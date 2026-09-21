@@ -1,4 +1,0 @@
-- Auth Worker、D1 schema 与共享契约均位于独立目录；注册/登录/session 是单文件入口，未涉及 Gateway、Forge 或 Git。
-- 初始 users 表没有组字段；用新迁移增加 `group_key TEXT NOT NULL DEFAULT 'free'`，让既有行和新行都具备非空组。
-- 注册策略通过显式 Worker vars 控制；只有值严格为 `true` 才开启，关闭时在 payload 解析和 D1 查询前返回 403。
-- Auth 自身类型检查、定向测试与 Wrangler deploy dry-run 通过；全量 services 类型检查因共享 TrustedUser 改为必需 groupKey 而暴露 Forge 现有 header 适配缺口，本任务按边界未修改 Forge。

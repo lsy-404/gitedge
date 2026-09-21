@@ -1,5 +1,0 @@
-- 创建任务审计目录、任务计划与任务索引记录。
-- 更新共享 TrustedUser 契约，增加 groupKey。
-- 增加 users.group_key D1 迁移，并将 Auth Wrangler vars 配置为 ALLOW_PUBLIC_SIGNUP=true、DEFAULT_USER_GROUP=free。
-- 更新 Auth 注册、登录、session 查询与 JSON 响应，传递可信 groupKey。
-- 增加注册策略与用户组定向单元测试。
