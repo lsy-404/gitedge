@@ -1,0 +1,270 @@
+import { z } from "zod";
+
+export const ActorSchema = z.object({
+  kind: z.enum(["user", "agent"]),
+  id: z.string().min(1),
+  name: z.string().min(1),
+  sessionId: z.string().optional(),
+});
+export type Actor = z.infer<typeof ActorSchema>;
+
+export const AgentSessionIdentitySchema = z.object({
+  id: z.string().min(1),
+  agentId: z.string().min(1),
+  agentName: z.string().min(1),
+  repositoryId: z.string().min(1),
+  workspaceName: z.string().min(1),
+  permission: z.enum(["read", "write"]),
+});
+export type AgentSessionIdentity = z.infer<typeof AgentSessionIdentitySchema>;
+
+export interface Repository {
+  id: string;
+  namespaceId: string;
+  owner: string;
+  name: string;
+  slug: string;
+  artifactName: string;
+  remote: string;
+  description: string;
+  visibility: "public" | "private";
+  defaultBranch: string;
+  createdAt: number;
+  updatedAt: number;
+  canWrite: boolean;
+}
+
+export interface Issue {
+  id: string;
+  number: number;
+  title: string;
+  body: string;
+  state: "open" | "closed";
+  author: string;
+  actor: Actor;
+  labels: string[];
+  assignees: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface PullRequest {
+  id: string;
+  number: number;
+  title: string;
+  body: string;
+  state: "open" | "closed" | "merged";
+  author: string;
+  actor: Actor;
+  baseRef: string;
+  headRef: string;
+  headSessionId: string | null;
+  draft: boolean;
+  mergedOid: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface Comment {
+  id: string;
+  body: string;
+  actor: Actor;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface Discussion {
+  id: string;
+  number: number;
+  title: string;
+  body: string;
+  category: "general" | "ideas" | "q-and-a" | "announcements";
+  state: "open" | "closed";
+  actor: Actor;
+  answerCommentId: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface WikiPage {
+  slug: string;
+  title: string;
+  content: string;
+  revision: number;
+  updatedBy: string;
+  updatedAt: number;
+}
+
+export interface Review {
+  id: string;
+  body: string;
+  state: "commented" | "approved" | "changes_requested";
+  commitOid: string;
+  actor: Actor;
+  createdAt: number;
+}
+
+export interface CheckRun {
+  id: string;
+  name: string;
+  commitOid: string;
+  status: "queued" | "in_progress" | "completed";
+  conclusion: "success" | "failure" | "neutral" | "cancelled" | null;
+  summary: string;
+  detailsUrl: string | null;
+  actor: Actor;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface Agent {
+  id: string;
+  name: string;
+  description: string;
+  createdAt: number;
+  disabledAt: number | null;
+}
+
+export interface AgentSession {
+  id: string;
+  agentId: string;
+  agentName: string;
+  repositoryId: string;
+  workspaceName: string;
+  remote: string;
+  baseRef: string;
+  baseOid: string | null;
+  permission: "read" | "write";
+  status: "active" | "completed" | "revoked";
+  createdAt: number;
+  expiresAt: number;
+}
+
+export interface CreatedAgentSession extends AgentSession {
+  token: string;
+  gitToken: string;
+  instructions: string | null;
+}
+
+export interface GitRef {
+  name: string;
+  oid: string;
+}
+export interface GitCommit {
+  oid: string;
+  tree: string;
+  parents: string[];
+  message: string;
+  author: { name: string; email: string; timestamp: number };
+}
+export interface GitTreeEntry {
+  name: string;
+  path: string;
+  oid: string;
+  mode: string;
+  type: "tree" | "blob" | "commit";
+}
+export interface GitTree {
+  ref: string;
+  oid: string | null;
+  path: string;
+  entries: GitTreeEntry[];
+}
+export interface GitFile {
+  path: string;
+  oid: string;
+  size: number;
+  binary: boolean;
+  content: string | null;
+}
+export interface GitGraph {
+  commits: GitCommit[];
+  refs: GitRef[];
+  sessions: AgentSession[];
+  truncated: boolean;
+}
+export interface GitDiffFile {
+  path: string;
+  type: "added" | "deleted" | "modified";
+  oldOid: string | null;
+  newOid: string | null;
+  patch: string | null;
+  binary: boolean;
+}
+export interface GitComparison {
+  baseOid: string;
+  headOid: string;
+  mergeBaseOid: string | null;
+  commits: GitCommit[];
+  files: GitDiffFile[];
+  truncated: boolean;
+}
+
+const title = z.string().trim().min(1).max(200);
+const body = z.string().max(50_000);
+export const GitOidSchema = z.string().regex(/^[0-9a-f]{40}$/);
+export const GitBranchSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(255)
+  .refine(
+    (value) =>
+      !/(\.\.|@\{|[\s~^:?*\[\\\x00-\x1f\x7f])/.test(value) &&
+      !value.startsWith("/") &&
+      !value.endsWith("/") &&
+      !value.endsWith(".") &&
+      value
+        .split("/")
+        .every((part) => part.length > 0 && !part.startsWith(".") && !part.endsWith(".lock")),
+    "Invalid Git branch name"
+  );
+export const CreateCommentInputSchema = z.object({ body: body.min(1) });
+export const CreateDiscussionInputSchema = z.object({
+  title,
+  body: body.default(""),
+  category: z.enum(["general", "ideas", "q-and-a", "announcements"]).default("general"),
+});
+export const UpdateDiscussionInputSchema = z
+  .object({
+    title: title.optional(),
+    body: body.optional(),
+    state: z.enum(["open", "closed"]).optional(),
+    answerCommentId: z.string().nullable().optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0);
+export const CreateReviewInputSchema = z.object({
+  body: body.default(""),
+  state: z.enum(["commented", "approved", "changes_requested"]),
+  commitOid: GitOidSchema,
+});
+export const PutCheckRunInputSchema = z
+  .object({
+    name: title,
+    commitOid: GitOidSchema,
+    status: z.enum(["queued", "in_progress", "completed"]),
+    conclusion: z.enum(["success", "failure", "neutral", "cancelled"]).nullable().default(null),
+    summary: body.default(""),
+    detailsUrl: z
+      .url()
+      .refine((value) => new URL(value).protocol === "https:")
+      .nullable()
+      .default(null),
+  })
+  .refine((value) =>
+    value.status === "completed" ? value.conclusion !== null : value.conclusion === null
+  );
+export const CreateAgentInputSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  description: z.string().max(500).default(""),
+});
+export const CreateAgentSessionInputSchema = z.object({
+  repositoryId: z.string().min(1),
+  baseRef: GitBranchSchema.default("main"),
+  permission: z.enum(["read", "write"]).default("write"),
+  ttlSeconds: z.number().int().min(300).max(86_400).default(3_600),
+});
+export const MergePullRequestInputSchema = z.object({
+  expectedBaseOid: GitOidSchema,
+  expectedHeadOid: GitOidSchema,
+});

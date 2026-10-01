@@ -1,4 +1,6 @@
 import { z } from "zod";
+import type { AgentSessionIdentity } from "./forge";
+export * from "./forge";
 
 export const ErrorCodeSchema = z.enum([
   "bad_request",
@@ -24,6 +26,7 @@ export type TrustedUser = {
   readonly id: string;
   readonly identifier: string;
   readonly groupKey: string;
+  readonly agentSession?: AgentSessionIdentity;
 };
 
 export type UserGroupLimits = {
@@ -174,6 +177,8 @@ export const CreateRepositoryInputSchema = z.object({
 export const CreateIssueInputSchema = z.object({
   title: z.string().trim().min(1).max(200),
   body: z.string().max(50_000).default(""),
+  labels: z.array(z.string().trim().min(1).max(50)).max(20).default([]),
+  assignees: z.array(z.string().trim().min(1).max(64)).max(20).default([]),
 });
 
 export const UpdateIssueInputSchema = z
@@ -181,6 +186,8 @@ export const UpdateIssueInputSchema = z
     title: z.string().trim().min(1).max(200).optional(),
     body: z.string().max(50_000).optional(),
     state: z.enum(["open", "closed"]).optional(),
+    labels: z.array(z.string().trim().min(1).max(50)).max(20).optional(),
+    assignees: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
   })
   .refine((value) => Object.keys(value).length > 0);
 
@@ -189,6 +196,8 @@ export const CreatePullRequestInputSchema = z.object({
   body: z.string().max(50_000).default(""),
   baseRef: z.string().trim().min(1).max(255),
   headRef: z.string().trim().min(1).max(255),
+  headSessionId: z.string().nullable().default(null),
+  draft: z.boolean().default(false),
 });
 
 export const UpdatePullRequestInputSchema = z
@@ -196,6 +205,7 @@ export const UpdatePullRequestInputSchema = z
     title: z.string().trim().min(1).max(200).optional(),
     body: z.string().max(50_000).optional(),
     state: z.enum(["open", "closed"]).optional(),
+    draft: z.boolean().optional(),
   })
   .refine((value) => Object.keys(value).length > 0);
 
