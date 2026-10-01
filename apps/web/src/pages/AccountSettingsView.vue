@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute } from "vue-router";
 import type { SsoIdentity, SsoProviderSummary } from "../lib/api";
-import { api } from "../lib/api";
+import { api, ssoAuthorizationUrl } from "../lib/api";
 import { sessionState } from "../lib/session";
 
 const { t } = useI18n();
@@ -52,9 +52,8 @@ async function link(provider: SsoProviderSummary) {
   notice.value = "";
   try {
     const response = await api.linkSsoIdentity(provider.id, "/settings/account");
-    const target = new URL(response.url, window.location.origin);
-    if (target.origin !== window.location.origin || !target.pathname.startsWith("/api/auth/sso/"))
-      throw new Error(t("ssoLinkError"));
+    const target = ssoAuthorizationUrl(response.url);
+    if (!target) throw new Error(t("ssoLinkError"));
     window.location.assign(target.href);
   } catch (cause) {
     actionError.value = cause instanceof Error ? cause.message : t("ssoLinkError");

@@ -59,6 +59,16 @@ export class ApiError extends Error {
   }
 }
 
+export function ssoAuthorizationUrl(value: string): URL | null {
+  try {
+    const target = new URL(value);
+    if (target.protocol !== "https:" || target.username || target.password) return null;
+    return target;
+  } catch {
+    return null;
+  }
+}
+
 interface ApiEnvelope<T> {
   data: T;
 }

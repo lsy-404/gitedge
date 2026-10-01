@@ -3,6 +3,7 @@ import { createApp, nextTick } from "vue";
 import App from "../../apps/web/src/App.vue";
 import { router } from "../../apps/web/src/router";
 import { i18n } from "../../apps/web/src/i18n";
+import { ssoAuthorizationUrl } from "../../apps/web/src/lib/api";
 import { clearSession, setSession } from "../../apps/web/src/lib/session";
 
 const providers = [
@@ -66,6 +67,15 @@ afterEach(() => {
 });
 
 describe("OIDC and SAML account flows", () => {
+  it("allows configured HTTPS authorization URLs and rejects unsafe schemes and userinfo", () => {
+    expect(ssoAuthorizationUrl("https://identity.example.test/authorize")?.href).toBe(
+      "https://identity.example.test/authorize"
+    );
+    expect(ssoAuthorizationUrl("javascript:alert(1)")).toBeNull();
+    expect(ssoAuthorizationUrl("data:text/html,login")).toBeNull();
+    expect(ssoAuthorizationUrl("https://user:password@identity.example.test/authorize")).toBeNull();
+  });
+
   it("lists provider protocols and metadata and uses only a safe in-site login return path", async () => {
     i18n.global.locale.value = "en";
     vi.stubGlobal(
@@ -170,7 +180,7 @@ describe("OIDC and SAML account flows", () => {
     mounted.unmount();
   });
 
-  it("creates an explicit identity-link request and rejects an external redirect URL", async () => {
+  it("creates an explicit identity-link request and rejects an authorization URL with userinfo", async () => {
     setSession({ id: "user-1", identifier: "person@example.test" });
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), "https://gitedge.test");
@@ -186,7 +196,7 @@ describe("OIDC and SAML account flows", () => {
       if (init?.method === "POST")
         return new Response(
           JSON.stringify({
-            data: { url: "https://external.example.test/start" },
+            data: { url: "https://user@identity.example.test/authorize" },
           }),
           { status: 200 }
         );
