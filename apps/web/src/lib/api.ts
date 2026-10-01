@@ -69,6 +69,11 @@ export function ssoAuthorizationUrl(value: string): URL | null {
   }
 }
 
+export interface SsoLogoutResponse {
+  url: string | null;
+  providerLogoutUnavailable: boolean;
+}
+
 interface ApiEnvelope<T> {
   data: T;
 }
@@ -146,6 +151,11 @@ export const api = {
     request<{ url: string }>(`/api/auth/sso/${encodeURIComponent(providerId)}/link`, {
       method: "POST",
       body: JSON.stringify({ returnTo }),
+    }),
+  logoutSsoIdentity: (providerId: string, identityId: string) =>
+    request<SsoLogoutResponse>(`/api/auth/sso/${encodeURIComponent(providerId)}/logout`, {
+      method: "POST",
+      body: JSON.stringify({ identityId }),
     }),
   unlinkSsoIdentity: (identityId: string) =>
     request<{ unlinked: boolean }>(`/api/auth/sso/identities/${encodeURIComponent(identityId)}`, {

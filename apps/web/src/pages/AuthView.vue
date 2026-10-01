@@ -22,8 +22,10 @@ const ssoErrorCodes = [
   "sso_identity_in_use",
   "sso_signup_disabled",
   "sso_configuration",
+  "sso_logout_unavailable",
 ];
 const hasSsoError = computed(() => ssoErrorCodes.includes(String(route.query.error || "")));
+const ssoLogoutUnavailable = computed(() => route.query.error === "sso_logout_unavailable");
 const githubOauthError = computed(() => (hasSsoError.value ? "" : oauthError.value));
 const returnTo = computed(() => safeReturnTo(route.query.redirect));
 
@@ -155,7 +157,9 @@ async function submit() {
         </p>
         <p class="note">{{ t("noWriteScope") }}</p>
       </div>
-      <p v-if="hasSsoError" class="form-error" role="alert">{{ t("ssoLoginError") }}</p>
+      <p v-if="hasSsoError" class="form-error" role="alert">
+        {{ ssoLogoutUnavailable ? t("ssoLogoutUnavailable") : t("ssoLoginError") }}
+      </p>
       <p v-else-if="githubOauthError" class="form-error" role="alert">
         {{ t("oauthError", { error: githubOauthError }) }}
       </p>

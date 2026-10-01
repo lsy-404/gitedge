@@ -4,7 +4,7 @@ import App from "../../apps/web/src/App.vue";
 import { router } from "../../apps/web/src/router";
 import { i18n } from "../../apps/web/src/i18n";
 import { ssoAuthorizationUrl } from "../../apps/web/src/lib/api";
-import { clearSession, setSession } from "../../apps/web/src/lib/session";
+import { clearSession, sessionState, setSession } from "../../apps/web/src/lib/session";
 
 const providers = [
   { id: "acme-oidc", label: "Acme", protocol: "oidc" },
@@ -215,6 +215,44 @@ describe("OIDC and SAML account flows", () => {
     expect(mounted.root.querySelector('[role="alert"]')?.textContent).toContain(
       "Unable to start identity linking"
     );
+    mounted.unmount();
+  });
+
+  it("ends the GitEdge session and reports when provider logout is unavailable", async () => {
+    setSession({ id: "user-1", identifier: "user@example.test" });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "https://gitedge.test");
+      if (url.pathname === "/api/auth/session")
+        return new Response(
+          JSON.stringify({ data: { id: "user-1", identifier: "user@example.test" } }),
+          { status: 200 }
+        );
+      if (url.pathname === "/api/auth/sso/providers")
+        return new Response(JSON.stringify({ data: [providers[0]] }), { status: 200 });
+      if (url.pathname === "/api/auth/sso/identities")
+        return new Response(JSON.stringify({ data: [identity] }), { status: 200 });
+      if (url.pathname === "/api/auth/sso/acme-oidc/logout" && init?.method === "POST")
+        return new Response(
+          JSON.stringify({ data: { url: null, providerLogoutUnavailable: true } }),
+          { status: 200 }
+        );
+      return new Response(JSON.stringify({ data: {} }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const mounted = await mountRoute("/settings/account");
+    await settle();
+
+    mounted.root.querySelectorAll<HTMLButtonElement>(".sso-identity .button")[1]?.click();
+    await settle();
+
+    expect(sessionState.user).toBeNull();
+    expect(router.currentRoute.value.fullPath).toBe("/login?error=sso_logout_unavailable");
+    expect(mounted.root.querySelector('[role="alert"]')?.textContent).toContain(
+      "GitEdge session has ended, but the identity provider did not confirm sign-out"
+    );
+    const logoutCall = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
+    expect(logoutCall?.[0]).toContain("/api/auth/sso/acme-oidc/logout");
+    expect(JSON.parse(String(logoutCall?.[1]?.body))).toEqual({ identityId: identity.id });
     mounted.unmount();
   });
 });

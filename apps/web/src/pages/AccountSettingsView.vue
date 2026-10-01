@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import type { SsoIdentity, SsoProviderSummary } from "../lib/api";
 import { api, ssoAuthorizationUrl } from "../lib/api";
-import { sessionState } from "../lib/session";
+import { clearSession, sessionState } from "../lib/session";
 
 const { t } = useI18n();
 const route = useRoute();
+const router = useRouter();
 const providers = ref<SsoProviderSummary[]>([]);
 const identities = ref<SsoIdentity[]>([]);
 const loading = ref(false);
@@ -16,6 +17,7 @@ const actionError = ref("");
 const notice = ref("");
 const busyProviderId = ref("");
 const busyIdentityId = ref("");
+const busyLogoutIdentityId = ref("");
 const linkedNotice = computed(() => route.query.sso === "linked");
 const callbackError = computed(() => {
   const code = String(route.query.error || "");
@@ -75,6 +77,31 @@ async function unlink(identity: SsoIdentity) {
     actionError.value = cause instanceof Error ? cause.message : t("ssoUnlinkError");
   } finally {
     busyIdentityId.value = "";
+  }
+}
+
+async function federatedLogout(identity: SsoIdentity) {
+  busyLogoutIdentityId.value = identity.id;
+  actionError.value = "";
+  try {
+    const response = await api.logoutSsoIdentity(identity.providerId, identity.id);
+    clearSession();
+    const target = response.url ? ssoAuthorizationUrl(response.url) : null;
+    const invalidReturnedUrl = response.url !== null && !target;
+    const providerLogoutUnavailable = response.providerLogoutUnavailable || invalidReturnedUrl;
+    if (target && !providerLogoutUnavailable) {
+      window.location.assign(target.href);
+      return;
+    }
+    await router.replace(
+      providerLogoutUnavailable
+        ? { path: "/login", query: { error: "sso_logout_unavailable" } }
+        : "/login"
+    );
+  } catch (cause) {
+    actionError.value = cause instanceof Error ? cause.message : t("ssoLogoutError");
+  } finally {
+    busyLogoutIdentityId.value = "";
   }
 }
 
@@ -157,6 +184,7 @@ onMounted(load);
         <div>
           <h2 id="sso-identities-heading">{{ t("ssoIdentities") }}</h2>
           <p class="muted">{{ t("ssoIdentitiesHint") }}</p>
+          <p class="muted">{{ t("ssoFederatedLogoutHint") }}</p>
         </div>
         <button class="button ghost" :disabled="loading" @click="load">{{ t("refresh") }}</button>
       </div>
@@ -179,6 +207,14 @@ onMounted(load);
             @click="unlink(identity)"
           >
             {{ busyIdentityId === identity.id ? t("loading") : t("ssoUnlink") }}
+          </button>
+          <button
+            class="button"
+            :aria-label="`${t('ssoFederatedLogout')} · ${identity.providerLabel}`"
+            :disabled="loading || busyLogoutIdentityId === identity.id"
+            @click="federatedLogout(identity)"
+          >
+            {{ busyLogoutIdentityId === identity.id ? t("loading") : t("ssoFederatedLogout") }}
           </button>
         </li>
       </ul>

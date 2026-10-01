@@ -111,6 +111,10 @@ const messages = {
     ssoVerifiedEmail: "已验证邮箱",
     ssoIdentityInUse: "此身份已关联到另一个 GitEdge 账户。",
     ssoExpired: "关联请求已过期，请重新开始。",
+    ssoFederatedLogout: "单点退出",
+    ssoFederatedLogoutHint: "此操作会结束 GitEdge 会话；支持时也会请求身份提供方退出。",
+    ssoLogoutError: "无法结束此身份提供方的会话。",
+    ssoLogoutUnavailable: "本站会话已结束，但身份提供方未确认退出。",
     account: "账户",
     accessLevel: "授权级别",
     identityAccess: "仅身份识别",
@@ -400,6 +404,12 @@ const messages = {
     ssoVerifiedEmail: "Verified email",
     ssoIdentityInUse: "This identity is already linked to another GitEdge account.",
     ssoExpired: "The identity link request expired. Start again.",
+    ssoFederatedLogout: "Sign out with provider",
+    ssoFederatedLogoutHint:
+      "This ends your GitEdge session and asks the identity provider to sign out when supported.",
+    ssoLogoutError: "Unable to end this identity provider session.",
+    ssoLogoutUnavailable:
+      "Your GitEdge session has ended, but the identity provider did not confirm sign-out.",
     account: "Account",
     accessLevel: "Access level",
     identityAccess: "Identity only",
