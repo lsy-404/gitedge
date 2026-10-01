@@ -101,7 +101,13 @@ async function submit() {
         <p class="muted">{{ register ? t("registerHint") : t("loginHint") }}</p>
       </div>
       <label
-        >{{ t("identifier") }}<input v-model="identifier" required autocomplete="username" /></label
+        >{{ t(register ? "registrationIdentifier" : "identifier")
+        }}<input
+          v-model="identifier"
+          required
+          autocomplete="username"
+          :pattern="register ? '[A-Za-z0-9][A-Za-z0-9-]{2,62}' : undefined"
+          :maxlength="register ? 63 : 64" /></label
       ><label
         >{{ t("password")
         }}<input

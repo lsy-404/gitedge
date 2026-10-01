@@ -43,6 +43,10 @@ The commit graph includes all commit parents and session fork refs. Pull request
 
 CI runners submit check results through the authenticated Pull Request checks API. Agent reviews are explicitly marked separately from human reviews; the marker identifies the authenticated author, while the result and summary describe the runner's work.
 
+## Single sign-on
+
+Configure multiple OIDC or SAML 2.0 providers, link identities to existing accounts, and use provider-aware single sign-out from Account settings. Standard code-flow and SAML signature validation use maintained MIT libraries. See [SSO configuration](docs/sso.md) for provider settings, callback URLs, secrets and supported flows.
+
 ## Architecture
 
 The public Gateway serves Vue assets and authenticates requests before forwarding to internal Auth, Forge, Git and Deploy Workers. Auth owns credentials and agent sessions. Forge owns collaboration records in D1. Git owns Artifacts operations and forwards Smart HTTP streams. Deploy interprets a reviewed deployment manifest and relays a fixed set of Cloudflare operations.

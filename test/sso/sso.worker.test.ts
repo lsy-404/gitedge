@@ -196,6 +196,12 @@ describe("SSO account and callback boundaries", () => {
       password: "a-valid-fixture-password",
     });
     const account = await user(registered);
+    const passwordLogin = await call("/login", "POST", "", {
+      identifier: "sso-existing-owner",
+      password: "a-valid-fixture-password",
+    });
+    expect((await user(passwordLogin)).id).toBe(account.id);
+
     const linked = await flow("linked-subject", {
       link: true,
       sessionCookie: account.sessionCookie,
@@ -281,4 +287,88 @@ describe("SSO account and callback boundaries", () => {
     const established = await flow("first-subject", { allowSignup: false });
     expect(cookie(await established.callback())).not.toBe("");
   });
+});
+
+it("ends the local session before provider logout and accepts the return state once", async () => {
+  const started = await flow("logout-subject");
+  const account = await user(await started.callback());
+  const identities = identityListSchema.parse(
+    await (await call("/sso/identities", "GET", account.sessionCookie)).json()
+  ).data;
+  const response = await call("/sso/enterprise/logout", "POST", account.sessionCookie, {
+    identityId: identities[0].id,
+  });
+  expect(response.status).toBe(200);
+  const data = z
+    .object({ data: z.object({ url: z.string(), providerLogoutUnavailable: z.boolean() }) })
+    .parse(await response.json()).data;
+  expect(data.providerLogoutUnavailable).toBe(false);
+  const target = new URL(data.url);
+  expect(target.origin).toBe(fixture.issuer);
+  expect(target.searchParams.get("post_logout_redirect_uri")).toBe(
+    `${origin}/api/auth/sso/enterprise/logout-callback`
+  );
+  expect((await call("/session", "GET", account.sessionCookie)).status).toBe(401);
+  expect(
+    response.headers
+      .getSetCookie()
+      .some((value) => value.startsWith("gitedge_session=;") && value.includes("Max-Age=0"))
+  ).toBe(true);
+  const callback = () =>
+    call(
+      `/sso/enterprise/logout-callback?state=${target.searchParams.get("state")}`,
+      "GET",
+      cookie(response, "gitedge_sso")
+    );
+  expect((await callback()).headers.get("Location")).toBe("/login");
+  expect((await callback()).status).toBe(400);
+  expect(
+    (
+      await env.DB.prepare("SELECT COUNT(*) AS count FROM auth_sessions WHERE user_id = ?")
+        .bind(account.id)
+        .first<{ count: number }>()
+    )?.count
+  ).toBe(0);
+});
+
+it("keeps local logout effective when the provider cannot be reached", async () => {
+  const started = await flow("logout-unavailable");
+  const account = await user(await started.callback());
+  const identities = identityListSchema.parse(
+    await (await call("/sso/identities", "GET", account.sessionCookie)).json()
+  ).data;
+  vi.stubGlobal("fetch", async () => {
+    throw new Error("Provider unavailable");
+  });
+  const response = await call("/sso/enterprise/logout", "POST", account.sessionCookie, {
+    identityId: identities[0].id,
+  });
+  expect(await response.json()).toEqual({ data: { url: null, providerLogoutUnavailable: true } });
+  expect((await call("/session", "GET", account.sessionCookie)).status).toBe(401);
+});
+
+it("rejects unusable usernames and leaves no account behind on namespace collision", async () => {
+  for (const identifier of ["person@example.test", "nested/name", "with space"])
+    expect(
+      (await call("/register", "POST", "", { identifier, password: "a-valid-fixture-password" }))
+        .status
+    ).toBe(400);
+  const owner = await env.DB.prepare("SELECT id FROM users LIMIT 1").first<{ id: string }>();
+  if (!owner) throw new Error("Missing fixture owner");
+  await env.DB.prepare(
+    "INSERT INTO namespaces (id,slug,created_by,created_at,kind,display_name,description) VALUES ('collision','existing-organization',?,1,'organization','Existing','')"
+  )
+    .bind(owner.id)
+    .run();
+  expect(
+    (
+      await call("/register", "POST", "", {
+        identifier: "existing-organization",
+        password: "a-valid-fixture-password",
+      })
+    ).status
+  ).toBe(409);
+  expect(
+    await env.DB.prepare("SELECT id FROM users WHERE identifier='existing-organization'").first()
+  ).toBeNull();
 });

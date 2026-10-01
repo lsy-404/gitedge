@@ -234,29 +234,41 @@ export async function register(
     identifier,
     groupKey: env.DEFAULT_USER_GROUP,
   };
-  await env.DB.prepare(
-    "INSERT INTO users (id, identifier, group_key, password_salt, password_hash, password_auth_enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-  )
-    .bind(
-      user.id,
-      identifier,
-      user.groupKey,
-      bytesToBase64(salt),
-      await derivePasswordHash(parsed.data.password, salt),
-      1,
-      Date.now()
-    )
-    .run();
   const namespaceId = crypto.randomUUID();
   const now = Date.now();
-  await env.DB.batch([
-    env.DB.prepare(
-      "INSERT INTO namespaces (id, slug, created_by, created_at) VALUES (?, ?, ?, ?)"
-    ).bind(namespaceId, identifier, user.id, now),
-    env.DB.prepare(
-      "INSERT INTO namespace_memberships (namespace_id, user_id, created_at, role) VALUES (?, ?, ?, 'owner')"
-    ).bind(namespaceId, user.id, now),
-  ]);
+  const passwordHash = await derivePasswordHash(parsed.data.password, salt);
+  try {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO users (id, identifier, group_key, password_salt, password_hash, password_auth_enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      ).bind(user.id, identifier, user.groupKey, bytesToBase64(salt), passwordHash, 1, now),
+      env.DB.prepare(
+        "INSERT INTO namespaces (id, slug, created_by, created_at) VALUES (?, ?, ?, ?)"
+      ).bind(namespaceId, identifier, user.id, now),
+      env.DB.prepare(
+        "INSERT INTO namespace_memberships (namespace_id, user_id, created_at, role) VALUES (?, ?, ?, 'owner')"
+      ).bind(namespaceId, user.id, now),
+    ]);
+  } catch {
+    const conflict = await env.DB.prepare(
+      "SELECT id FROM namespaces WHERE slug = ? UNION ALL SELECT id FROM users WHERE identifier = ? LIMIT 1"
+    )
+      .bind(identifier, identifier)
+      .first<{ id: string }>()
+      .catch(() => null);
+    if (conflict)
+      return {
+        ok: false,
+        status: 409,
+        error: { code: "conflict", message: "This username is already in use." },
+      };
+    createLogger(env.LOG_LEVEL, { service: "auth" }).error("auth:registration-failed", {});
+    return {
+      ok: false,
+      status: 503,
+      error: { code: "internal_error", message: "Registration is temporarily unavailable." },
+    };
+  }
   return { ok: true, data: { ...user, sessionToken: await issueSession(env, user.id) } };
 }
 

@@ -10,7 +10,10 @@ const httpsUrl = z
     return url.protocol === "https:" && !url.username && !url.password && !url.hash;
   });
 const common = {
-  id: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/),
+  id: z
+    .string()
+    .regex(/^[a-z][a-z0-9-]{0,39}$/)
+    .refine((id) => !["providers", "identities"].includes(id)),
   label: z.string().trim().min(1).max(80),
   allowSignup: z.boolean().default(true),
 };
@@ -19,7 +22,7 @@ const providerSchema = z.discriminatedUnion("protocol", [
     .object({
       ...common,
       protocol: z.literal("oidc"),
-      issuer: httpsUrl,
+      issuer: httpsUrl.refine((value) => !new URL(value).search),
       clientId: z.string().min(1).max(512),
       scopes: z
         .array(z.string().min(1).max(128))

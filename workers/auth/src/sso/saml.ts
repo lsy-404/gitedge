@@ -10,6 +10,7 @@ import {
   type Profile,
   type SamlConfig,
 } from "@node-saml/node-saml";
+// POST logout has no signed profile, so verify its root with the library's XML verifier.
 import { getVerifiedXml } from "@node-saml/node-saml/lib/xml";
 import { z } from "zod";
 import type {

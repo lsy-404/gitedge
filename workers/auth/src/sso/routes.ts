@@ -11,8 +11,8 @@ import {
 } from "../session";
 import { ssoProviders, ssoSecrets } from "./config";
 import { listSsoIdentities, resolveSsoIdentity, unlinkSsoIdentity } from "./identities";
-import { startOidc, completeOidc } from "./oidc";
-import { startSaml, completeSaml, samlMetadata } from "./saml";
+import { startOidc, completeOidc, startOidcLogout } from "./oidc";
+import { startSaml, completeSaml, samlMetadata, startSamlLogout, completeSamlLogout } from "./saml";
 import type { SsoEnvironment, SsoIdentityClaims, SsoProvider, SsoProviderSecrets } from "./types";
 
 const FLOW_COOKIE = "gitedge_sso";
@@ -24,6 +24,34 @@ interface SsoRequestRow {
   return_to: string;
   callback_url: string;
   payload: string;
+}
+async function persistFlow(
+  env: SsoEnvironment,
+  provider: SsoProvider,
+  state: string,
+  proof: string,
+  flow: SsoRequestRow
+): Promise<void> {
+  const now = Date.now();
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM auth_sso_requests WHERE expires_at <= ?").bind(now),
+    env.DB.prepare(
+      "INSERT INTO auth_sso_requests (state_hash, provider_id, issuer, browser_hash, intent, user_id, session_hash, return_to, callback_url, payload, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).bind(
+      await hashToken(state),
+      provider.id,
+      provider.issuer,
+      await hashToken(proof),
+      flow.intent,
+      flow.user_id,
+      flow.session_hash,
+      flow.return_to,
+      flow.callback_url,
+      flow.payload,
+      now,
+      now + FLOW_SECONDS * 1000
+    ),
+  ]);
 }
 function json(data: unknown, status = 200): Response {
   return Response.json({ data }, { status, headers: { "Cache-Control": "no-store" } });
@@ -217,26 +245,14 @@ async function handleSsoRequest(
         provider.protocol === "oidc"
           ? await startOidc(provider, secrets, callback, state)
           : await startSaml(provider, secrets, callback, state);
-      const now = Date.now();
-      await env.DB.batch([
-        env.DB.prepare("DELETE FROM auth_sso_requests WHERE expires_at <= ?").bind(now),
-        env.DB.prepare(
-          "INSERT INTO auth_sso_requests (state_hash, provider_id, issuer, browser_hash, intent, user_id, session_hash, return_to, callback_url, payload, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        ).bind(
-          await hashToken(state),
-          provider.id,
-          provider.issuer,
-          await hashToken(proof),
-          linking ? "link" : "login",
-          linking ? (user?.id ?? null) : null,
-          linking ? await hashToken(readCookie(request) ?? "") : null,
-          returnTo,
-          callback,
-          authorization.payload,
-          now,
-          now + FLOW_SECONDS * 1000
-        ),
-      ]);
+      await persistFlow(env, provider, state, proof, {
+        intent: linking ? "link" : "login",
+        user_id: linking ? (user?.id ?? null) : null,
+        session_hash: linking ? await hashToken(readCookie(request) ?? "") : null,
+        return_to: returnTo,
+        callback_url: callback,
+        payload: authorization.payload,
+      });
       logger.info("sso:started", { providerId: provider.id, protocol: provider.protocol, linking });
       const response = linking
         ? json({ url: authorization.url })
@@ -255,7 +271,90 @@ async function handleSsoRequest(
       );
     }
   }
-  if (parts[2] === "callback" && ["GET", "POST"].includes(request.method)) {
+  if (parts[2] === "logout" && request.method === "POST") {
+    if (!user || user.agentSession || request.headers.has("Authorization"))
+      return fail(401, "unauthorized", "A human account session is required.");
+    if (request.headers.get("Origin") !== url.origin)
+      return fail(403, "forbidden", "Same-origin account management is required.");
+    const text = await readTextLimited(request.body, 4096);
+    let input: unknown;
+    try {
+      input = JSON.parse(text ?? "null");
+    } catch {
+      return fail(400, "bad_request", "Invalid logout request.");
+    }
+    if (
+      !input ||
+      typeof input !== "object" ||
+      !("identityId" in input) ||
+      typeof input.identityId !== "string"
+    )
+      return fail(400, "bad_request", "Select a linked identity to sign out.");
+    const identity = await env.DB.prepare(
+      "SELECT subject, display_name AS displayName, COALESCE(session_index, '') AS sessionIndex, COALESCE(name_id_format, '') AS nameIdFormat FROM auth_sso_identities WHERE id = ? AND user_id = ? AND provider_id = ? AND issuer = ?"
+    )
+      .bind(input.identityId, user.id, provider.id, provider.issuer)
+      .first<
+        Pick<SsoIdentityClaims, "subject" | "displayName" | "sessionIndex" | "nameIdFormat">
+      >();
+    if (!identity) return fail(404, "not_found", "Linked identity was not found.");
+    const token = readCookie(request);
+    if (token)
+      await env.DB.prepare("DELETE FROM auth_sessions WHERE token_hash = ?")
+        .bind(await hashToken(token))
+        .run();
+    const state = createToken(),
+      proof = createToken();
+    const logoutCallback = new URL(`/api/auth/sso/${provider.id}/logout-callback`, url).toString();
+    let target: string | null = null;
+    let payload = "{}";
+    let providerError = false;
+    try {
+      if (provider.protocol === "oidc")
+        target = await startOidcLogout(provider, secrets, logoutCallback, state);
+      else if (provider.logoutUrl) {
+        const authorization = await startSamlLogout(
+          provider,
+          secrets,
+          callbackUrl(request, provider),
+          logoutCallback,
+          { ...identity, emailVerified: false },
+          state
+        );
+        target = authorization.url;
+        payload = authorization.payload;
+      }
+      if (target)
+        await persistFlow(env, provider, state, proof, {
+          intent: "logout",
+          user_id: user.id,
+          session_hash: null,
+          return_to: "/login",
+          callback_url: logoutCallback,
+          payload,
+        });
+    } catch {
+      providerError = true;
+      target = null;
+      logger.warn("sso:provider-logout-unavailable", { providerId: provider.id });
+    }
+    const response = json({ url: target, providerLogoutUnavailable: providerError });
+    response.headers.append("Set-Cookie", createSessionCookie("", 0));
+    response.headers.append(
+      "Set-Cookie",
+      flowCookie(target ? proof : "", target ? FLOW_SECONDS : 0)
+    );
+    logger.info("sso:logged-out", {
+      providerId: provider.id,
+      userId: user.id,
+      federated: Boolean(target),
+    });
+    return response;
+  }
+  if (
+    ["callback", "logout-callback"].includes(parts[2]) &&
+    ["GET", "POST"].includes(request.method)
+  ) {
     const body = request.method === "POST" ? await readTextLimited(request.body, 1024 * 1024) : "";
     if (body === null) return fail(413, "bad_request", "SSO response exceeded the size limit.");
     const params = request.method === "POST" ? new URLSearchParams(body) : url.searchParams;
@@ -279,6 +378,29 @@ async function handleSsoRequest(
     if (new URL(flow.callback_url).origin !== url.origin)
       return redirect(flow.return_to, "invalid_response");
     try {
+      if (parts[2] === "logout-callback") {
+        if (flow.intent !== "logout" || params.has("error"))
+          return redirect("/login", "invalid_response");
+        if (provider.protocol === "saml") {
+          const publicUrl = new URL(flow.callback_url);
+          publicUrl.search = url.search;
+          const callbackRequest = new Request(publicUrl, {
+            method: request.method,
+            headers: request.headers,
+            ...(request.method === "POST" ? { body } : {}),
+          });
+          await completeSamlLogout(
+            provider,
+            secrets,
+            callbackUrl(request, provider),
+            flow.callback_url,
+            callbackRequest,
+            flow.payload
+          );
+        }
+        return redirect("/login");
+      }
+      if (flow.intent === "logout") return redirect("/login", "invalid_response");
       let claims: SsoIdentityClaims;
       if (provider.protocol === "saml") {
         const assertion = params.get("SAMLResponse");

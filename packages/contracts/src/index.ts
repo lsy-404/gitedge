@@ -141,18 +141,19 @@ export function repositoryRouteCacheKey(namespaceSlug: string, repositorySlug: s
   return `repo-route:v1:${namespaceSlug}/${repositorySlug}`;
 }
 
-export const RegisterInputSchema = z.object({
-  identifier: z.string().trim().min(3).max(64),
-  password: z.string().min(12).max(256),
-});
-
-export const LoginInputSchema = RegisterInputSchema;
-
 export const NamespaceSlugSchema = z
   .string()
   .trim()
   .toLowerCase()
   .regex(/^[a-z0-9][a-z0-9-]{0,62}$/);
+export const RegisterInputSchema = z.object({
+  identifier: NamespaceSlugSchema.refine((value) => value.length >= 3),
+  password: z.string().min(12).max(256),
+});
+export const LoginInputSchema = z.object({
+  identifier: z.string().trim().min(3).max(64),
+  password: z.string().min(12).max(256),
+});
 
 export const CreateOrganizationInputSchema = z.object({
   slug: NamespaceSlugSchema,

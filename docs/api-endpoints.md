@@ -2,7 +2,7 @@
 
 Responses use `{ "data": ... }`; failures use `{ "error": { "code": ..., "message": ... } }`. Private repository existence is hidden from unauthorized readers.
 
-Auth: register, login, logout, session and GitHub OAuth under `/api/auth`. Account agent CRUD lives at `/api/auth/agents`; each agent's session collection lives at `/api/auth/agents/:id/sessions`. Sessions return API/Git credentials once. Account Git credentials live at `/api/auth/tokens`.
+Auth: register, login, logout, session and GitHub OAuth under `/api/auth`. Account agent CRUD lives at `/api/auth/agents`; each agent's session collection lives at `/api/auth/agents/:id/sessions`. Sessions return API/Git credentials once. Account Git credentials live at `/api/auth/tokens`. SSO provider discovery, login, metadata, identity linking and single sign-out live under `/api/auth/sso`; see [SSO configuration](sso.md).
 
 Forge: `/api/forge/repositories`, `/repositories/by-name/:owner/:repo`, and organization/member management. Repository resources are `/repositories/:id/issues`, `/pull-requests`, `/discussions` and `/wiki`. Numbered items expose details, PATCH and comments. PRs expose `diff`, `reviews`, `checks` and `merge`; merge requires expected base/head OIDs. Wiki pages expose history and revision-aware PUT/restore.
 
