@@ -1,17 +1,29 @@
-@import url("https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
 :root {
   color-scheme: dark;
-  font-family: "Hanken Grotesk", sans-serif;
-  color: #e8e6eb;
-  background: #121217;
+  font-family:
+    "Hanken Grotesk", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  color: var(--text);
+  background: var(--canvas);
   font-size: 15px;
   --canvas: #121217;
   --surface: #1a191f;
   --lift: #242229;
+  --field: #111016;
   --line: #37343e;
-  --muted: #9a96a4;
+  --line-soft: #2a2830;
+  --text: #e8e6eb;
+  --strong: #fff;
+  --muted: #a39fad;
+  --faint: #8a8695;
   --accent: #8b83f7;
+  --accent-ink: #111019;
   --warm: #e6c99a;
+  --ok: #8ad0af;
+  --ok-line: #365c4d;
+  --danger: #e59191;
+  --done: #c4a8f0;
+  --done-line: #5b4a7a;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
 }
 * {
   box-sizing: border-box;
@@ -22,8 +34,31 @@ body {
   background: radial-gradient(circle at 80% -10%, #262240 0, transparent 35%), var(--canvas);
 }
 button,
-input {
+input,
+select,
+textarea {
   font: inherit;
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.button:focus-visible,
+.repo-row:focus-visible {
+  outline-offset: -2px;
+}
+.skip-link {
+  position: absolute;
+  left: 12px;
+  top: -48px;
+  z-index: 10;
+  padding: 10px 14px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.skip-link:focus {
+  top: 12px;
 }
 button {
   cursor: pointer;
@@ -68,7 +103,7 @@ a {
 .brand small {
   display: block;
   color: var(--muted);
-  font: 11px "IBM Plex Mono";
+  font: 11px var(--mono);
   letter-spacing: 0.18em;
   text-transform: uppercase;
 }
@@ -80,7 +115,7 @@ a {
 }
 .top-actions a:hover,
 .top-actions a.router-link-active {
-  color: #fff;
+  color: var(--strong);
 }
 .account-summary {
   display: inline-flex;
@@ -110,8 +145,8 @@ footer {
   display: flex;
   justify-content: space-between;
   padding: 28px 6vw;
-  color: #676371;
-  font: 11px "IBM Plex Mono";
+  color: var(--faint);
+  font: 11px var(--mono);
   border-top: 1px solid #24222b;
   margin-top: 80px;
 }
@@ -130,7 +165,7 @@ footer {
   margin: 0 0 13px;
   color: var(--accent);
   letter-spacing: 0.16em;
-  font: 11px "IBM Plex Mono";
+  font: 11px var(--mono);
   text-transform: uppercase;
 }
 .page h1 {
@@ -148,11 +183,11 @@ footer {
   border: 1px solid var(--line);
   border-radius: 3px;
   padding: 10px 15px;
-  color: #fff;
+  color: var(--strong);
   background: var(--lift);
 }
 .button.primary {
-  color: #111019;
+  color: var(--accent-ink);
   border-color: var(--accent);
   background: var(--accent);
   font-weight: 600;
@@ -184,7 +219,7 @@ footer {
   flex: 0 0 auto;
   border: 1px solid #4d485b;
   color: var(--warm);
-  font: 16px "IBM Plex Mono";
+  font: 16px var(--mono);
 }
 .repo-icon.large {
   width: 48px;
@@ -218,7 +253,7 @@ footer {
   border: 1px solid var(--line);
   padding: 5px 8px;
   color: var(--warm);
-  font: 11px "IBM Plex Mono";
+  font: 11px var(--mono);
 }
 .arrow {
   color: var(--accent);
@@ -229,7 +264,7 @@ footer {
   border-radius: 99px;
   padding: 2px 7px;
   margin-left: 10px;
-  font: 10px "IBM Plex Mono";
+  font: 10px var(--mono);
   color: var(--muted);
 }
 .badge.private {
@@ -237,12 +272,20 @@ footer {
   border-color: #625640;
 }
 .badge.open {
-  color: #8ad0af;
-  border-color: #365c4d;
+  color: var(--ok);
+  border-color: var(--ok-line);
+}
+.badge.closed {
+  color: var(--danger);
+  border-color: #6b4348;
+}
+.badge.merged {
+  color: var(--done);
+  border-color: var(--done-line);
 }
 .note {
-  color: #676371;
-  font: 11px "IBM Plex Mono";
+  color: var(--faint);
+  font: 11px var(--mono);
   margin-top: 22px;
 }
 .create-form {
@@ -250,10 +293,8 @@ footer {
   gap: 15px;
   margin: 24px 0;
 }
-.create-form label {
-  color: var(--muted);
-  font-size: 12px;
-}
+.create-form label,
+.auth-card input,
 .create-form input,
 .create-form textarea,
 .create-form select {
@@ -261,15 +302,22 @@ footer {
   display: block;
   margin-top: 7px;
   border: 1px solid var(--line);
-  background: #111016;
-  color: #fff;
+  background: var(--field);
+  color: var(--strong);
   padding: 11px 12px;
   outline: none;
 }
-.create-form input:focus,
-.create-form textarea:focus,
-.create-form select:focus {
+.auth-card input:focus-visible,
+.create-form input:focus-visible,
+.create-form textarea:focus-visible,
+.create-form select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
   border-color: var(--accent);
+}
+.button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 .form-actions,
 .section-actions {
@@ -281,7 +329,7 @@ footer {
   margin-top: 24px;
 }
 .form-error {
-  color: #e59191;
+  color: var(--danger);
   font-size: 12px;
   margin: 0;
 }
@@ -310,7 +358,7 @@ footer {
 .terminal {
   margin-top: 60px;
   color: #aaa6b3;
-  font: 12px "IBM Plex Mono";
+  font: 12px var(--mono);
   line-height: 2.1;
 }
 .terminal span {
@@ -356,7 +404,7 @@ footer {
   text-align: left;
 }
 .button.github:hover {
-  border-color: #fff;
+  border-color: var(--strong);
 }
 .permission-card {
   margin: 0 0 5px;
@@ -367,7 +415,7 @@ footer {
   line-height: 1.5;
 }
 .permission-card strong {
-  color: #e8e6eb;
+  color: var(--text);
 }
 .section-heading {
   padding: 20px 16px 10px;
@@ -384,28 +432,6 @@ footer {
 .muted {
   color: var(--muted);
 }
-.auth-card label {
-  color: var(--muted);
-  font-size: 12px;
-}
-.auth-card input {
-  width: 100%;
-  display: block;
-  margin-top: 7px;
-  border: 1px solid var(--line);
-  background: #111016;
-  color: #fff;
-  padding: 11px 12px;
-  outline: none;
-}
-.auth-card input:focus {
-  border-color: var(--accent);
-}
-.form-error {
-  color: #e59191;
-  font-size: 12px;
-  margin: 0;
-}
 .switch-auth {
   color: var(--muted);
   text-align: center;
@@ -419,7 +445,7 @@ footer {
   font-size: 13px;
 }
 .back-link:hover {
-  color: #fff;
+  color: var(--strong);
 }
 .repo-title {
   align-items: center;
@@ -436,6 +462,8 @@ footer {
 .repo-tabs {
   display: flex;
   gap: 26px;
+  overflow-x: auto;
+  white-space: nowrap;
   border-bottom: 1px solid var(--line);
 }
 .repo-tabs a {
@@ -445,12 +473,12 @@ footer {
 }
 .repo-tabs a:hover,
 .repo-tabs a.active {
-  color: #fff;
+  color: var(--strong);
   border-color: var(--accent);
 }
 .repo-tabs small {
   color: var(--muted);
-  font: 10px "IBM Plex Mono";
+  font: 10px var(--mono);
 }
 .content-card {
   border: 1px solid var(--line);
@@ -466,18 +494,13 @@ footer {
   color: var(--muted);
   font-size: 12px;
 }
-.file-row,
 .item-row {
   display: flex;
   align-items: center;
   gap: 14px;
   padding: 16px;
-  border-bottom: 1px solid #2a2830;
+  border-bottom: 1px solid var(--line-soft);
 }
-.file-row strong {
-  flex: 0 0 180px;
-}
-.file-row .muted,
 .item-row small {
   flex: 1;
   color: var(--muted);
@@ -489,7 +512,7 @@ footer {
 .number,
 .wiki-mark {
   color: var(--accent);
-  font: 12px "IBM Plex Mono";
+  font: 12px var(--mono);
 }
 .wiki-mark {
   border: 1px solid var(--accent);
@@ -506,7 +529,7 @@ footer {
 }
 .state.error {
   flex-direction: column;
-  color: #e59191;
+  color: var(--danger);
 }
 .spinner {
   width: 15px;
@@ -521,6 +544,34 @@ footer {
   height: 6px;
   background: var(--accent);
   border-radius: 50%;
+}
+.page > *,
+.auth-layout > * {
+  animation: rise 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+.page > :nth-child(2),
+.auth-layout > :nth-child(2) {
+  animation-delay: 70ms;
+}
+.page > :nth-child(3) {
+  animation-delay: 140ms;
+}
+.page > :nth-child(n + 4) {
+  animation-delay: 200ms;
+}
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
 }
 @keyframes spin {
   to {
@@ -556,9 +607,7 @@ footer {
     margin-left: auto;
   }
   .repo-tabs {
-    gap: 14px;
-    overflow: auto;
-    white-space: nowrap;
+    gap: 18px;
   }
   .item-row strong {
     flex: 1;
@@ -574,9 +623,20 @@ footer {
   .topbar {
     padding: 0 5vw;
   }
+  .topbar {
+    height: auto;
+    min-height: 64px;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-block: 10px;
+  }
   .top-actions {
-    gap: 10px;
-    font-size: 12px;
+    gap: 12px;
+    font-size: 13px;
+    flex-wrap: wrap;
+  }
+  .text-button {
+    padding: 10px 6px;
   }
   .account-summary {
     display: none;

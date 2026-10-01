@@ -4,7 +4,6 @@ import { useI18n } from "vue-i18n";
 import { useRoute } from "vue-router";
 import type { Repository } from "../lib/api";
 import { ApiError, api } from "../lib/api";
-import { sessionState } from "../lib/session";
 import StatusState from "../components/StatusState.vue";
 import DeployWizard from "../components/DeployWizard.vue";
 import RepositoryCode from "../components/RepositoryCode.vue";
@@ -74,7 +73,7 @@ watch(() => [route.params.owner, route.params.repo], load, { immediate: true });
         </div>
       </div>
       <DeployWizard v-if="showDeploy && repository.canWrite" :repository="repository" />
-      <nav class="repo-tabs">
+      <nav class="repo-tabs" :aria-label="t('repositoryNav')">
         <RouterLink :class="{ active: section === 'code' }" :to="`/${owner}/${repoName}`">{{
           t("code")
         }}</RouterLink>
