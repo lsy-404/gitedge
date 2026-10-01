@@ -8,6 +8,7 @@ import {
   type RateLimitNamespace,
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
+import { createLogger } from "../../../src/worker/common/logger";
 
 export interface GatewayService {
   fetch(request: Request): Promise<Response>;
@@ -238,11 +239,16 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
       request.method !== "HEAD" &&
       !request.headers.get("Authorization") &&
       request.headers.get("Origin") !== url.origin
-    )
+    ) {
+      createLogger(undefined, { service: "gateway" }).warn("gateway:origin-rejected", {
+        origin: request.headers.get("Origin"),
+        expectedOrigin: url.origin,
+      });
       return Response.json(
         { error: { code: "forbidden", message: "Same-origin writes are required." } },
         { status: 403 }
       );
+    }
     const userLimitResponse = await enforceUserLimit(session, env);
     if (userLimitResponse) return userLimitResponse;
     return service.fetch(forwardAuthenticated(request, prefix, session));

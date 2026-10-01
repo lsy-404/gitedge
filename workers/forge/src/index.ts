@@ -384,13 +384,13 @@ function canCreateRepository(namespace: NamespaceAccessRow, userId: string): boo
   return namespace.created_by === userId;
 }
 
-async function publicRepositoryRead(env: ForgeEnv, parts: string[]): Promise<Response> {
-  const owner = parts[2];
-  const slug = parts[3];
-  if (!owner || !slug) return error(404, "not_found", "Endpoint was not found.");
-
-  const repository = await publicRepositoryForOwnerAndSlug(env, owner, slug);
-  if (!repository) return error(404, "not_found", "Repository was not found.");
+async function publicRepositoryRead(
+  env: ForgeEnv,
+  repository: RepositoryRow,
+  suffix: string[],
+  request: Request
+): Promise<Response> {
+  const parts = ["public", "repositories", repository.owner, repository.slug, ...suffix];
   if (!repository.artifact_name || !repository.remote)
     return error(503, "internal_error", "Repository storage is unavailable.");
   if (parts.length === 4) return json({ data: repoResponse(repository) });
@@ -427,6 +427,53 @@ async function publicRepositoryRead(env: ForgeEnv, parts: string[]): Promise<Res
       .bind(repository.id, parts[5])
       .first();
     return page ? json({ data: page }) : error(404, "not_found", "Wiki page was not found.");
+  }
+  if (resource === "wiki" && parts[5] && parts[6] === "history" && parts.length === 7) {
+    const rows = await env.DB.prepare(
+      "SELECT slug, title, content, revision, updated_by AS updatedBy, updated_at AS updatedAt FROM forge_wiki_revisions WHERE repository_id = ? AND slug = ? ORDER BY revision DESC"
+    )
+      .bind(repository.id, parts[5])
+      .all();
+    return json({ data: rows.results });
+  }
+  if (resource === "wiki" && parts[6] === "revisions" && parts.length === 8) {
+    const page = await env.DB.prepare(
+      "SELECT slug, title, content, revision, updated_by AS updatedBy, updated_at AS updatedAt FROM forge_wiki_revisions WHERE repository_id = ? AND slug = ? AND revision = ?"
+    )
+      .bind(repository.id, parts[5], Number(parts[7]))
+      .first();
+    return page ? json({ data: page }) : error(404, "not_found", "Wiki revision was not found.");
+  }
+  if (
+    resource === "pull-requests" &&
+    parts.length === 7 &&
+    ["reviews", "checks", "diff"].includes(parts[6])
+  ) {
+    const pull = await env.DB.prepare(
+      "SELECT * FROM forge_pull_requests WHERE repository_id = ? AND number = ?"
+    )
+      .bind(repository.id, Number(parts[5]))
+      .first<Record<string, unknown>>();
+    if (!pull) return error(404, "not_found", "Pull request was not found.");
+    if (parts[6] === "diff") {
+      const gitUrl = new URL(`/repositories/${repository.id}/compare`, request.url);
+      gitUrl.searchParams.set("base", String(pull.base_ref));
+      gitUrl.searchParams.set("head", String(pull.head_ref));
+      if (pull.head_session_id)
+        gitUrl.searchParams.set("headSessionId", String(pull.head_session_id));
+      createLogger(env.LOG_LEVEL, { service: "forge" }).debug("forge:public-pull-request-diff", {
+        repositoryId: repository.id,
+        number: parts[5],
+      });
+      return env.GIT.fetch(new Request(gitUrl));
+    }
+    const table = parts[6] === "reviews" ? "forge_reviews" : "forge_check_runs";
+    const rows = await env.DB.prepare(
+      `SELECT * FROM ${table} WHERE pull_request_id = ? ORDER BY created_at DESC`
+    )
+      .bind(String(pull.id))
+      .all<Record<string, unknown>>();
+    return json({ data: rows.results.map((row) => presentForgeRow(parts[6], row)) });
   }
   if (resource === "discussions" && parts.length === 5) {
     const rows = await env.DB.prepare(
@@ -1315,24 +1362,18 @@ export default {
     const url = new URL(request.url);
     const parts = url.pathname.split("/").filter(Boolean);
 
-    if (request.method === "GET" && parts[0] === "public" && parts[1] === "repositories") {
-      const publicUser = trustedUser(request);
-      if (publicUser?.agentSession) {
-        const sessionError = await activeAgentSession(env, publicUser);
-        if (sessionError) return sessionError;
-        const scopedRepo = await publicRepositoryForOwnerAndSlug(
-          env,
-          parts[2] ?? "",
-          parts[3] ?? ""
-        );
-        if (!scopedRepo || scopedRepo.id !== publicUser.agentSession.repositoryId)
-          return error(403, "forbidden", "Agent session is limited to another repository.");
-      }
-      return publicRepositoryRead(env, parts);
-    }
-
     const user = trustedUser(request);
-    if (!user) return error(401, "unauthorized", "Trusted user context is required.");
+    if (!user) {
+      if (request.method !== "GET" || parts[0] !== "repositories")
+        return error(401, "unauthorized", "Trusted user context is required.");
+      const byName = parts[1] === "by-name";
+      const repository = byName
+        ? await publicRepositoryForOwnerAndSlug(env, parts[2] ?? "", parts[3] ?? "")
+        : await repositoryById(env, parts[1] ?? "");
+      if (!repository || repository.visibility !== "public")
+        return error(404, "not_found", "Repository was not found.");
+      return publicRepositoryRead(env, repository, parts.slice(byName ? 4 : 2), request);
+    }
     const sessionError = await activeAgentSession(env, user);
     if (sessionError) return sessionError;
     if (

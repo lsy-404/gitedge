@@ -1,5 +1,7 @@
 import { env } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
+import git from "../../workers/git/src/index";
+import { resolveGitAccess, resolveWorkspace } from "../../workers/git/src/access";
 import forge from "../../workers/forge/src/index";
 import { FixtureArtifacts } from "../support/artifacts";
 
@@ -579,5 +581,85 @@ describe("Forge collaboration", () => {
       baseRef: "main",
       headRef: "topic",
     });
+  });
+});
+
+describe("Public repository boundaries", () => {
+  const read = (path: string) => forge.fetch(new Request(`https://forge.test${path}`), forgeEnv);
+
+  it("serves canonical anonymous pages, reviews and wiki history without write access", async () => {
+    for (const path of [
+      "/repositories/by-name/alice/demo",
+      "/repositories/r1",
+      "/repositories/r1/issues",
+      "/repositories/r1/issues/6",
+      "/repositories/r1/issues/6/comments",
+      "/repositories/r1/pull-requests",
+      "/repositories/r1/pull-requests/8",
+      "/repositories/r1/pull-requests/8/reviews",
+      "/repositories/r1/pull-requests/8/checks",
+      "/repositories/r1/pull-requests/8/diff",
+      "/repositories/r1/discussions",
+      "/repositories/r1/wiki",
+      "/repositories/r1/wiki/home/history",
+    ])
+      expect((await read(path)).status, path).toBe(200);
+    expect(await (await read("/repositories/r1")).json()).toMatchObject({
+      data: { canWrite: false },
+    });
+    expect(
+      (
+        await forge.fetch(
+          new Request("https://forge.test/repositories/r1/issues", { method: "POST" }),
+          forgeEnv
+        )
+      ).status
+    ).toBe(401);
+    await env.DB.prepare("UPDATE repositories SET visibility = 'private' WHERE id = 'r1'").run();
+    try {
+      for (const path of [
+        "/repositories/by-name/alice/demo",
+        "/repositories/r1/issues",
+        "/repositories/r1/wiki",
+      ])
+        expect((await read(path)).status).toBe(404);
+    } finally {
+      await env.DB.prepare("UPDATE repositories SET visibility = 'public' WHERE id = 'r1'").run();
+    }
+  });
+
+  it("grants public access only to a published fork head and cannot mint untracked tokens", async () => {
+    const request = new Request("https://git.test/repositories/r1/tree");
+    const access = await resolveGitAccess(request, forgeEnv, "r1");
+    expect(access).not.toBeNull();
+    if (!access) throw new Error("Missing public fixture");
+    expect(await resolveWorkspace(forgeEnv, access, "s1")).toBeNull();
+    expect(await resolveWorkspace(forgeEnv, access, "s1", "unpublished")).toBeNull();
+    const pull = await env.DB.prepare(
+      "SELECT head_ref FROM forge_pull_requests WHERE head_session_id = 's1' LIMIT 1"
+    ).first<{ head_ref: string }>();
+    expect(pull).not.toBeNull();
+    if (!pull) throw new Error("Missing published fixture");
+    expect(await resolveWorkspace(forgeEnv, access, "s1", pull.head_ref)).toMatchObject({
+      id: "s1",
+    });
+    expect(
+      (
+        await git.fetch(
+          new Request(
+            "https://git.test/repositories/r1/raw?sessionId=s1&ref=unpublished&path=secret.txt"
+          ),
+          forgeEnv
+        )
+      ).status
+    ).toBe(404);
+    const before = artifacts.snapshot("repo-r1").tokens.length;
+    const tokenRequest = new Request("https://git.test/repositories/r1/tokens", {
+      method: "POST",
+      headers: auth("u1", "alice"),
+      body: JSON.stringify({ scope: "write" }),
+    });
+    expect((await git.fetch(tokenRequest, forgeEnv)).status).toBe(405);
+    expect(artifacts.snapshot("repo-r1").tokens).toHaveLength(before);
   });
 });

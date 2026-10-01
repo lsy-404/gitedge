@@ -1,4 +1,3 @@
-import { z } from "zod";
 import { createLogger } from "../../../src/worker/common/logger";
 import { listRepositorySessions, resolveGitAccess, resolveWorkspace, type GitEnv } from "./access";
 import {
@@ -36,11 +35,6 @@ function validPath(path: string): boolean {
     path.split("/").every((part) => part !== ".." && part !== ".")
   );
 }
-const TokenInputSchema = z.object({
-  scope: z.enum(["read", "write"]).default("read"),
-  ttlSeconds: z.number().int().min(60).max(3600).default(3600),
-});
-
 export async function handleGitApi(request: Request, env: GitEnv): Promise<Response> {
   const url = new URL(request.url);
   const parts = url.pathname.split("/").filter(Boolean);
@@ -72,25 +66,6 @@ export async function handleGitApi(request: Request, env: GitEnv): Promise<Respo
   if (!validPath(path) || ref.length > 255 || !ref.length)
     return fail(400, "bad_request", "Invalid ref or path.");
   logger.debug("artifacts:request", { resource, sessionId: session?.id });
-  if (resource === "tokens" && request.method === "POST") {
-    const parsed = TokenInputSchema.safeParse(await request.json().catch(() => null));
-    if (!parsed.success) return fail(400, "bad_request", "Invalid token request.");
-    if (
-      !access.user ||
-      (parsed.data.scope === "write" &&
-        (!access.repository.canWrite || userSession?.permission === "read"))
-    )
-      return fail(403, "forbidden", "Write tokens require repository write access.");
-    const token = await repo.createToken(parsed.data.scope, parsed.data.ttlSeconds);
-    const info = await repo.info();
-    logger.info("artifacts:git-token-issued", { scope: parsed.data.scope, sessionId: session?.id });
-    return json({
-      id: token.id,
-      remote: info.remote,
-      token: token.plaintext,
-      expiresAt: Date.parse(token.expiresAt),
-    });
-  }
   if (resource === "merge" && request.method === "POST") {
     if (!access.user || !access.repository.canWrite || userSession)
       return fail(403, "forbidden", "A repository member must merge proposals.");
@@ -183,7 +158,10 @@ export async function handleGitApi(request: Request, env: GitEnv): Promise<Respo
   }
   if (resource === "compare") {
     const headSessionId = url.searchParams.get("headSessionId");
-    const headSession = headSessionId ? await resolveWorkspace(env, access, headSessionId) : null;
+    const head = url.searchParams.get("head") ?? "HEAD";
+    const headSession = headSessionId
+      ? await resolveWorkspace(env, access, headSessionId, head)
+      : null;
     if (headSessionId && !headSession) return fail(404, "not_found", "Head session was not found.");
     using headRepo = await env.ARTIFACTS.get(
       headSession?.workspaceName ?? access.repository.artifactName
@@ -192,7 +170,7 @@ export async function handleGitApi(request: Request, env: GitEnv): Promise<Respo
       repo,
       headRepo,
       url.searchParams.get("base") ?? access.repository.defaultBranch,
-      url.searchParams.get("head") ?? "HEAD"
+      head
     );
     return comparison ? json(comparison) : fail(404, "not_found", "Comparison ref was not found.");
   }

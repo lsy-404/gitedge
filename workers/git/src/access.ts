@@ -59,7 +59,8 @@ export async function resolveGitAccess(
 export async function resolveWorkspace(
   env: GitEnv,
   access: GitRepositoryAccess,
-  sessionId?: string | null
+  sessionId?: string | null,
+  publicHeadRef?: string
 ): Promise<AgentSession | null> {
   if (!sessionId) return null;
   const row = await env.DB.prepare(
@@ -68,12 +69,14 @@ export async function resolveWorkspace(
     .bind(sessionId, access.repository.id)
     .first<AgentSession>();
   if (!row) return null;
-  if (access.user?.agentSession && access.user.agentSession.id !== sessionId) return null;
-  if (!access.repository.canWrite) {
+  const ownWorkspace = !access.user?.agentSession || access.user.agentSession.id === sessionId;
+  if (!access.repository.canWrite || !ownWorkspace) {
+    // A published PR grants access to its head only, never to the entire private fork.
+    if (!publicHeadRef) return null;
     const publicPull = await env.DB.prepare(
-      "SELECT id FROM forge_pull_requests WHERE repository_id = ? AND head_session_id = ?"
+      "SELECT id FROM forge_pull_requests WHERE repository_id = ? AND head_session_id = ? AND head_ref = ?"
     )
-      .bind(access.repository.id, sessionId)
+      .bind(access.repository.id, sessionId, publicHeadRef)
       .first<{ id: string }>();
     if (!publicPull) return null;
   }
