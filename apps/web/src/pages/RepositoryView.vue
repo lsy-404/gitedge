@@ -124,15 +124,17 @@ watch(() => [route.params.owner, route.params.repo, route.params.section], load,
         <p class="muted">{{ repository?.description || t("noDescription") }}</p>
       </div>
     </div>
-    <nav class="repo-tabs">
+    <nav class="repo-tabs" :aria-label="t('repositoryNav')">
       <RouterLink :class="{ active: section === 'code' }" :to="`/${owner}/${repoName}`">{{
         t("code")
       }}</RouterLink>
       <RouterLink :class="{ active: section === 'issues' }" :to="`/${owner}/${repoName}/issues`"
-        >{{ t("issues") }} <small>{{ issues.length }}</small></RouterLink
+        >{{ t("issues") }}
+        <small v-if="section === 'issues' && !loading">{{ issues.length }}</small></RouterLink
       >
       <RouterLink :class="{ active: section === 'pulls' }" :to="`/${owner}/${repoName}/pulls`"
-        >{{ t("pulls") }} <small>{{ pulls.length }}</small></RouterLink
+        >{{ t("pulls") }}
+        <small v-if="section === 'pulls' && !loading">{{ pulls.length }}</small></RouterLink
       >
       <RouterLink :class="{ active: section === 'wiki' }" :to="`/${owner}/${repoName}/wiki`">{{
         t("wiki")
@@ -202,7 +204,7 @@ watch(() => [route.params.owner, route.params.repo, route.params.section], load,
         ><div v-for="issue in issues" :key="issue.number" class="item-row">
           <span class="number">#{{ issue.number }}</span
           ><strong>{{ issue.title }}</strong
-          ><span class="badge open">{{ issue.state }}</span
+          ><span :class="['badge', issue.state]">{{ t(issue.state) }}</span
           ><small>{{ issue.author }}</small>
         </div>
         <div v-if="!issues.length" class="state">{{ t("empty") }}</div></template
@@ -210,7 +212,7 @@ watch(() => [route.params.owner, route.params.repo, route.params.section], load,
         ><div v-for="pull in pulls" :key="pull.number" class="item-row">
           <span class="number">#{{ pull.number }}</span
           ><strong>{{ pull.title }}</strong
-          ><span class="badge open">{{ pull.state }}</span
+          ><span :class="['badge', pull.state]">{{ t(pull.state) }}</span
           ><small>{{ pull.headRef }} → {{ pull.baseRef }}</small>
         </div>
         <div v-if="!pulls.length" class="state">{{ t("empty") }}</div></template

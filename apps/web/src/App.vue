@@ -19,15 +19,16 @@ refreshSession();
 
 <template>
   <div class="app-shell">
+    <a class="skip-link" href="#main">{{ t("skipToContent") }}</a>
     <header class="topbar">
       <RouterLink class="brand" to="/dashboard"
-        ><span class="brand-mark">G</span
+        ><span class="brand-mark" aria-hidden="true">G</span
         ><span
           ><strong>{{ t("brand") }}</strong
           ><small>{{ t("brandSub") }}</small></span
         ></RouterLink
       >
-      <nav v-if="sessionState.user" class="top-actions">
+      <nav v-if="sessionState.user" class="top-actions" :aria-label="t('mainNav')">
         <RouterLink to="/dashboard">{{ t("dashboard") }}</RouterLink
         ><RouterLink to="/organizations">{{ t("organizations") }}</RouterLink
         ><RouterLink
@@ -47,7 +48,7 @@ refreshSession();
         {{ locale === "zh-CN" ? "EN" : "中文" }}
       </button>
     </header>
-    <main><RouterView /></main>
+    <main id="main" tabindex="-1"><RouterView /></main>
     <footer>
       <span>GitEdge · {{ t("brand") }}</span
       ><span>{{ t("edge") }}</span>
