@@ -12,7 +12,14 @@ import {
 import { ssoProviders, ssoSecrets } from "./config";
 import { listSsoIdentities, resolveSsoIdentity, unlinkSsoIdentity } from "./identities";
 import { startOidc, completeOidc, startOidcLogout } from "./oidc";
-import { startSaml, completeSaml, samlMetadata, startSamlLogout, completeSamlLogout } from "./saml";
+import {
+  startSaml,
+  completeSaml,
+  samlMetadata,
+  startSamlLogout,
+  completeSamlLogout,
+  completeSamlLogoutNotification,
+} from "./saml";
 import type { SsoEnvironment, SsoIdentityClaims, SsoProvider, SsoProviderSecrets } from "./types";
 
 const FLOW_COOKIE = "gitedge_sso";
@@ -101,7 +108,9 @@ function validClaims(claims: SsoIdentityClaims): boolean {
     claims.subject &&
     claims.subject.length <= 1024 &&
     claims.displayName.length <= 512 &&
-    (!claims.email || claims.email.length <= 320)
+    (!claims.email || claims.email.length <= 320) &&
+    (!claims.sessionIndex || claims.sessionIndex.length <= 1024) &&
+    (!claims.nameIdFormat || claims.nameIdFormat.length <= 1024)
   );
 }
 async function finishLogin(
@@ -130,8 +139,10 @@ async function finishLogin(
     response.headers.set("Location", `${target.pathname}${target.search}`);
   } else {
     const token = await issueSession(env, resolved.identity.userId);
-    await env.DB.prepare("INSERT INTO auth_sso_sessions (token_hash, identity_id) VALUES (?, ?)")
-      .bind(await hashToken(token), resolved.identity.id)
+    await env.DB.prepare(
+      "INSERT INTO auth_sso_sessions (token_hash, identity_id, session_index) VALUES (?, ?, ?)"
+    )
+      .bind(await hashToken(token), resolved.identity.id, claims.sessionIndex ?? null)
       .run();
     const previous = readCookie(request);
     if (previous)
@@ -358,6 +369,71 @@ async function handleSsoRequest(
     const body = request.method === "POST" ? await readTextLimited(request.body, 1024 * 1024) : "";
     if (body === null) return fail(413, "bad_request", "SSO response exceeded the size limit.");
     const params = request.method === "POST" ? new URLSearchParams(body) : url.searchParams;
+    if (
+      provider.protocol === "saml" &&
+      parts[2] === "logout-callback" &&
+      params.has("SAMLRequest")
+    ) {
+      try {
+        const endpoint = new URL(`/api/auth/sso/${provider.id}/logout-callback`, url);
+        endpoint.search = url.search;
+        const notification = await completeSamlLogoutNotification(
+          provider,
+          secrets,
+          callbackUrl(request, provider),
+          new URL(`/api/auth/sso/${provider.id}/logout-callback`, url).toString(),
+          new Request(endpoint, {
+            method: request.method,
+            headers: request.headers,
+            ...(request.method === "POST" ? { body } : {}),
+          })
+        );
+        const requestHash = await hashToken(
+          JSON.stringify([provider.id, provider.issuer, notification.requestId])
+        );
+        const nonce = createToken();
+        const indexes = JSON.stringify(notification.sessionIndexes);
+        const results = await env.DB.batch<Record<string, unknown>>([
+          env.DB.prepare("DELETE FROM auth_sso_logout_notifications WHERE expires_at <= ?").bind(
+            Date.now()
+          ),
+          env.DB.prepare(
+            "INSERT INTO auth_sso_logout_notifications (request_hash, nonce, expires_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING RETURNING request_hash"
+          ).bind(requestHash, nonce, Date.now() + (FLOW_SECONDS + 60) * 1000),
+          env.DB.prepare(
+            "DELETE FROM auth_sessions WHERE token_hash IN (SELECT s.token_hash FROM auth_sso_sessions s JOIN auth_sso_identities i ON i.id = s.identity_id WHERE i.protocol = 'saml' AND i.provider_id = ? AND i.issuer = ? AND i.subject = ? AND (? IS NULL OR i.name_id_format = ?) AND (? = '[]' OR s.session_index IN (SELECT value FROM json_each(?)))) AND EXISTS (SELECT 1 FROM auth_sso_logout_notifications WHERE request_hash = ? AND nonce = ?) RETURNING token_hash"
+          ).bind(
+            provider.id,
+            provider.issuer,
+            notification.subject,
+            notification.nameIdFormat,
+            notification.nameIdFormat,
+            indexes,
+            indexes,
+            requestHash,
+            nonce
+          ),
+        ]);
+        if (!results[1].results.length)
+          return fail(400, "sso_replayed", "Logout notification has already been processed.");
+        const response = new Response(null, {
+          status: 302,
+          headers: { Location: notification.responseUrl, "Cache-Control": "no-store" },
+        });
+        const currentToken = readCookie(request);
+        const currentHash = currentToken ? await hashToken(currentToken) : null;
+        if (currentHash && results[2].results.some((row) => row.token_hash === currentHash))
+          response.headers.append("Set-Cookie", createSessionCookie("", 0));
+        logger.info("sso:idp-logged-out", {
+          providerId: provider.id,
+          sessions: results[2].results.length,
+        });
+        return response;
+      } catch {
+        logger.warn("sso:idp-logout-rejected", { providerId: provider.id });
+        return fail(400, "sso_invalid_logout", "Logout notification is invalid.");
+      }
+    }
     const state = params.get(provider.protocol === "saml" ? "RelayState" : "state");
     const proof = browserProof(request);
     if (!state || state.length > 128 || !proof || proof.length > 128)

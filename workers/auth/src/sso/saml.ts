@@ -10,7 +10,7 @@ import {
   type Profile,
   type SamlConfig,
 } from "@node-saml/node-saml";
-// POST logout has no signed profile, so verify its root with the library's XML verifier.
+// Verify the signed XML root before processing logout data or decrypting assertions.
 import { getVerifiedXml, decryptXml } from "@node-saml/node-saml/lib/xml";
 import { z } from "zod";
 import type {
@@ -389,6 +389,125 @@ export async function completeSamlLogout(
   if (!cache.wasConsumed()) throw new Error("SAML logout request correlation was not consumed.");
 }
 
+export interface SamlLogoutNotification {
+  requestId: string;
+  subject: string;
+  nameIdFormat: string | null;
+  sessionIndexes: string[];
+  responseUrl: string;
+}
+
+export async function completeSamlLogoutNotification(
+  provider: SamlProvider,
+  secrets: SsoProviderSecrets,
+  loginCallbackUrl: string,
+  logoutCallbackUrl: string,
+  request: Request
+): Promise<SamlLogoutNotification> {
+  if (!provider.logoutUrl || !secrets.privateKey || !provider.signingCertificate)
+    throw new Error("SAML signed logout responses are not configured.");
+  const saml = createSaml(
+    provider,
+    secrets,
+    loginCallbackUrl,
+    new SingleRequestCache(),
+    logoutCallbackUrl
+  );
+  const requestUrl = new URL(request.url);
+  let xml: string;
+  let relayState = "";
+  let profile: Profile | null;
+  if (request.method === "GET") {
+    const parameters = requestUrl.searchParams;
+    assertUniqueQueryParameters(parameters, "SAMLRequest");
+    const encoded = requiredQueryValue(parameters, "SAMLRequest");
+    requiredQueryValue(parameters, "Signature");
+    if (!ALLOWED_SIGNATURE_ALGORITHMS.has(requiredQueryValue(parameters, "SigAlg")))
+      throw new Error("SAML logout request uses an unsupported signature algorithm.");
+    relayState = parameters.get("RelayState") ?? "";
+    assertResponseBase64(encoded);
+    xml = new TextDecoder().decode(
+      inflateRawSync(Buffer.from(encoded, "base64"), { maxOutputLength: 2_000_000 })
+    );
+    assertModernSignatureAlgorithms(xml, false);
+    const result = await saml.validateRedirectAsync(
+      Object.fromEntries(parameters.entries()),
+      requestUrl.search.slice(1)
+    );
+    profile = result.loggedOut ? result.profile : null;
+  } else if (request.method === "POST") {
+    if (
+      requestUrl.search ||
+      request.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase() !==
+        "application/x-www-form-urlencoded"
+    )
+      throw new Error("SAML logout request must use the POST form binding.");
+    const form = await request.formData();
+    const encoded = requiredFormValue(form, "SAMLRequest");
+    if (form.has("SAMLResponse") || form.getAll("RelayState").length > 1)
+      throw new Error("SAML logout request parameters are invalid.");
+    const relay = form.get("RelayState");
+    if (relay !== null && typeof relay !== "string")
+      throw new Error("SAML RelayState must be text.");
+    relayState = relay ?? "";
+    assertResponseBase64(encoded);
+    const original = Buffer.from(encoded, "base64").toString("utf8");
+    assertModernSignatureAlgorithms(original);
+    const document = parseXml(original);
+    const verified = getVerifiedXml(
+      original,
+      document.documentElement,
+      await saml.trustedSigningCertificates()
+    );
+    if (!verified) throw new Error("SAML logout request signature is invalid.");
+    xml = verified;
+    const result = await saml.validatePostRequestAsync({ SAMLRequest: encoded });
+    profile = result.loggedOut ? result.profile : null;
+  } else throw new Error("Unsupported SAML logout request binding.");
+  const root = parseXml(xml).documentElement;
+  if (
+    !profile ||
+    root.localName !== "LogoutRequest" ||
+    root.namespaceURI !== SAML_PROTOCOL_NS ||
+    root.getAttribute("Version") !== "2.0"
+  )
+    throw new Error("SAML logout request root is invalid.");
+  const requestId = root.getAttribute("ID") ?? "";
+  if (
+    !requestId ||
+    requestId.length > 1024 ||
+    root.getAttribute("Destination") !== logoutCallbackUrl ||
+    profile.ID !== requestId
+  )
+    throw new Error("SAML logout request destination or identifier is invalid.");
+  if (requiredText(root, SAML_ASSERTION_NS, "Issuer") !== provider.issuer)
+    throw new Error("SAML logout request issuer does not match the configured IdP.");
+  const issuedAt = Date.parse(root.getAttribute("IssueInstant") ?? "");
+  if (
+    !Number.isFinite(issuedAt) ||
+    issuedAt > Date.now() + ACCEPTED_CLOCK_SKEW_MS ||
+    Date.now() - issuedAt > REQUEST_ID_TTL_MS
+  )
+    throw new Error("SAML logout request is expired.");
+  assertTimeWindow(root, Date.now(), false);
+  const subject = typeof profile.nameID === "string" ? profile.nameID : "";
+  if (!subject.trim() || subject.length > 1024 || relayState.length > 1024)
+    throw new Error("SAML logout request subject or state is invalid.");
+  const sessionIndexes = elementChildren(root, SAML_PROTOCOL_NS, "SessionIndex").map(
+    (element) => element.textContent ?? ""
+  );
+  if (sessionIndexes.length > 100 || sessionIndexes.some((value) => !value || value.length > 1024))
+    throw new Error("SAML logout request session indexes are invalid.");
+  const responseUrl = await saml.getLogoutResponseUrlAsync(profile, relayState, {}, true);
+  return {
+    requestId,
+    subject,
+    nameIdFormat: profile.nameIDFormat ?? null,
+    sessionIndexes,
+    responseUrl,
+  };
+}
+
 function parseLogoutRequestState(
   provider: SamlProvider,
   loginCallbackUrl: string,
@@ -417,8 +536,11 @@ function parseLogoutRequestState(
   return state;
 }
 
-function assertUniqueQueryParameters(parameters: URLSearchParams): void {
-  const allowed = new Set(["SAMLResponse", "RelayState", "Signature", "SigAlg"]);
+function assertUniqueQueryParameters(
+  parameters: URLSearchParams,
+  messageName = "SAMLResponse"
+): void {
+  const allowed = new Set([messageName, "RelayState", "Signature", "SigAlg"]);
   const seen = new Set<string>();
   for (const [name] of parameters) {
     if (!allowed.has(name) || seen.has(name)) {

@@ -78,6 +78,18 @@ The callback is bound to a short-lived HttpOnly browser cookie and a single-use 
 
 The last configured login method cannot be unlinked. Existing repositories, namespace ownership and agent accounts remain attached to the same local account when an identity is explicitly linked. SAML emails are treated as profile data, not as verified account-linking evidence.
 
-Identity-provider-initiated SAML login, inbound IdP logout notifications, SCIM provisioning and group-to-repository permission mapping are not implemented. Identity authentication does not grant organization membership or administrative access. Use explicit GitEdge memberships and account groups.
+Signed SAML logout requests from the IdP are accepted through POST and Redirect bindings at the logout callback. They invalidate only sessions matching the configured provider, subject and supplied SessionIndexes, consume the request once, and return a signed response to the configured IdP logout endpoint. Unrelated account sessions and pending login/logout browser flows remain intact.
+
+Identity-provider-initiated SAML login, OIDC back-channel logout notifications, SCIM provisioning and group-to-repository permission mapping are not implemented. Identity authentication does not grant organization membership or administrative access. Use explicit GitEdge memberships and account groups.
 
 Protocol tests use real signed JWT/XML fixtures inside Node and Cloudflare Workers, with D1 coverage for identity binding, browser proof, replay, expiry and concurrent unlinking. A production IdP still requires tenant configuration and a live login/logout acceptance test before being enabled for users.
+
+## Live acceptance with Keycloak
+
+Use an isolated Keycloak distribution and the official `cloudflared` binary to exercise both protocols against a real IdP. The fixture only exposes its synthetic test realm and static login resources through a temporary HTTPS tunnel; administrative endpoints remain on loopback. It writes temporary Auth configuration only when `workers/auth/.dev.vars` does not already exist.
+
+```sh
+KEYCLOAK_DIR=/absolute/path/to/keycloak CLOUDFLARED_PATH=/absolute/path/to/cloudflared node test/e2e/keycloak-fixture.mjs
+```
+
+After the fixture reports that provider configuration was written, start or restart `npm run dev` in a second terminal. Wait for fixture readiness, then use the generated private `credentials.json` under ignored `work/full-verification/` to test account linking, both login methods and both single sign-out methods. Test an OIDC logout after using the SAML client in the same IdP session to exercise the signed logout notification. Stop the fixture with Ctrl+C after acceptance; this removes its temporary Auth variables and stops its IdP and tunnel. The fixture creates only synthetic accounts; never reuse production passwords or realm data.
