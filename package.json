@@ -33,6 +33,7 @@
     "wrangler": "^4.146.0"
   },
   "dependencies": {
+    "@node-saml/node-saml": "^5.1.0",
     "diff": "^9.0.0",
     "isomorphic-git": "^1.42.6",
     "memfs": "^4.80.0",
