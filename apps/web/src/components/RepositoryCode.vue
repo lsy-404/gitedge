@@ -19,6 +19,7 @@ import { sessionState } from "../lib/session";
 import {
   agentSessionDisplayStatus,
   findGraphCommit,
+  layoutGitGraph,
   projectGitGraph,
   repositoryCodeLocation,
   type GraphSessionMarker,
@@ -74,43 +75,7 @@ const branchRefs = computed(() => refs.value.filter((item) => item.name.startsWi
 const tagRefs = computed(() => refs.value.filter((item) => item.name.startsWith("refs/tags/")));
 const shortRefs = (items: GitRef[]) =>
   items.map((item) => ({ ...item, shortName: item.name.replace(/^refs\/(heads|tags)\//, "") }));
-const graphLayout = computed(() => {
-  const list = graph.value?.commits ?? [];
-  const index = new Map(list.map((commit, row) => [commit.oid, row]));
-  const lanes: string[] = [];
-  const points: Array<{ commit: GitCommit; row: number; lane: number }> = [];
-  const edges: Array<{ fromRow: number; fromLane: number; toRow: number; toLane: number }> = [];
-  for (const [row, commit] of list.entries()) {
-    let lane = lanes.indexOf(commit.oid);
-    if (lane < 0) {
-      lane = lanes.findIndex((value) => !value);
-      if (lane < 0) lane = lanes.length;
-      lanes[lane] = commit.oid;
-    }
-    points.push({ commit, row, lane });
-    const parents = commit.parents.filter((parent) => index.has(parent));
-    if (parents.length === 0) lanes[lane] = "";
-    parents.forEach((parent, parentIndex) => {
-      const toRow = index.get(parent);
-      if (toRow === undefined) return;
-      let toLane = lanes.indexOf(parent);
-      if (toLane < 0) {
-        toLane = parentIndex === 0 ? lane : lanes.findIndex((value) => !value);
-        if (toLane < 0) toLane = lanes.length;
-        lanes[toLane] = parent;
-      }
-      edges.push({ fromRow: row, fromLane: lane, toRow, toLane });
-    });
-    if (parents.length > 0 && lanes[lane] === commit.oid) lanes[lane] = parents[0];
-  }
-  return {
-    points,
-    edges,
-    width: Math.max(1, ...points.map((point) => point.lane + 1)) * 22 + 16,
-    rowHeight: 72,
-    height: points.length * 72,
-  };
-});
+const graphLayout = computed(() => layoutGitGraph(graph.value?.commits ?? []));
 const commitRefs = computed(() => graphView.value?.refsByOid ?? new Map<string, string[]>());
 const sessionMarkers = computed(
   () => graphView.value?.sessionsByOid ?? new Map<string, GraphSessionMarker[]>()

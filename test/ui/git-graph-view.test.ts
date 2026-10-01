@@ -3,6 +3,7 @@ import type { AgentSession, GitCommit, GitGraph } from "../../packages/contracts
 import {
   agentSessionDisplayStatus,
   findGraphCommit,
+  layoutGitGraph,
   projectGitGraph,
   repositoryCodeLocation,
 } from "../../apps/web/src/lib/gitGraphView";
@@ -149,4 +150,23 @@ describe("Git graph view projection", () => {
       "revoked"
     );
   });
+});
+
+it("connects every merge edge to the displayed parent lane", () => {
+  const commits = [
+    commit("merge", ["left", "right"]),
+    commit("right", ["base"]),
+    commit("left", ["base"]),
+    commit("base"),
+  ];
+  const graph = layoutGitGraph(commits);
+  expect(graph.edges).toHaveLength(4);
+  for (const edge of graph.edges) {
+    const source = graph.points[edge.fromRow];
+    const target = graph.points[edge.toRow];
+    expect(source.lane).toBe(edge.fromLane);
+    expect(target.lane).toBe(edge.toLane);
+    expect(source.commit.parents).toContain(target.commit.oid);
+  }
+  expect(graph.points.map((point) => point.commit.oid)).toEqual(commits.map((item) => item.oid));
 });

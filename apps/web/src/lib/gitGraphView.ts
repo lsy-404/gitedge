@@ -103,3 +103,60 @@ export function repositoryCodeLocation(
     query: { ref },
   };
 }
+
+export interface GitGraphPoint {
+  commit: GitCommit;
+  row: number;
+  lane: number;
+}
+export interface GitGraphEdge {
+  fromRow: number;
+  fromLane: number;
+  toRow: number;
+  toLane: number;
+}
+export interface GitGraphLayout {
+  points: GitGraphPoint[];
+  edges: GitGraphEdge[];
+  width: number;
+  rowHeight: number;
+  height: number;
+}
+
+export function layoutGitGraph(list: GitCommit[]): GitGraphLayout {
+  const index = new Map(list.map((commit, row) => [commit.oid, row]));
+  const lanes: string[] = [];
+  const points: GitGraphPoint[] = [];
+  const edges: GitGraphEdge[] = [];
+  for (const [row, commit] of list.entries()) {
+    let lane = lanes.indexOf(commit.oid);
+    if (lane < 0) {
+      lane = lanes.findIndex((value) => !value);
+      if (lane < 0) lane = lanes.length;
+      lanes[lane] = commit.oid;
+    }
+    points.push({ commit, row, lane });
+    const parents = commit.parents.filter((parent) => index.has(parent));
+    if (parents.length === 0) lanes[lane] = "";
+    parents.forEach((parent, parentIndex) => {
+      const toRow = index.get(parent);
+      if (toRow === undefined) return;
+      let toLane = lanes.indexOf(parent);
+      if (toLane < 0) {
+        toLane = parentIndex === 0 ? lane : lanes.findIndex((value) => !value);
+        if (toLane < 0) toLane = lanes.length;
+        lanes[toLane] = parent;
+      }
+      edges.push({ fromRow: row, fromLane: lane, toRow, toLane });
+    });
+    // A parent already reserved in another lane must not acquire a second copy.
+    if (lanes[lane] === commit.oid) lanes[lane] = "";
+  }
+  return {
+    points,
+    edges,
+    width: Math.max(1, ...points.map((point) => point.lane + 1)) * 22 + 16,
+    rowHeight: 72,
+    height: points.length * 72,
+  };
+}
