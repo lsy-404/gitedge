@@ -1,7 +1,14 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { env as workerEnv } from "cloudflare:workers";
 import { DeployManifestSchema } from "../../packages/contracts/src/deploy";
-import type { DeployDb, DeployEnv } from "../../workers/deploy/src/deploy";
+import type { DeployEnv } from "../../workers/deploy/src/deploy";
 import { handleDeploy } from "../../workers/deploy/src/deploy";
+
+const migrations = import.meta.glob("../../migrations/000*.sql", {
+  query: "?raw",
+  import: "default",
+  eager: true,
+}) as Record<string, string>;
 
 const repositoryId = "1234567890abcdef1234567890abcdef";
 const accountId = "a".repeat(32);
@@ -25,53 +32,102 @@ const manifestText = JSON.stringify({
   },
 });
 
-class FakeStatement {
-  constructor(private readonly query: string) {}
-  bind(..._values: (string | number | null)[]): FakeStatement {
-    return this;
+const gitRequests: Array<{
+  method: string;
+  path: string | null;
+  ref: string | null;
+  userId: string | null;
+}> = [];
+
+async function runSqlScript(sql: string): Promise<void> {
+  let statement = "";
+  let inTrigger = false;
+  for (const line of sql.split("\n")) {
+    const trimmed = line.trim();
+    if (!statement && (!trimmed || trimmed.startsWith("--") || /^PRAGMA\b/i.test(trimmed)))
+      continue;
+    if (/^CREATE TRIGGER\b/i.test(trimmed)) inTrigger = true;
+    statement += `${line}\n`;
+    if (inTrigger && /^END;?$/i.test(trimmed)) {
+      await workerEnv.DB.prepare(statement).run();
+      statement = "";
+      inTrigger = false;
+    } else if (!inTrigger && trimmed.endsWith(";")) {
+      await workerEnv.DB.prepare(statement).run();
+      statement = "";
+    }
   }
-  async first<T>(): Promise<T | null> {
-    return (
-      this.query.startsWith("SELECT repositories.id") ? { id: repositoryId } : null
-    ) as T | null;
-  }
-  async run(): Promise<unknown> {
-    return {};
-  }
+  if (statement.trim()) await workerEnv.DB.prepare(statement).run();
 }
-class FakeDb implements DeployDb {
-  prepare(query: string) {
-    return new FakeStatement(query);
-  }
-  async batch(_statements: FakeStatement[]): Promise<unknown> {
-    return {};
-  }
+
+async function prepareRepository(): Promise<void> {
+  for (const path of Object.keys(migrations).sort()) await runSqlScript(migrations[path]);
+  await workerEnv.DB.batch([
+    workerEnv.DB.prepare(
+      "INSERT INTO users (id, identifier, password_salt, password_hash, created_at) VALUES (?, ?, ?, ?, ?)"
+    ).bind("deploy-user", "deploy-owner", "salt", "hash", 1),
+    workerEnv.DB.prepare(
+      "INSERT INTO namespaces (id, slug, created_by, created_at, kind, display_name, description) VALUES (?, ?, ?, ?, 'personal', ?, '')"
+    ).bind("deploy-namespace", "deploy-owner", "deploy-user", 1, "Deploy Owner"),
+    workerEnv.DB.prepare(
+      "INSERT INTO namespace_memberships (namespace_id, user_id, created_at, role) VALUES (?, ?, ?, 'owner')"
+    ).bind("deploy-namespace", "deploy-user", 1),
+    workerEnv.DB.prepare(
+      "INSERT INTO repositories (id, namespace_id, created_by, slug, do_name, visibility, description, created_at, updated_at, artifact_name, remote, default_branch) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).bind(
+      repositoryId,
+      "deploy-namespace",
+      "deploy-user",
+      "deploy-repo",
+      "repo:deploy-test",
+      "private",
+      "",
+      1,
+      1,
+      "deploy-test-artifact",
+      "artifact://deploy-test-artifact",
+      "main"
+    ),
+  ]);
 }
 
 function testEnv(
   moduleSource: () => string = () => "export default { fetch() { return new Response('ok') } }"
 ): DeployEnv {
   return {
-    DB: new FakeDb(),
+    DB: workerEnv.DB,
     GIT: {
       async fetch(request: Request): Promise<Response> {
         const url = new URL(request.url);
-        expect(request.headers.get("X-GitEdge-User-Id")).toBe("user-1");
-        if (url.searchParams.get("path") === "gitedge.deploy.json")
-          return Response.json({ data: { content: manifestText, binary: false } });
-        if (url.searchParams.get("path") === "worker/index.js")
-          return Response.json({
-            data: {
-              content: moduleSource(),
-              binary: false,
-            },
-          });
-        return new Response("not found", { status: 404 });
+        const path = url.searchParams.get("path");
+        gitRequests.push({
+          method: request.method,
+          path,
+          ref: url.searchParams.get("ref"),
+          userId: request.headers.get("X-GitEdge-User-Id"),
+        });
+        const content =
+          path === "gitedge.deploy.json"
+            ? () => manifestText
+            : path === "worker/index.js"
+              ? moduleSource
+              : undefined;
+        if (!content) return new Response("File was not found.", { status: 404 });
+        const body = content();
+        return new Response(body, {
+          headers: {
+            "Content-Type": path === "gitedge.deploy.json" ? "application/json" : "text/javascript",
+            "Content-Length": String(new TextEncoder().encode(body).byteLength),
+            "Content-Disposition": "attachment",
+          },
+        });
       },
     },
     DEPLOY_SESSION_KEY: "test-deploy-session-encryption-key-32-bytes-minimum",
   };
 }
+
+beforeAll(prepareRepository);
 
 function request(
   path: string,
@@ -85,8 +141,8 @@ function request(
     headers: {
       Origin: "https://gitedge.test",
       "Content-Type": "application/json",
-      "X-GitEdge-User-Id": "user-1",
-      "X-GitEdge-User-Name": "alice",
+      "X-GitEdge-User-Id": "deploy-user",
+      "X-GitEdge-User-Name": "deploy-owner",
       "X-GitEdge-User-Group": "free",
       ...(cookie ? { Cookie: cookie } : {}),
       ...extra,
@@ -102,6 +158,21 @@ afterEach(() => {
 });
 
 describe("repository deployment", () => {
+  it("reads the manifest and declared modules from raw Git file responses", async () => {
+    gitRequests.length = 0;
+    const response = await handleDeploy(request("plan"), testEnv(), logger);
+    const payload = (await response.json()) as {
+      data: { manifest: { name: string }; manifestDigest: string };
+    };
+    expect(response.status).toBe(200);
+    expect(payload.data.manifest.name).toBe("Example");
+    expect(payload.data.manifestDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(gitRequests).toEqual([
+      { method: "GET", path: "gitedge.deploy.json", ref: "main", userId: "deploy-user" },
+      { method: "GET", path: "worker/index.js", ref: "main", userId: "deploy-user" },
+    ]);
+  });
+
   it("validates a strict manifest and rejects executable recipe fields", () => {
     expect(DeployManifestSchema.safeParse(JSON.parse(manifestText)).success).toBe(true);
     expect(

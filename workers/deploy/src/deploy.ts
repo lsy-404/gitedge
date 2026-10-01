@@ -174,7 +174,11 @@ async function readTextLimited(
     bytes.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return new TextDecoder().decode(bytes);
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
 }
 function decodeBase64Url(value: string): Uint8Array {
   const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
@@ -292,16 +296,6 @@ async function readManifest(
   } catch {
     return null;
   }
-  if (typeof raw === "object" && raw !== null && "data" in raw) raw = raw.data;
-  if (typeof raw === "object" && raw !== null && "content" in raw) {
-    const content = raw.content;
-    if (typeof content !== "string") return null;
-    try {
-      raw = JSON.parse(content);
-    } catch {
-      return null;
-    }
-  }
   const parsed = DeployManifestSchema.safeParse(raw);
   if (!parsed.success) return null;
   return { manifest: parsed.data, digest: await digest(JSON.stringify(parsed.data)) };
@@ -322,13 +316,10 @@ async function readDeclaredFile(
   fileUrl.searchParams.set("ref", ref);
   const response = await gitFetch(env, fileUrl, user);
   if (!response.ok) return null;
-  const payload = await readGitJson<{
-    data?: { content?: string | null; binary?: boolean; size?: number };
-  }>(response, maxBytes + 64 * 1024);
-  const file = payload?.data;
-  if (!file || file.binary || typeof file.content !== "string") return null;
-  if (new TextEncoder().encode(file.content).byteLength > maxBytes) return null;
-  return file.content;
+  const declaredSize = Number(response.headers.get("Content-Length") ?? 0);
+  if (declaredSize > maxBytes) return null;
+  const content = await readTextLimited(response.body, maxBytes);
+  return content !== null && !content.includes("\0") ? content : null;
 }
 async function readDeploymentPlan(
   env: DeployEnv,
@@ -365,17 +356,6 @@ async function readJsonBody<T>(request: Request): Promise<T | null> {
   const declared = Number(request.headers.get("Content-Length") ?? 0);
   if (declared > MAX_JSON_REQUEST_BYTES) return null;
   const text = await readTextLimited(request.body, MAX_JSON_REQUEST_BYTES);
-  if (text === null) return null;
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    return null;
-  }
-}
-async function readGitJson<T>(response: Response, maxBytes: number): Promise<T | null> {
-  const declared = Number(response.headers.get("Content-Length") ?? 0);
-  if (declared > maxBytes) return null;
-  const text = await readTextLimited(response.body, maxBytes);
   if (text === null) return null;
   try {
     return JSON.parse(text) as T;
