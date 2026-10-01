@@ -120,33 +120,34 @@ onMounted(load);
 
 <template>
   <section class="page account-settings">
-    <p class="eyebrow">{{ t("settings") }} / {{ t("account") }}</p>
-    <h1>{{ t("account") }}</h1>
+    <div class="page-head">
+      <h1>{{ t("account") }}</h1>
+    </div>
     <p v-if="linkedNotice" class="state success" role="status">{{ t("ssoLinked") }}</p>
     <p v-if="callbackError" class="state error" role="alert">{{ callbackError }}</p>
     <p v-if="loadingError" class="state error" role="alert">{{ loadingError }}</p>
     <p v-if="actionError" class="state error" role="alert">{{ actionError }}</p>
     <p v-if="notice" class="state success" role="status">{{ notice }}</p>
 
-    <div v-if="sessionState.user?.externalIdentity" class="panel identity-panel">
-      <div class="identity-heading">
+    <div v-if="sessionState.user?.externalIdentity" class="box">
+      <div class="box-header identity">
         <img
           v-if="sessionState.user.externalIdentity.avatarUrl"
           :src="sessionState.user.externalIdentity.avatarUrl"
           alt=""
         />
         <div>
-          <h2>GitHub</h2>
+          <div>GitHub</div>
           <a
             v-if="sessionState.user.externalIdentity.profileUrl"
             :href="sessionState.user.externalIdentity.profileUrl"
             target="_blank"
             rel="noreferrer"
             >@{{ sessionState.user.externalIdentity.login }}</a
-          ><span v-else>@{{ sessionState.user.externalIdentity.login }}</span>
+          ><span v-else class="muted">@{{ sessionState.user.externalIdentity.login }}</span>
         </div>
       </div>
-      <dl class="identity-details">
+      <dl class="kv">
         <dt>{{ t("accessLevel") }}</dt>
         <dd>
           {{
@@ -164,28 +165,25 @@ onMounted(load);
         </dd>
         <dt>{{ t("organizations") }}</dt>
         <dd>
-          <span
-            v-if="sessionState.user.externalIdentity.organizations?.length"
-            class="identity-list"
-            >{{
-              sessionState.user.externalIdentity.organizations.map((item) => item.login).join(", ")
-            }}</span
+          <span v-if="sessionState.user.externalIdentity.organizations?.length">{{
+            sessionState.user.externalIdentity.organizations.map((item) => item.login).join(", ")
+          }}</span
           ><span v-else class="muted">{{ t("noConnectedData") }}</span>
         </dd>
       </dl>
     </div>
-    <div v-else class="panel state github-identity-empty">
+    <div v-else class="box box-form state github-identity-empty">
       <p>{{ t("noGithubIdentity") }}</p>
     </div>
 
-    <section class="panel sso-settings" :aria-labelledby="`sso-identities-heading`">
+    <section class="box box-form sso-settings" :aria-labelledby="`sso-identities-heading`">
       <div class="sso-section-heading">
         <div>
           <h2 id="sso-identities-heading">{{ t("ssoIdentities") }}</h2>
           <p class="muted">{{ t("ssoIdentitiesHint") }}</p>
           <p class="muted">{{ t("ssoFederatedLogoutHint") }}</p>
         </div>
-        <button class="button ghost" :disabled="loading" @click="load">{{ t("refresh") }}</button>
+        <button class="btn ghost" :disabled="loading" @click="load">{{ t("refresh") }}</button>
       </div>
       <p v-if="!loading && !identities.length" class="muted">{{ t("ssoNoIdentities") }}</p>
       <ul v-else class="sso-identity-list">
@@ -201,14 +199,14 @@ onMounted(load);
             }}</small>
           </div>
           <button
-            class="button ghost"
+            class="btn ghost"
             :disabled="loading || busyIdentityId === identity.id"
             @click="unlink(identity)"
           >
             {{ busyIdentityId === identity.id ? t("loading") : t("ssoUnlink") }}
           </button>
           <button
-            class="button"
+            class="btn"
             :aria-label="`${t('ssoFederatedLogout')} · ${identity.providerLabel}`"
             :disabled="loading || busyLogoutIdentityId === identity.id"
             @click="federatedLogout(identity)"
@@ -234,7 +232,7 @@ onMounted(load);
             >
           </div>
           <button
-            class="button"
+            class="btn"
             :disabled="loading || busyProviderId === provider.id"
             @click="link(provider)"
           >

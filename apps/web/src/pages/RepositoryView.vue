@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import { useRoute } from "vue-router";
 import type { Repository } from "../lib/api";
 import { ApiError, api } from "../lib/api";
+import AppIcon from "../components/AppIcon.vue";
 import StatusState from "../components/StatusState.vue";
 import DeployWizard from "../components/DeployWizard.vue";
 import RepositoryCode from "../components/RepositoryCode.vue";
@@ -47,7 +48,6 @@ watch(() => [route.params.owner, route.params.repo], load, { immediate: true });
 
 <template>
   <section class="page repo-page">
-    <RouterLink class="back-link" to="/dashboard">← {{ t("back") }}</RouterLink>
     <StatusState
       v-if="loading || error || notFound"
       :loading="loading"
@@ -58,41 +58,40 @@ watch(() => [route.params.owner, route.params.repo], load, { immediate: true });
       <template #empty>{{ t("repositoryNotFound") }}</template>
     </StatusState>
     <template v-else-if="repository">
-      <div class="repo-title">
-        <div class="repo-icon large">{{ repoName.slice(0, 1).toUpperCase() }}</div>
-        <div class="repo-heading-copy">
-          <p class="eyebrow">{{ owner }} / {{ t("repository") }}</p>
-          <h1>{{ repoName }}</h1>
-          <p class="muted">{{ repository.description || t("noDescription") }}</p>
-        </div>
-        <div class="repo-heading-actions">
-          <span class="badge" :class="repository.visibility">{{ t(repository.visibility) }}</span>
-          <button v-if="repository.canWrite" class="button" @click="showDeploy = !showDeploy">
-            {{ t("deploy") }}
-          </button>
-        </div>
-      </div>
-      <DeployWizard v-if="showDeploy && repository.canWrite" :repository="repository" />
-      <nav class="repo-tabs" :aria-label="t('repositoryNav')">
-        <RouterLink :class="{ active: section === 'code' }" :to="`/${owner}/${repoName}`">{{
-          t("code")
-        }}</RouterLink>
-        <RouterLink
-          :class="{ active: section === 'issues' }"
-          :to="`/${owner}/${repoName}/issues`"
-          >{{ t("issues") }}</RouterLink
+      <div class="repo-head">
+        <AppIcon name="repo" :size="20" />
+        <span class="path">{{ owner }}</span
+        ><span class="path muted">/</span>
+        <h1>{{ repoName }}</h1>
+        <span class="pill">{{ t(repository.visibility) }}</span>
+        <button
+          v-if="repository.canWrite"
+          class="btn repo-deploy"
+          @click="showDeploy = !showDeploy"
         >
-        <RouterLink :class="{ active: section === 'pulls' }" :to="`/${owner}/${repoName}/pulls`">{{
-          t("pulls")
-        }}</RouterLink>
+          {{ t("deploy") }}
+        </button>
+      </div>
+      <p class="repo-desc">{{ repository.description || t("noDescription") }}</p>
+      <DeployWizard v-if="showDeploy && repository.canWrite" :repository="repository" />
+      <nav class="tabs" :aria-label="t('repositoryNav')">
+        <RouterLink :class="{ active: section === 'code' }" :to="`/${owner}/${repoName}`"
+          ><AppIcon name="code" />{{ t("code") }}</RouterLink
+        >
+        <RouterLink :class="{ active: section === 'issues' }" :to="`/${owner}/${repoName}/issues`"
+          ><AppIcon name="issue" />{{ t("issues") }}</RouterLink
+        >
+        <RouterLink :class="{ active: section === 'pulls' }" :to="`/${owner}/${repoName}/pulls`"
+          ><AppIcon name="pr" />{{ t("pulls") }}</RouterLink
+        >
         <RouterLink
           :class="{ active: section === 'discussions' }"
           :to="`/${owner}/${repoName}/discussions`"
           >{{ t("discussions") }}</RouterLink
         >
-        <RouterLink :class="{ active: section === 'wiki' }" :to="`/${owner}/${repoName}/wiki`">{{
-          t("wiki")
-        }}</RouterLink>
+        <RouterLink :class="{ active: section === 'wiki' }" :to="`/${owner}/${repoName}/wiki`"
+          ><AppIcon name="wiki" />{{ t("wiki") }}</RouterLink
+        >
       </nav>
       <RepositoryCode
         v-if="section === 'code' || section === 'commits' || section === 'compare'"

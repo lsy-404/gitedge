@@ -225,7 +225,7 @@ const migrationPaths = computed(
 </script>
 
 <template>
-  <section class="panel deploy-wizard" :aria-labelledby="`deploy-title-${repository.id}`">
+  <section class="box box-form deploy-wizard" :aria-labelledby="`deploy-title-${repository.id}`">
     <header>
       <div>
         <p class="eyebrow">{{ repository.owner }} / {{ repository.name }}</p>
@@ -242,7 +242,7 @@ const migrationPaths = computed(
         maxlength="255"
         :placeholder="t('deployWizard.chooseRef')"
       />
-      <button class="button primary" :disabled="loading">
+      <button class="btn primary" :disabled="loading">
         {{ loading ? "…" : t("deployWizard.load") }}
       </button>
     </form>
@@ -301,7 +301,7 @@ const migrationPaths = computed(
         <label for="deploy-token">{{ t("deployWizard.token") }}</label>
         <input id="deploy-token" v-model="token" type="password" autocomplete="off" required />
         <p class="muted">{{ t("deployWizard.tokenHint") }}</p>
-        <button class="button primary" :disabled="loading">
+        <button class="btn primary" :disabled="loading">
           {{ t("deployWizard.createSession") }}
         </button>
       </form>
@@ -314,7 +314,7 @@ const migrationPaths = computed(
               {{ account.name }}
             </option>
           </select>
-          <button class="button" type="button" :disabled="loading" @click="chooseAccount">
+          <button class="btn" type="button" :disabled="loading" @click="chooseAccount">
             {{ t("deployWizard.chooseAccount") }}
           </button>
         </div>
@@ -352,7 +352,7 @@ const migrationPaths = computed(
             <span>{{ t("deployWizard.confirm") }}</span>
           </label>
           <button
-            class="button primary"
+            class="btn primary"
             :disabled="loading || !accepted || (accounts.length > 1 && !accountConfirmed)"
           >
             {{ t("deployWizard.deploy") }}
@@ -375,7 +375,7 @@ const migrationPaths = computed(
       {{ error }}
       <button
         v-if="progress.some((item) => item.state === 'failed')"
-        class="button ghost"
+        class="btn ghost"
         :disabled="loading"
         @click="retry"
       >

@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { api, type Organization, type Repository } from "../lib/api";
 import { sessionState } from "../lib/session";
+import FormActions from "../components/FormActions.vue";
 import StatusState from "../components/StatusState.vue";
+import AppIcon from "../components/AppIcon.vue";
 
 const { t, locale } = useI18n();
 const repos = ref<Repository[]>([]);
@@ -15,6 +17,12 @@ const formError = ref("");
 const form = ref({ name: "", description: "", visibility: "private" as "public" | "private" });
 const organizations = ref<Organization[]>([]);
 const owner = ref("");
+const filter = ref("");
+const visibleRepos = computed(() => {
+  const query = filter.value.trim().toLowerCase();
+  if (!query) return repos.value;
+  return repos.value.filter((repo) => `${repo.owner}/${repo.name}`.toLowerCase().includes(query));
+});
 
 function formatUpdatedAt(value: number): string {
   return new Intl.DateTimeFormat(locale.value, { dateStyle: "medium" }).format(value);
@@ -54,15 +62,14 @@ onMounted(load);
 
 <template>
   <section class="page">
-    <div class="page-heading">
-      <div>
-        <p class="eyebrow">{{ t("dashboard") }} / 01</p>
-        <h1>{{ t("repositories") }}</h1>
-      </div>
-      <button class="button primary" @click="showForm = !showForm">+ {{ t("newRepo") }}</button>
+    <div class="page-head">
+      <h1>{{ t("repositories") }}</h1>
+      <button class="btn primary" @click="showForm = !showForm">
+        <AppIcon name="plus" />{{ t("newRepo") }}
+      </button>
     </div>
-    <form v-if="showForm" class="panel create-form" @submit.prevent="createRepository">
-      <label
+    <form v-if="showForm" class="box box-form form-stack" @submit.prevent="createRepository">
+      <label class="field"
         >{{ t("repositoryOwner")
         }}<select v-model="owner" required>
           <option :value="sessionState.user?.identifier">
@@ -77,54 +84,56 @@ onMounted(load);
           </option>
         </select></label
       >
-      <label>{{ t("repositoryName") }}<input v-model="form.name" required /></label>
-      <label>{{ t("description") }}<input v-model="form.description" /></label>
-      <label
+      <label class="field">{{ t("repositoryName") }}<input v-model="form.name" required /></label>
+      <label class="field">{{ t("description") }}<input v-model="form.description" /></label>
+      <label class="field"
         >{{ t("visibility")
         }}<select v-model="form.visibility">
           <option value="private">{{ t("private") }}</option>
           <option value="public">{{ t("public") }}</option>
         </select></label
       >
-      <p v-if="formError" class="form-error">{{ formError }}</p>
-      <div class="form-actions">
-        <button type="button" class="button ghost" @click="showForm = false">
-          {{ t("cancel") }}</button
-        ><button class="button primary" :disabled="saving">
-          {{ saving ? t("loading") : t("create") }}
-        </button>
-      </div>
+      <FormActions :saving="saving" :error="formError" @cancel="showForm = false" />
     </form>
-    <div class="rule" />
-    <StatusState
-      :loading="loading"
-      :error="error"
-      :empty="!loading && !error && !repos.length"
-      @retry="load"
-    />
-    <div v-if="!loading && !error" class="repo-list">
-      <RouterLink
-        v-for="repo in repos"
-        :key="repo.id"
-        class="repo-row"
-        :to="`/${repo.owner}/${repo.name}`"
-      >
-        <div class="repo-icon">{{ repo.name.slice(0, 1).toUpperCase() }}</div>
-        <div class="repo-copy">
-          <h3>
-            {{ repo.owner }} / <strong>{{ repo.name }}</strong
-            ><span :class="['badge', repo.visibility]">{{
-              repo.visibility === "private" ? t("private") : t("public")
-            }}</span>
-          </h3>
-          <p>{{ repo.description || t("noDescription") }}</p>
-        </div>
-        <div class="repo-meta">
-          <code>{{ repo.defaultBranch }}</code
-          ><span>{{ formatUpdatedAt(repo.updatedAt) }}</span
-          ><span class="arrow">→</span>
-        </div>
-      </RouterLink>
+    <div v-if="!loading && !error && repos.length" class="toolbar">
+      <input
+        v-model="filter"
+        class="search"
+        type="search"
+        :placeholder="t('findRepository')"
+        :aria-label="t('findRepository')"
+      />
+    </div>
+    <div class="box">
+      <StatusState
+        :loading="loading"
+        :error="error"
+        :empty="!loading && !error && !visibleRepos.length"
+        @retry="load"
+      />
+      <template v-if="!loading && !error">
+        <RouterLink
+          v-for="repo in visibleRepos"
+          :key="repo.id"
+          class="box-row"
+          :to="`/${repo.owner}/${repo.name}`"
+        >
+          <AppIcon class="state-icon" name="repo" />
+          <div class="grow">
+            <div class="row-title">
+              {{ repo.owner }} / {{ repo.name }}
+              <span class="pill">{{
+                repo.visibility === "private" ? t("private") : t("public")
+              }}</span>
+            </div>
+            <p class="muted">{{ repo.description || t("noDescription") }}</p>
+            <div class="row-meta">
+              <span class="mono">{{ repo.defaultBranch }}</span>
+              <span>{{ t("updatedOn", { date: formatUpdatedAt(repo.updatedAt) }) }}</span>
+            </div>
+          </div>
+        </RouterLink>
+      </template>
     </div>
   </section>
 </template>

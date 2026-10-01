@@ -85,50 +85,38 @@ async function submit() {
 }
 </script>
 <template>
-  <section class="auth-layout">
-    <div class="auth-intro">
-      <p class="eyebrow">{{ t("brandSub") }}</p>
-      <h1>{{ t("welcome") }}</h1>
-      <p>{{ t("welcomeText") }}</p>
-      <div class="terminal">
-        <span>~$</span> {{ t("cloneCommand") }}<br /><span>✓</span> <em>{{ t("edge") }}</em>
-      </div>
-    </div>
-    <form class="panel auth-card" @submit.prevent="submit">
-      <div>
-        <p class="eyebrow">{{ register ? t("registerStep") : t("loginStep") }}</p>
-        <h2>{{ register ? t("signUp") : t("signIn") }}</h2>
-        <p class="muted">{{ register ? t("registerHint") : t("loginHint") }}</p>
-      </div>
-      <label
+  <section class="auth">
+    <img class="auth-logo" src="/logo.svg" alt="" width="48" height="48" />
+    <h1>{{ register ? t("registerTitle") : t("loginTitle") }}</h1>
+    <form class="box auth-card form-stack" @submit.prevent="submit">
+      <label class="field"
         >{{ t(register ? "registrationIdentifier" : "identifier")
         }}<input
           v-model="identifier"
           required
           autocomplete="username"
           :pattern="register ? '[A-Za-z0-9][A-Za-z0-9-]{2,62}' : undefined"
-          :maxlength="register ? 63 : 64" /></label
-      ><label
+          :maxlength="register ? 63 : 64"
+      /></label>
+      <label class="field"
         >{{ t("password")
         }}<input
           v-model="password"
           type="password"
           required
           minlength="12"
-          autocomplete="current-password"
+          :autocomplete="register ? 'new-password' : 'current-password'"
       /></label>
-      <p v-if="error" class="form-error">{{ error }}</p>
-      <button class="button primary" :disabled="busy">
-        {{ busy ? t("loading") : t("submit") }}
+      <p v-if="error" class="form-error" role="alert">{{ error }}</p>
+      <button class="btn primary block" :disabled="busy">
+        {{ busy ? t("loading") : register ? t("signUp") : t("signIn") }}
       </button>
-      <div class="oauth-divider">
-        <span>{{ t("orContinue") }}</span>
-      </div>
-      <div class="oauth-options">
+      <div class="divider">{{ t("orContinue") }}</div>
+      <div class="oauth">
         <a
           v-for="provider in providers"
           :key="provider.id"
-          class="button federation-provider"
+          class="btn federation-provider"
           :href="providerHref(provider.id)"
         >
           <span>{{ provider.label }}</span>
@@ -147,21 +135,14 @@ async function submit() {
         >
           {{ provider.label }} · {{ t("ssoMetadata") }}
         </a>
-        <button type="button" class="button github" @click="githubLogin('identity')">
-          ◉ {{ t("githubIdentity") }}
+        <button type="button" class="btn block" @click="githubLogin('identity')">
+          {{ t("githubIdentity") }}
         </button>
-        <p class="permission-card">
-          <strong>{{ t("identityTitle") }}</strong
-          ><br />{{ t("identityText") }}
-        </p>
-        <button type="button" class="button github" @click="githubLogin('read')">
-          ◉ {{ t("githubRead") }}
+        <p class="oauth-hint">{{ t("identityText") }}</p>
+        <button type="button" class="btn block" @click="githubLogin('read')">
+          {{ t("githubRead") }}
         </button>
-        <p class="permission-card">
-          <strong>{{ t("readTitle") }}</strong
-          ><br />{{ t("readText") }}
-        </p>
-        <p class="note">{{ t("noWriteScope") }}</p>
+        <p class="oauth-hint">{{ t("readText") }} {{ t("noWriteScope") }}</p>
       </div>
       <p v-if="hasSsoError" class="form-error" role="alert">
         {{ ssoLogoutUnavailable ? t("ssoLogoutUnavailable") : t("ssoLoginError") }}
@@ -169,12 +150,12 @@ async function submit() {
       <p v-else-if="githubOauthError" class="form-error" role="alert">
         {{ t("oauthError", { error: githubOauthError }) }}
       </p>
-      <p class="switch-auth">
-        {{ register ? t("hasAccount") : t("needsAccount") }}
-        <RouterLink :to="register ? '/login' : '/register'">{{
-          register ? t("signIn") : t("signUp")
-        }}</RouterLink>
-      </p>
     </form>
+    <p class="auth-switch">
+      {{ register ? t("hasAccount") : t("needsAccount") }}
+      <RouterLink :to="register ? '/login' : '/register'">{{
+        register ? t("signIn") : t("signUp")
+      }}</RouterLink>
+    </p>
   </section>
 </template>

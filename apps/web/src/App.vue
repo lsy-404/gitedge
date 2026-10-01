@@ -21,12 +21,10 @@ refreshSession();
   <div class="app-shell">
     <a class="skip-link" href="#main">{{ t("skipToContent") }}</a>
     <header class="topbar">
-      <RouterLink class="brand" to="/dashboard"
-        ><img class="brand-mark" src="/logo.svg" alt="" width="32" height="32" /><span
-          ><strong>{{ t("brand") }}</strong
-          ><small>{{ t("brandSub") }}</small></span
-        ></RouterLink
-      >
+      <RouterLink class="brand" to="/dashboard">
+        <img class="brand-mark" src="/logo.svg" alt="" width="28" height="28" />
+        {{ t("brand") }}
+      </RouterLink>
       <nav v-if="sessionState.user" class="top-actions" :aria-label="t('mainNav')">
         <RouterLink to="/dashboard">{{ t("dashboard") }}</RouterLink
         ><RouterLink to="/organizations">{{ t("organizations") }}</RouterLink
@@ -49,8 +47,8 @@ refreshSession();
     </header>
     <main id="main" tabindex="-1"><RouterView /></main>
     <footer>
-      <span>{{ t("brand") }}</span
-      ><span>{{ t("edge") }}</span>
+      <span>{{ t("brand") }}</span>
+      <span>{{ t("edge") }}</span>
     </footer>
   </div>
 </template>

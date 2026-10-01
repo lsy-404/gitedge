@@ -201,7 +201,7 @@ sessionClockTimer = setInterval(() => {
         <label>{{ t("agentName") }}<input v-model="agentForm.name" required maxlength="80" /></label
         ><label
           >{{ t("description") }}<input v-model="agentForm.description" maxlength="500" /></label
-        ><button class="button primary" :disabled="saving">{{ t("createAgent") }}</button>
+        ><button class="btn primary" :disabled="saving">{{ t("createAgent") }}</button>
       </form>
       <div class="agent-layout">
         <nav class="content-card agent-list">
@@ -229,7 +229,7 @@ sessionClockTimer = setInterval(() => {
               </div>
               <button
                 v-if="!currentAgent.disabledAt"
-                class="button"
+                class="btn"
                 @click="disableAgent(currentAgent)"
               >
                 {{ t("disableAgent") }}
@@ -268,7 +268,7 @@ sessionClockTimer = setInterval(() => {
                 <option :value="86400">1 {{ t("day") }}</option>
                 <option :value="604800">7 {{ t("days") }}</option>
               </select></label
-            ><button class="button primary" :disabled="saving || !repositories.length">
+            ><button class="btn primary" :disabled="saving || !repositories.length">
               {{ t("createAgentSession") }}
             </button>
           </form>
@@ -299,7 +299,7 @@ sessionClockTimer = setInterval(() => {
                 </div>
                 <button
                   v-if="session.status === 'active' && !sessionExpired(session)"
-                  class="button"
+                  class="btn"
                   @click="revoke(session)"
                 >
                   {{ t("revokeSession") }}
@@ -329,7 +329,7 @@ sessionClockTimer = setInterval(() => {
             <pre>{{ createdSession.instructions || t("noInstructions") }}</pre>
           </label>
           <p class="muted">{{ t("credentialsNotSaved") }}</p>
-          <button class="button primary" @click="clearCredentials">{{ t("close") }}</button>
+          <button class="btn primary" @click="clearCredentials">{{ t("close") }}</button>
         </article>
       </section>
     </template>
@@ -338,6 +338,7 @@ sessionClockTimer = setInterval(() => {
 
 <style scoped>
 .content-card {
+  border-radius: 6px;
   border: 1px solid var(--line);
   background: var(--surface);
   padding: 18px;
@@ -361,7 +362,7 @@ sessionClockTimer = setInterval(() => {
 .session-form select {
   padding: 10px;
   border: 1px solid var(--line);
-  background: var(--lift);
+  background: var(--subtle);
   color: inherit;
   font: inherit;
 }
@@ -389,7 +390,7 @@ sessionClockTimer = setInterval(() => {
   background: transparent;
 }
 .agent-choice.selected {
-  background: var(--lift);
+  background: var(--subtle);
   border-left: 2px solid var(--accent);
 }
 .agent-choice small,
@@ -435,8 +436,8 @@ sessionClockTimer = setInterval(() => {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
   padding: 10px;
-  color: var(--warm);
-  background: var(--lift);
+  color: var(--link);
+  background: var(--subtle);
   font:
     12px/1.6 "IBM Plex Mono",
     monospace;

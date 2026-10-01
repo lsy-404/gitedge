@@ -485,7 +485,7 @@ watch(
       <div class="section-actions">
         <button
           v-if="canCreate && (section !== 'wiki' || repository.canWrite)"
-          class="button primary"
+          class="btn primary"
           @click="showForm = !showForm"
         >
           +
@@ -553,9 +553,9 @@ watch(
           :to="`/${repository.owner}/${repository.name}/issues/${row.number}`"
           ><span class="number">#{{ row.number }}</span
           ><strong>{{ row.title }}</strong
-          ><span class="badge" :class="row.state">{{ t(row.state) }}</span
+          ><span class="pill" :class="row.state">{{ t(row.state) }}</span
           ><small>{{ actorName(row) }}</small
-          ><span v-for="label in row.labels" :key="label" class="badge">{{
+          ><span v-for="label in row.labels" :key="label" class="pill">{{
             label
           }}</span></RouterLink
         >
@@ -570,9 +570,9 @@ watch(
           :to="`/${repository.owner}/${repository.name}/pulls/${row.number}`"
           ><span class="number">#{{ row.number }}</span
           ><strong>{{ row.title }}</strong
-          ><span class="badge" :class="row.state">{{ t(row.state) }}</span
+          ><span class="pill" :class="row.state">{{ t(row.state) }}</span
           ><small>{{ row.headRef }} → {{ row.baseRef }}</small
-          ><span v-if="row.headSessionId" class="badge agent-badge">{{
+          ><span v-if="row.headSessionId" class="pill agent-badge">{{
             t("agentSession")
           }}</span></RouterLink
         >
@@ -587,12 +587,10 @@ watch(
           :to="`/${repository.owner}/${repository.name}/discussions/${row.number}`"
           ><span class="number">#{{ row.number }}</span
           ><strong>{{ row.title }}</strong
-          ><span class="badge">{{ t(`category${row.category}`) }}</span
-          ><span class="badge" :class="row.state">{{ t(row.state) }}</span
+          ><span class="pill">{{ t(`category${row.category}`) }}</span
+          ><span class="pill" :class="row.state">{{ t(row.state) }}</span
           ><small>{{ actorName(row) }}</small
-          ><span v-if="row.answerCommentId" class="badge open">{{
-            t("answered")
-          }}</span></RouterLink
+          ><span v-if="row.answerCommentId" class="pill open">{{ t("answered") }}</span></RouterLink
         >
         <p v-if="!discussions.length" class="empty-inline">{{ t("empty") }}</p>
         <p v-if="discussions.length >= 100" class="list-limit-note">{{ t("listLimited") }}</p>
@@ -627,18 +625,18 @@ watch(
             v-if="showEditActions && 'state' in item && item.state !== 'merged'"
             class="detail-actions"
           >
-            <button class="button" @click="editMode = !editMode">
+            <button class="btn" @click="editMode = !editMode">
               {{ editMode ? t("cancel") : t("edit") }}</button
             ><button
               v-if="'state' in item && item.state === 'closed'"
-              class="button"
+              class="btn"
               :disabled="saving"
               @click="updateState('open')"
             >
               {{ t("reopen") }}</button
             ><button
               v-if="'state' in item && item.state === 'open'"
-              class="button"
+              class="btn"
               :disabled="saving"
               @click="updateState('closed')"
             >
@@ -648,7 +646,7 @@ watch(
         </div>
         <div v-if="'actor' in item" class="actor-line">
           {{ actorName(item) }} · {{ new Date(itemCreatedAt(item)).toLocaleString()
-          }}<span v-if="item.actor.kind === 'agent'" class="badge agent-badge">{{
+          }}<span v-if="item.actor.kind === 'agent'" class="pill agent-badge">{{
             t("agentAuthored")
           }}</span>
         </div>
@@ -670,32 +668,32 @@ watch(
                 :placeholder="t('commaSeparated')" /></label></template
           ><label v-if="section === 'pulls'" class="checkbox-line"
             ><input v-model="editDraft.draft" type="checkbox" />{{ t("draftPull") }}</label
-          ><button class="button primary" :disabled="saving">{{ t("save") }}</button>
+          ><button class="btn primary" :disabled="saving">{{ t("save") }}</button>
         </form>
         <pre v-else class="body-content">{{ "content" in item ? item.content : item.body }}</pre>
         <div v-if="'labels' in item" class="metadata-row">
-          <span v-for="label in item.labels" :key="label" class="badge">{{ label }}</span
-          ><span v-for="assignee in item.assignees" :key="assignee" class="badge"
+          <span v-for="label in item.labels" :key="label" class="pill">{{ label }}</span
+          ><span v-for="assignee in item.assignees" :key="assignee" class="pill"
             >{{ t("assignee") }}: {{ assignee }}</span
           >
         </div>
         <div v-if="'headRef' in item" class="pull-meta">
           <span>{{ item.headRef }} → {{ item.baseRef }}</span
-          ><span v-if="item.headSessionId" class="badge agent-badge"
+          ><span v-if="item.headSessionId" class="pill agent-badge"
             >{{ t("sessionFork") }} · {{ item.headSessionId }}</span
-          ><span v-if="'mergedOid' in item && item.mergedOid" class="badge open"
+          ><span v-if="'mergedOid' in item && item.mergedOid" class="pill open"
             >{{ t("mergedCommit") }} {{ item.mergedOid.slice(0, 8) }}</span
           >
         </div>
         <div v-if="section === 'wiki' && showEditActions" class="wiki-edit-actions">
-          <button class="button" @click="wikiEditing = !wikiEditing">
+          <button class="btn" @click="wikiEditing = !wikiEditing">
             {{ wikiEditing ? t("cancel") : t("edit") }}
           </button>
           <form v-if="wikiEditing" class="inline-form" @submit.prevent="saveWiki">
             <input v-model="wikiDraft.title" required /><textarea
               v-model="wikiDraft.content"
               rows="8"
-            /><button class="button primary" :disabled="saving">{{ t("save") }}</button>
+            /><button class="btn primary" :disabled="saving">{{ t("save") }}</button>
           </form>
         </div>
         <div v-if="section === 'wiki'" class="wiki-history">
@@ -710,7 +708,7 @@ watch(
               >{{ revision.updatedBy }} · {{ new Date(revision.updatedAt).toLocaleString() }}</small
             ><button
               v-if="showEditActions"
-              class="button"
+              class="btn"
               :disabled="saving || isCurrentRevision(revision.revision)"
               @click="restoreWiki(revision)"
             >
@@ -730,7 +728,7 @@ watch(
             <span v-else class="muted">{{ t("binaryPreviewUnavailable") }}</span>
           </div>
           <div v-if="showEditActions && pullIsOpen" class="merge-actions">
-            <button class="button primary" :disabled="saving || !diff.headOid" @click="mergePull">
+            <button class="btn primary" :disabled="saving || !diff.headOid" @click="mergePull">
               {{ t("mergePull") }}</button
             ><span class="muted">{{ t("mergeUsesCurrentHeads") }}</span>
           </div>
@@ -740,11 +738,11 @@ watch(
         <p class="eyebrow">{{ t("reviews") }}</p>
         <div v-for="review in reviews" :key="review.id" class="item-row">
           <strong>{{ t(`review${review.state}`) }}</strong
-          ><span class="badge" :class="review.actor.kind === 'agent' ? 'agent-badge' : ''">{{
+          ><span class="pill" :class="review.actor.kind === 'agent' ? 'agent-badge' : ''">{{
             actorName(review)
           }}</span
           ><code>{{ review.commitOid.slice(0, 8) }}</code
-          ><span v-if="review.commitOid !== diff?.headOid" class="badge stale-check">{{
+          ><span v-if="review.commitOid !== diff?.headOid" class="pill stale-check">{{
             t("outdatedReview")
           }}</span>
           <p>{{ review.body }}</p>
@@ -755,7 +753,7 @@ watch(
             <option value="approved">{{ t("reviewapproved") }}</option>
             <option value="changes_requested">{{ t("reviewchanges_requested") }}</option></select
           ><textarea v-model="reviewForm.body" :placeholder="t('reviewBody')" rows="2" /><button
-            class="button"
+            class="btn"
             type="submit"
           >
             {{ t("submitReview") }}
@@ -766,13 +764,13 @@ watch(
         <p class="eyebrow">{{ t("checks") }}</p>
         <div v-for="check in checks" :key="check.id" class="item-row">
           <strong>{{ check.name }}</strong
-          ><span class="badge" :class="check.conclusion === 'success' ? 'open' : ''"
+          ><span class="pill" :class="check.conclusion === 'success' ? 'open' : ''"
             >{{ check.status }} · {{ check.conclusion || t("pending") }}</span
-          ><span class="badge" :class="check.actor.kind === 'agent' ? 'agent-badge' : ''">{{
+          ><span class="pill" :class="check.actor.kind === 'agent' ? 'agent-badge' : ''">{{
             actorName(check)
           }}</span
           ><code>{{ check.commitOid.slice(0, 8) }}</code
-          ><span v-if="check.commitOid !== diff?.headOid" class="badge stale-check">{{
+          ><span v-if="check.commitOid !== diff?.headOid" class="pill stale-check">{{
             t("outdatedCheck")
           }}</span>
           <p>{{ check.summary }}</p>
@@ -799,7 +797,7 @@ watch(
             <option value="neutral">neutral</option>
             <option value="cancelled">cancelled</option></select
           ><textarea v-model="checkForm.summary" :placeholder="t('summary')" rows="2" /><button
-            class="button"
+            class="btn"
             type="submit"
           >
             {{ t("addCheck") }}
@@ -815,7 +813,7 @@ watch(
               t("answerMarked")
             }}
           </p>
-          <button v-if="showEditActions" class="button" @click="markAnswer(null)">
+          <button v-if="showEditActions" class="btn" @click="markAnswer(null)">
             {{ t("clearAnswer") }}
           </button>
         </div>
@@ -825,7 +823,7 @@ watch(
         <article v-for="comment in comments" :key="comment.id" class="comment-row">
           <div class="actor-line">
             <strong>{{ actorName(comment) }}</strong
-            ><span class="badge agent-badge" v-if="comment.actor.kind === 'agent'">{{
+            ><span class="pill agent-badge" v-if="comment.actor.kind === 'agent'">{{
               t("agentAuthored")
             }}</span
             ><small>{{ new Date(comment.createdAt).toLocaleString() }}</small
@@ -849,7 +847,7 @@ watch(
             :placeholder="t('writeComment')"
             rows="4"
             required
-          /><button class="button primary" type="submit" :disabled="saving">
+          /><button class="btn primary" type="submit" :disabled="saving">
             {{ editCommentId ? t("save") : t("comment") }}
           </button>
         </form>
@@ -869,6 +867,7 @@ watch(
   justify-content: flex-end;
 }
 .content-card {
+  border-radius: 6px;
   border: 1px solid var(--line);
   background: var(--surface);
   padding: 18px;
@@ -899,28 +898,28 @@ watch(
 }
 .number,
 code {
-  color: var(--warm);
+  color: var(--link);
   font-family: "IBM Plex Mono", monospace;
   font-size: 12px;
 }
-.badge {
-  border: 1px solid #4a4654;
+.pill {
+  border: 1px solid var(--line);
   border-radius: 99px;
   padding: 2px 7px;
   color: var(--muted);
   font: 10px "IBM Plex Mono";
 }
-.badge.open {
-  color: #8ad0af;
-  border-color: #365c4d;
+.pill.open {
+  color: var(--ok);
+  border-color: var(--ok);
 }
-.badge.agent-badge {
-  color: var(--warm);
-  border-color: #625640;
+.pill.agent-badge {
+  color: var(--link);
+  border-color: var(--line);
 }
-.badge.stale-check {
-  color: #e8ad75;
-  border-color: #785b3e;
+.pill.stale-check {
+  color: var(--link);
+  border-color: var(--link);
 }
 .empty-inline {
   padding: 28px;
@@ -953,7 +952,7 @@ code {
   padding: 10px;
   border: 1px solid var(--line);
   color: inherit;
-  background: var(--lift);
+  background: var(--subtle);
   font: inherit;
 }
 .detail-card {
@@ -983,7 +982,7 @@ code {
 .body-content {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  color: #dedbe3;
+  color: var(--text);
   font: 14px/1.7 inherit;
   margin: 18px 0;
 }
@@ -1012,8 +1011,8 @@ code {
   overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  color: #d4d0dc;
-  background: #15141a;
+  color: var(--text);
+  background: var(--subtle);
   padding: 12px;
   font:
     12px/1.6 "IBM Plex Mono",

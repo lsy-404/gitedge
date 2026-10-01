@@ -3,6 +3,7 @@ import { onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { api, type Organization, type OrganizationMember } from "../lib/api";
+import FormActions from "../components/FormActions.vue";
 import StatusState from "../components/StatusState.vue";
 const route = useRoute();
 const { t } = useI18n();
@@ -44,45 +45,44 @@ onMounted(load);
 </script>
 <template>
   <section class="page">
-    <RouterLink class="back-link" to="/organizations">← {{ t("organizations") }}</RouterLink>
-    <div class="repo-title">
-      <div class="repo-icon large">
-        {{ organization?.displayName.slice(0, 1).toUpperCase() || "O" }}
-      </div>
+    <div class="page-head">
       <div>
-        <p class="eyebrow">{{ t("organizations") }}</p>
         <h1>{{ organization?.displayName || slug }}</h1>
-        <p class="muted">{{ organization?.description || t("noDescription") }}</p>
+        <p>{{ organization?.description || t("noDescription") }}</p>
       </div>
+      <RouterLink class="btn" to="/organizations">{{ t("organizations") }}</RouterLink>
     </div>
     <StatusState :loading="loading" :error="error" @retry="load" />
-    <div v-if="!loading && !error" class="content-card">
-      <div class="section-heading">
-        <h2>{{ t("members") }}</h2>
+    <div v-if="!loading && !error" class="box">
+      <div class="box-header">
+        {{ t("members") }} <span class="count">{{ members.length }}</span>
       </div>
-      <div v-for="member in members" :key="member.identifier" class="item-row">
-        <strong>{{ member.identifier }}</strong
-        ><span class="badge">{{ member.role === "owner" ? t("ownerRole") : t("memberRole") }}</span>
+      <div v-for="member in members" :key="member.identifier" class="box-row">
+        <div class="grow row-title">{{ member.identifier }}</div>
+        <span class="pill">{{ member.role === "owner" ? t("ownerRole") : t("memberRole") }}</span>
       </div>
       <div v-if="!members.length" class="state">{{ t("empty") }}</div>
     </div>
     <form
       v-if="!loading && !error && organization?.role === 'owner'"
-      class="panel create-form"
+      class="box box-form form-stack"
+      style="margin-top: 16px"
       @submit.prevent="addMember"
     >
       <h2>{{ t("addMember") }}</h2>
-      <label>{{ t("memberIdentifier") }}<input v-model="form.identifier" required /></label
-      ><label
+      <label class="field"
+        >{{ t("memberIdentifier") }}<input v-model="form.identifier" required
+      /></label>
+      <label class="field"
         >{{ t("role")
         }}<select v-model="form.role">
           <option value="member">{{ t("memberRole") }}</option>
           <option value="owner">{{ t("ownerRole") }}</option>
         </select></label
       >
-      <p v-if="formError" class="form-error">{{ formError }}</p>
+      <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
       <div class="form-actions">
-        <button class="button primary" :disabled="saving">
+        <button class="btn primary" :disabled="saving">
           {{ saving ? t("loading") : t("addMember") }}
         </button>
       </div>

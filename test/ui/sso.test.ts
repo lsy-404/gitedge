@@ -160,7 +160,7 @@ describe("OIDC and SAML account flows", () => {
     expect(mounted.root.textContent).toContain("GitHub");
     expect(mounted.root.querySelectorAll(".sso-provider")).toHaveLength(1);
 
-    mounted.root.querySelector<HTMLButtonElement>(".sso-identity .button")?.click();
+    mounted.root.querySelector<HTMLButtonElement>(".sso-identity .btn")?.click();
     await settle();
     expect(mounted.root.querySelector('[role="alert"]')?.textContent).toContain(
       "Keep another sign-in method before unlinking."
@@ -206,7 +206,7 @@ describe("OIDC and SAML account flows", () => {
     const mounted = await mountRoute("/settings/account");
     await settle();
 
-    mounted.root.querySelector<HTMLButtonElement>(".sso-provider .button")?.click();
+    mounted.root.querySelector<HTMLButtonElement>(".sso-provider .btn")?.click();
     await settle();
 
     const linkCall = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
@@ -242,7 +242,7 @@ describe("OIDC and SAML account flows", () => {
     const mounted = await mountRoute("/settings/account");
     await settle();
 
-    mounted.root.querySelectorAll<HTMLButtonElement>(".sso-identity .button")[1]?.click();
+    mounted.root.querySelectorAll<HTMLButtonElement>(".sso-identity .btn")[1]?.click();
     await settle();
 
     expect(sessionState.user).toBeNull();

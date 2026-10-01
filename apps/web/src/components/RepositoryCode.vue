@@ -107,7 +107,8 @@ const graphLayout = computed(() => {
     points,
     edges,
     width: Math.max(1, ...points.map((point) => point.lane + 1)) * 22 + 16,
-    height: points.length * 42 + 10,
+    rowHeight: 72,
+    height: points.length * 72,
   };
 });
 const commitRefs = computed(() => graphView.value?.refsByOid ?? new Map<string, string[]>());
@@ -372,11 +373,11 @@ onUnmounted(() => {
         </select>
       </label>
       <RouterLink
-        class="button ghost"
+        class="btn ghost"
         :to="`/${repository.owner}/${repository.name}/commits?ref=${encodeURIComponent(refName)}`"
         >{{ t("commitGraph") }}</RouterLink
       >
-      <RouterLink class="button ghost" :to="`/${repository.owner}/${repository.name}/compare`">{{
+      <RouterLink class="btn ghost" :to="`/${repository.owner}/${repository.name}/compare`">{{
         t("compare")
       }}</RouterLink>
       <div class="clone-control">
@@ -396,12 +397,12 @@ onUnmounted(() => {
           <option value="read">{{ t("readToken") }}</option>
           <option value="write">{{ t("writeToken") }}</option>
         </select>
-        <button class="button" :disabled="tokenBusy || !tokenName.trim()" @click="issueToken">
+        <button class="btn" :disabled="tokenBusy || !tokenName.trim()" @click="issueToken">
           {{ t("createCloneToken") }}
         </button>
       </template>
     </div>
-    <div v-if="token" class="token-once panel">
+    <div v-if="token" class="token-once box box-form">
       <div>
         <strong>{{ t(tokenExpired ? "tokenExpired" : "tokenShownOnce") }}</strong>
         <p>{{ t("tokenExpiry", { date: new Date(token.expiresAt).toLocaleString() }) }}</p>
@@ -409,10 +410,10 @@ onUnmounted(() => {
       <code v-if="!tokenExpired">{{ token.token }}</code>
       <code>{{ cloneUrl }}</code>
       <code v-if="!tokenExpired">{{ cloneCommand }}</code>
-      <button v-if="!tokenExpired" class="button" @click="copyCloneCommand">
+      <button v-if="!tokenExpired" class="btn" @click="copyCloneCommand">
         {{ t("copyCloneCommand") }}
       </button>
-      <button class="button" @click="clearToken">{{ t("close") }}</button>
+      <button class="btn" @click="clearToken">{{ t("close") }}</button>
     </div>
     <div v-if="loading || error" class="content-card">
       <StatusState :loading="loading" :error="error" :empty="false" @retry="load" />
@@ -482,66 +483,76 @@ onUnmounted(() => {
           }}</span>
         </div>
         <p v-if="!graph?.commits.length && !loading" class="empty-inline">{{ t("noCommits") }}</p>
-        <div v-else class="graph-scroll">
-          <svg
-            :width="graphLayout.width"
-            :height="graphLayout.height"
-            role="img"
-            :aria-label="t('commitGraph')"
-          >
-            <line
-              v-for="(edge, i) in graphLayout.edges"
-              :key="`edge-${i}`"
-              :x1="12 + edge.fromLane * 22"
-              :y1="20 + edge.fromRow * 42"
-              :x2="12 + edge.toLane * 22"
-              :y2="20 + edge.toRow * 42"
-              :stroke="edge.fromLane === edge.toLane ? '#8b83f7' : '#d5a36a'"
-              stroke-width="2"
-            />
-            <circle
-              v-for="point in graphLayout.points"
-              :key="point.commit.oid"
-              :cx="12 + point.lane * 22"
-              :cy="20 + point.row * 42"
-              r="5"
-              tabindex="0"
-              role="link"
-              :aria-label="`${t('openCommit')} ${point.commit.oid}`"
-              :fill="
-                (sessionMarkers.get(point.commit.oid)?.length ?? 0) > 0 ? '#e6c99a' : '#8b83f7'
-              "
-              @click="selectCommit(point.commit.oid)"
-              @keydown="handleCommitKeydown($event, point.commit.oid)"
-            />
-          </svg>
-        </div>
-        <div
-          v-for="point in graphLayout.points"
-          :key="point.commit.oid"
-          class="commit-row"
-          :style="{ paddingLeft: `${graphLayout.width + 10}px` }"
-        >
-          <RouterLink
-            :to="{
-              path: `/${repository.owner}/${repository.name}/commits`,
-              query: { ref: refName, oid: point.commit.oid },
+        <div v-else class="graph-history">
+          <div class="graph-scroll">
+            <svg
+              :width="graphLayout.width"
+              :height="graphLayout.height"
+              role="img"
+              :aria-label="t('commitGraph')"
+            >
+              <line
+                v-for="(edge, i) in graphLayout.edges"
+                :key="`edge-${i}`"
+                :x1="12 + edge.fromLane * 22"
+                :y1="20 + edge.fromRow * graphLayout.rowHeight"
+                :x2="12 + edge.toLane * 22"
+                :y2="20 + edge.toRow * graphLayout.rowHeight"
+                :stroke="edge.fromLane === edge.toLane ? '#8b83f7' : '#d5a36a'"
+                stroke-width="2"
+              />
+              <circle
+                v-for="point in graphLayout.points"
+                :key="point.commit.oid"
+                :cx="12 + point.lane * 22"
+                :cy="20 + point.row * graphLayout.rowHeight"
+                r="5"
+                tabindex="0"
+                role="link"
+                :aria-label="`${t('openCommit')} ${point.commit.oid}`"
+                :fill="
+                  (sessionMarkers.get(point.commit.oid)?.length ?? 0) > 0 ? '#e6c99a' : '#8b83f7'
+                "
+                @click="selectCommit(point.commit.oid)"
+                @keydown="handleCommitKeydown($event, point.commit.oid)"
+              />
+            </svg>
+          </div>
+          <div
+            v-for="point in graphLayout.points"
+            :key="point.commit.oid"
+            class="commit-row"
+            :style="{
+              paddingLeft: `${graphLayout.width + 10}px`,
+              height: `${graphLayout.rowHeight}px`,
             }"
-            class="commit-subject"
-            >{{ point.commit.message.split("\n")[0] }}</RouterLink
-          ><code>{{ point.commit.oid.slice(0, 8) }}</code
-          ><span v-for="name in commitRefs.get(point.commit.oid)" :key="name" class="badge">{{
-            name
-          }}</span
-          ><span
-            v-for="marker in sessionMarkers.get(point.commit.oid)"
-            :key="`${marker.session.id}-${marker.kind}-${marker.branchName}`"
-            class="badge agent-badge"
-            >{{ sessionMarkerLabel(marker) }} · {{ sessionPermission(marker.session) }}</span
-          ><small
-            >{{ point.commit.author.name }} ·
-            {{ new Date(point.commit.author.timestamp * 1000).toLocaleString() }}</small
           >
+            <div class="commit-title">
+              <RouterLink
+                :to="{
+                  path: `/${repository.owner}/${repository.name}/commits`,
+                  query: { ref: refName, oid: point.commit.oid },
+                }"
+                class="commit-subject"
+                >{{ point.commit.message.split("\n")[0] }}</RouterLink
+              ><code>{{ point.commit.oid.slice(0, 8) }}</code>
+              <small
+                >{{ point.commit.author.name }} ·
+                {{ new Date(point.commit.author.timestamp * 1000).toLocaleString() }}</small
+              >
+            </div>
+            <div class="commit-labels">
+              <span v-for="name in commitRefs.get(point.commit.oid)" :key="name" class="pill">{{
+                name
+              }}</span
+              ><span
+                v-for="marker in sessionMarkers.get(point.commit.oid)"
+                :key="`${marker.session.id}-${marker.kind}-${marker.branchName}`"
+                class="pill agent-badge"
+                >{{ sessionMarkerLabel(marker) }} · {{ sessionPermission(marker.session) }}</span
+              >
+            </div>
+          </div>
         </div>
         <div v-if="graph?.sessions.length" class="session-overlay">
           <strong>{{ t("agentSessions") }}</strong>
@@ -584,7 +595,7 @@ onUnmounted(() => {
             >
           </div>
         </div>
-        <button v-if="hasMoreCommits" class="button" @click="loadMore">
+        <button v-if="hasMoreCommits" class="btn" @click="loadMore">
           {{ t("loadMore") }}
         </button>
       </section>
@@ -622,7 +633,7 @@ onUnmounted(() => {
               {{ item.shortName }}
             </option>
           </select></label
-        ><button class="button primary" @click="load">{{ t("compare") }}</button>
+        ><button class="btn primary" @click="load">{{ t("compare") }}</button>
       </div>
       <p v-if="comparison" class="muted">
         {{ comparison.commits.length }} {{ t("commits") }} · {{ comparison.files.length }}
@@ -630,7 +641,7 @@ onUnmounted(() => {
       </p>
       <div v-for="change in comparison?.files" :key="change.path" class="item-row">
         <strong>{{ change.path }}</strong
-        ><span class="badge">{{ change.type }}</span>
+        ><span class="pill">{{ change.type }}</span>
         <pre v-if="change.patch" class="diff-preview">{{ change.patch }}</pre>
       </div>
     </section>
@@ -655,7 +666,7 @@ onUnmounted(() => {
 .code-toolbar input,
 .compare-form select {
   color: inherit;
-  background: var(--lift);
+  background: var(--subtle);
   border: 1px solid var(--line);
   padding: 8px;
 }
@@ -678,9 +689,9 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  background: var(--lift);
+  background: var(--subtle);
   padding: 7px;
-  color: var(--warm);
+  color: var(--link);
 }
 .browser-grid {
   display: grid;
@@ -688,6 +699,7 @@ onUnmounted(() => {
   gap: 18px;
 }
 .content-card {
+  border-radius: 6px;
   border: 1px solid var(--line);
   background: var(--surface);
   padding: 16px;
@@ -716,11 +728,11 @@ onUnmounted(() => {
   color: inherit;
   background: transparent;
   border: 0;
-  border-bottom: 1px solid #2c2932;
+  border-bottom: 1px solid var(--line-soft);
   padding: 8px 4px;
 }
 .file-entry:hover {
-  background: var(--lift);
+  background: var(--subtle);
 }
 .file-entry small {
   margin-left: auto;
@@ -740,7 +752,7 @@ onUnmounted(() => {
   max-height: 70vh;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  color: #d4d0dc;
+  color: var(--text);
   font:
     12px/1.65 "IBM Plex Mono",
     monospace;
@@ -755,34 +767,56 @@ onUnmounted(() => {
   position: relative;
   overflow: hidden;
 }
+.graph-history {
+  position: relative;
+}
 .graph-scroll {
   position: absolute;
-  left: 12px;
-  top: 86px;
+  left: 0;
+  top: 0;
   pointer-events: none;
 }
 .commit-row {
-  min-height: 42px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  border-bottom: 1px solid #2c2932;
+  padding-block: 8px;
+  border-bottom: 1px solid var(--line-soft);
   color: var(--muted);
   font-size: 12px;
 }
+.commit-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 24px;
+  min-width: 0;
+}
+.commit-title small {
+  white-space: nowrap;
+}
+.commit-labels {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  min-width: 0;
+}
+.commit-labels .pill {
+  flex-shrink: 0;
+}
 .commit-subject {
-  color: #eee;
+  color: var(--strong);
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .commit-row code,
 .commit-detail code {
-  color: var(--warm);
+  color: var(--link);
   font: 11px monospace;
 }
-.badge.agent-badge {
-  color: var(--warm);
-  border-color: #625640;
+.pill.agent-badge {
+  color: var(--link);
+  border-color: var(--line);
 }
 .session-overlay-row {
   display: grid;
@@ -815,8 +849,8 @@ onUnmounted(() => {
 }
 .token-once code {
   padding: 10px;
-  background: var(--lift);
-  color: var(--warm);
+  background: var(--subtle);
+  color: var(--link);
 }
 .compare-form {
   display: flex;
@@ -846,8 +880,8 @@ onUnmounted(() => {
   .browser-grid {
     grid-template-columns: 1fr;
   }
-  .commit-row {
-    padding-left: 46px !important;
+  .commit-title small {
+    display: none;
   }
 }
 </style>
