@@ -1,8 +1,9 @@
 node_modules/
 .wrangler/
+.cloudflare/
 dist/
+work/
 build/
 *.log
 coverage/
 worker-configuration.d.ts
-wrangler.jsonc

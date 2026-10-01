@@ -83,7 +83,7 @@ export async function handleGitApi(request: Request, env: GitEnv): Promise<Respo
       id: token.id,
       remote: info.remote,
       token: token.plaintext,
-      expiresAt: token.expiresAt,
+      expiresAt: Date.parse(token.expiresAt),
     });
   }
   if (resource === "merge" && request.method === "POST") {

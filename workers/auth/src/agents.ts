@@ -242,7 +242,7 @@ export async function handleAgentManagement(
         .bind(Date.now(), agent.id)
         .run();
       const sessions = await env.DB.prepare(
-        sessionSelect + " WHERE s.agent_id = ? AND s.status = 'active'"
+        sessionSelect + " WHERE s.agent_id = ? AND s.status != 'completed'"
       )
         .bind(agent.id)
         .all<AgentSessionRow>();

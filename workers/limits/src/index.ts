@@ -4,8 +4,8 @@ import type { RateLimitDecision } from "../../../packages/contracts/src/index";
 
 type HitRow = { at: number };
 
-export class SharedRateLimitDurableObject extends DurableObject {
-  constructor(ctx: DurableObjectState, env: Env) {
+export class SharedRateLimitDurableObject extends DurableObject<Record<string, never>> {
+  constructor(ctx: DurableObjectState, env: Record<string, never>) {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
       ctx.storage.sql.exec(

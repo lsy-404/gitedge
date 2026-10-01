@@ -57,9 +57,10 @@ export function gitHttpClient(remote: string, maxBytes = 24 * 1024 * 1024): Http
         method: request.method ?? "GET",
         headers: request.headers,
         body,
-        redirect: "error",
+        redirect: "manual",
         signal: AbortSignal.timeout(30_000),
       });
+      if (response.status >= 300 && response.status < 400) throw new Error("Git repository redirected the request.");
       return {
         url: response.url,
         method: request.method,

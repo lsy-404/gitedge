@@ -4,3 +4,7 @@ node_modules/
 dist/
 work/
 worker-configuration.d.ts
+
+.env*
+.cloudflare/
+coverage/

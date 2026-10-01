@@ -1,7 +1,8 @@
 import { z } from "zod";
-import type { AgentSessionIdentity } from "./forge";
+import { GitBranchSchema, type AgentSessionIdentity } from "./forge";
 export * from "./forge";
 export * from "./trust";
+export * from "./account";
 
 export const ErrorCodeSchema = z.enum([
   "bad_request",
@@ -195,8 +196,8 @@ export const UpdateIssueInputSchema = z
 export const CreatePullRequestInputSchema = z.object({
   title: z.string().trim().min(1).max(200),
   body: z.string().max(50_000).default(""),
-  baseRef: z.string().trim().min(1).max(255),
-  headRef: z.string().trim().min(1).max(255),
+  baseRef: GitBranchSchema,
+  headRef: GitBranchSchema,
   headSessionId: z.string().nullable().default(null),
   draft: z.boolean().default(false),
 });
