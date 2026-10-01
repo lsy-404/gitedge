@@ -2,6 +2,8 @@
 import { onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { api, type Organization } from "../lib/api";
+import AppIcon from "../components/AppIcon.vue";
+import FormActions from "../components/FormActions.vue";
 import StatusState from "../components/StatusState.vue";
 const { t } = useI18n();
 const organizations = ref<Organization[]>([]);
@@ -40,50 +42,42 @@ onMounted(load);
 </script>
 <template>
   <section class="page">
-    <div class="page-heading">
-      <div>
-        <p class="eyebrow">{{ t("organizations") }} / 02</p>
-        <h1>{{ t("organizations") }}</h1>
-      </div>
-      <button class="button primary" @click="showForm = !showForm">
-        + {{ t("newOrganization") }}
+    <div class="page-head">
+      <h1>{{ t("organizations") }}</h1>
+      <button class="btn primary" @click="showForm = !showForm">
+        <AppIcon name="plus" />{{ t("newOrganization") }}
       </button>
     </div>
-    <form v-if="showForm" class="panel create-form" @submit.prevent="create">
-      <label>{{ t("slug") }}<input v-model="form.slug" required /></label
-      ><label>{{ t("displayName") }}<input v-model="form.displayName" required /></label
-      ><label>{{ t("description") }}<textarea v-model="form.description" rows="3" /></label>
-      <p v-if="formError" class="form-error">{{ formError }}</p>
-      <div class="form-actions">
-        <button type="button" class="button ghost" @click="showForm = false">
-          {{ t("cancel") }}</button
-        ><button class="button primary" :disabled="saving">
-          {{ saving ? t("loading") : t("create") }}
-        </button>
-      </div>
+    <form v-if="showForm" class="box box-form form-stack" @submit.prevent="create">
+      <label class="field">{{ t("slug") }}<input v-model="form.slug" required /></label>
+      <label class="field"
+        >{{ t("displayName") }}<input v-model="form.displayName" required
+      /></label>
+      <label class="field"
+        >{{ t("description") }}<textarea v-model="form.description" rows="3" />
+      </label>
+      <FormActions :saving="saving" :error="formError" @cancel="showForm = false" />
     </form>
-    <div class="rule" />
-    <StatusState
-      :loading="loading"
-      :error="error"
-      :empty="!loading && !error && !organizations.length"
-      @retry="load"
-    />
-    <div v-if="!loading && !error" class="repo-list">
-      <RouterLink
-        v-for="organization in organizations"
-        :key="organization.slug"
-        class="repo-row"
-        :to="`/organizations/${organization.slug}`"
-        ><div class="repo-icon">{{ organization.displayName.slice(0, 1).toUpperCase() }}</div>
-        <div class="repo-copy">
-          <h3>
-            <strong>{{ organization.displayName }}</strong>
-          </h3>
-          <p>{{ organization.description || t("noDescription") }}</p>
-        </div>
-        <span class="arrow">→</span></RouterLink
-      >
+    <div class="box">
+      <StatusState
+        :loading="loading"
+        :error="error"
+        :empty="!loading && !error && !organizations.length"
+        @retry="load"
+      />
+      <template v-if="!loading && !error">
+        <RouterLink
+          v-for="organization in organizations"
+          :key="organization.slug"
+          class="box-row"
+          :to="`/organizations/${organization.slug}`"
+        >
+          <div class="grow">
+            <div class="row-title">{{ organization.displayName }}</div>
+            <p class="muted">{{ organization.description || t("noDescription") }}</p>
+          </div>
+        </RouterLink>
+      </template>
     </div>
   </section>
 </template>

@@ -6,27 +6,28 @@ const { t } = useI18n();
 
 <template>
   <section class="page">
-    <p class="eyebrow">{{ t("settings") }} / {{ t("account") }}</p>
-    <h1>{{ t("account") }}</h1>
-    <div v-if="sessionState.user?.externalIdentity" class="panel identity-panel">
-      <div class="identity-heading">
+    <div class="page-head">
+      <h1>{{ t("account") }}</h1>
+    </div>
+    <div v-if="sessionState.user?.externalIdentity" class="box">
+      <div class="box-header identity">
         <img
           v-if="sessionState.user.externalIdentity.avatarUrl"
           :src="sessionState.user.externalIdentity.avatarUrl"
           alt=""
         />
         <div>
-          <h2>GitHub</h2>
+          <div>GitHub</div>
           <a
             v-if="sessionState.user.externalIdentity.profileUrl"
             :href="sessionState.user.externalIdentity.profileUrl"
             target="_blank"
             rel="noreferrer"
             >@{{ sessionState.user.externalIdentity.login }}</a
-          ><span v-else>@{{ sessionState.user.externalIdentity.login }}</span>
+          ><span v-else class="muted">@{{ sessionState.user.externalIdentity.login }}</span>
         </div>
       </div>
-      <dl class="identity-details">
+      <dl class="kv">
         <dt>{{ t("accessLevel") }}</dt>
         <dd>
           {{
@@ -44,19 +45,16 @@ const { t } = useI18n();
         </dd>
         <dt>{{ t("organizations") }}</dt>
         <dd>
-          <span
-            v-if="sessionState.user.externalIdentity.organizations?.length"
-            class="identity-list"
-            >{{
-              sessionState.user.externalIdentity.organizations.map((item) => item.login).join(", ")
-            }}</span
+          <span v-if="sessionState.user.externalIdentity.organizations?.length">{{
+            sessionState.user.externalIdentity.organizations.map((item) => item.login).join(", ")
+          }}</span
           ><span v-else class="muted">{{ t("noConnectedData") }}</span>
         </dd>
       </dl>
     </div>
-    <div v-else class="panel state">
+    <div v-else class="box state">
       <p>{{ t("noGithubIdentity") }}</p>
-      <RouterLink class="button primary" to="/login">{{ t("signIn") }}</RouterLink>
+      <RouterLink class="btn primary" to="/login">{{ t("signIn") }}</RouterLink>
     </div>
   </section>
 </template>

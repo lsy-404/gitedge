@@ -13,7 +13,7 @@ GitEdge 是面向个人开发者和小团队的边缘 Git Forge。首批目标�
 ## 前端
 
 - Vue 3、TypeScript、Vite、Vue Router、Vue I18n。
-- 深色界面优先，保留明确的键盘焦点、错误、加载和空状态。
+- 深色界面优先并随系统切换浅色；布局与交互对齐 GitHub，配色取 Cloudflare 橙与中性灰，保留明确的键盘焦点、错误、加载和空状态。
 - 不用演示数据掩盖 API 故障；页面只呈现真实服务数据。
 - 仓库一级导航固定为 Code、Issues、Pull Requests、Wiki。
 

@@ -4,11 +4,12 @@ import { useI18n } from "vue-i18n";
 import { useRoute } from "vue-router";
 import { api, type Issue, type PullRequest, type Repository, type WikiPage } from "../lib/api";
 import StatusState from "../components/StatusState.vue";
+import AppIcon from "../components/AppIcon.vue";
 import FormActions from "../components/FormActions.vue";
 import { sessionState } from "../lib/session";
 
 const route = useRoute();
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const owner = computed(() => String(route.params.owner));
 const repoName = computed(() => String(route.params.repo));
 const section = computed(() => String(route.params.section || "code"));
@@ -24,6 +25,10 @@ const saving = ref(false);
 const formError = ref("");
 const issueForm = ref({ title: "", body: "" });
 const pullForm = ref({ title: "", body: "", head: "", base: "main" });
+const copied = ref(false);
+const cloneUrl = computed(() => `${window.location.origin}/${owner.value}/${repoName.value}.git`);
+const openIssues = computed(() => issues.value.filter((item) => item.state === "open").length);
+const openPulls = computed(() => pulls.value.filter((item) => item.state === "open").length);
 const wikiForm = ref({ slug: "", title: "", body: "" });
 
 async function load() {
@@ -61,6 +66,20 @@ async function load() {
   } finally {
     loading.value = false;
   }
+}
+
+async function copyCloneUrl() {
+  try {
+    await navigator.clipboard.writeText(cloneUrl.value);
+    copied.value = true;
+    window.setTimeout(() => (copied.value = false), 1500);
+  } catch {
+    copied.value = false;
+  }
+}
+
+function formatDate(value: number): string {
+  return new Intl.DateTimeFormat(locale.value, { dateStyle: "medium" }).format(value);
 }
 
 async function createIssue() {
@@ -114,35 +133,42 @@ watch(() => [route.params.owner, route.params.repo, route.params.section], load,
 </script>
 
 <template>
-  <section class="page repo-page">
-    <RouterLink class="back-link" to="/dashboard">← {{ t("back") }}</RouterLink>
-    <div class="repo-title">
-      <div class="repo-icon large">{{ repoName.slice(0, 1).toUpperCase() }}</div>
-      <div>
-        <p class="eyebrow">{{ owner }} / {{ t("repository") }}</p>
-        <h1>{{ repoName }}</h1>
-        <p class="muted">{{ repository?.description || t("noDescription") }}</p>
-      </div>
+  <section class="page">
+    <div class="repo-head">
+      <AppIcon name="repo" :size="20" />
+      <span class="path">{{ owner }}</span>
+      <span class="path muted">/</span>
+      <strong>{{ repoName }}</strong>
+      <span v-if="repository" class="pill">
+        {{ repository.visibility === "private" ? t("private") : t("public") }}
+      </span>
     </div>
-    <nav class="repo-tabs" :aria-label="t('repositoryNav')">
-      <RouterLink :class="{ active: section === 'code' }" :to="`/${owner}/${repoName}`">{{
-        t("code")
-      }}</RouterLink>
-      <RouterLink :class="{ active: section === 'issues' }" :to="`/${owner}/${repoName}/issues`"
-        >{{ t("issues") }}
-        <small v-if="section === 'issues' && !loading">{{ issues.length }}</small></RouterLink
-      >
-      <RouterLink :class="{ active: section === 'pulls' }" :to="`/${owner}/${repoName}/pulls`"
-        >{{ t("pulls") }}
-        <small v-if="section === 'pulls' && !loading">{{ pulls.length }}</small></RouterLink
-      >
-      <RouterLink :class="{ active: section === 'wiki' }" :to="`/${owner}/${repoName}/wiki`">{{
-        t("wiki")
-      }}</RouterLink>
+    <p class="repo-desc">{{ repository?.description || t("noDescription") }}</p>
+    <nav class="tabs" :aria-label="t('repositoryNav')">
+      <RouterLink :class="{ active: section === 'code' }" :to="`/${owner}/${repoName}`">
+        <AppIcon name="code" />{{ t("code") }}
+      </RouterLink>
+      <RouterLink :class="{ active: section === 'issues' }" :to="`/${owner}/${repoName}/issues`">
+        <AppIcon name="issue" />{{ t("issues") }}
+        <span v-if="section === 'issues' && !loading && !error" class="count">{{
+          issues.length
+        }}</span>
+      </RouterLink>
+      <RouterLink :class="{ active: section === 'pulls' }" :to="`/${owner}/${repoName}/pulls`">
+        <AppIcon name="pr" />{{ t("pulls") }}
+        <span v-if="section === 'pulls' && !loading && !error" class="count">{{
+          pulls.length
+        }}</span>
+      </RouterLink>
+      <RouterLink :class="{ active: section === 'wiki' }" :to="`/${owner}/${repoName}/wiki`">
+        <AppIcon name="wiki" />{{ t("wiki") }}
+      </RouterLink>
     </nav>
-    <div v-if="!loading && !error && canWrite && section !== 'code'" class="section-actions">
-      <button class="button primary" @click="showForm = !showForm">
-        +
+
+    <div v-if="!loading && !error && canWrite && section !== 'code'" class="page-head">
+      <span />
+      <button class="btn primary" @click="showForm = !showForm">
+        <AppIcon name="plus" />
         {{
           section === "issues"
             ? t("createIssue")
@@ -154,75 +180,113 @@ watch(() => [route.params.owner, route.params.repo, route.params.section], load,
     </div>
     <form
       v-if="showForm && section === 'issues'"
-      class="panel create-form"
+      class="box box-form form-stack"
       @submit.prevent="createIssue"
     >
-      <label>{{ t("issueTitle") }}<input v-model="issueForm.title" required /></label
-      ><label>{{ t("issueBody") }}<textarea v-model="issueForm.body" rows="4" /></label
-      ><FormActions :saving="saving" :error="formError" @cancel="showForm = false" />
+      <label class="field">{{ t("issueTitle") }}<input v-model="issueForm.title" required /></label>
+      <label class="field"
+        >{{ t("issueBody") }}<textarea v-model="issueForm.body" rows="4" />
+      </label>
+      <FormActions :saving="saving" :error="formError" @cancel="showForm = false" />
     </form>
     <form
       v-if="showForm && section === 'pulls'"
-      class="panel create-form"
+      class="box box-form form-stack"
       @submit.prevent="createPullRequest"
     >
-      <label>{{ t("issueTitle") }}<input v-model="pullForm.title" required /></label
-      ><label>{{ t("issueBody") }}<textarea v-model="pullForm.body" rows="4" /></label
-      ><label>{{ t("headBranch") }}<input v-model="pullForm.head" required /></label
-      ><label>{{ t("baseBranch") }}<input v-model="pullForm.base" required /></label
-      ><FormActions :saving="saving" :error="formError" @cancel="showForm = false" />
+      <label class="field">{{ t("issueTitle") }}<input v-model="pullForm.title" required /></label>
+      <label class="field">{{ t("issueBody") }}<textarea v-model="pullForm.body" rows="4" /></label>
+      <label class="field">{{ t("headBranch") }}<input v-model="pullForm.head" required /></label>
+      <label class="field">{{ t("baseBranch") }}<input v-model="pullForm.base" required /></label>
+      <FormActions :saving="saving" :error="formError" @cancel="showForm = false" />
     </form>
     <form
       v-if="showForm && section === 'wiki'"
-      class="panel create-form"
+      class="box box-form form-stack"
       @submit.prevent="createWikiPage"
     >
-      <label>{{ t("slug") }}<input v-model="wikiForm.slug" required /></label
-      ><label>{{ t("pageTitle") }}<input v-model="wikiForm.title" required /></label
-      ><label>{{ t("pageBody") }}<textarea v-model="wikiForm.body" rows="6" required /></label
-      ><FormActions :saving="saving" :error="formError" @cancel="showForm = false" />
+      <label class="field">{{ t("slug") }}<input v-model="wikiForm.slug" required /></label>
+      <label class="field">{{ t("pageTitle") }}<input v-model="wikiForm.title" required /></label>
+      <label class="field"
+        >{{ t("pageBody") }}<textarea v-model="wikiForm.body" rows="6" required />
+      </label>
+      <FormActions :saving="saving" :error="formError" @cancel="showForm = false" />
     </form>
-    <div class="content-card">
-      <StatusState :loading="loading" :error="error" :empty="false" @retry="load" /><template
-        v-if="!loading && !error && section === 'code'"
-        ><div class="code-toolbar">
-          <code>{{ repository?.defaultBranch || "main" }}</code
-          ><span
-            >{{ t("cloneUrl") }}:
-            <code>{{
-              `/${repository?.owner || owner}/${repository?.name || repoName}.git`
-            }}</code></span
+
+    <div class="box">
+      <StatusState :loading="loading" :error="error" :empty="false" @retry="load" />
+      <template v-if="!loading && !error && section === 'code'">
+        <div class="clone">
+          <span class="branch"
+            ><AppIcon name="branch" />{{ repository?.defaultBranch || "main" }}</span
           >
+          <code>{{ cloneUrl }}</code>
+          <button class="btn" :aria-label="t('copy')" @click="copyCloneUrl">
+            <AppIcon :name="copied ? 'check' : 'copy'" />{{ copied ? t("copied") : t("copy") }}
+          </button>
         </div>
         <div class="state">
-          <div>
-            <strong>{{ t("noCode") }}</strong>
-            <p class="muted">{{ t("pushFirst") }}</p>
+          <strong>{{ t("noCode") }}</strong>
+          <p>{{ t("pushFirst") }}</p>
+        </div>
+      </template>
+      <template v-else-if="!loading && !error && section === 'issues'">
+        <div class="box-header">
+          <span class="state-icon open"
+            ><AppIcon name="issue" /> {{ openIssues }} {{ t("open") }}</span
+          >
+          <span class="muted"
+            ><AppIcon name="issue-closed" /> {{ issues.length - openIssues }}
+            {{ t("closed") }}</span
+          >
+        </div>
+        <div v-for="issue in issues" :key="issue.number" class="box-row">
+          <AppIcon
+            :class="['state-icon', issue.state === 'open' ? 'open' : 'done']"
+            :name="issue.state === 'open' ? 'issue' : 'issue-closed'"
+          />
+          <div class="grow">
+            <div class="row-title">{{ issue.title }}</div>
+            <div class="row-meta">
+              <span>#{{ issue.number }} · {{ t("openedBy", { author: issue.author }) }}</span>
+              <span>{{ t("updatedOn", { date: formatDate(issue.updatedAt) }) }}</span>
+            </div>
           </div>
-        </div></template
-      ><template v-else-if="!loading && !error && section === 'issues'"
-        ><div v-for="issue in issues" :key="issue.number" class="item-row">
-          <span class="number">#{{ issue.number }}</span
-          ><strong>{{ issue.title }}</strong
-          ><span :class="['badge', issue.state]">{{ t(issue.state) }}</span
-          ><small>{{ issue.author }}</small>
         </div>
-        <div v-if="!issues.length" class="state">{{ t("empty") }}</div></template
-      ><template v-else-if="!loading && !error && section === 'pulls'"
-        ><div v-for="pull in pulls" :key="pull.number" class="item-row">
-          <span class="number">#{{ pull.number }}</span
-          ><strong>{{ pull.title }}</strong
-          ><span :class="['badge', pull.state]">{{ t(pull.state) }}</span
-          ><small>{{ pull.headRef }} → {{ pull.baseRef }}</small>
+        <div v-if="!issues.length" class="state">{{ t("empty") }}</div>
+      </template>
+      <template v-else-if="!loading && !error && section === 'pulls'">
+        <div class="box-header">
+          <span class="state-icon open"><AppIcon name="pr" /> {{ openPulls }} {{ t("open") }}</span>
+          <span class="muted">{{ pulls.length - openPulls }} {{ t("closed") }}</span>
         </div>
-        <div v-if="!pulls.length" class="state">{{ t("empty") }}</div></template
-      ><template v-else-if="!loading && !error && section === 'wiki'"
-        ><div v-for="page in wiki" :key="page.slug" class="item-row">
-          <span class="wiki-mark">W</span><strong>{{ page.title }}</strong
-          ><small>r{{ page.revision }}</small>
+        <div v-for="pull in pulls" :key="pull.number" class="box-row">
+          <AppIcon :class="['state-icon', pull.state]" name="pr" />
+          <div class="grow">
+            <div class="row-title">
+              {{ pull.title }}<span :class="['pill', pull.state]">{{ t(pull.state) }}</span>
+            </div>
+            <div class="row-meta">
+              <span>#{{ pull.number }} · {{ t("openedBy", { author: pull.author }) }}</span>
+              <span class="mono">{{ pull.headRef }} → {{ pull.baseRef }}</span>
+            </div>
+          </div>
         </div>
-        <div v-if="!wiki.length" class="state">{{ t("empty") }}</div></template
-      >
+        <div v-if="!pulls.length" class="state">{{ t("empty") }}</div>
+      </template>
+      <template v-else-if="!loading && !error && section === 'wiki'">
+        <div v-for="page in wiki" :key="page.slug" class="box-row">
+          <AppIcon class="state-icon" name="wiki" />
+          <div class="grow">
+            <div class="row-title">{{ page.title }}</div>
+            <div class="row-meta">
+              <span>r{{ page.revision }} · {{ page.updatedBy }}</span>
+              <span>{{ t("updatedOn", { date: formatDate(page.updatedAt) }) }}</span>
+            </div>
+          </div>
+        </div>
+        <div v-if="!wiki.length" class="state">{{ t("empty") }}</div>
+      </template>
     </div>
   </section>
 </template>
