@@ -172,7 +172,7 @@ describe("GitEdge API client", () => {
 
 describe("GitEdge product shell", () => {
   it("ships Chinese and English product language keys", () => {
-    expect(i18n.global.t("brand")).toBe("码锋");
+    expect(i18n.global.t("brand")).toBe("GitEdge");
     i18n.global.locale.value = "en";
     expect(i18n.global.t("welcome")).toBe("Code at the edge");
     i18n.global.locale.value = "zh-CN";

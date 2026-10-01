@@ -1,4 +1,4 @@
-# GitEdge / 码锋
+# GitEdge
 
 GitEdge is an MIT-licensed Git forge on Cloudflare Workers and Artifacts. The Vue interface supports repositories, Git file browsing and commit graphs, Issues, Pull Requests, Discussions, Wiki revisions, and repository deployment.
 

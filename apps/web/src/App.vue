@@ -22,8 +22,7 @@ refreshSession();
     <a class="skip-link" href="#main">{{ t("skipToContent") }}</a>
     <header class="topbar">
       <RouterLink class="brand" to="/dashboard"
-        ><span class="brand-mark" aria-hidden="true">G</span
-        ><span
+        ><img class="brand-mark" src="/logo.svg" alt="" width="32" height="32" /><span
           ><strong>{{ t("brand") }}</strong
           ><small>{{ t("brandSub") }}</small></span
         ></RouterLink
@@ -50,7 +49,7 @@ refreshSession();
     </header>
     <main id="main" tabindex="-1"><RouterView /></main>
     <footer>
-      <span>GitEdge · {{ t("brand") }}</span
+      <span>{{ t("brand") }}</span
       ><span>{{ t("edge") }}</span>
     </footer>
   </div>

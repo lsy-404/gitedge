@@ -5,19 +5,19 @@
   color: var(--text);
   background: var(--canvas);
   font-size: 15px;
-  --canvas: #121217;
-  --surface: #1a191f;
-  --lift: #242229;
-  --field: #111016;
-  --line: #37343e;
-  --line-soft: #2a2830;
-  --text: #e8e6eb;
+  --canvas: #121110;
+  --surface: #1b1917;
+  --lift: #26231f;
+  --field: #0f0e0d;
+  --line: #3a352f;
+  --line-soft: #2b2723;
+  --text: #ece8e3;
   --strong: #fff;
-  --muted: #a39fad;
-  --faint: #8a8695;
-  --accent: #8b83f7;
-  --accent-ink: #111019;
-  --warm: #e6c99a;
+  --muted: #aaa39a;
+  --faint: #8f877d;
+  --accent: #f6821f;
+  --accent-ink: #1a0e04;
+  --warm: #fbad41;
   --ok: #8ad0af;
   --ok-line: #365c4d;
   --danger: #e59191;
@@ -31,7 +31,8 @@
 body {
   margin: 0;
   min-width: 320px;
-  background: radial-gradient(circle at 80% -10%, #262240 0, transparent 35%), var(--canvas);
+  background:
+    radial-gradient(circle at 80% -10%, rgba(246, 130, 31, 0.14) 0, transparent 38%), var(--canvas);
 }
 button,
 input,
@@ -78,7 +79,7 @@ a {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid #282630;
+  border-bottom: 1px solid #2b2723;
 }
 .brand {
   display: flex;
@@ -87,14 +88,9 @@ a {
   letter-spacing: 0.01em;
 }
 .brand-mark {
-  width: 30px;
-  height: 30px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--accent);
-  color: var(--accent);
-  font-family: monospace;
-  font-weight: 700;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
 }
 .brand strong {
   display: block;
@@ -147,7 +143,7 @@ footer {
   padding: 28px 6vw;
   color: var(--faint);
   font: 11px var(--mono);
-  border-top: 1px solid #24222b;
+  border-top: 1px solid #24201c;
   margin-top: 80px;
 }
 .page {
@@ -209,7 +205,7 @@ footer {
 }
 .repo-row:hover {
   padding-left: 10px;
-  background: #191820;
+  background: #1a1816;
 }
 .repo-icon {
   width: 37px;
@@ -217,7 +213,7 @@ footer {
   display: grid;
   place-items: center;
   flex: 0 0 auto;
-  border: 1px solid #4d485b;
+  border: 1px solid #4d453b;
   color: var(--warm);
   font: 16px var(--mono);
 }
@@ -260,7 +256,7 @@ footer {
   font-size: 20px;
 }
 .badge {
-  border: 1px solid #4a4654;
+  border: 1px solid #4d463e;
   border-radius: 99px;
   padding: 2px 7px;
   margin-left: 10px;
@@ -269,7 +265,7 @@ footer {
 }
 .badge.private {
   color: var(--warm);
-  border-color: #625640;
+  border-color: #6b4a22;
 }
 .badge.open {
   color: var(--ok);
@@ -277,7 +273,7 @@ footer {
 }
 .badge.closed {
   color: var(--danger);
-  border-color: #6b4348;
+  border-color: #6b4040;
 }
 .badge.merged {
   color: var(--done);
@@ -357,7 +353,7 @@ footer {
 }
 .terminal {
   margin-top: 60px;
-  color: #aaa6b3;
+  color: #b3aca3;
   font: 12px var(--mono);
   line-height: 2.1;
 }
@@ -481,7 +477,7 @@ footer {
   color: var(--ok);
 }
 .button.github {
-  background: #242229;
+  background: var(--lift);
   text-align: left;
 }
 .button.github:hover {
@@ -764,7 +760,7 @@ footer {
 .spinner {
   width: 15px;
   height: 15px;
-  border: 2px solid #454151;
+  border: 2px solid #4a443c;
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
