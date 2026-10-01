@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../lib/api";
+import type { SsoProviderSummary } from "../lib/api";
 import { setSession } from "../lib/session";
 const { t } = useI18n();
 const route = useRoute();
@@ -13,10 +14,56 @@ const password = ref("");
 const error = ref("");
 const busy = ref(false);
 const oauthError = computed(() => String(route.query.error || ""));
+const providers = ref<SsoProviderSummary[]>([]);
+const providersError = ref(false);
+const ssoErrorCodes = [
+  "sso_invalid_response",
+  "sso_expired",
+  "sso_identity_in_use",
+  "sso_signup_disabled",
+  "sso_configuration",
+];
+const hasSsoError = computed(() => ssoErrorCodes.includes(String(route.query.error || "")));
+const githubOauthError = computed(() => (hasSsoError.value ? "" : oauthError.value));
+const returnTo = computed(() => safeReturnTo(route.query.redirect));
+
+function safeReturnTo(candidate: unknown): string {
+  const fallback = "/dashboard";
+  if (typeof candidate !== "string" || !candidate.startsWith("/")) return fallback;
+  try {
+    const target = new URL(candidate, window.location.origin);
+    if (target.origin !== window.location.origin || candidate.startsWith("//")) return fallback;
+    return `${target.pathname}${target.search}${target.hash}`;
+  } catch {
+    return fallback;
+  }
+}
+
+function providerHref(providerId: string): string {
+  return `/api/auth/sso/${encodeURIComponent(providerId)}/start?returnTo=${encodeURIComponent(returnTo.value)}`;
+}
+
+function metadataHref(url: string | undefined): string | null {
+  if (!url) return null;
+  try {
+    const target = new URL(url);
+    return target.protocol === "https:" ? target.href : null;
+  } catch {
+    return null;
+  }
+}
+
+onMounted(async () => {
+  try {
+    providers.value = await api.ssoProviders();
+  } catch {
+    providersError.value = true;
+  }
+});
+
 function githubLogin(access: "identity" | "read") {
-  const returnTo = String(route.query.redirect || "/dashboard");
   window.location.assign(
-    `/api/auth/github/start?access=${access}&returnTo=${encodeURIComponent(returnTo)}`
+    `/api/auth/github/start?access=${access}&returnTo=${encodeURIComponent(returnTo.value)}`
   );
 }
 async function submit() {
@@ -70,6 +117,28 @@ async function submit() {
         <span>{{ t("orContinue") }}</span>
       </div>
       <div class="oauth-options">
+        <a
+          v-for="provider in providers"
+          :key="provider.id"
+          class="button federation-provider"
+          :href="providerHref(provider.id)"
+        >
+          <span>{{ provider.label }}</span>
+          <span class="protocol-badge">{{ provider.protocol.toUpperCase() }}</span>
+        </a>
+        <p v-if="providersError" class="form-error" role="status">{{ t("ssoProvidersError") }}</p>
+        <a
+          v-for="provider in providers.filter(
+            (item) => item.protocol === 'saml' && metadataHref(item.metadataUrl)
+          )"
+          :key="`${provider.id}-metadata`"
+          class="metadata-link"
+          :href="metadataHref(provider.metadataUrl) || undefined"
+          target="_blank"
+          rel="noreferrer"
+        >
+          {{ provider.label }} · {{ t("ssoMetadata") }}
+        </a>
         <button type="button" class="button github" @click="githubLogin('identity')">
           ◉ {{ t("githubIdentity") }}
         </button>
@@ -86,7 +155,10 @@ async function submit() {
         </p>
         <p class="note">{{ t("noWriteScope") }}</p>
       </div>
-      <p v-if="oauthError" class="form-error">{{ t("oauthError", { error: oauthError }) }}</p>
+      <p v-if="hasSsoError" class="form-error" role="alert">{{ t("ssoLoginError") }}</p>
+      <p v-else-if="githubOauthError" class="form-error" role="alert">
+        {{ t("oauthError", { error: githubOauthError }) }}
+      </p>
       <p class="switch-auth">
         {{ register ? t("hasAccount") : t("needsAccount") }}
         <RouterLink :to="register ? '/login' : '/register'">{{

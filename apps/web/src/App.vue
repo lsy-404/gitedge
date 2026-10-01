@@ -32,15 +32,14 @@ refreshSession();
         <RouterLink to="/dashboard">{{ t("dashboard") }}</RouterLink
         ><RouterLink to="/organizations">{{ t("organizations") }}</RouterLink
         ><RouterLink to="/settings/agents">{{ t("agents") }}</RouterLink
-        ><RouterLink
-          v-if="sessionState.user.externalIdentity"
-          class="account-summary"
-          to="/settings/account"
+        ><RouterLink v-if="sessionState.user" class="account-summary" to="/settings/account"
           ><img
-            v-if="sessionState.user.externalIdentity.avatarUrl"
+            v-if="sessionState.user.externalIdentity?.avatarUrl"
             :src="sessionState.user.externalIdentity.avatarUrl"
             alt=""
-          />{{ sessionState.user.externalIdentity.login }}</RouterLink
+          />{{
+            sessionState.user.externalIdentity?.login || sessionState.user.identifier
+          }}</RouterLink
         ><button class="text-button" @click="toggleLocale">
           {{ locale === "zh-CN" ? "EN" : "中文" }}</button
         ><button class="text-button" @click="signOut">{{ t("signOut") }}</button>

@@ -399,6 +399,87 @@ footer {
   display: grid;
   gap: 8px;
 }
+.federation-provider {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  text-align: left;
+}
+.protocol-badge {
+  display: inline-block;
+  margin-left: 9px;
+  padding: 2px 7px;
+  border: 1px solid #625640;
+  border-radius: 99px;
+  color: var(--warm);
+  font: 10px var(--mono);
+  vertical-align: middle;
+}
+.metadata-link {
+  color: var(--accent);
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.sso-settings {
+  display: grid;
+  gap: 20px;
+  margin-top: 24px;
+}
+.sso-section-heading,
+.sso-provider,
+.sso-identity {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.sso-section-heading h2,
+.sso-provider-list h3 {
+  margin: 0 0 6px;
+}
+.sso-section-heading p,
+.sso-identity p {
+  margin: 0;
+  line-height: 1.5;
+}
+.sso-identity-list,
+.sso-provider-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.sso-identity,
+.sso-provider {
+  padding: 14px;
+  border: 1px solid var(--line-soft);
+  background: rgba(17, 16, 22, 0.45);
+}
+.sso-identity > div,
+.sso-provider > div {
+  min-width: 0;
+}
+.sso-identity p {
+  margin-top: 6px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.sso-identity small {
+  display: inline-block;
+  margin-top: 6px;
+  color: var(--ok);
+}
+.sso-identity .button,
+.sso-provider .button {
+  flex: 0 0 auto;
+}
+.state.success {
+  border-color: var(--ok-line);
+  color: var(--ok);
+}
 .button.github {
   background: #242229;
   text-align: left;
@@ -788,6 +869,16 @@ footer {
     padding: 10px 6px;
   }
   .account-summary {
-    display: none;
+    display: inline-flex;
+  }
+  .sso-section-heading,
+  .sso-provider,
+  .sso-identity {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .sso-provider .button,
+  .sso-identity .button {
+    align-self: flex-start;
   }
 }

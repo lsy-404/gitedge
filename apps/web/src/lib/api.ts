@@ -22,6 +22,7 @@ import type {
   WikiPage,
   CreatedAgentSession,
 } from "../../../../packages/contracts/src/forge";
+import type { SsoIdentity, SsoProviderSummary } from "../../../../packages/contracts/src/sso";
 
 export type {
   Organization,
@@ -47,6 +48,7 @@ export type {
   WikiPage,
   CreatedAgentSession,
 };
+export type { SsoIdentity, SsoProviderSummary };
 
 export class ApiError extends Error {
   constructor(
@@ -74,7 +76,24 @@ async function request<T>(
     ...init,
   });
   if (!response.ok) {
-    throw new ApiError(response.status, (await response.text()) || response.statusText);
+    const body = await response.text();
+    let message = body || response.statusText;
+    try {
+      const parsed: unknown = JSON.parse(body);
+      if (
+        typeof parsed === "object" &&
+        parsed !== null &&
+        "error" in parsed &&
+        typeof parsed.error === "object" &&
+        parsed.error !== null &&
+        "message" in parsed.error &&
+        typeof parsed.error.message === "string"
+      )
+        message = parsed.error.message;
+    } catch {
+      message = body || response.statusText;
+    }
+    throw new ApiError(response.status, message);
   }
   if (response.status === 204) {
     if (allowNoContent) return;
@@ -111,6 +130,17 @@ export const api = {
     request<User>("/api/auth/register", { method: "POST", body: JSON.stringify(payload) }),
   logout: () => request("/api/auth/logout", { method: "POST" }, true),
   session: () => request<User>("/api/auth/session"),
+  ssoProviders: () => request<SsoProviderSummary[]>("/api/auth/sso/providers"),
+  ssoIdentities: () => request<SsoIdentity[]>("/api/auth/sso/identities"),
+  linkSsoIdentity: (providerId: string, returnTo: string) =>
+    request<{ url: string }>(`/api/auth/sso/${encodeURIComponent(providerId)}/link`, {
+      method: "POST",
+      body: JSON.stringify({ returnTo }),
+    }),
+  unlinkSsoIdentity: (identityId: string) =>
+    request<{ unlinked: boolean }>(`/api/auth/sso/identities/${encodeURIComponent(identityId)}`, {
+      method: "DELETE",
+    }),
   repositories: () => request<Repository[]>("/api/forge/repositories"),
   repository: (owner: string, repo: string) =>
     request<Repository>(
