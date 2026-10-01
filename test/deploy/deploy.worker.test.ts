@@ -241,8 +241,20 @@ describe("repository deployment", () => {
         created.push(body.name);
         return Response.json({ success: true, result: resource });
       }
-      if (url.pathname.endsWith("/workers/scripts/example-worker") && init?.method === "PUT")
+      if (url.pathname.endsWith("/workers/scripts/example-worker") && init?.method === "PUT") {
+        expect(init.body).toBeInstanceOf(FormData);
+        if (!(init.body instanceof FormData))
+          throw new Error("Worker upload must use multipart form data.");
+        expect(new Headers(init.headers).has("Content-Type")).toBe(false);
+        const metadataPart = init.body.get("metadata");
+        expect(typeof metadataPart).toBe("string");
+        if (typeof metadataPart !== "string")
+          throw new Error("Worker upload metadata must be JSON text.");
+        const metadata = JSON.parse(metadataPart) as { main_module?: string };
+        expect(metadata.main_module).toBe("worker/index.js");
+        expect(init.body.get("worker/index.js")).not.toBeNull();
         return Response.json({ success: true, result: { id: "version-1" } });
+      }
       if (
         url.pathname.endsWith("/workers/scripts/example-worker/subdomain") &&
         init?.method === "POST"

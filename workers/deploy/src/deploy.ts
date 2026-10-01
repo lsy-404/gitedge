@@ -369,7 +369,9 @@ async function cfEnvelope<T>(
   try {
     const headers = new Headers(init.headers);
     headers.set("Authorization", `Bearer ${token}`);
-    if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+    const isMultipart = typeof FormData !== "undefined" && init.body instanceof FormData;
+    if (init.body && !isMultipart && !headers.has("Content-Type"))
+      headers.set("Content-Type", "application/json");
     const response = await fetch(`${API}${path}`, { ...init, headers, signal: controller.signal });
     if (!response.ok) throw new Error("Cloudflare API request failed");
     const text = await readTextLimited(response.body, MAX_CF_BODY_BYTES);
@@ -981,11 +983,7 @@ async function handleDeployRequest(
       bindings,
     };
     const form = new FormData();
-    form.append(
-      "metadata",
-      new Blob([JSON.stringify(metadata)], { type: "application/json" }),
-      "metadata.json"
-    );
+    form.set("metadata", JSON.stringify(metadata));
     for (const module of modules)
       form.append(
         module.path,
