@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   ApiError,
@@ -10,6 +10,8 @@ import {
   type Repository,
 } from "../lib/api";
 import StatusState from "../components/StatusState.vue";
+import { agentSessionDisplayStatus } from "../lib/gitGraphView";
+import { clearAgentSessionSecrets, isCredentialExpired } from "../lib/credentialSecurity";
 
 const { t } = useI18n();
 const agents = ref<Agent[]>([]);
@@ -17,6 +19,14 @@ const repositories = ref<Repository[]>([]);
 const sessions = ref<AgentSession[]>([]);
 const selectedAgent = ref("");
 const loading = ref(false);
+const sessionsError = ref("");
+const sessionsLoading = ref(false);
+const sessionsRequestVersion = ref(0);
+const sessionNow = ref(Date.now());
+const credentialsExpired = ref(false);
+let credentialExpiryTimer: ReturnType<typeof setTimeout> | undefined;
+let createSessionVersion = 0;
+let sessionClockTimer: ReturnType<typeof setInterval> | undefined;
 const saving = ref(false);
 const error = ref("");
 const createdSession = ref<CreatedAgentSession | null>(null);
@@ -39,7 +49,7 @@ async function load() {
     agents.value = agentList;
     repositories.value = repoList;
     if (!selectedAgent.value && agentList[0]) selectedAgent.value = agentList[0].id;
-    await loadSessions();
+    else await loadSessions();
   } catch (cause) {
     error.value =
       cause instanceof ApiError && cause.status === 404 ? t("agentsUnavailable") : t("apiError");
@@ -48,14 +58,52 @@ async function load() {
   }
 }
 async function loadSessions() {
-  if (!selectedAgent.value) {
+  const requestVersion = sessionsRequestVersion.value + 1;
+  sessionsRequestVersion.value = requestVersion;
+  const agentId = selectedAgent.value;
+  sessionsError.value = "";
+  if (!agentId) {
     sessions.value = [];
+    sessionsLoading.value = false;
     return;
   }
+  sessions.value = [];
+  sessionsLoading.value = true;
   try {
-    sessions.value = await api.agentSessions(selectedAgent.value);
+    const result = await api.agentSessions(agentId);
+    if (requestVersion === sessionsRequestVersion.value && agentId === selectedAgent.value) {
+      sessions.value = result;
+    }
   } catch {
-    sessions.value = [];
+    if (requestVersion === sessionsRequestVersion.value && agentId === selectedAgent.value) {
+      sessionsError.value = t("apiError");
+    }
+  } finally {
+    if (requestVersion === sessionsRequestVersion.value && agentId === selectedAgent.value) {
+      sessionsLoading.value = false;
+    }
+  }
+}
+function sessionStatus(session: AgentSession): string {
+  return t(agentSessionDisplayStatus(session, sessionNow.value));
+}
+function sessionExpired(session: AgentSession): boolean {
+  return agentSessionDisplayStatus(session, sessionNow.value) === "expired";
+}
+function showCreatedCredentials(session: CreatedAgentSession): void {
+  clearTimeout(credentialExpiryTimer);
+  credentialsExpired.value = isCredentialExpired(session.expiresAt, Date.now());
+  createdSession.value = credentialsExpired.value ? clearAgentSessionSecrets(session) : session;
+  if (!credentialsExpired.value) {
+    credentialExpiryTimer = setTimeout(
+      () => {
+        const current = createdSession.value;
+        if (!current || current.id !== session.id) return;
+        createdSession.value = clearAgentSessionSecrets(current);
+        credentialsExpired.value = true;
+      },
+      Math.max(0, session.expiresAt - Date.now())
+    );
   }
 }
 async function createAgent() {
@@ -86,9 +134,16 @@ async function createSession() {
   if (!selectedAgent.value) return;
   saving.value = true;
   error.value = "";
+  const agentId = selectedAgent.value;
+  const requestVersion = ++createSessionVersion;
   try {
-    createdSession.value = await api.createAgentSession(selectedAgent.value, sessionForm.value);
-    sessions.value = [createdSession.value, ...sessions.value];
+    const session = await api.createAgentSession(agentId, sessionForm.value);
+    if (requestVersion !== createSessionVersion || agentId !== selectedAgent.value) {
+      await api.revokeAgentSession(agentId, session.id);
+      return;
+    }
+    showCreatedCredentials(session);
+    sessions.value = [session, ...sessions.value];
   } catch {
     error.value = t("apiError");
   } finally {
@@ -107,12 +162,27 @@ async function revoke(session: AgentSession) {
   }
 }
 function clearCredentials() {
+  clearTimeout(credentialExpiryTimer);
+  credentialExpiryTimer = undefined;
   createdSession.value = null;
+  credentialsExpired.value = false;
 }
 watch(selectedAgent, () => {
+  createSessionVersion += 1;
+  clearCredentials();
   void loadSessions();
 });
 void load();
+onUnmounted(() => {
+  clearTimeout(credentialExpiryTimer);
+  clearInterval(sessionClockTimer);
+  sessionsRequestVersion.value += 1;
+  createSessionVersion += 1;
+  createdSession.value = null;
+});
+sessionClockTimer = setInterval(() => {
+  sessionNow.value = Date.now();
+}, 30_000);
 </script>
 
 <template>
@@ -204,26 +274,39 @@ void load();
           </form>
           <section class="content-card">
             <p class="eyebrow">{{ t("sessions") }}</p>
-            <div v-for="session in sessions" :key="session.id" class="session-row">
-              <div>
-                <strong>{{ session.workspaceName }}</strong
-                ><small
-                  >{{
-                    repositories.find((repo) => repo.id === session.repositoryId)?.slug ||
-                    session.repositoryId
-                  }}
-                  · {{ session.baseRef }} ·
-                  {{ t(session.permission === "read" ? "readOnly" : "writeAccess") }}</small
-                ><small
-                  >{{ t("expiresAt") }} {{ new Date(session.expiresAt).toLocaleString() }} ·
-                  {{ t(session.status) }}</small
+            <StatusState
+              v-if="sessionsError"
+              :error="sessionsError"
+              :empty="false"
+              @retry="loadSessions"
+            />
+            <StatusState v-else-if="sessionsLoading" :loading="true" :empty="false" />
+            <template v-else>
+              <div v-for="session in sessions" :key="session.id" class="session-row">
+                <div>
+                  <strong>{{ session.workspaceName }}</strong
+                  ><small
+                    >{{
+                      repositories.find((repo) => repo.id === session.repositoryId)?.slug ||
+                      session.repositoryId
+                    }}
+                    · {{ session.baseRef }} ·
+                    {{ t(session.permission === "read" ? "readOnly" : "writeAccess") }}</small
+                  ><small
+                    >{{ t("expiresAt") }} {{ new Date(session.expiresAt).toLocaleString() }} ·
+                    {{ sessionStatus(session) }}</small
+                  >
+                </div>
+                <button
+                  v-if="session.status === 'active' && !sessionExpired(session)"
+                  class="button"
+                  @click="revoke(session)"
                 >
+                  {{ t("revokeSession") }}
+                </button>
               </div>
-              <button v-if="session.status === 'active'" class="button" @click="revoke(session)">
-                {{ t("revokeSession") }}
-              </button>
-            </div>
-            <p v-if="!sessions.length" class="muted">{{ t("noSessions") }}</p>
+              <p v-if="!sessions.length" class="muted">{{ t("noSessions") }}</p>
+            </template>
           </section>
         </div>
         <div v-else class="content-card state">{{ t("selectAgent") }}</div>
@@ -234,10 +317,10 @@ void load();
             {{ t("close") }}
           </button>
           <p class="eyebrow">{{ t("oneTimeCredentials") }}</p>
-          <h2>{{ t("copyBeforeClose") }}</h2>
-          <label
+          <h2>{{ t(credentialsExpired ? "tokenExpired" : "copyBeforeClose") }}</h2>
+          <label v-if="!credentialsExpired"
             >{{ t("apiBearerToken") }}<code>Bearer {{ createdSession.token }}</code></label
-          ><label
+          ><label v-if="!credentialsExpired"
             >{{ t("gitToken") }}<code>{{ createdSession.gitToken }}</code></label
           ><label
             >{{ t("gitRemote") }}<code>{{ createdSession.remote }}</code></label

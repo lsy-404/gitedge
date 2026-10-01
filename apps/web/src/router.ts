@@ -36,7 +36,7 @@ export const router = createRouter({
     },
     { path: "/:owner/:repo/wiki/:slug", component: RepositoryView, meta: { allowAnonymous: true } },
     {
-      path: "/:owner/:repo/:view(tree|blob)/:ref/:path(.*)*",
+      path: "/:owner/:repo/:view(tree|blob)/:path(.*)*",
       component: RepositoryView,
       meta: { allowAnonymous: true },
     },

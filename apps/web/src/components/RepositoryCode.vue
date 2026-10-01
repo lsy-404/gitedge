@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import type {
-  AgentSession,
   GitCommit,
   GitComparison,
   GitFile,
@@ -14,6 +13,14 @@ import type {
 } from "../lib/api";
 import { ApiError, api } from "../lib/api";
 import StatusState from "./StatusState.vue";
+import { clearOneTimeToken, isCredentialExpired } from "../lib/credentialSecurity";
+import {
+  agentSessionDisplayStatus,
+  findGraphCommit,
+  projectGitGraph,
+  repositoryCodeLocation,
+  type GraphSessionMarker,
+} from "../lib/gitGraphView";
 
 const props = defineProps<{ repository: Repository; section: string }>();
 const { t } = useI18n();
@@ -24,6 +31,11 @@ const tree = ref<GitTree | null>(null);
 const file = ref<GitFile | null>(null);
 const graph = ref<GitGraph | null>(null);
 const commits = ref<GitCommit[]>([]);
+const selectedCommit = computed(() =>
+  findGraphCommit(String(route.query.oid || ""), graph.value, commits.value)
+);
+const graphView = computed(() => (graph.value ? projectGitGraph(graph.value) : null));
+const now = ref(Date.now());
 const comparison = ref<GitComparison | null>(null);
 const loading = ref(false);
 const error = ref("");
@@ -34,9 +46,11 @@ const limit = 50;
 const token = ref<{ remote: string; token: string; expiresAt: number } | null>(null);
 const tokenScope = ref<"read" | "write">("read");
 const tokenBusy = ref(false);
-const refName = computed(() =>
-  String(route.params.ref || route.query.ref || props.repository.defaultBranch)
-);
+const tokenExpired = ref(false);
+let tokenExpiryTimer: ReturnType<typeof setTimeout> | undefined;
+let tokenRequestVersion = 0;
+let clockTimer: ReturnType<typeof setInterval> | undefined;
+const refName = computed(() => String(route.query.ref || props.repository.defaultBranch));
 const filePath = computed(() => {
   const value = route.params.path;
   return Array.isArray(value) ? value.join("/") : String(value || "");
@@ -84,23 +98,9 @@ const graphLayout = computed(() => {
     height: points.length * 42 + 10,
   };
 });
-const commitRefs = computed(() => {
-  const index = new Map<string, string[]>();
-  for (const item of refs.value) {
-    const names = index.get(item.oid) ?? [];
-    names.push(item.name.replace(/^refs\/(heads|tags)\//, ""));
-    index.set(item.oid, names);
-  }
-  return index;
-});
-function hasSessionBase(session: AgentSession): session is AgentSession & { baseOid: string } {
-  return session.baseOid !== null;
-}
-const sessionByOid = computed(
-  () =>
-    new Map(
-      (graph.value?.sessions ?? []).filter(hasSessionBase).map((item) => [item.baseOid, item])
-    )
+const commitRefs = computed(() => graphView.value?.refsByOid ?? new Map<string, string[]>());
+const sessionMarkers = computed(
+  () => graphView.value?.sessionsByOid ?? new Map<string, GraphSessionMarker[]>()
 );
 const title = computed(() => filePath.value.split("/").at(-1) || props.repository.name);
 const compareBase = computed({
@@ -144,10 +144,9 @@ async function load() {
     if (version !== requestVersion) return;
     refs.value = refData;
     if (props.section === "commits") {
-      const [items, graphData, activeSessions] = await Promise.all([
+      const [items, graphData] = await Promise.all([
         api.commits(props.repository.id, refName.value, offset.value, limit),
         api.graph(props.repository.id, refName.value, 100),
-        api.repositorySessions(props.repository.id).catch(() => []),
       ]);
       if (version !== requestVersion) return;
       commits.value = offset.value === 0 ? items : [...commits.value, ...items];
@@ -159,25 +158,35 @@ async function load() {
     if (props.section === "compare") {
       const base = String(route.query.base || props.repository.defaultBranch);
       const head = String(route.query.head || defaultCompareHead.value);
-      comparison.value = await api.compare(
+      const result = await api.compare(
         props.repository.id,
         base,
         head,
         route.query.headSessionId?.toString()
       );
+      if (version !== requestVersion) return;
+      comparison.value = result;
       return;
     }
     if (isBlob.value && filePath.value) {
-      file.value = await api.file(props.repository.id, refName.value, filePath.value);
+      const fileData = await api.file(props.repository.id, refName.value, filePath.value);
+      if (version !== requestVersion) return;
+      file.value = fileData;
       return;
     }
-    tree.value = await api.tree(props.repository.id, refName.value, filePath.value);
+    const treeData = await api.tree(props.repository.id, refName.value, filePath.value);
+    if (version !== requestVersion) return;
+    tree.value = treeData;
     if (
       !filePath.value &&
       tree.value.entries.some((entry) => entry.name.toLowerCase() === "readme.md")
     ) {
       const readme = tree.value.entries.find((entry) => entry.name.toLowerCase() === "readme.md");
-      if (readme) file.value = await api.file(props.repository.id, refName.value, readme.path);
+      if (readme) {
+        const readmeFile = await api.file(props.repository.id, refName.value, readme.path);
+        if (version !== requestVersion) return;
+        file.value = readmeFile;
+      }
     }
     emptyReason.value = tree.value.entries.length === 0 ? "tree" : "";
   } catch (cause) {
@@ -203,30 +212,76 @@ function handleRefChange(event: Event) {
   const target = event.target;
   if (target instanceof HTMLSelectElement) void changeRef(target.value);
 }
+function selectCommit(oid: string) {
+  void router.push({
+    path: `/${props.repository.owner}/${props.repository.name}/commits`,
+    query: { ref: refName.value, oid },
+  });
+}
+function handleCommitKeydown(event: KeyboardEvent, oid: string) {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    selectCommit(oid);
+  }
+}
 function copyRemote() {
   void navigator.clipboard.writeText(props.repository.remote);
 }
 function openTree(path: string, type: "tree" | "blob") {
-  router.push(
-    `/${props.repository.owner}/${props.repository.name}/${type}/${encodeURIComponent(refName.value)}/${path.split("/").map(encodeURIComponent).join("/")}`
+  void router.push(
+    repositoryCodeLocation(props.repository.owner, props.repository.name, type, path, refName.value)
   );
 }
 async function issueToken() {
   tokenBusy.value = true;
   error.value = "";
+  const repositoryId = props.repository.id;
+  const requestVersion = ++tokenRequestVersion;
   try {
-    token.value = await api.repositoryToken(props.repository.id, {
+    const issuedToken = await api.repositoryToken(repositoryId, {
       scope: tokenScope.value,
       ttlSeconds: 3600,
     });
+    if (requestVersion !== tokenRequestVersion || repositoryId !== props.repository.id) return;
+    token.value = issuedToken;
+    tokenExpired.value = isCredentialExpired(issuedToken.expiresAt, Date.now());
+    if (tokenExpired.value) token.value = clearOneTimeToken(issuedToken);
+    clearTimeout(tokenExpiryTimer);
+    if (!tokenExpired.value) {
+      tokenExpiryTimer = setTimeout(
+        () => {
+          if (requestVersion !== tokenRequestVersion || !token.value) return;
+          token.value = clearOneTimeToken(token.value);
+          tokenExpired.value = true;
+        },
+        Math.max(0, issuedToken.expiresAt - Date.now())
+      );
+    }
   } catch (cause) {
-    showError(cause);
+    if (requestVersion === tokenRequestVersion) showError(cause);
   } finally {
-    tokenBusy.value = false;
+    if (requestVersion === tokenRequestVersion) tokenBusy.value = false;
   }
 }
 function clearToken() {
+  tokenRequestVersion += 1;
+  tokenBusy.value = false;
   token.value = null;
+  tokenExpired.value = false;
+  clearTimeout(tokenExpiryTimer);
+  tokenExpiryTimer = undefined;
+}
+function sessionForkRefs(sessionId: string) {
+  return graph.value?.refs.filter((item) => item.name.startsWith(`session/${sessionId}/`)) ?? [];
+}
+function sessionStatus(session: NonNullable<typeof graph.value>["sessions"][number]): string {
+  return t(agentSessionDisplayStatus(session, now.value));
+}
+function sessionPermission(session: NonNullable<typeof graph.value>["sessions"][number]): string {
+  return t(session.permission === "read" ? "readOnly" : "writeAccess");
+}
+function sessionMarkerLabel(marker: GraphSessionMarker): string {
+  return `${marker.session.agentName} / ${marker.session.workspaceName} · ${t(marker.kind === "base" ? "sessionBase" : "sessionForkTip")}`;
 }
 function downloadText() {
   if (!file.value?.content) return;
@@ -260,6 +315,7 @@ watch(
       offset.value = 0;
       commits.value = [];
       hasMoreCommits.value = false;
+      if (previousRepositoryId !== props.repository.id) clearToken();
     }
     previousRepositoryId = props.repository.id;
     previousSection = props.section;
@@ -268,6 +324,16 @@ watch(
   },
   { immediate: true }
 );
+onMounted(() => {
+  clockTimer = setInterval(() => {
+    now.value = Date.now();
+  }, 30_000);
+});
+onUnmounted(() => {
+  clearInterval(clockTimer);
+  clearTimeout(tokenExpiryTimer);
+  tokenRequestVersion += 1;
+});
 </script>
 
 <template>
@@ -312,11 +378,11 @@ watch(
     </div>
     <div v-if="token" class="token-once panel">
       <div>
-        <strong>{{ t("tokenShownOnce") }}</strong>
+        <strong>{{ t(tokenExpired ? "tokenExpired" : "tokenShownOnce") }}</strong>
         <p>{{ t("tokenExpiry", { date: new Date(token.expiresAt).toLocaleString() }) }}</p>
       </div>
-      <code>{{ token.token }}</code
-      ><code>{{ token.remote }}</code
+      <code v-if="!tokenExpired">{{ token.token }}</code>
+      <code>{{ token.remote }}</code
       ><button class="button" @click="clearToken">{{ t("close") }}</button>
     </div>
     <div v-if="loading || error" class="content-card">
@@ -382,7 +448,9 @@ watch(
             <p class="eyebrow">{{ t("commitGraph") }}</p>
             <strong>{{ refName }}</strong>
           </div>
-          <span v-if="graph?.truncated" class="muted">{{ t("graphLimit") }}</span>
+          <span v-if="graph?.truncated" class="muted">{{
+            t("graphTruncated", { count: graph.commits.length })
+          }}</span>
         </div>
         <p v-if="!graph?.commits.length && !loading" class="empty-inline">{{ t("noCommits") }}</p>
         <div v-else class="graph-scroll">
@@ -408,7 +476,14 @@ watch(
               :cx="12 + point.lane * 22"
               :cy="20 + point.row * 42"
               r="5"
-              :fill="sessionByOid.has(point.commit.oid) ? '#e6c99a' : '#8b83f7'"
+              tabindex="0"
+              role="link"
+              :aria-label="`${t('openCommit')} ${point.commit.oid}`"
+              :fill="
+                (sessionMarkers.get(point.commit.oid)?.length ?? 0) > 0 ? '#e6c99a' : '#8b83f7'
+              "
+              @click="selectCommit(point.commit.oid)"
+              @keydown="handleCommitKeydown($event, point.commit.oid)"
             />
           </svg>
         </div>
@@ -429,18 +504,56 @@ watch(
           ><span v-for="name in commitRefs.get(point.commit.oid)" :key="name" class="badge">{{
             name
           }}</span
-          ><span v-if="sessionByOid.get(point.commit.oid)" class="badge agent-badge"
-            >{{ t("agentSession") }} · {{ sessionByOid.get(point.commit.oid)?.workspaceName }}</span
+          ><span
+            v-for="marker in sessionMarkers.get(point.commit.oid)"
+            :key="`${marker.session.id}-${marker.kind}-${marker.branchName}`"
+            class="badge agent-badge"
+            >{{ sessionMarkerLabel(marker) }} · {{ sessionPermission(marker.session) }}</span
           ><small
             >{{ point.commit.author.name }} ·
             {{ new Date(point.commit.author.timestamp * 1000).toLocaleString() }}</small
           >
         </div>
         <div v-if="graph?.sessions.length" class="session-overlay">
-          <strong>{{ t("agentSessions") }}</strong
-          ><span v-for="session in graph.sessions" :key="session.id"
-            >{{ session.agentName }} / {{ session.workspaceName }} · {{ session.status }}</span
-          >
+          <strong>{{ t("agentSessions") }}</strong>
+          <p>
+            {{
+              t("forkRefSummary", {
+                refs: graphView?.sessionForkRefCount ?? 0,
+                sessions: graphView?.sessionsWithForkRefs ?? 0,
+                total: graphView?.visibleSessionCount ?? 0,
+              })
+            }}
+          </p>
+          <p v-if="(graphView?.sessionsWithoutForkRefs ?? 0) > 0" class="muted">
+            {{ t("forkRefsMissing", { count: graphView?.sessionsWithoutForkRefs ?? 0 }) }}
+          </p>
+          <div v-for="session in graph.sessions" :key="session.id" class="session-overlay-row">
+            <RouterLink
+              v-if="session.baseOid"
+              :to="{
+                path: `/${repository.owner}/${repository.name}/commits`,
+                query: { ref: refName, oid: session.baseOid },
+              }"
+              >{{ session.agentName }} / {{ session.workspaceName }} ·
+              {{ t("sessionBase") }}</RouterLink
+            >
+            <span v-else>{{ session.agentName }} / {{ session.workspaceName }}</span>
+            <small
+              >{{ sessionPermission(session) }} · {{ sessionStatus(session) }} ·
+              {{ new Date(session.expiresAt).toLocaleString() }}</small
+            >
+            <RouterLink
+              v-for="forkRef in sessionForkRefs(session.id)"
+              :key="forkRef.name"
+              :to="{
+                path: `/${repository.owner}/${repository.name}/commits`,
+                query: { ref: refName, oid: forkRef.oid },
+              }"
+              >{{ forkRef.name.slice(`session/${session.id}/`.length) }} ·
+              {{ forkRef.oid.slice(0, 8) }}</RouterLink
+            >
+          </div>
         </div>
         <button v-if="hasMoreCommits" class="button" @click="loadMore">
           {{ t("loadMore") }}
@@ -449,17 +562,10 @@ watch(
       <section v-if="route.query.oid" class="content-card commit-detail">
         <p class="eyebrow">{{ t("commitDetails") }}</p>
         <code>{{ route.query.oid }}</code>
-        <p
-          v-for="commit in commits.filter((item) => item.oid === route.query.oid)"
-          :key="commit.oid"
-        >
-          {{ commit.message }}
-        </p>
+        <p v-if="selectedCommit">{{ selectedCommit.message }}</p>
+        <p v-else class="muted">{{ t("commitNotInGraph") }}</p>
         <strong>{{ t("parents") }}</strong>
-        <div
-          v-for="parent in commits.find((item) => item.oid === route.query.oid)?.parents"
-          :key="parent"
-        >
+        <div v-for="parent in selectedCommit?.parents" :key="parent">
           <RouterLink
             :to="{
               path: `/${repository.owner}/${repository.name}/commits`,
@@ -647,6 +753,19 @@ watch(
 .badge.agent-badge {
   color: var(--warm);
   border-color: #625640;
+}
+.session-overlay-row {
+  display: grid;
+  gap: 4px;
+  border-top: 1px solid var(--line);
+  padding: 8px 0;
+}
+.graph-scroll svg circle {
+  pointer-events: all;
+  cursor: pointer;
+}
+.session-overlay-row small {
+  color: var(--muted);
 }
 .session-overlay {
   display: grid;
