@@ -28,13 +28,7 @@ import {
 
 type ForgeEnv = {
   readonly DB: D1Database;
-  readonly ARTIFACTS: {
-    create(
-      name: string,
-      options: { setDefaultBranch: string; description: string }
-    ): Promise<{ name: string; token: string }>;
-    get(name: string): Promise<{ remote: string; revokeToken(token: string): Promise<boolean> }>;
-  };
+  readonly ARTIFACTS: Artifacts;
   readonly GIT: { fetch(request: Request): Promise<Response> };
   readonly LOG_LEVEL?: string;
   readonly USER_GROUP_LIMITS_JSON?: string;
@@ -1531,10 +1525,10 @@ export default {
           setDefaultBranch: "main",
           description: parsed.data.description,
         });
-        const artifact = await env.ARTIFACTS.get(created.name);
+        using artifact = await env.ARTIFACTS.get(created.name);
         if (!(await artifact.revokeToken(created.token)))
           throw new Error("Initial repository token could not be revoked.");
-        createdArtifact = { name: created.name, remote: artifact.remote };
+        createdArtifact = { name: created.name, remote: created.remote };
         await env.DB.prepare(
           "UPDATE repositories SET artifact_name = ?, remote = ?, updated_at = ? WHERE id = ?"
         )
