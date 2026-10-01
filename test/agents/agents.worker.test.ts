@@ -1,3 +1,4 @@
+import { runSqlScript } from "../support/database";
 import { env } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -11,29 +12,8 @@ const migrations = import.meta.glob<string>("../../migrations/000*.sql", {
   eager: true,
 });
 
-async function runSqlScript(sql: string): Promise<void> {
-  let statement = "";
-  let inTrigger = false;
-  for (const line of sql.split("\n")) {
-    const trimmed = line.trim();
-    if (!statement && (!trimmed || trimmed.startsWith("--") || /^PRAGMA\b/i.test(trimmed)))
-      continue;
-    if (/^CREATE TRIGGER\b/i.test(trimmed)) inTrigger = true;
-    statement += `${line}\n`;
-    if (inTrigger && /^END;?$/i.test(trimmed)) {
-      await env.DB.prepare(statement).run();
-      statement = "";
-      inTrigger = false;
-    } else if (!inTrigger && trimmed.endsWith(";")) {
-      await env.DB.prepare(statement).run();
-      statement = "";
-    }
-  }
-  if (statement.trim()) await env.DB.prepare(statement).run();
-}
-
 async function applyMigrations(): Promise<void> {
-  for (const path of Object.keys(migrations).sort()) await runSqlScript(migrations[path]);
+  for (const path of Object.keys(migrations).sort()) await runSqlScript(env.DB, migrations[path]);
 }
 
 const artifacts = new FixtureArtifacts();

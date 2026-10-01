@@ -17,6 +17,7 @@ export interface SamlProvider extends SsoProviderBase {
   certificates: string[];
   entityId?: string;
   signingCertificate?: string;
+  decryptionCertificate?: string;
   signatureValidation: "both" | "assertion" | "response";
   logoutUrl?: string;
 }
@@ -41,6 +42,8 @@ export interface SsoAuthorization {
 export interface SsoEnvironment {
   DB: D1Database;
   SSO_PROVIDERS_JSON?: string;
+  GITHUB_CLIENT_ID?: string;
+  GITHUB_CLIENT_SECRET?: string;
   SSO_SECRETS_JSON?: string;
   DEFAULT_USER_GROUP: string;
   LOG_LEVEL?: string;

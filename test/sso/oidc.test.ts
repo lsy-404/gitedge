@@ -1,3 +1,4 @@
+import { FixtureOidc } from "../support/oidc";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import * as oidc from "openid-client";
@@ -8,7 +9,6 @@ const issuer = "https://identity.example.test";
 const callbackUrl = "https://app.example.test/api/auth/sso/callback";
 const clientId = "gitedge-oidc-client";
 const clientSecret = "test-client-secret";
-const textEncoder = new TextEncoder();
 const FlowPayloadSchema = z.object({
   version: z.literal(1),
   providerId: z.string(),
@@ -39,85 +39,9 @@ function parseFlowPayload(payload: string) {
   return FlowPayloadSchema.parse(decoded);
 }
 
-let signingKey: CryptoKey | null = null;
-let publicJwk: JsonWebKey | null = null;
-let responseIdToken = "";
-const tokenRequests: Array<{ authorization: string | null; body: URLSearchParams }> = [];
-
-function base64Url(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-}
-
-async function signIdToken(claims: Record<string, string | number | boolean>): Promise<string> {
-  if (!signingKey) throw new Error("OIDC signing key is not initialized.");
-  const header = base64Url(
-    textEncoder.encode(JSON.stringify({ alg: "RS256", typ: "JWT", kid: "test-key" }))
-  );
-  const payload = base64Url(textEncoder.encode(JSON.stringify(claims)));
-  const content = `${header}.${payload}`;
-  const signature = await crypto.subtle.sign(
-    "RSASSA-PKCS1-v1_5",
-    signingKey,
-    textEncoder.encode(content)
-  );
-  return `${content}.${base64Url(new Uint8Array(signature))}`;
-}
-
-function requestUrl(input: RequestInfo | URL): string {
-  if (typeof input === "string") return input;
-  if (input instanceof URL) return input.href;
-  return input.url;
-}
-
-function requestBody(body: BodyInit | null | undefined): URLSearchParams {
-  if (body instanceof URLSearchParams) return body;
-  return typeof body === "string" ? new URLSearchParams(body) : new URLSearchParams();
-}
-
+let fixture: FixtureOidc;
 function installDiscoveryFetch(): void {
-  vi.stubGlobal(
-    "fetch",
-    async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-      const url = new URL(requestUrl(input));
-      if (url.href === `${issuer}/.well-known/openid-configuration`) {
-        return Response.json({
-          issuer,
-          authorization_endpoint: `${issuer}/authorize`,
-          token_endpoint: `${issuer}/token`,
-          jwks_uri: `${issuer}/jwks`,
-          response_types_supported: ["code"],
-          subject_types_supported: ["public"],
-          id_token_signing_alg_values_supported: ["RS256"],
-          token_endpoint_auth_methods_supported: [
-            "client_secret_basic",
-            "client_secret_post",
-            "none",
-          ],
-          code_challenge_methods_supported: ["S256"],
-        });
-      }
-      if (url.href === `${issuer}/jwks`) {
-        if (!publicJwk) throw new Error("OIDC public key is not initialized.");
-        return Response.json({
-          keys: [{ ...publicJwk, kid: "test-key", use: "sig", alg: "RS256" }],
-        });
-      }
-      if (url.href === `${issuer}/token`) {
-        const body = requestBody(init?.body);
-        const headers = new Headers(init?.headers);
-        tokenRequests.push({ authorization: headers.get("Authorization"), body });
-        return Response.json({
-          access_token: "ephemeral-access-token",
-          token_type: "Bearer",
-          expires_in: 300,
-          id_token: responseIdToken,
-        });
-      }
-      return new Response("Not found", { status: 404 });
-    }
-  );
+  vi.stubGlobal("fetch", fixture.fetch);
 }
 
 function provider(tokenAuthMethod: OidcProvider["tokenAuthMethod"]): OidcProvider {
@@ -134,30 +58,19 @@ function provider(tokenAuthMethod: OidcProvider["tokenAuthMethod"]): OidcProvide
 }
 
 beforeAll(async () => {
-  const keys = await crypto.subtle.generateKey(
-    {
-      name: "RSASSA-PKCS1-v1_5",
-      modulusLength: 2048,
-      publicExponent: new Uint8Array([1, 0, 1]),
-      hash: "SHA-256",
-    },
-    true,
-    ["sign", "verify"]
-  );
-  signingKey = keys.privateKey;
-  publicJwk = await crypto.subtle.exportKey("jwk", keys.publicKey);
+  fixture = await FixtureOidc.create();
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  tokenRequests.length = 0;
+  fixture.tokenRequests.length = 0;
 });
 
 describe("OIDC authorization code flow", () => {
   it("uses configured client authentication, S256 PKCE, state and nonce", async () => {
     installDiscoveryFetch();
     for (const { method, callbackMethod } of tokenAuthCases) {
-      tokenRequests.length = 0;
+      fixture.tokenRequests.length = 0;
       const currentProvider = provider(method);
       const secrets = method === "none" ? {} : { clientSecret };
       const state = `state-for-${method}-roundtrip`;
@@ -177,15 +90,15 @@ describe("OIDC authorization code flow", () => {
       );
       expect(flow).toMatchObject({ providerId: currentProvider.id, issuer, clientId, callbackUrl });
 
-      responseIdToken = await signIdToken({
+      fixture.idToken = await fixture.sign({
         iss: issuer,
         sub: `subject-${method}`,
         aud: clientId,
         iat: Math.floor(Date.now() / 1000),
         exp: Math.floor(Date.now() / 1000) + 300,
         nonce: flow.nonce,
-        name: "Rosmontis",
-        email: "rosmontis@example.test",
+        name: "Fixture User",
+        email: "fixture@example.test",
         email_verified: true,
       });
       const callback =
@@ -206,12 +119,12 @@ describe("OIDC authorization code flow", () => {
       );
       expect(identity).toEqual({
         subject: `subject-${method}`,
-        displayName: "Rosmontis",
-        email: "rosmontis@example.test",
+        displayName: "Fixture User",
+        email: "fixture@example.test",
         emailVerified: true,
       });
-      expect(tokenRequests).toHaveLength(1);
-      const request = tokenRequests[0];
+      expect(fixture.tokenRequests).toHaveLength(1);
+      const request = fixture.tokenRequests[0];
       expect(request?.body.get("code_verifier")).toBe(flow.codeVerifier);
       if (method === "client_secret_basic") {
         const authorization = request?.authorization;
@@ -242,7 +155,7 @@ describe("OIDC authorization code flow", () => {
       "state-for-unverified-email"
     );
     const flow = parseFlowPayload(authorization.payload);
-    responseIdToken = await signIdToken({
+    fixture.idToken = await fixture.sign({
       iss: issuer,
       sub: "subject-unverified",
       aud: clientId,
@@ -278,7 +191,7 @@ describe("OIDC authorization code flow", () => {
     const state = "state-for-tampered-signature";
     const authorization = await startOidc(currentProvider, {}, callbackUrl, state);
     const flow = parseFlowPayload(authorization.payload);
-    const validToken = await signIdToken({
+    const validToken = await fixture.sign({
       iss: issuer,
       sub: "subject-tampered-signature",
       aud: clientId,
@@ -290,7 +203,7 @@ describe("OIDC authorization code flow", () => {
     if (!header || !claims || !signature) throw new Error("Invalid signed test token.");
     const firstSignatureCharacter = signature[0];
     if (!firstSignatureCharacter) throw new Error("Invalid signed test token.");
-    responseIdToken = `${header}.${claims}.${firstSignatureCharacter === "A" ? "B" : "A"}${signature.slice(1)}`;
+    fixture.idToken = `${header}.${claims}.${firstSignatureCharacter === "A" ? "B" : "A"}${signature.slice(1)}`;
 
     await expect(
       completeOidc(

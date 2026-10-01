@@ -1,14 +1,15 @@
+import { runSqlScript } from "../support/database";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { env as workerEnv } from "cloudflare:workers";
 import { DeployManifestSchema } from "../../packages/contracts/src/deploy";
 import type { DeployEnv } from "../../workers/deploy/src/deploy";
 import { handleDeploy } from "../../workers/deploy/src/deploy";
 
-const migrations = import.meta.glob("../../migrations/000*.sql", {
+const migrations = import.meta.glob<string>("../../migrations/000*.sql", {
   query: "?raw",
   import: "default",
   eager: true,
-}) as Record<string, string>;
+});
 
 const repositoryId = "1234567890abcdef1234567890abcdef";
 const accountId = "a".repeat(32);
@@ -39,29 +40,9 @@ const gitRequests: Array<{
   userId: string | null;
 }> = [];
 
-async function runSqlScript(sql: string): Promise<void> {
-  let statement = "";
-  let inTrigger = false;
-  for (const line of sql.split("\n")) {
-    const trimmed = line.trim();
-    if (!statement && (!trimmed || trimmed.startsWith("--") || /^PRAGMA\b/i.test(trimmed)))
-      continue;
-    if (/^CREATE TRIGGER\b/i.test(trimmed)) inTrigger = true;
-    statement += `${line}\n`;
-    if (inTrigger && /^END;?$/i.test(trimmed)) {
-      await workerEnv.DB.prepare(statement).run();
-      statement = "";
-      inTrigger = false;
-    } else if (!inTrigger && trimmed.endsWith(";")) {
-      await workerEnv.DB.prepare(statement).run();
-      statement = "";
-    }
-  }
-  if (statement.trim()) await workerEnv.DB.prepare(statement).run();
-}
-
 async function prepareRepository(): Promise<void> {
-  for (const path of Object.keys(migrations).sort()) await runSqlScript(migrations[path]);
+  for (const path of Object.keys(migrations).sort())
+    await runSqlScript(workerEnv.DB, migrations[path]);
   await workerEnv.DB.batch([
     workerEnv.DB.prepare(
       "INSERT INTO users (id, identifier, password_salt, password_hash, created_at) VALUES (?, ?, ?, ?, ?)"

@@ -1,3 +1,4 @@
+import { runSqlScript } from "../support/database";
 import { env } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
 import git from "../../workers/git/src/index";
@@ -5,48 +6,30 @@ import { resolveGitAccess, resolveWorkspace } from "../../workers/git/src/access
 import forge from "../../workers/forge/src/index";
 import { FixtureArtifacts } from "../support/artifacts";
 
-const migrations = import.meta.glob("../../migrations/000*.sql", {
+const migrations = import.meta.glob<string>("../../migrations/000*.sql", {
   query: "?raw",
   import: "default",
   eager: true,
-}) as Record<string, string>;
-
-async function runSqlScript(sql: string): Promise<void> {
-  let statement = "";
-  let inTrigger = false;
-  for (const line of sql.split("\n")) {
-    const trimmed = line.trim();
-    if (!statement && (!trimmed || trimmed.startsWith("--") || /^PRAGMA\b/i.test(trimmed)))
-      continue;
-    if (/^CREATE TRIGGER\b/i.test(trimmed)) inTrigger = true;
-    statement += `${line}\n`;
-    if (inTrigger && /^END;?$/i.test(trimmed)) {
-      await env.DB.prepare(statement).run();
-      statement = "";
-      inTrigger = false;
-    } else if (!inTrigger && trimmed.endsWith(";")) {
-      await env.DB.prepare(statement).run();
-      statement = "";
-    }
-  }
-  if (statement.trim()) await env.DB.prepare(statement).run();
-}
+});
 
 async function applyForgeMigrations(): Promise<void> {
   const paths = Object.keys(migrations).sort();
   for (const path of paths) {
     if ((path.split("/").at(-1) ?? "") >= "0005_") continue;
-    await runSqlScript(migrations[path]);
+    await runSqlScript(env.DB, migrations[path]);
   }
-  await runSqlScript(`INSERT INTO users (id, identifier, password_salt, password_hash, created_at) VALUES ('u1','alice','x','x',1), ('u2','bob','x','x',1), ('u3','eve','x','x',1);
+  await runSqlScript(
+    env.DB,
+    `INSERT INTO users (id, identifier, password_salt, password_hash, created_at) VALUES ('u1','alice','x','x',1), ('u2','bob','x','x',1), ('u3','eve','x','x',1);
 INSERT INTO namespaces (id, slug, created_by, created_at, kind, display_name, description) VALUES ('n1','alice','u1',1,'personal','Alice','');
 INSERT INTO namespace_memberships (namespace_id,user_id,created_at,role) VALUES ('n1','u1',1,'owner');
 INSERT INTO repositories (id,namespace_id,created_by,slug,do_name,visibility,description,created_at,updated_at) VALUES ('r1','n1','u1','demo','repo:r1','public','',1,1);
 INSERT INTO forge_issues (id,repository_id,number,author_id,title,body,state,created_at,updated_at) VALUES ('legacy-issue','r1',6,'u1','Legacy issue','', 'open',1,1);
-INSERT INTO forge_pull_requests (id,repository_id,number,author_id,title,body,base_ref,head_ref,state,created_at,updated_at) VALUES ('legacy-pr','r1',8,'u1','Legacy PR','', 'main','topic','open',1,1);`);
+INSERT INTO forge_pull_requests (id,repository_id,number,author_id,title,body,base_ref,head_ref,state,created_at,updated_at) VALUES ('legacy-pr','r1',8,'u1','Legacy PR','', 'main','topic','open',1,1);`
+  );
   for (const path of paths) {
     if ((path.split("/").at(-1) ?? "") < "0005_") continue;
-    await runSqlScript(migrations[path]);
+    await runSqlScript(env.DB, migrations[path]);
   }
 }
 
@@ -117,9 +100,12 @@ beforeAll(async () => {
     .bind(sourceArtifact.name, sourceArtifact.remote)
     .run();
   expect(artifacts.snapshot(sourceArtifact.name).tokens[0]?.state).toBe("revoked");
-  await runSqlScript(`INSERT INTO auth_agents (id,user_id,name,description,created_at) VALUES ('a1','u2','reviewer','',1);
+  await runSqlScript(
+    env.DB,
+    `INSERT INTO auth_agents (id,user_id,name,description,created_at) VALUES ('a1','u2','reviewer','',1);
 INSERT INTO auth_git_tokens (id,user_id,repository_id,name,token_hash,permission,expires_at,created_at) VALUES ('gt1','u2','r1','test','git-hash','read',9999999999999,1);
-INSERT INTO auth_agent_sessions (id,agent_id,user_id,repository_id,token_hash,git_token_id,workspace_name,remote,base_ref,base_oid,permission,status,created_at,expires_at) VALUES ('s1','a1','u2','r1','session-hash','gt1','review','artifact://repo-r1','main',NULL,'read','active',1,9999999999999);`);
+INSERT INTO auth_agent_sessions (id,agent_id,user_id,repository_id,token_hash,git_token_id,workspace_name,remote,base_ref,base_oid,permission,status,created_at,expires_at) VALUES ('s1','a1','u2','r1','session-hash','gt1','review','artifact://repo-r1','main',NULL,'read','active',1,9999999999999);`
+  );
 });
 
 describe("Forge collaboration", () => {

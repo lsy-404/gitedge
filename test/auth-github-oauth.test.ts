@@ -7,6 +7,7 @@ type OAuthState = {
   access_level: "identity" | "read";
   return_to: string;
   expires_at: number;
+  browser_hash: string;
 };
 
 class TestDatabase implements D1Database {
@@ -39,8 +40,13 @@ class TestStatement implements D1PreparedStatement {
   async first<T = unknown>(): Promise<T | null> {
     if (this.query.startsWith("DELETE FROM github_oauth_states")) {
       const state = this.database.states.get(String(this.values[0]));
+      if (
+        !state ||
+        state.expires_at <= Number(this.values[1]) ||
+        state.browser_hash !== this.values[2]
+      )
+        return null;
       this.database.states.delete(String(this.values[0]));
-      if (!state || state.expires_at <= Number(this.values[1])) return null;
       return {
         code_verifier: state.code_verifier,
         access_level: state.access_level,
@@ -67,6 +73,7 @@ class TestStatement implements D1PreparedStatement {
         access_level: access,
         return_to: String(this.values[3]),
         expires_at: Number(this.values[4]),
+        browser_hash: String(this.values[6]),
       });
     }
     if (this.query.startsWith("INSERT INTO auth_sessions"))
@@ -153,9 +160,18 @@ describe("GitHub OAuth", () => {
         );
       })
     );
-    const completed = await completeGithubOAuth(
+    const unbound = await completeGithubOAuth(
       new Request(
         `https://forge.example/api/auth/github/callback?state=${state}&code=provider-code`
+      ),
+      environment
+    );
+    expect(unbound.status).toBe(400);
+    expect(database.states.size).toBe(1);
+    const completed = await completeGithubOAuth(
+      new Request(
+        `https://forge.example/api/auth/github/callback?state=${state}&code=provider-code`,
+        { headers: { Cookie: started.headers.get("Set-Cookie")?.split(";")[0] ?? "" } }
       ),
       environment
     );
@@ -167,7 +183,8 @@ describe("GitHub OAuth", () => {
 
     const replay = await completeGithubOAuth(
       new Request(
-        `https://forge.example/api/auth/github/callback?state=${state}&code=provider-code`
+        `https://forge.example/api/auth/github/callback?state=${state}&code=provider-code`,
+        { headers: { Cookie: started.headers.get("Set-Cookie")?.split(";")[0] ?? "" } }
       ),
       environment
     );
@@ -194,7 +211,8 @@ describe("GitHub OAuth", () => {
     );
     const completed = await completeGithubOAuth(
       new Request(
-        `https://forge.example/api/auth/github/callback?state=${state}&code=provider-code`
+        `https://forge.example/api/auth/github/callback?state=${state}&code=provider-code`,
+        { headers: { Cookie: started.headers.get("Set-Cookie")?.split(";")[0] ?? "" } }
       ),
       environment
     );
@@ -242,7 +260,8 @@ describe("GitHub OAuth", () => {
     );
     await completeGithubOAuth(
       new Request(
-        `https://forge.example/api/auth/github/callback?state=${state}&code=provider-code`
+        `https://forge.example/api/auth/github/callback?state=${state}&code=provider-code`,
+        { headers: { Cookie: started.headers.get("Set-Cookie")?.split(";")[0] ?? "" } }
       ),
       environment
     );

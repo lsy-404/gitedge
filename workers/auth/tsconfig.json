@@ -9,7 +9,7 @@
     "skipLibCheck": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "types": ["@cloudflare/workers-types"]
+    "types": ["@cloudflare/workers-types", "node"]
   },
   "include": ["src", "../../packages/contracts/src", "../../src/worker/common/logger.ts"]
 }

@@ -1,3 +1,5 @@
+import { timingSafeEqual } from "node:crypto";
+import { handleSso } from "./sso/routes";
 import {
   LoginInputSchema,
   RegisterInputSchema,
@@ -5,6 +7,15 @@ import {
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
 import { createLogger } from "../../../src/worker/common/logger";
+import {
+  bytesToBase64,
+  createSessionCookie,
+  readCookie,
+  issueSession,
+  hashToken,
+  createToken,
+  SESSION_MAX_AGE_SECONDS,
+} from "./session";
 import { PBKDF2_ITERATIONS } from "./password";
 import { authenticateAgentSession, authenticateGitToken, handleAgentManagement } from "./agents";
 
@@ -14,6 +25,8 @@ type AuthEnv = {
   readonly LOG_LEVEL?: string;
   readonly ALLOW_PUBLIC_SIGNUP: string;
   readonly DEFAULT_USER_GROUP: string;
+  readonly SSO_PROVIDERS_JSON?: string;
+  readonly SSO_SECRETS_JSON?: string;
   readonly GITHUB_CLIENT_ID?: string;
   readonly GITHUB_CLIENT_SECRET?: string;
   readonly GITHUB_API_BASE?: string;
@@ -62,9 +75,8 @@ type GithubOrganizationSummary = {
   readonly avatarUrl: string;
 };
 
-const SESSION_COOKIE = "gitedge_session";
-const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
 const GITHUB_STATE_MAX_AGE_MS = 10 * 60 * 1000;
+const GITHUB_FLOW_COOKIE = "gitedge_github_flow";
 const GITHUB_READ_SCOPES = ["read:user", "user:email", "read:org"] as const;
 
 function json(body: unknown, status = 200, headers?: HeadersInit): Response {
@@ -79,12 +91,6 @@ function fail(
   message: string
 ): Response {
   return json({ error: { code, message } }, status);
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-  let value = "";
-  for (const byte of bytes) value += String.fromCharCode(byte);
-  return btoa(value);
 }
 
 function base64ToBytes(value: string): Uint8Array<ArrayBuffer> {
@@ -108,19 +114,6 @@ async function derivePasswordHash(
     256
   );
   return bytesToBase64(new Uint8Array(bits));
-}
-
-async function hashToken(token: string): Promise<string> {
-  return bytesToBase64(
-    new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)))
-  );
-}
-
-function createToken(): string {
-  return bytesToBase64(crypto.getRandomValues(new Uint8Array(32)))
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replaceAll("=", "");
 }
 
 function createPkceVerifier(): string {
@@ -200,36 +193,12 @@ function isGithubUserResponse(value: unknown): value is GithubUserResponse {
   );
 }
 
-function createSessionCookie(token: string, maxAge: number): string {
-  return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
-}
-
-function readCookie(request: Request): string | null {
-  const cookie = request.headers.get("Cookie") ?? "";
-  const entry = cookie
-    .split(";")
-    .map((part) => part.trim())
-    .find((part) => part.startsWith(`${SESSION_COOKIE}=`));
-  return entry ? entry.slice(SESSION_COOKIE.length + 1) : null;
-}
-
 async function readJson(request: Request): Promise<unknown> {
   try {
     return await request.json();
   } catch {
     return null;
   }
-}
-
-async function issueSession(env: AuthEnv, userId: string): Promise<string> {
-  const token = createToken();
-  const now = Date.now();
-  await env.DB.prepare(
-    "INSERT INTO auth_sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)"
-  )
-    .bind(await hashToken(token), userId, now + SESSION_MAX_AGE_SECONDS * 1000, now)
-    .run();
-  return token;
 }
 
 export async function register(
@@ -326,7 +295,7 @@ export async function login(
       parsed.data.password,
       base64ToBytes(user.password_salt)
     );
-    passwordMatches = crypto.subtle.timingSafeEqual(
+    passwordMatches = timingSafeEqual(
       base64ToBytes(passwordHash),
       base64ToBytes(user.password_hash)
     );
@@ -561,7 +530,7 @@ async function findOrCreateGithubUser(
   // This identifier is independent of mutable GitHub account names and never derives from email.
   const user: TrustedUser = {
     id: crypto.randomUUID(),
-    identifier: `github-${createToken().slice(0, 24).toLowerCase()}`,
+    identifier: `github-${crypto.randomUUID().replaceAll("-", "").slice(0, 24)}`,
     groupKey: env.DEFAULT_USER_GROUP,
   };
   const namespaceId = crypto.randomUUID();
@@ -608,12 +577,21 @@ export async function startGithubOAuth(request: Request, env: AuthEnv): Promise<
 
   const state = createToken();
   const verifier = createPkceVerifier();
+  const proof = createToken();
   const now = Date.now();
   await env.DB.prepare("DELETE FROM github_oauth_states WHERE expires_at <= ?").bind(now).run();
   await env.DB.prepare(
-    "INSERT INTO github_oauth_states (state_hash, code_verifier, access_level, return_to, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+    "INSERT INTO github_oauth_states (state_hash, code_verifier, access_level, return_to, expires_at, created_at, browser_hash) VALUES (?, ?, ?, ?, ?, ?, ?)"
   )
-    .bind(await hashToken(state), verifier, access, returnTo, now + GITHUB_STATE_MAX_AGE_MS, now)
+    .bind(
+      await hashToken(state),
+      verifier,
+      access,
+      returnTo,
+      now + GITHUB_STATE_MAX_AGE_MS,
+      now,
+      await hashToken(proof)
+    )
     .run();
   const authorizationUrl = new URL("/login/oauth/authorize", githubOAuthBase(env));
   authorizationUrl.searchParams.set("client_id", env.GITHUB_CLIENT_ID);
@@ -623,7 +601,14 @@ export async function startGithubOAuth(request: Request, env: AuthEnv): Promise<
   authorizationUrl.searchParams.set("code_challenge_method", "S256");
   if (access === "read") authorizationUrl.searchParams.set("scope", GITHUB_READ_SCOPES.join(" "));
   logger.info("github-oauth:started", { access });
-  return Response.redirect(authorizationUrl.toString(), 302);
+  return new Response(null, {
+    status: 302,
+    headers: {
+      Location: authorizationUrl.toString(),
+      "Cache-Control": "no-store",
+      "Set-Cookie": `${GITHUB_FLOW_COOKIE}=${proof}; Path=/api/auth/github; Secure; HttpOnly; SameSite=Lax; Max-Age=600`,
+    },
+  });
 }
 
 export async function completeGithubOAuth(request: Request, env: AuthEnv): Promise<Response> {
@@ -638,11 +623,17 @@ export async function completeGithubOAuth(request: Request, env: AuthEnv): Promi
   }
   const url = new URL(request.url);
   const state = url.searchParams.get("state");
-  if (!state) return fail(400, "bad_request", "Invalid GitHub sign-in response.");
+  const proof = request.headers
+    .get("Cookie")
+    ?.split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(`${GITHUB_FLOW_COOKIE}=`))
+    ?.slice(GITHUB_FLOW_COOKIE.length + 1);
+  if (!state || !proof) return fail(400, "bad_request", "Invalid GitHub sign-in response.");
   const oauthState = await env.DB.prepare(
-    "DELETE FROM github_oauth_states WHERE state_hash = ? AND expires_at > ? RETURNING code_verifier, access_level, return_to"
+    "DELETE FROM github_oauth_states WHERE state_hash = ? AND expires_at > ? AND browser_hash = ? RETURNING code_verifier, access_level, return_to"
   )
-    .bind(await hashToken(state), Date.now())
+    .bind(await hashToken(state), Date.now(), await hashToken(proof))
     .first<GithubOAuthStateRow>();
   if (!oauthState) {
     logger.warn("github-oauth:invalid-state");
@@ -733,6 +724,12 @@ export default {
   async fetch(request: Request, env: AuthEnv): Promise<Response> {
     const logger = createLogger(env.LOG_LEVEL, { service: "auth" });
     const path = new URL(request.url).pathname;
+    if (path.startsWith("/sso/")) {
+      const active = request.headers.has("Authorization")
+        ? null
+        : await session(env, readCookie(request));
+      return handleSso(request, env, active?.ok ? active.data : null);
+    }
     if (request.method === "GET" && path === "/git-session") {
       const authenticated = await authenticateGitToken(request, env);
       return authenticated
