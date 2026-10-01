@@ -67,6 +67,11 @@ interface CfRawResource {
   name?: string;
   title?: string;
 }
+interface WorkerSubdomain {
+  enabled?: boolean;
+  previews_enabled?: boolean;
+  url?: string;
+}
 
 function response(data: unknown, status = 200, headers: HeadersInit = {}): Response {
   return Response.json({ data }, { status, headers });
@@ -78,6 +83,32 @@ function failure(
   headers: HeadersInit = {}
 ): Response {
   return Response.json({ error: { code, message } }, { status, headers });
+}
+async function activationFailure(
+  env: DeployEnv,
+  session: DeploymentSession,
+  logger: DeployLogger,
+  repositoryId: string,
+  workerName: string,
+  detail: string
+): Promise<Response> {
+  logger.warn("deploy:workers-dev-activation-failed", { repositoryId, workerName, detail });
+  const serialized = JSON.stringify({
+    error: {
+      code: "activation_failed",
+      message: "Worker upload succeeded, but workers.dev activation failed. Retry activation.",
+      uploadStatus: "upload_succeeded",
+      activationStatus: "activation_failed",
+    },
+  });
+  return new Response(serialized, {
+    status: 502,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Set-Cookie": cookieHeader(await seal(env, session), SESSION_SECONDS),
+      "Cache-Control": "no-store",
+    },
+  });
 }
 function safeName(value: string): string {
   return value
@@ -1028,17 +1059,65 @@ async function handleDeployRequest(
         "Cloudflare rejected the Worker upload. You can retry this step."
       );
     }
-    const subdomain = await cf<{ subdomain?: string; enabled?: boolean }>(
+    const subdomainPath = cfPath(
+      selected.session.accountId,
+      `workers/scripts/${encodeURIComponent(workerName)}/subdomain`
+    );
+    try {
+      await cf(selected.session.token, subdomainPath, {
+        method: "POST",
+        headers: { "Cloudflare-Workers-Script-Api-Date": "2025-08-01" },
+        body: JSON.stringify({ enabled: true, previews_enabled: false }),
+      });
+    } catch {
+      return activationFailure(
+        env,
+        selected.session,
+        logger,
+        repositoryId,
+        workerName,
+        "activation_api_rejected"
+      );
+    }
+    const script = await cf<{ subdomain?: WorkerSubdomain }>(
       selected.session.token,
-      cfPath(selected.session.accountId, "workers/subdomain")
+      cfPath(selected.session.accountId, `workers/workers/${encodeURIComponent(workerName)}`)
     ).catch(() => null);
-    const zone =
-      typeof subdomain?.subdomain === "string" && subdomain.enabled !== false
-        ? subdomain.subdomain
-        : null;
+    const workerUrl = script?.subdomain?.url;
+    if (script?.subdomain?.enabled !== true || typeof workerUrl !== "string")
+      return activationFailure(
+        env,
+        selected.session,
+        logger,
+        repositoryId,
+        workerName,
+        "activation_not_confirmed"
+      );
+    let confirmedUrl: URL;
+    try {
+      confirmedUrl = new URL(workerUrl);
+    } catch {
+      return activationFailure(
+        env,
+        selected.session,
+        logger,
+        repositoryId,
+        workerName,
+        "workers_dev_url_invalid"
+      );
+    }
+    if (confirmedUrl.protocol !== "https:" || !confirmedUrl.hostname.endsWith(".workers.dev"))
+      return activationFailure(
+        env,
+        selected.session,
+        logger,
+        repositoryId,
+        workerName,
+        "workers_dev_url_invalid"
+      );
     const result = {
       workerName,
-      url: zone ? `https://${workerName}.${zone}.workers.dev` : null,
+      url: confirmedUrl.toString(),
       resources: Object.entries(selected.session.completed)
         .filter(([key]) => !key.startsWith("migration:"))
         .map(([key, id]) => ({ key, id })),
@@ -1046,7 +1125,7 @@ async function handleDeployRequest(
     logger.info("deploy:worker-deployed", {
       repositoryId,
       workerName,
-      hasWorkersDevUrl: zone !== null,
+      hasWorkersDevUrl: true,
     });
     return response(result, 200, {
       "Set-Cookie": cookieHeader("", 0),

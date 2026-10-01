@@ -173,6 +173,7 @@ describe("repository deployment", () => {
     const resources = new Map<string, { id: string; name: string }[]>();
     const created: string[] = [];
     const calls: string[] = [];
+    let subdomainReads = 0;
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input));
       calls.push(`${init?.method ?? "GET"} ${url.pathname}`);
@@ -190,11 +191,29 @@ describe("repository deployment", () => {
       }
       if (url.pathname.endsWith("/workers/scripts/example-worker") && init?.method === "PUT")
         return Response.json({ success: true, result: { id: "version-1" } });
-      if (url.pathname.endsWith("/workers/subdomain"))
+      if (
+        url.pathname.endsWith("/workers/scripts/example-worker/subdomain") &&
+        init?.method === "POST"
+      ) {
+        expect(new Headers(init.headers).get("Cloudflare-Workers-Script-Api-Date")).toBe(
+          "2025-08-01"
+        );
+        expect(JSON.parse(String(init.body))).toEqual({ enabled: true, previews_enabled: false });
+        return Response.json({ success: true, result: { enabled: true, previews_enabled: false } });
+      }
+      if (url.pathname.endsWith("/workers/workers/example-worker")) {
+        subdomainReads += 1;
         return Response.json({
           success: true,
-          result: { subdomain: "test-account", enabled: true },
+          result: {
+            subdomain: {
+              enabled: subdomainReads > 1,
+              previews_enabled: false,
+              url: "https://example-worker.test-account.workers.dev",
+            },
+          },
         });
+      }
       throw new Error(`Unexpected Cloudflare API request ${url.pathname}`);
     });
 
@@ -254,7 +273,7 @@ describe("repository deployment", () => {
     expect(retryProvision.status).toBe(200);
     expect(created).toEqual(["example-db"]);
 
-    const deployed = await handleDeploy(
+    const failedActivation = await handleDeploy(
       request(
         "deploy",
         "POST",
@@ -268,11 +287,45 @@ describe("repository deployment", () => {
       env,
       logger
     );
+    const failurePayload = (await failedActivation.json()) as {
+      error: { code: string; uploadStatus: string; activationStatus: string };
+    };
+    expect(failedActivation.status).toBe(502);
+    expect(failurePayload.error.code).toBe("activation_failed");
+    expect(failurePayload.error.uploadStatus).toBe("upload_succeeded");
+    expect(failurePayload.error.activationStatus).toBe("activation_failed");
+    const activationRetryCookie = failedActivation.headers.get("Set-Cookie")?.split(";")[0];
+    expect(activationRetryCookie).toContain("ge_deploy_session=");
+    expect(failedActivation.headers.get("Set-Cookie")).toContain("Max-Age=900");
+
+    const deployed = await handleDeploy(
+      request(
+        "deploy",
+        "POST",
+        {
+          workerName: "example-worker",
+          confirmDigest: plan.manifestDigest,
+          nonce: sessionPayload.nonce,
+        },
+        activationRetryCookie
+      ),
+      env,
+      logger
+    );
     const output = await deployed.text();
     expect(deployed.status).toBe(200);
     expect(output).toContain("https://example-worker.test-account.workers.dev");
     expect(output).not.toContain(token);
-    expect(calls.some((call) => call.startsWith("PUT "))).toBe(true);
+    expect(deployed.headers.get("Set-Cookie")).toContain("Max-Age=0");
+    expect(calls.filter((call) => call.startsWith("PUT "))).toHaveLength(2);
+    expect(
+      calls.filter((call) => call.startsWith("POST ") && call.includes("/subdomain"))
+    ).toHaveLength(2);
+    expect(
+      calls.filter(
+        (call) => call.startsWith("GET ") && call.endsWith("/workers/workers/example-worker")
+      )
+    ).toHaveLength(2);
     expect(JSON.stringify(logger.info.mock.calls)).not.toContain(token);
   });
 });
