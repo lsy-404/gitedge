@@ -5,10 +5,11 @@
     "moduleResolution": "bundler",
     "strict": true,
     "noEmit": true,
-    "lib": ["ES2022", "WebWorker"],
+    "lib": ["ES2022", "ESNext.Disposable"],
     "skipLibCheck": true,
     "noUnusedLocals": true,
-    "noUnusedParameters": true
+    "noUnusedParameters": true,
+    "types": ["@cloudflare/workers-types"]
   },
-  "include": ["src", "../../packages/contracts/src", "worker-configuration.d.ts"]
+  "include": ["src", "../../packages/contracts/src", "../../src/worker/common/logger.ts"]
 }

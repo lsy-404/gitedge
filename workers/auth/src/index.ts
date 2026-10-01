@@ -5,9 +5,11 @@ import {
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
 import { createLogger } from "../../../src/worker/common/logger";
+import { authenticateAgentSession, authenticateGitToken, handleAgentManagement } from "./agents";
 
 type AuthEnv = {
   readonly DB: D1Database;
+  readonly ARTIFACTS: Artifacts;
   readonly LOG_LEVEL?: string;
   readonly ALLOW_PUBLIC_SIGNUP: string;
   readonly DEFAULT_USER_GROUP: string;
@@ -731,6 +733,12 @@ export default {
   async fetch(request: Request, env: AuthEnv): Promise<Response> {
     const logger = createLogger(env.LOG_LEVEL, { service: "auth" });
     const path = new URL(request.url).pathname;
+    if (request.method === "GET" && path === "/git-session") {
+      const authenticated = await authenticateGitToken(request, env);
+      return authenticated
+        ? json({ data: authenticated }, 200, { "Cache-Control": "no-store" })
+        : fail(401, "unauthorized", "Invalid Git credential.");
+    }
     if (request.method === "GET" && path === "/github/start") return startGithubOAuth(request, env);
     if (request.method === "GET" && path === "/github/callback")
       return completeGithubOAuth(request, env);
@@ -775,8 +783,25 @@ export default {
       return json({ data: { loggedOut: true } }, 200, { "Set-Cookie": createSessionCookie("", 0) });
     }
     if (request.method === "GET" && path === "/session") {
+      const authorization = request.headers.get("Authorization");
+      if (authorization) {
+        const user = authorization.startsWith("Bearer ")
+          ? await authenticateAgentSession(env, authorization.slice(7))
+          : null;
+        return user
+          ? json({ data: user }, 200, { "Cache-Control": "no-store" })
+          : fail(401, "unauthorized", "Invalid agent session.");
+      }
       const result = await session(env, readCookie(request));
       return result.ok ? json({ data: result.data }) : json({ error: result.error }, result.status);
+    }
+    if (/^\/(agents|sessions|tokens)(\/|$)/.test(path)) {
+      const active = await session(env, readCookie(request));
+      if (!active.ok) return json({ error: active.error }, active.status);
+      if (request.method !== "GET" && request.headers.get("Origin") !== new URL(request.url).origin)
+        return fail(403, "forbidden", "Same-origin account management is required.");
+      const result = await handleAgentManagement(request, env, active.data);
+      if (result) return result;
     }
     return request.method === "GET" || request.method === "POST"
       ? fail(404, "bad_request", "Unknown auth endpoint.")

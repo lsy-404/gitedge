@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { AgentSessionIdentity } from "./forge";
 export * from "./forge";
+export * from "./trust";
 
 export const ErrorCodeSchema = z.enum([
   "bad_request",

@@ -3,26 +3,14 @@
   "name": "gitedge-git",
   "account_id": "df4481f3ce1fa0394b4617442a97d147",
   "main": "src/index.ts",
-  "compatibility_date": "2026-08-26",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
   "workers_dev": false,
-  "limits": { "cpu_ms": 300000 },
-  "durable_objects": {
-    "bindings": [
-      { "name": "REPO_DO", "class_name": "RepoDurableObject" },
-      {
-        "name": "RATE_LIMITER",
-        "class_name": "SharedRateLimitDurableObject",
-        "script_name": "gitedge-limits"
-      }
-    ]
+  "limits": {
+    "cpu_ms": 300000
   },
-  "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["RepoDurableObject"] }
-  ],
-  "kv_namespaces": [
-    { "binding": "ROUTES", "id": "ece920cc5b2b4d4ca8972716ee16e4b4" }
-  ],
   "d1_databases": [
     {
       "binding": "DB",
@@ -31,21 +19,16 @@
       "migrations_dir": "../../migrations"
     }
   ],
-  "r2_buckets": [
-    { "binding": "REPO_BUCKET", "bucket_name": "gitedge-git-repos" }
-  ],
-  "queues": {
-    "producers": [
-      { "binding": "REPO_TASKS_QUEUE", "queue": "gitedge-git-repo-maint" }
-    ],
-    "consumers": [
-      { "queue": "gitedge-git-repo-maint", "max_batch_size": 1, "max_batch_timeout": 1 }
-    ]
+  "observability": {
+    "enabled": true
   },
-  "observability": { "enabled": true },
   "vars": {
-    "REPO_DO_IDLE_MINUTES": "30",
-    "LOG_LEVEL": "info",
-    "USER_GROUP_LIMITS_JSON": "{\"free\":{\"rpm\":120,\"maxRepositories\":10,\"maxPushBytes\":268435456,\"maxRepositoryBytes\":1073741824,\"maxStorageBytes\":5368709120},\"team\":{\"rpm\":600,\"maxRepositories\":100,\"maxPushBytes\":1073741824,\"maxRepositoryBytes\":10737418240,\"maxStorageBytes\":107374182400},\"admin\":{\"rpm\":1200,\"maxRepositories\":1000,\"maxPushBytes\":5368709120,\"maxRepositoryBytes\":107374182400,\"maxStorageBytes\":1099511627776}}"
-  }
+    "LOG_LEVEL": "info"
+  },
+  "artifacts": [
+    {
+      "binding": "ARTIFACTS",
+      "namespace": "gitedge"
+    }
+  ]
 }

@@ -1,16 +1,13 @@
 import {
+  AgentSessionIdentitySchema,
+  TRUSTED_USER_HEADERS,
+  trustedHeaders,
   consumeRateLimit,
   parseUserGroupLimits,
   type RateLimitDecision,
   type RateLimitNamespace,
+  type TrustedUser,
 } from "../../../packages/contracts/src/index";
-
-const TRUSTED_USER_HEADERS = [
-  "x-gitedge-user-id",
-  "x-gitedge-user-email",
-  "x-gitedge-user-name",
-  "x-gitedge-user-group",
-] as const;
 
 export interface GatewayService {
   fetch(request: Request): Promise<Response>;
@@ -21,16 +18,14 @@ export interface GatewayEnv {
   AUTH: GatewayService;
   FORGE: GatewayService;
   GIT: GatewayService;
+  DEPLOY?: GatewayService;
   RATE_LIMITER: RateLimitNamespace;
   IP_RPM_LIMIT?: string;
   USER_GROUP_LIMITS_JSON?: string;
 }
 
-interface AuthenticatedSession {
+interface AuthenticatedSession extends TrustedUser {
   authenticated: true;
-  userId: string;
-  userName: string;
-  groupKey: string;
 }
 
 interface AnonymousSession {
@@ -40,7 +35,7 @@ interface AnonymousSession {
 type SessionResult = AuthenticatedSession | AnonymousSession;
 
 interface AuthSessionPayload {
-  data: { id: string; identifier: string; groupKey: string } | null;
+  data: TrustedUser | null;
 }
 
 function isSessionPayload(value: unknown): value is AuthSessionPayload {
@@ -60,7 +55,9 @@ function isSessionPayload(value: unknown): value is AuthSessionPayload {
       value.data.identifier.length > 0 &&
       "groupKey" in value.data &&
       typeof value.data.groupKey === "string" &&
-      value.data.groupKey.length > 0)
+      value.data.groupKey.length > 0 &&
+      (!("agentSession" in value.data) ||
+        AgentSessionIdentitySchema.safeParse(value.data.agentSession).success))
   );
 }
 
@@ -105,9 +102,10 @@ async function readSession(response: Response): Promise<SessionResult | Response
   if (payload.data === null) return { authenticated: false };
   return {
     authenticated: true,
-    userId: payload.data.id,
-    userName: payload.data.identifier,
+    id: payload.data.id,
+    identifier: payload.data.identifier,
     groupKey: payload.data.groupKey,
+    agentSession: payload.data.agentSession,
   };
 }
 
@@ -122,6 +120,8 @@ async function authenticate(
     headers.set("Cookie", cookie);
   }
   headers.set("Accept", "application/json");
+  const authorization = request.headers.get("Authorization");
+  if (authorization) headers.set("Authorization", authorization);
   return readSession(await auth.fetch(new Request(sessionUrl, { headers })));
 }
 
@@ -131,16 +131,25 @@ function forwardServicePath(request: Request, prefix: string): Request {
   return withPath(request, servicePath);
 }
 
-function forwardForge(request: Request, session?: AuthenticatedSession): Request {
+function forwardAuthenticated(
+  request: Request,
+  prefix: string,
+  session?: AuthenticatedSession
+): Request {
   const headers = new Headers(request.headers);
   withoutTrustedHeaders(headers);
   headers.delete("Cookie");
-  if (session) {
-    headers.set("X-GitEdge-User-Id", session.userId);
-    headers.set("X-GitEdge-User-Name", session.userName);
-    headers.set("X-GitEdge-User-Group", session.groupKey);
+  headers.delete("Authorization");
+  trustedHeaders(session).forEach((value, name) => headers.set(name, value));
+  if (prefix === "/api/deploy") {
+    const cookie = (request.headers.get("Cookie") ?? "")
+      .split(";")
+      .map((part) => part.trim())
+      .filter((part) => part.startsWith("ge_deploy_") || part.startsWith("__Host-ge_deploy_"))
+      .join("; ");
+    if (cookie) headers.set("Cookie", cookie);
   }
-  return new Request(forwardServicePath(request, "/api/forge"), { headers });
+  return new Request(forwardServicePath(request, prefix), { headers });
 }
 
 function parsePositiveLimit(value: string | undefined, fallback: number): number {
@@ -173,7 +182,7 @@ async function enforceUserLimit(
   const limits = parseUserGroupLimits(env.USER_GROUP_LIMITS_JSON);
   const decision = await consumeRateLimit(
     env.RATE_LIMITER,
-    `user:${session.groupKey}:${session.userId}`,
+    `user:${session.groupKey}:${session.id}`,
     limits[session.groupKey]?.rpm ?? limits.free.rpm
   );
   return rateLimitedResponse(decision);
@@ -200,25 +209,93 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
     return env.AUTH.fetch(forwardServicePath(request, "/api/auth"));
   }
 
-  if (isApiPath(url.pathname, "/api/forge")) {
+  if (["/api/forge", "/api/git", "/api/deploy"].some((prefix) => isApiPath(url.pathname, prefix))) {
+    const prefix = isApiPath(url.pathname, "/api/forge")
+      ? "/api/forge"
+      : isApiPath(url.pathname, "/api/git")
+        ? "/api/git"
+        : "/api/deploy";
+    const service =
+      prefix === "/api/forge" ? env.FORGE : prefix === "/api/git" ? env.GIT : env.DEPLOY;
+    if (!service)
+      return Response.json(
+        { error: { code: "service_unavailable", message: "Deployment service is unavailable." } },
+        { status: 503 }
+      );
     const session = await authenticate(request, env.AUTH);
     if (session instanceof Response) return session;
     if (!session.authenticated) {
-      if (request.method === "GET" || request.method === "HEAD") {
-        return env.FORGE.fetch(forwardForge(request));
+      if ((request.method === "GET" || request.method === "HEAD") && prefix !== "/api/deploy") {
+        return service.fetch(forwardAuthenticated(request, prefix));
       }
       return new Response(JSON.stringify({ error: "Authentication required" }), {
         status: 401,
         headers: { "Content-Type": "application/json; charset=utf-8" },
       });
     }
+    if (
+      request.method !== "GET" &&
+      request.method !== "HEAD" &&
+      !request.headers.get("Authorization") &&
+      request.headers.get("Origin") !== url.origin
+    )
+      return Response.json(
+        { error: { code: "forbidden", message: "Same-origin writes are required." } },
+        { status: 403 }
+      );
     const userLimitResponse = await enforceUserLimit(session, env);
     if (userLimitResponse) return userLimitResponse;
-    return env.FORGE.fetch(forwardForge(request, session));
+    return service.fetch(forwardAuthenticated(request, prefix, session));
   }
 
   if (isGitRequest(url.pathname)) {
-    return env.GIT.fetch(request);
+    const headers = new Headers(request.headers);
+    withoutTrustedHeaders(headers);
+    headers.delete("Cookie");
+    const gitMatch = /^\/([^/]+)\/([^/]+)\.git(?:\/|$)/.exec(url.pathname);
+    if (request.headers.has("Authorization") && gitMatch) {
+      const authUrl = new URL("/git-session", url);
+      authUrl.searchParams.set("owner", gitMatch[1]);
+      authUrl.searchParams.set("repo", gitMatch[2]);
+      const authHeaders = new Headers();
+      authHeaders.set("Authorization", request.headers.get("Authorization") ?? "");
+      const response = await env.AUTH.fetch(new Request(authUrl, { headers: authHeaders }));
+      if (!response.ok)
+        return new Response("Git authentication failed.\n", {
+          status: 401,
+          headers: { "WWW-Authenticate": 'Basic realm="GitEdge"', "Cache-Control": "no-store" },
+        });
+      const payload: unknown = await response.json();
+      if (
+        !payload ||
+        typeof payload !== "object" ||
+        !("data" in payload) ||
+        !payload.data ||
+        typeof payload.data !== "object" ||
+        !("user" in payload.data) ||
+        !isSessionPayload({ data: payload.data.user }) ||
+        !("repositoryId" in payload.data) ||
+        typeof payload.data.repositoryId !== "string" ||
+        !("permission" in payload.data) ||
+        (payload.data.permission !== "read" && payload.data.permission !== "write")
+      )
+        return Response.json({ error: "Invalid Git authentication response" }, { status: 502 });
+      const userPayload = { data: payload.data.user };
+      if (!isSessionPayload(userPayload) || !userPayload.data)
+        return Response.json({ error: "Invalid Git authentication response" }, { status: 502 });
+      trustedHeaders(userPayload.data).forEach((value, name) => headers.set(name, value));
+      headers.set(
+        "X-GitEdge-Git-Grant",
+        JSON.stringify({
+          repositoryId: payload.data.repositoryId,
+          permission: payload.data.permission,
+        })
+      );
+      const userLimit = await enforceUserLimit({ authenticated: true, ...userPayload.data }, env);
+      if (userLimit) return userLimit;
+    }
+    headers.delete("Authorization");
+    return env.GIT.fetch(new Request(request, { headers }));
   }
 
   if (request.method === "GET" || request.method === "HEAD") {

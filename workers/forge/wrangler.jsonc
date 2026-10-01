@@ -3,20 +3,35 @@
   "name": "gitedge-forge",
   "account_id": "df4481f3ce1fa0394b4617442a97d147",
   "main": "src/index.ts",
-  "compatibility_date": "2026-08-26",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
   "workers_dev": false,
   "vars": {
     "USER_GROUP_LIMITS_JSON": "{\"free\":{\"rpm\":120,\"maxRepositories\":10,\"maxPushBytes\":268435456,\"maxRepositoryBytes\":1073741824,\"maxStorageBytes\":5368709120},\"team\":{\"rpm\":600,\"maxRepositories\":100,\"maxPushBytes\":1073741824,\"maxRepositoryBytes\":10737418240,\"maxStorageBytes\":107374182400},\"admin\":{\"rpm\":1200,\"maxRepositories\":1000,\"maxPushBytes\":5368709120,\"maxRepositoryBytes\":107374182400,\"maxStorageBytes\":1099511627776}}"
   },
-  "d1_databases": [{
-    "binding": "DB",
-    "database_name": "gitedge",
-    "database_id": "c9a00d9d-db41-494e-b096-55b8b6bfe3a9",
-    "migrations_dir": "../../migrations"
-  }],
-  "kv_namespaces": [
-    { "binding": "ROUTES", "id": "ece920cc5b2b4d4ca8972716ee16e4b4" }
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "gitedge",
+      "database_id": "c9a00d9d-db41-494e-b096-55b8b6bfe3a9",
+      "migrations_dir": "../../migrations"
+    }
   ],
-  "observability": { "enabled": true }
+  "kv_namespaces": [
+    {
+      "binding": "ROUTES",
+      "id": "ece920cc5b2b4d4ca8972716ee16e4b4"
+    }
+  ],
+  "observability": {
+    "enabled": true
+  },
+  "artifacts": [
+    {
+      "binding": "ARTIFACTS",
+      "namespace": "gitedge"
+    }
+  ]
 }

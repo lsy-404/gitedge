@@ -1,8 +1,10 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    "lib": ["ES2022", "WebWorker"],
-    "noEmit": true
+    "lib": ["ES2022", "ESNext.Disposable"],
+    "noEmit": true,
+    "types": ["@cloudflare/workers-types"],
+    "target": "ES2022"
   },
-  "include": ["src", "../../worker-configuration.d.ts"]
+  "include": ["src", "../../packages/contracts/src", "../../src/worker/common/logger.ts"]
 }
