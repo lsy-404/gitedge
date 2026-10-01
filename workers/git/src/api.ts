@@ -61,7 +61,7 @@ export async function handleGitApi(request: Request, env: GitEnv): Promise<Respo
       : (session?.workspaceName ?? access.repository.artifactName)
   );
   const logger = createLogger(env.LOG_LEVEL, { service: "artifacts-git", repoId: repositoryId });
-  const ref = url.searchParams.get("ref") ?? access.repository.defaultBranch;
+  const ref = url.searchParams.get("ref") ?? session?.baseRef ?? access.repository.defaultBranch;
   const path = url.searchParams.get("path") ?? "";
   if (!validPath(path) || ref.length > 255 || !ref.length)
     return fail(400, "bad_request", "Invalid ref or path.");

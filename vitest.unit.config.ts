@@ -17,6 +17,7 @@ export default defineConfig({
     include: ["test/**/*.test.ts"],
     exclude: [
       "test/**/*.worker.test.ts",
+      "test/ui/**/*.test.ts",
       "**/node_modules/**",
       "**/.wrangler/**",
       "**/.cloudflare/**",

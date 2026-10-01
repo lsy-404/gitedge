@@ -4,6 +4,8 @@ import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import type {
   CheckRun,
+  GitComparison,
+  AgentSession,
   Comment,
   Discussion,
   Issue,
@@ -32,7 +34,7 @@ const checks = ref<CheckRun[]>([]);
 const wikiHistory = ref<WikiPage[]>([]);
 const wikiEditing = ref(false);
 const wikiDraft = ref({ title: "", content: "" });
-const diff = ref<Awaited<ReturnType<typeof api.pullDiff>> | null>(null);
+const diff = ref<GitComparison | null>(null);
 const loading = ref(false);
 const error = ref("");
 const notFound = ref(false);
@@ -65,7 +67,7 @@ const form = ref<{
 const commentBody = ref("");
 const editCommentId = ref("");
 const reviewForm = ref<{ state: Review["state"]; body: string }>({ state: "commented", body: "" });
-const agentSessions = ref<Awaited<ReturnType<typeof api.repositorySessions>>>([]);
+const agentSessions = ref<AgentSession[]>([]);
 const checkForm = ref<{
   name: string;
   commitOid: string;
@@ -621,12 +623,25 @@ watch(
             </p>
             <h2>{{ "title" in item ? item.title : "" }}</h2>
           </div>
-          <div v-if="showEditActions && section !== 'wiki'" class="detail-actions">
+          <div
+            v-if="showEditActions && 'state' in item && item.state !== 'merged'"
+            class="detail-actions"
+          >
             <button class="button" @click="editMode = !editMode">
               {{ editMode ? t("cancel") : t("edit") }}</button
-            ><button class="button" :disabled="saving" @click="updateState('open')">
+            ><button
+              v-if="'state' in item && item.state === 'closed'"
+              class="button"
+              :disabled="saving"
+              @click="updateState('open')"
+            >
               {{ t("reopen") }}</button
-            ><button class="button" :disabled="saving" @click="updateState('closed')">
+            ><button
+              v-if="'state' in item && item.state === 'open'"
+              class="button"
+              :disabled="saving"
+              @click="updateState('closed')"
+            >
               {{ t("closeIssue") }}
             </button>
           </div>
@@ -734,7 +749,7 @@ watch(
           }}</span>
           <p>{{ review.body }}</p>
         </div>
-        <form v-if="canCreate" class="inline-form" @submit.prevent="addReview">
+        <form v-if="canCreate && pullIsOpen" class="inline-form" @submit.prevent="addReview">
           <select v-model="reviewForm.state">
             <option value="commented">{{ t("reviewcommented") }}</option>
             <option value="approved">{{ t("reviewapproved") }}</option>
@@ -765,7 +780,11 @@ watch(
             t("details")
           }}</a>
         </div>
-        <form v-if="repository.canWrite" class="inline-form" @submit.prevent="addCheck">
+        <form
+          v-if="repository.canWrite && pullIsOpen"
+          class="inline-form"
+          @submit.prevent="addCheck"
+        >
           <input v-model="checkForm.name" :placeholder="t('checkName')" required /><input
             v-model="checkForm.commitOid"
             :placeholder="t('commitOid')"

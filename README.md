@@ -25,6 +25,7 @@ Configure a random `DEPLOY_SESSION_KEY` of at least 32 characters in `workers/de
 npm run typecheck
 npm test
 npm run test:workers
+npm run test:web
 npm run build
 ```
 
