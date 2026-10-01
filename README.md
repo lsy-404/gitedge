@@ -1,6 +1,6 @@
-# GitEdge / 码锋
+# GitEdge
 
-GitEdge（码锋）是在 Cloudflare 边缘运行的轻量 Git Forge。产品包含 Vue 3 中英双语前端、独立授权门户、个人与组织命名空间，以及仓库、Issue、Pull Request、Wiki 和 Git Smart HTTP v2 路径。
+GitEdge 是在 Cloudflare 边缘运行的轻量 Git Forge。产品包含 Vue 3 中英双语前端、独立授权门户、个人与组织命名空间，以及仓库、Issue、Pull Request、Wiki 和 Git Smart HTTP v2 路径。
 
 ## 当前能力
 

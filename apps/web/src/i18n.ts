@@ -2,8 +2,8 @@ import { createI18n } from "vue-i18n";
 
 const messages = {
   "zh-CN": {
-    brand: "码锋",
-    brandSub: "GitEdge",
+    brand: "GitEdge",
+    brandSub: "边缘 Git Forge",
     signIn: "登录",
     signUp: "注册",
     signOut: "退出",
@@ -35,7 +35,7 @@ const messages = {
     public: "公开",
     private: "私有",
     loginHint: "登录后访问你的仓库与协作空间",
-    registerHint: "创建你的码锋账户",
+    registerHint: "创建你的 GitEdge 账户",
     back: "返回工作台",
     skipToContent: "跳到主要内容",
     mainNav: "主导航",
@@ -102,8 +102,8 @@ const messages = {
     noGithubIdentity: "尚未连接 GitHub 身份",
   },
   en: {
-    brand: "码锋",
-    brandSub: "GitEdge",
+    brand: "GitEdge",
+    brandSub: "Edge Git Forge",
     signIn: "Sign in",
     signUp: "Create account",
     signOut: "Sign out",

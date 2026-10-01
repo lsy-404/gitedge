@@ -1,13 +1,12 @@
-# GitEdge / 码锋产品约束
+# GitEdge 产品约束
 
 ## 产品定位
 
-码锋是面向个人开发者和小团队的边缘 Git Forge。首批目标不是复刻大型代码托管平台，而是让授权、仓库、Git transport、Issue、Pull Request 和 Wiki 形成一个可信的最小端到端产品。
+GitEdge 是面向个人开发者和小团队的边缘 Git Forge。首批目标不是复刻大型代码托管平台，而是让授权、仓库、Git transport、Issue、Pull Request 和 Wiki 形成一个可信的最小端到端产品。
 
 ## 品牌与语言
 
-- 英文名称：GitEdge
-- 中文名称：码锋
+- 名称：GitEdge（界面中英文均使用该名称，不设中文译名，避免同音歧义）
 - 界面默认简体中文，并提供英文切换。
 - 气质：精确、克制、偏工具化；技术事实优先于营销文案。
 

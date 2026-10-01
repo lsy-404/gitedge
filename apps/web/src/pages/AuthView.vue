@@ -38,7 +38,7 @@ async function submit() {
 <template>
   <section class="auth-layout">
     <div class="auth-intro">
-      <p class="eyebrow">{{ t("brandSub") }} / {{ t("brand") }}</p>
+      <p class="eyebrow">{{ t("brandSub") }}</p>
       <h1>{{ t("welcome") }}</h1>
       <p>{{ t("welcomeText") }}</p>
       <div class="terminal">
