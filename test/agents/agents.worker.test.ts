@@ -110,14 +110,14 @@ describe("Auth agents, Artifact sessions, and Git credentials", () => {
       new Request("https://auth.test/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ identifier: "Rosmontis", password: "a-long-test-password-2026" }),
+        body: JSON.stringify({ identifier: "FixtureUser", password: "a-long-test-password-2026" }),
       }),
       authEnv
     );
     expect(registration.status).toBe(201);
     const cookie = cookieFrom(registration);
     const user = await env.DB.prepare("SELECT id, identifier FROM users WHERE identifier = ?")
-      .bind("rosmontis")
+      .bind("fixtureuser")
       .first<{ id: string; identifier: string }>();
     expect(user).not.toBeNull();
     if (!user) throw new Error("Registered user row is missing.");

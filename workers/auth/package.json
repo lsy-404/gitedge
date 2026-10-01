@@ -2,5 +2,7 @@
   "name": "@gitedge/auth",
   "private": true,
   "type": "module",
-  "scripts": { "typecheck": "tsc --noEmit -p tsconfig.json" }
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
 }

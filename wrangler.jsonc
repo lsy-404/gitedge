@@ -3,103 +3,93 @@
   "name": "git-on-cloudflare",
   "main": "src/worker/index.ts",
   "compatibility_date": "2026-05-13",
-  "compatibility_flags": [
-    "nodejs_als"
-  ],
+  "compatibility_flags": ["nodejs_als"],
   "workers_dev": false,
   "routes": [
     {
       "pattern": "git-on-cloudflare.com",
-      "custom_domain": true
+      "custom_domain": true,
     },
     {
       "pattern": "git.limic.dev",
-      "custom_domain": true
-    }
+      "custom_domain": true,
+    },
   ],
   "limits": {
-    "cpu_ms": 300000
+    "cpu_ms": 300000,
   },
   "durable_objects": {
     "bindings": [
       {
         "name": "REPO_DO",
-        "class_name": "RepoDurableObject"
+        "class_name": "RepoDurableObject",
       },
       {
         "name": "RATE_LIMITER",
-        "class_name": "SharedRateLimitDurableObject"
-      }
-    ]
+        "class_name": "SharedRateLimitDurableObject",
+      },
+    ],
   },
   "migrations": [
     {
       "tag": "v1",
-      "new_sqlite_classes": [
-        "RepoDurableObject"
-      ]
+      "new_sqlite_classes": ["RepoDurableObject"],
     },
     {
       "tag": "v2",
-      "new_sqlite_classes": [
-        "AuthDurableObject"
-      ]
+      "new_sqlite_classes": ["AuthDurableObject"],
     },
     {
       "tag": "v3",
-      "deleted_classes": [
-        "AuthDurableObject"
-      ]
+      "deleted_classes": ["AuthDurableObject"],
     },
     {
       "tag": "v4",
-      "new_sqlite_classes": [
-        "SharedRateLimitDurableObject"
-      ]
-    }
+      "new_sqlite_classes": ["SharedRateLimitDurableObject"],
+    },
   ],
   "kv_namespaces": [
     {
       "binding": "ROUTES",
-      "id": "4e471bad6c5e44ceb91c4adf5559cb44"
-    }
+      "id": "4e471bad6c5e44ceb91c4adf5559cb44",
+    },
   ],
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "git-on-cloudflare",
       "database_id": "1fd98d8b-92b8-4a12-852a-e218ce362149",
-      "migrations_dir": "drizzle/d1"
-    }
+      "migrations_dir": "drizzle/d1",
+    },
   ],
   "r2_buckets": [
     {
       "binding": "REPO_BUCKET",
-      "bucket_name": "git-repos"
-    }
+      "bucket_name": "git-repos",
+    },
   ],
   "queues": {
     "producers": [
       {
         "binding": "REPO_TASKS_QUEUE",
-        "queue": "git-on-cloudflare-repo-maint"
-      }
+        "queue": "git-on-cloudflare-repo-maint",
+      },
     ],
     "consumers": [
       {
         "queue": "git-on-cloudflare-repo-maint",
         "max_batch_size": 1,
-        "max_batch_timeout": 1
-      }
-    ]
+        "max_batch_timeout": 1,
+      },
+    ],
   },
   "observability": {
-    "enabled": true
+    "enabled": true,
   },
   "assets": {
     "binding": "ASSETS",
     "directory": "dist/client",
-    "html_handling": "none"
+    "html_handling": "none",
   },
   // Environment variables (text/JSON)
   "vars": {
@@ -109,6 +99,6 @@
     "LOG_LEVEL": "info",
     // tessera OIDC issuer (production). Override via .dev.vars for local dev.
     // Client id and secret are runtime concerns and live in .dev.vars / `wrangler secret put`.
-    "TESSERA_OIDC_ISSUER": "https://auth.limic.dev"
-  }
+    "TESSERA_OIDC_ISSUER": "https://auth.limic.dev",
+  },
 }

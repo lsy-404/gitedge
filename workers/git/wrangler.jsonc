@@ -4,32 +4,30 @@
   "account_id": "df4481f3ce1fa0394b4617442a97d147",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
-  "compatibility_flags": [
-    "nodejs_compat"
-  ],
+  "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
   "limits": {
-    "cpu_ms": 300000
+    "cpu_ms": 300000,
   },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "gitedge",
       "database_id": "c9a00d9d-db41-494e-b096-55b8b6bfe3a9",
-      "migrations_dir": "../../migrations"
-    }
+      "migrations_dir": "../../migrations",
+    },
   ],
   "observability": {
-    "enabled": true
+    "enabled": true,
   },
   "vars": {
-    "LOG_LEVEL": "info"
+    "LOG_LEVEL": "info",
   },
   "artifacts": [
     {
       "binding": "ARTIFACTS",
       "namespace": "gitedge",
-      "remote": true
-    }
-  ]
+      "remote": true,
+    },
+  ],
 }

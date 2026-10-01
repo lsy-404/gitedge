@@ -2,5 +2,7 @@
   "name": "gitedge-artifacts-smoke",
   "private": true,
   "type": "module",
-  "devDependencies": { "wrangler": "^4.145.0" }
+  "devDependencies": {
+    "wrangler": "^4.145.0"
+  }
 }

@@ -91,7 +91,7 @@ describe("Gateway routing", () => {
           () =>
             new Response(
               JSON.stringify({
-                data: { id: "user-1", identifier: "Rosmontis", groupKey: "team" },
+                data: { id: "user-1", identifier: "FixtureUser", groupKey: "team" },
               }),
               { headers: { "Content-Type": "application/json" } }
             )
@@ -105,7 +105,7 @@ describe("Gateway routing", () => {
 
     expect(response.status).toBe(200);
     expect(received?.headers.get("X-GitEdge-User-Id")).toBe("user-1");
-    expect(received?.headers.get("X-GitEdge-User-Name")).toBe("Rosmontis");
+    expect(received?.headers.get("X-GitEdge-User-Name")).toBe("FixtureUser");
     expect(received?.headers.get("X-GitEdge-User-Group")).toBe("team");
     expect(received?.headers.get("Cookie")).toBeNull();
     expect(new URL(received?.url ?? "https://invalid").pathname).toBe("/repositories");

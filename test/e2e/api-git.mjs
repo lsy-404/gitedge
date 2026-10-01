@@ -40,7 +40,7 @@ async function git(args, cwd, token) {
   const env = {
     ...process.env,
     GIT_TERMINAL_PROMPT: "0",
-    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_COUNT: token ? "1" : "0",
     GIT_CONFIG_KEY_0: "http.extraHeader",
     GIT_CONFIG_VALUE_0: `Authorization: Bearer ${token}`,
   };
@@ -132,6 +132,11 @@ try {
   const tree = await api(`/api/git/repositories/${repository.id}/tree?ref=main`);
   assert.ok(tree.entries.some((entry) => entry.name === "README.md"));
   console.log("Gateway Git push, separate clone and file tree verified");
+  await git(["clone", remote, path.join(directory, "public-clone")], directory);
+  for (const suffix of ["", "/issues", "/pull-requests", "/discussions", "/wiki"]) {
+    const response = await fetch(`${origin}/api/forge/repositories/${repository.id}${suffix}`);
+    assert.equal(response.status, 200, `Anonymous repository read: ${suffix}`);
+  }
   const agents = await Promise.all(
     ["builder", "reviewer"].map((name) =>
       api("/api/auth/agents", "POST", { name, description: "Integration verification" })
@@ -295,6 +300,19 @@ try {
   assert.ok(graph.commits.some((commit) => commit.parents.length === 2));
   await api(`/api/auth/agents/${agents[0].id}/sessions/${sessions[0].id}`, "DELETE");
   await api("/api/auth/session", "GET", undefined, sessions[0].token, 401);
+  for (const suffix of [
+    "/pull-requests/1/reviews",
+    "/pull-requests/1/checks",
+    "/pull-requests/1/diff",
+    "/wiki/home/history",
+  ]) {
+    const response = await fetch(`${origin}/api/forge/repositories/${repository.id}${suffix}`);
+    assert.equal(response.status, 200, `Anonymous collaboration read: ${suffix}`);
+  }
+  const privateWorkspace = await fetch(
+    `${origin}/api/git/repositories/${repository.id}/tree?sessionId=${sessions[0].id}`
+  );
+  assert.equal(privateWorkspace.status, 404);
   publicResult.pulls = [pull.number, second.number];
   publicResult.issue = issue.number;
   publicResult.discussion = discussion.number;

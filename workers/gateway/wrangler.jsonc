@@ -9,60 +9,56 @@
     "binding": "ASSETS",
     "directory": "../../apps/web/dist",
     "html_handling": "none",
-    "not_found_handling": "none"
+    "not_found_handling": "none",
   },
   "services": [
     {
       "binding": "AUTH",
-      "service": "gitedge-auth"
+      "service": "gitedge-auth",
     },
     {
       "binding": "FORGE",
-      "service": "gitedge-forge"
+      "service": "gitedge-forge",
     },
     {
       "binding": "GIT",
-      "service": "gitedge-git"
+      "service": "gitedge-git",
     },
     {
       "binding": "DEPLOY",
-      "service": "gitedge-deploy"
-    }
+      "service": "gitedge-deploy",
+    },
   ],
   "durable_objects": {
     "bindings": [
       {
         "name": "RATE_LIMITER",
         "class_name": "SharedRateLimitDurableObject",
-        "script_name": "gitedge-limits"
-      }
-    ]
+        "script_name": "gitedge-limits",
+      },
+    ],
   },
   "migrations": [
     {
       "tag": "v1",
-      "new_sqlite_classes": [
-        "RateLimitDurableObject"
-      ]
+      "new_sqlite_classes": ["RateLimitDurableObject"],
     },
     {
       "tag": "v2",
-      "deleted_classes": [
-        "RateLimitDurableObject"
-      ]
-    }
+      "deleted_classes": ["RateLimitDurableObject"],
+    },
   ],
   "vars": {
     "IP_RPM_LIMIT": "300",
-    "USER_GROUP_LIMITS_JSON": "{\"free\":{\"rpm\":120,\"maxRepositories\":10,\"maxPushBytes\":268435456,\"maxRepositoryBytes\":1073741824,\"maxStorageBytes\":5368709120},\"team\":{\"rpm\":600,\"maxRepositories\":100,\"maxPushBytes\":1073741824,\"maxRepositoryBytes\":10737418240,\"maxStorageBytes\":107374182400},\"admin\":{\"rpm\":1200,\"maxRepositories\":1000,\"maxPushBytes\":5368709120,\"maxRepositoryBytes\":107374182400,\"maxStorageBytes\":1099511627776}}"
+    "USER_GROUP_LIMITS_JSON": "{\"free\":{\"rpm\":120,\"maxRepositories\":10,\"maxPushBytes\":268435456,\"maxRepositoryBytes\":1073741824,\"maxStorageBytes\":5368709120},\"team\":{\"rpm\":600,\"maxRepositories\":100,\"maxPushBytes\":1073741824,\"maxRepositoryBytes\":10737418240,\"maxStorageBytes\":107374182400},\"admin\":{\"rpm\":1200,\"maxRepositories\":1000,\"maxPushBytes\":5368709120,\"maxRepositoryBytes\":107374182400,\"maxStorageBytes\":1099511627776}}",
   },
   "routes": [
     {
       "pattern": "gitedge.voidcarve.com",
-      "custom_domain": true
-    }
+      "custom_domain": true,
+    },
   ],
   "observability": {
-    "enabled": true
-  }
+    "enabled": true,
+  },
 }

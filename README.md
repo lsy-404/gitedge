@@ -28,11 +28,13 @@ npm run test:workers
 npm run build
 ```
 
+With the local stack running, `node test/e2e/api-git.mjs` verifies account creation, native Git push/clone, two isolated agent forks, reviews/checks/merges, collaboration edits, deployment plan parsing and session revocation. It creates remote Artifacts verification repositories and stores temporary credentials only under ignored `work/` with private file permissions.
+
 `build` builds the Vue interface and bundles every Worker with Wrangler's dry-run mode. Production deployment is a separate `npm run deploy` operation that applies D1 migrations and deploys internal services before the Gateway.
 
 ## Git and agents
 
-Repository pages issue scoped, expiring Artifacts Git tokens. Keep credentials in process environment or a credential helper, and keep the remote URL free of credentials. Standard Git clone, fetch and push use the Artifacts remote, or the GitEdge Smart HTTP route with a repository-scoped GitEdge credential.
+Repository pages issue scoped, expiring GitEdge credentials through Auth. Keep credentials in process environment or a credential helper, and keep the remote URL free of credentials. Standard Git clone, fetch and push use `https://<host>/<owner>/<repository>.git`; public repositories allow anonymous clone. Agent session credentials use the isolated Artifacts workspace remote returned when the session is created.
 
 Account agent sessions return their API and Git tokens once. Use the API token as `Authorization: Bearer <session-token>` and the Git token for the returned workspace remote. Tokens cannot manage account credentials or grant Cloudflare deployment access. Revoking a session disables its API identity and revokes its issued Git token.
 

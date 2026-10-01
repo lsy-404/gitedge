@@ -67,7 +67,8 @@ export async function proxyGitTransport(request: Request, env: GitEnv): Promise<
       redirect: "manual",
       signal: AbortSignal.timeout(120_000),
     });
-    if (response.status >= 300 && response.status < 400) return fail(502, "upstream_redirect", "Artifacts redirected the Git request.");
+    if (response.status >= 300 && response.status < 400)
+      return fail(502, "upstream_redirect", "Artifacts redirected the Git request.");
     logger.debug("artifacts:git-transport", {
       operation: match[3],
       status: response.status,
