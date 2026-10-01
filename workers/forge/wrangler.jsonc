@@ -19,12 +19,6 @@
       "migrations_dir": "../../migrations"
     }
   ],
-  "kv_namespaces": [
-    {
-      "binding": "ROUTES",
-      "id": "ece920cc5b2b4d4ca8972716ee16e4b4"
-    }
-  ],
   "observability": {
     "enabled": true
   },
@@ -32,6 +26,12 @@
     {
       "binding": "ARTIFACTS",
       "namespace": "gitedge"
+    }
+  ],
+  "services": [
+    {
+      "binding": "GIT",
+      "service": "gitedge-git"
     }
   ]
 }
