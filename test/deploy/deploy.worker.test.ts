@@ -250,8 +250,8 @@ describe("repository deployment", () => {
         expect(typeof metadataPart).toBe("string");
         if (typeof metadataPart !== "string")
           throw new Error("Worker upload metadata must be JSON text.");
-        const metadata = JSON.parse(metadataPart) as { main_module?: string };
-        expect(metadata.main_module).toBe("worker/index.js");
+        const metadata: unknown = JSON.parse(metadataPart);
+        expect(metadata).toMatchObject({ main_module: "worker/index.js" });
         expect(init.body.get("worker/index.js")).not.toBeNull();
         return Response.json({ success: true, result: { id: "version-1" } });
       }
