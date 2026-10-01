@@ -1,0 +1,1094 @@
+import { DeployManifestSchema, type DeployManifest } from "../../../packages/contracts/src/deploy";
+import type { TrustedUser } from "../../../packages/contracts/src/index";
+
+const API = "https://api.cloudflare.com/client/v4";
+const MANIFEST_PATH = "gitedge.deploy.json";
+const MAX_MANIFEST_BYTES = 64 * 1024;
+const COOKIE = "ge_deploy_session";
+const SESSION_SECONDS = 15 * 60;
+const MAX_CF_BODY_BYTES = 10 * 1024 * 1024;
+const MAX_JSON_REQUEST_BYTES = 16 * 1024;
+const MAX_MIGRATION_FILE_BYTES = 256 * 1024;
+const MAX_TOTAL_MIGRATION_BYTES = 4 * 1024 * 1024;
+
+export interface DeployGitService {
+  fetch(request: Request): Promise<Response>;
+}
+export interface DeployDb {
+  prepare(query: string): { bind(...values: (string | number | null)[]): DeployStatement };
+  batch(statements: DeployStatement[]): Promise<unknown>;
+}
+interface DeployStatement {
+  first<T>(): Promise<T | null>;
+  run(): Promise<unknown>;
+}
+export interface DeployEnv {
+  DB: DeployDb;
+  GIT: DeployGitService;
+  DEPLOY_SESSION_KEY: string;
+  DEPLOY_ORIGIN?: string;
+  LOG_LEVEL?: string;
+}
+export interface DeployLogger {
+  info(message: string, fields?: Record<string, unknown>): void;
+  warn(message: string, fields?: Record<string, unknown>): void;
+  error(message: string, fields?: Record<string, unknown>): void;
+}
+
+interface DeploymentSession {
+  version: 1;
+  ownerId: string;
+  repositoryId: string;
+  ref: string;
+  digest: string;
+  sourceDigests: string[];
+  token: string;
+  nonce: string;
+  accountId: string | null;
+  resourceNames: Record<string, string>;
+  expiresAt: number;
+  completed: Record<string, string>;
+}
+interface CfEnvelope<T> {
+  success: boolean;
+  result: T;
+  errors?: Array<{ code: number; message: string }>;
+  result_info?: { cursor?: string; page?: number; total_pages?: number };
+}
+interface CfAccount {
+  id: string;
+  name: string;
+}
+interface CfNamedResource {
+  id: string;
+  name: string;
+}
+interface CheckedDeploymentPlan {
+  manifest: DeployManifest;
+  digest: string;
+  sourceDigests: Record<string, string>;
+}
+interface CfRawResource {
+  id?: string;
+  uuid?: string;
+  name?: string;
+  title?: string;
+}
+
+function response(data: unknown, status = 200, headers: HeadersInit = {}): Response {
+  return Response.json({ data }, { status, headers });
+}
+function failure(
+  status: number,
+  code: string,
+  message: string,
+  headers: HeadersInit = {}
+): Response {
+  return Response.json({ error: { code, message } }, { status, headers });
+}
+function safeName(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 63);
+}
+function trustedUser(request: Request): TrustedUser | null {
+  const id = request.headers.get("X-GitEdge-User-Id");
+  const identifier = request.headers.get("X-GitEdge-User-Name");
+  const groupKey = request.headers.get("X-GitEdge-User-Group");
+  return id && identifier && groupKey ? { id, identifier, groupKey } : null;
+}
+function trustedUserHeaders(user: TrustedUser): Headers {
+  return new Headers({
+    "X-GitEdge-User-Id": user.id,
+    "X-GitEdge-User-Name": user.identifier,
+    "X-GitEdge-User-Group": user.groupKey,
+  });
+}
+async function gitFetch(env: DeployEnv, url: URL, user: TrustedUser): Promise<Response> {
+  const headers = trustedUserHeaders(user);
+  headers.set("Accept", "application/json");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  try {
+    return await env.GIT.fetch(new Request(url, { headers, signal: controller.signal }));
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+function cookieValue(request: Request): string | null {
+  const cookie = request.headers
+    .get("Cookie")
+    ?.split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(`${COOKIE}=`));
+  return cookie ? cookie.slice(COOKIE.length + 1) : null;
+}
+function cookieHeader(value: string, maxAge: number): string {
+  // The public prefix keeps this credential away from unrelated Gateway services.
+  return `${COOKIE}=${value}; Path=/api/deploy; HttpOnly; Secure; SameSite=Strict; Max-Age=${maxAge}`;
+}
+function base64Url(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+async function readTextLimited(
+  stream: ReadableStream<Uint8Array> | null,
+  maxBytes: number
+): Promise<string | null> {
+  if (!stream) return "";
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
+function decodeBase64Url(value: string): Uint8Array {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const binary = atob(normalized + "=".repeat((4 - (normalized.length % 4)) % 4));
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+}
+async function encryptionKey(secret: string): Promise<CryptoKey> {
+  if (secret.length < 32) throw new Error("DEPLOY_SESSION_KEY must contain at least 32 characters");
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(secret));
+  return crypto.subtle.importKey("raw", digest, "AES-GCM", false, ["encrypt", "decrypt"]);
+}
+async function seal(env: DeployEnv, session: DeploymentSession): Promise<string> {
+  const serialized = JSON.stringify(session);
+  if (new TextEncoder().encode(serialized).byteLength > 2700)
+    throw new Error("Deployment session exceeds the cookie size limit");
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    await encryptionKey(env.DEPLOY_SESSION_KEY),
+    new TextEncoder().encode(serialized)
+  );
+  const combined = new Uint8Array(iv.length + ciphertext.byteLength);
+  combined.set(iv);
+  combined.set(new Uint8Array(ciphertext), iv.length);
+  return base64Url(combined);
+}
+async function unseal(
+  env: DeployEnv,
+  request: Request,
+  user: TrustedUser,
+  repositoryId: string,
+  ref: string
+): Promise<DeploymentSession | null> {
+  const value = cookieValue(request);
+  if (!value) return null;
+  try {
+    const bytes = decodeBase64Url(value);
+    const plaintext = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: bytes.slice(0, 12) },
+      await encryptionKey(env.DEPLOY_SESSION_KEY),
+      bytes.slice(12)
+    );
+    const session = JSON.parse(new TextDecoder().decode(plaintext)) as DeploymentSession;
+    if (
+      session.version !== 1 ||
+      session.ownerId !== user.id ||
+      session.repositoryId !== repositoryId ||
+      session.ref !== ref ||
+      session.expiresAt <= Date.now()
+    )
+      return null;
+    return session;
+  } catch {
+    return null;
+  }
+}
+async function digest(text: string): Promise<string> {
+  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+async function sourceDigest(text: string): Promise<string> {
+  return (await digest(text)).slice(0, 32);
+}
+function declaredSourcePaths(manifest: DeployManifest): string[] {
+  const modules = [manifest.worker.entrypoint, ...manifest.worker.modules];
+  const migrations = manifest.resources.d1.flatMap((database) => database.migrations);
+  return Array.from(new Set([...modules, ...migrations])).sort();
+}
+async function repositoryForUser(
+  env: DeployEnv,
+  userId: string,
+  repositoryId: string
+): Promise<boolean> {
+  const row = await env.DB.prepare(
+    "SELECT repositories.id FROM repositories JOIN namespace_memberships ON namespace_memberships.namespace_id = repositories.namespace_id WHERE repositories.id = ? AND namespace_memberships.user_id = ? AND namespace_memberships.role = 'owner'"
+  )
+    .bind(repositoryId, userId)
+    .first<{ id: string }>();
+  return row !== null;
+}
+function validRef(ref: string): boolean {
+  return (
+    ref.length > 0 &&
+    ref.length <= 255 &&
+    !ref.startsWith("-") &&
+    !ref.includes("..") &&
+    !ref.includes("~") &&
+    !ref.includes("^") &&
+    !ref.includes(":") &&
+    !ref.includes("\\") &&
+    !ref.includes(" ")
+  );
+}
+async function readManifest(
+  env: DeployEnv,
+  repositoryId: string,
+  ref: string,
+  user: TrustedUser
+): Promise<{ manifest: DeployManifest; digest: string } | null> {
+  const url = new URL(
+    `/repositories/${encodeURIComponent(repositoryId)}/raw`,
+    "https://git.internal"
+  );
+  url.searchParams.set("path", MANIFEST_PATH);
+  url.searchParams.set("ref", ref);
+  const upstream = await gitFetch(env, url, user);
+  if (!upstream.ok) return null;
+  const length = Number(upstream.headers.get("Content-Length") ?? 0);
+  if (length > MAX_MANIFEST_BYTES) return null;
+  const text = await readTextLimited(upstream.body, MAX_MANIFEST_BYTES);
+  if (text === null) return null;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (typeof raw === "object" && raw !== null && "data" in raw) raw = raw.data;
+  if (typeof raw === "object" && raw !== null && "content" in raw) {
+    const content = raw.content;
+    if (typeof content !== "string") return null;
+    try {
+      raw = JSON.parse(content);
+    } catch {
+      return null;
+    }
+  }
+  const parsed = DeployManifestSchema.safeParse(raw);
+  if (!parsed.success) return null;
+  return { manifest: parsed.data, digest: await digest(JSON.stringify(parsed.data)) };
+}
+async function readDeclaredFile(
+  env: DeployEnv,
+  repositoryId: string,
+  ref: string,
+  user: TrustedUser,
+  path: string,
+  maxBytes: number
+): Promise<string | null> {
+  const fileUrl = new URL(
+    `/repositories/${encodeURIComponent(repositoryId)}/raw`,
+    "https://git.internal"
+  );
+  fileUrl.searchParams.set("path", path);
+  fileUrl.searchParams.set("ref", ref);
+  const response = await gitFetch(env, fileUrl, user);
+  if (!response.ok) return null;
+  const payload = await readGitJson<{
+    data?: { content?: string | null; binary?: boolean; size?: number };
+  }>(response, maxBytes + 64 * 1024);
+  const file = payload?.data;
+  if (!file || file.binary || typeof file.content !== "string") return null;
+  if (new TextEncoder().encode(file.content).byteLength > maxBytes) return null;
+  return file.content;
+}
+async function readDeploymentPlan(
+  env: DeployEnv,
+  repositoryId: string,
+  ref: string,
+  user: TrustedUser
+): Promise<CheckedDeploymentPlan | null> {
+  const manifestResult = await readManifest(env, repositoryId, ref, user);
+  if (!manifestResult) return null;
+  const manifest = manifestResult.manifest;
+  const migrationPaths = manifest.resources.d1.flatMap((database) => database.migrations);
+  const sourcePaths = declaredSourcePaths(manifest);
+  const sourceDigests: Record<string, string> = {};
+  let moduleBytes = 0;
+  let migrationBytes = 0;
+  for (const path of sourcePaths) {
+    const isMigration = migrationPaths.includes(path);
+    const limit = isMigration ? MAX_MIGRATION_FILE_BYTES : MAX_CF_BODY_BYTES;
+    const content = await readDeclaredFile(env, repositoryId, ref, user, path, limit);
+    if (content === null) return null;
+    const size = new TextEncoder().encode(content).byteLength;
+    if (isMigration) migrationBytes += size;
+    else moduleBytes += size;
+    if (migrationBytes > MAX_TOTAL_MIGRATION_BYTES || moduleBytes > MAX_CF_BODY_BYTES) return null;
+    sourceDigests[path] = await sourceDigest(content);
+  }
+  const sourceEntries = Object.entries(sourceDigests).sort(([left], [right]) =>
+    left.localeCompare(right)
+  );
+  const combinedDigest = await digest(`${manifestResult.digest}\n${JSON.stringify(sourceEntries)}`);
+  return { manifest, digest: combinedDigest, sourceDigests };
+}
+async function readJsonBody<T>(request: Request): Promise<T | null> {
+  const declared = Number(request.headers.get("Content-Length") ?? 0);
+  if (declared > MAX_JSON_REQUEST_BYTES) return null;
+  const text = await readTextLimited(request.body, MAX_JSON_REQUEST_BYTES);
+  if (text === null) return null;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
+}
+async function readGitJson<T>(response: Response, maxBytes: number): Promise<T | null> {
+  const declared = Number(response.headers.get("Content-Length") ?? 0);
+  if (declared > maxBytes) return null;
+  const text = await readTextLimited(response.body, maxBytes);
+  if (text === null) return null;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
+}
+function manifestPermissions(manifest: DeployManifest): string[] {
+  const result = [
+    "Account: Account Settings Read",
+    "Account: Workers Scripts Write",
+    "Account: Workers Scripts Read",
+  ];
+  if (manifest.resources.d1.length) result.push("Account: D1 Write", "Account: D1 Read");
+  if (manifest.resources.r2.length)
+    result.push("Account: Workers R2 Storage Write", "Account: Workers R2 Storage Read");
+  if (manifest.resources.kv.length)
+    result.push("Account: Workers KV Storage Write", "Account: Workers KV Storage Read");
+  return result;
+}
+function hasValidNonce(session: DeploymentSession, body: { nonce?: unknown } | null): boolean {
+  return typeof body?.nonce === "string" && body.nonce === session.nonce;
+}
+function isAgent(user: TrustedUser): boolean {
+  return user.agentSession !== undefined;
+}
+function sameOrigin(request: Request, env: DeployEnv): boolean {
+  const origin = request.headers.get("Origin");
+  const expected = env.DEPLOY_ORIGIN ?? new URL(request.url).origin;
+  return origin === expected && request.headers.get("Sec-Fetch-Site") !== "cross-site";
+}
+async function cfEnvelope<T>(
+  token: string,
+  path: string,
+  init: RequestInit = {}
+): Promise<CfEnvelope<T>> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const headers = new Headers(init.headers);
+    headers.set("Authorization", `Bearer ${token}`);
+    if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+    const response = await fetch(`${API}${path}`, { ...init, headers, signal: controller.signal });
+    if (!response.ok) throw new Error("Cloudflare API request failed");
+    const text = await readTextLimited(response.body, MAX_CF_BODY_BYTES);
+    if (text === null) throw new Error("Cloudflare API response exceeded limit");
+    const envelope = JSON.parse(text) as CfEnvelope<T>;
+    if (!envelope.success) throw new Error("Cloudflare API rejected the request");
+    return envelope;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+async function cf<T>(token: string, path: string, init: RequestInit = {}): Promise<T> {
+  return (await cfEnvelope<T>(token, path, init)).result;
+}
+async function listAccounts(token: string): Promise<CfAccount[]> {
+  const accounts: CfAccount[] = [];
+  for (let page = 1; page <= 20; page += 1) {
+    const envelope = await cfEnvelope<CfAccount[]>(token, `/accounts?per_page=50&page=${page}`);
+    accounts.push(...envelope.result);
+    if (page >= (envelope.result_info?.total_pages ?? 1)) return accounts;
+  }
+  throw new Error("Cloudflare account lookup exceeded the page limit");
+}
+function cfPath(accountId: string, suffix: string): string {
+  return `/accounts/${encodeURIComponent(accountId)}/${suffix}`;
+}
+async function selectedSession(
+  env: DeployEnv,
+  request: Request,
+  user: TrustedUser,
+  repositoryId: string,
+  ref: string
+): Promise<{ session: DeploymentSession; currentManifest: DeployManifest } | Response> {
+  const session = await unseal(env, request, user, repositoryId, ref);
+  if (!session)
+    return failure(401, "deploy_session_required", "Create a deployment session first.");
+  const current = await readDeploymentPlan(env, repositoryId, ref, user);
+  if (!current || current.digest !== session.digest)
+    return failure(
+      409,
+      "manifest_changed",
+      "The deployment manifest changed. Review the plan again."
+    );
+  if (!(await repositoryForUser(env, user.id, repositoryId)))
+    return failure(404, "not_found", "Repository was not found.");
+  return { session, currentManifest: current.manifest };
+}
+function resourceEndpoints(
+  manifest: DeployManifest,
+  accountId: string,
+  names: Record<string, string> = {}
+): Array<{
+  key: string;
+  resourceId: string;
+  kind: "d1" | "r2" | "kv";
+  name: string;
+  list: string;
+  create: string;
+  body: Record<string, string>;
+}> {
+  return [
+    ...manifest.resources.d1.map((item) => {
+      const name = names[item.id] ?? item.name;
+      return {
+        key: `d1:${item.id}`,
+        resourceId: item.id,
+        kind: "d1" as const,
+        name,
+        list: `${cfPath(accountId, "d1/database")}?name=${encodeURIComponent(name)}&per_page=1000`,
+        create: cfPath(accountId, "d1/database"),
+        body: { name, primary_location_hint: "wnam" },
+      };
+    }),
+    ...manifest.resources.r2.map((item) => {
+      const name = names[item.id] ?? item.name;
+      return {
+        key: `r2:${item.id}`,
+        resourceId: item.id,
+        kind: "r2" as const,
+        name,
+        list: `${cfPath(accountId, "r2/buckets")}?name_contains=${encodeURIComponent(name)}&per_page=1000`,
+        create: cfPath(accountId, "r2/buckets"),
+        body: { name, locationHint: "wnam" },
+      };
+    }),
+    ...manifest.resources.kv.map((item) => {
+      const name = names[item.id] ?? item.name;
+      return {
+        key: `kv:${item.id}`,
+        resourceId: item.id,
+        kind: "kv" as const,
+        name,
+        list: `${cfPath(accountId, "storage/kv/namespaces")}?order=title&per_page=1000&page=1`,
+        create: cfPath(accountId, "storage/kv/namespaces"),
+        body: { title: name },
+      };
+    }),
+  ];
+}
+function validResourceNames(
+  manifest: DeployManifest,
+  input: unknown
+): Record<string, string> | null {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) return null;
+  const allowed = new Map(
+    [...manifest.resources.d1, ...manifest.resources.r2, ...manifest.resources.kv].map(
+      (resource) => [resource.id, resource.name]
+    )
+  );
+  const entries = Object.entries(input);
+  if (
+    entries.length !== allowed.size ||
+    entries.some(
+      ([id, name]) =>
+        !allowed.has(id) || typeof name !== "string" || !/^[a-z][a-z0-9-]{2,62}$/.test(name)
+    )
+  )
+    return null;
+  return Object.fromEntries(entries) as Record<string, string>;
+}
+function normalizeResource(
+  kind: "d1" | "r2" | "kv",
+  item: CfRawResource,
+  fallbackName: string
+): CfNamedResource {
+  const name = kind === "kv" ? (item.title ?? fallbackName) : (item.name ?? fallbackName);
+  const id =
+    kind === "d1" ? (item.uuid ?? item.id ?? name) : kind === "kv" ? (item.id ?? name) : name;
+  return { id, name };
+}
+async function listResources(
+  token: string,
+  target: ReturnType<typeof resourceEndpoints>[number]
+): Promise<CfNamedResource[]> {
+  if (target.kind === "d1") {
+    const result = await cf<CfRawResource[]>(token, target.list);
+    return result.map((item) => normalizeResource("d1", item, ""));
+  }
+  if (target.kind === "r2") {
+    const resources: CfNamedResource[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 50; page += 1) {
+      const path = cursor ? `${target.list}&cursor=${encodeURIComponent(cursor)}` : target.list;
+      const envelope = await cfEnvelope<{ buckets?: CfRawResource[] }>(token, path);
+      resources.push(
+        ...(envelope.result.buckets ?? []).map((item) => normalizeResource("r2", item, ""))
+      );
+      if (resources.some((item) => item.name === target.name)) return resources;
+      cursor = envelope.result_info?.cursor;
+      if (!cursor) return resources;
+    }
+    throw new Error("R2 resource lookup exceeded the page limit");
+  }
+  const resources: CfNamedResource[] = [];
+  for (let page = 1; page <= 50; page += 1) {
+    const url = new URL(target.list, API);
+    url.searchParams.set("page", String(page));
+    const envelope = await cfEnvelope<CfRawResource[]>(token, `${url.pathname}${url.search}`);
+    resources.push(...envelope.result.map((item) => normalizeResource("kv", item, "")));
+    if (resources.some((item) => item.name === target.name)) return resources;
+    if (page >= (envelope.result_info?.total_pages ?? 1)) return resources;
+  }
+  throw new Error("KV resource lookup exceeded the page limit");
+}
+async function ensureResource(
+  session: DeploymentSession,
+  target: ReturnType<typeof resourceEndpoints>[number],
+  existing: CfNamedResource[]
+): Promise<CfNamedResource> {
+  const match = existing.find((item) => item.name === target.name);
+  if (match) {
+    session.completed[target.key] = match.id;
+    return match;
+  }
+  const created = normalizeResource(
+    target.kind,
+    await cf<CfRawResource>(session.token, target.create, {
+      method: "POST",
+      body: JSON.stringify(target.body),
+    }),
+    target.name
+  );
+  session.completed[target.key] = created.id;
+  return created;
+}
+async function applyD1Migrations(
+  session: DeploymentSession,
+  manifest: DeployManifest,
+  repositoryId: string,
+  ref: string,
+  user: TrustedUser,
+  expectedSourceDigests: string[],
+  logger: DeployLogger,
+  env: DeployEnv
+): Promise<void> {
+  for (const database of manifest.resources.d1) {
+    const databaseId = session.completed[`d1:${database.id}`];
+    if (!databaseId) throw new Error("D1 database binding was not provisioned");
+    for (const path of database.migrations) {
+      const sql = await readDeclaredFile(
+        env,
+        repositoryId,
+        ref,
+        user,
+        path,
+        MAX_MIGRATION_FILE_BYTES
+      );
+      const sourceIndex = declaredSourcePaths(manifest).indexOf(path);
+      if (
+        sql === null ||
+        sourceIndex < 0 ||
+        (await sourceDigest(sql)) !== expectedSourceDigests[sourceIndex]
+      )
+        throw new Error("D1 migration is invalid or too large");
+      const key = `migration:${database.id}:${path}`;
+      await cf(
+        session.token,
+        cfPath(session.accountId!, `d1/database/${encodeURIComponent(databaseId)}/query`),
+        {
+          method: "POST",
+          body: JSON.stringify({
+            sql: "CREATE TABLE IF NOT EXISTS _gitedge_deploy_migrations (name TEXT PRIMARY KEY NOT NULL, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);",
+          }),
+        }
+      );
+      const prior = await cf<Array<{ results?: Array<{ name: string }> }>>(
+        session.token,
+        cfPath(session.accountId!, `d1/database/${encodeURIComponent(databaseId)}/query`),
+        {
+          method: "POST",
+          body: JSON.stringify({
+            sql: "SELECT name FROM _gitedge_deploy_migrations WHERE name = ?",
+            params: [key],
+          }),
+        }
+      );
+      if (!(prior[0]?.results ?? []).some((row) => row.name === key)) {
+        // D1 batches are transactional, so a failed ledger insert rolls back the migration too.
+        const statements = sql.trim().replace(/;+\s*$/, "");
+        await cf(
+          session.token,
+          cfPath(session.accountId!, `d1/database/${encodeURIComponent(databaseId)}/query`),
+          {
+            method: "POST",
+            body: JSON.stringify({
+              batch: [
+                { sql: statements },
+                { sql: "INSERT INTO _gitedge_deploy_migrations (name) VALUES (?)", params: [key] },
+              ],
+            }),
+          }
+        );
+      }
+      logger.info("deploy:migration-applied", { repositoryId, databaseId, migration: path });
+    }
+  }
+}
+
+async function handleDeployRequest(
+  request: Request,
+  env: DeployEnv,
+  logger: DeployLogger
+): Promise<Response> {
+  if (request.headers.has("X-GitEdge-Agent-Session"))
+    return failure(
+      403,
+      "agent_deploy_forbidden",
+      "Agent sessions cannot access Cloudflare deployment credentials."
+    );
+  const user = trustedUser(request);
+  if (!user) return failure(401, "unauthorized", "Trusted user context is required.");
+  if (!sameOrigin(request, env))
+    return failure(403, "origin_rejected", "Request origin was rejected.");
+  const url = new URL(request.url);
+  const parts = url.pathname.split("/").filter(Boolean);
+  const repositoryId = url.searchParams.get("repositoryId") ?? parts[1] ?? "";
+  const ref = url.searchParams.get("ref") ?? "HEAD";
+  if (!/^[0-9a-f-]{16,64}$/i.test(repositoryId) || !validRef(ref))
+    return failure(400, "bad_request", "A repository and valid ref are required.");
+  if (!(await repositoryForUser(env, user.id, repositoryId)))
+    return failure(404, "not_found", "Repository was not found.");
+  if (request.method === "GET" && parts[0] === "plan") {
+    const plan = await readDeploymentPlan(env, repositoryId, ref, user);
+    if (!plan)
+      return failure(
+        404,
+        "manifest_not_found",
+        "This ref has no valid gitedge.deploy.json manifest."
+      );
+    return response({
+      repositoryId,
+      ref,
+      manifestDigest: plan.digest,
+      manifest: plan.manifest,
+      permissions: manifestPermissions(plan.manifest),
+    });
+  }
+  if (request.method === "POST" && parts[0] === "session") {
+    if (isAgent(user))
+      return failure(
+        403,
+        "agent_deploy_forbidden",
+        "Agent sessions cannot grant Cloudflare account access."
+      );
+    const body = await readJsonBody<{ token?: unknown; manifestDigest?: unknown }>(request);
+    if (
+      !body ||
+      typeof body.token !== "string" ||
+      body.token.length < 20 ||
+      body.token.length > 512 ||
+      typeof body.manifestDigest !== "string"
+    )
+      return failure(400, "bad_request", "A Cloudflare token and manifest digest are required.");
+    const current = await readDeploymentPlan(env, repositoryId, ref, user);
+    if (!current || current.digest !== body.manifestDigest)
+      return failure(
+        409,
+        "manifest_changed",
+        "The deployment manifest changed. Review the plan again."
+      );
+    let accounts: CfAccount[];
+    try {
+      accounts = await listAccounts(body.token);
+    } catch {
+      return failure(403, "token_invalid", "Cloudflare token could not list accounts.");
+    }
+    if (accounts.length === 0)
+      return failure(
+        403,
+        "account_not_authorized",
+        "This token has no available Cloudflare accounts."
+      );
+    const nonceBytes = crypto.getRandomValues(new Uint8Array(24));
+    const session: DeploymentSession = {
+      version: 1,
+      ownerId: user.id,
+      repositoryId,
+      ref,
+      digest: current.digest,
+      sourceDigests: declaredSourcePaths(current.manifest).map(
+        (path) => current.sourceDigests[path]
+      ),
+      token: body.token,
+      nonce: base64Url(nonceBytes),
+      accountId: null,
+      resourceNames: {},
+      expiresAt: Date.now() + SESSION_SECONDS * 1000,
+      completed: {},
+    };
+    const sealed = await seal(env, session);
+    logger.info("deploy:session-created", { repositoryId, accountCount: accounts.length });
+    return response(
+      {
+        accounts: accounts.map(({ id, name }) => ({ id, name })),
+        permissions: manifestPermissions(current.manifest),
+        nonce: session.nonce,
+      },
+      200,
+      { "Set-Cookie": cookieHeader(sealed, SESSION_SECONDS), "Cache-Control": "no-store" }
+    );
+  }
+  if (request.method === "POST" && parts[0] === "account") {
+    if (isAgent(user))
+      return failure(
+        403,
+        "agent_deploy_forbidden",
+        "Agent sessions cannot grant Cloudflare account access."
+      );
+    const session = await unseal(env, request, user, repositoryId, ref);
+    if (!session)
+      return failure(401, "deploy_session_required", "Create a deployment session first.");
+    const current = await readDeploymentPlan(env, repositoryId, ref, user);
+    if (!current || current.digest !== session.digest)
+      return failure(
+        409,
+        "manifest_changed",
+        "The deployment manifest or source changed. Review the plan again."
+      );
+    const body = await readJsonBody<{ accountId?: unknown; nonce?: unknown }>(request);
+    if (!hasValidNonce(session, body))
+      return failure(403, "csrf_rejected", "Deployment session nonce is invalid.");
+    if (!body || typeof body.accountId !== "string" || !/^[a-f0-9]{32}$/.test(body.accountId))
+      return failure(400, "bad_request", "Select a Cloudflare account.");
+    let accounts: CfAccount[];
+    try {
+      accounts = await listAccounts(session.token);
+    } catch {
+      return failure(
+        502,
+        "account_lookup_failed",
+        "Cloudflare account access could not be checked."
+      );
+    }
+    if (!accounts.some((item) => item.id === body.accountId))
+      return failure(
+        403,
+        "account_not_authorized",
+        "Selected account is not available to this token."
+      );
+    session.accountId = body.accountId;
+    logger.info("deploy:account-selected", { repositoryId, accountId: body.accountId });
+    return response({ accountId: body.accountId }, 200, {
+      "Set-Cookie": cookieHeader(await seal(env, session), SESSION_SECONDS),
+      "Cache-Control": "no-store",
+    });
+  }
+  if (request.method === "DELETE" && parts[0] === "session")
+    return response({ cleared: true }, 200, {
+      "Set-Cookie": cookieHeader("", 0),
+      "Cache-Control": "no-store",
+    });
+  const selected = await selectedSession(env, request, user, repositoryId, ref);
+  if (selected instanceof Response) return selected;
+  if (!selected.session.accountId)
+    return failure(400, "account_required", "Select a Cloudflare account first.");
+  if (request.method === "POST" && parts[0] === "resources") {
+    const body = await readJsonBody<{ nonce?: unknown; resourceNames?: unknown }>(request);
+    if (!hasValidNonce(selected.session, body))
+      return failure(403, "csrf_rejected", "Deployment session nonce is invalid.");
+    const selectedNames = validResourceNames(selected.currentManifest, body?.resourceNames);
+    if (!selectedNames)
+      return failure(400, "bad_request", "Resource names do not match the deployment manifest.");
+    const targets = resourceEndpoints(
+      selected.currentManifest,
+      selected.session.accountId,
+      selectedNames
+    );
+    const availability = await Promise.all(
+      targets.map(async (item) => {
+        const normalized = await listResources(selected.session.token, item);
+        return {
+          id: item.resourceId,
+          key: item.key,
+          kind: item.kind,
+          name: item.name,
+          exists: normalized.some((entry) => entry.name === item.name),
+        };
+      })
+    );
+    return response({ resources: availability }, 200, { "Cache-Control": "no-store" });
+  }
+  if (request.method === "POST" && parts[0] === "provision") {
+    const body = await readJsonBody<{ nonce?: unknown; resourceNames?: unknown }>(request);
+    if (!hasValidNonce(selected.session, body))
+      return failure(403, "csrf_rejected", "Deployment session nonce is invalid.");
+    const names = validResourceNames(selected.currentManifest, body?.resourceNames);
+    if (!names)
+      return failure(400, "bad_request", "Resource names do not match the deployment manifest.");
+    if (
+      Object.keys(selected.session.resourceNames).length &&
+      JSON.stringify(names) !== JSON.stringify(selected.session.resourceNames)
+    )
+      return failure(
+        409,
+        "resource_names_locked",
+        "Resource names are locked after the first provisioning attempt."
+      );
+    selected.session.resourceNames = names;
+    const targets = resourceEndpoints(selected.currentManifest, selected.session.accountId, names);
+    const done: Array<{ key: string; id: string; name: string; reused: boolean }> = [];
+    for (const target of targets) {
+      try {
+        const before = await listResources(selected.session.token, target);
+        const resource = await ensureResource(selected.session, target, before);
+        const reused = before.some((item) => item.id === resource.id);
+        done.push({ key: target.key, id: resource.id, name: target.name, reused });
+        logger.info("deploy:resource-ready", { kind: target.kind, name: target.name, reused });
+      } catch {
+        logger.warn("deploy:resource-failed", { kind: target.kind, name: target.name });
+        return failure(
+          502,
+          "resource_provision_failed",
+          `Could not create or reuse the declared ${target.kind} resource. Retry to continue safely.`,
+          {
+            "Set-Cookie": cookieHeader(await seal(env, selected.session), SESSION_SECONDS),
+            "Cache-Control": "no-store",
+          }
+        );
+      }
+    }
+    const envelope = response({ resources: done }, 200, {
+      "Set-Cookie": cookieHeader(await seal(env, selected.session), SESSION_SECONDS),
+      "Cache-Control": "no-store",
+    });
+    return envelope;
+  }
+  if (request.method === "POST" && parts[0] === "migrate") {
+    const body = await readJsonBody<{ nonce?: unknown }>(request);
+    if (!hasValidNonce(selected.session, body))
+      return failure(403, "csrf_rejected", "Deployment session nonce is invalid.");
+    try {
+      await applyD1Migrations(
+        selected.session,
+        selected.currentManifest,
+        repositoryId,
+        ref,
+        user,
+        selected.session.sourceDigests,
+        logger,
+        env
+      );
+    } catch {
+      logger.warn("deploy:migration-failed", { repositoryId });
+      return failure(
+        502,
+        "migration_failed",
+        "A declared database migration failed. Completed migrations can be safely retried."
+      );
+    }
+    return response(
+      {
+        completed: selected.currentManifest.resources.d1.flatMap((database) =>
+          database.migrations.map((path) => `${database.id}:${path}`)
+        ),
+      },
+      200,
+      {
+        "Set-Cookie": cookieHeader(await seal(env, selected.session), SESSION_SECONDS),
+        "Cache-Control": "no-store",
+      }
+    );
+  }
+  if (request.method === "POST" && parts[0] === "deploy") {
+    if (isAgent(user))
+      return failure(
+        403,
+        "agent_deploy_forbidden",
+        "Agent sessions cannot grant Cloudflare account access."
+      );
+    const manifest = selected.currentManifest;
+    const body = await readJsonBody<{
+      workerName?: unknown;
+      confirmDigest?: unknown;
+      nonce?: unknown;
+    }>(request);
+    if (!hasValidNonce(selected.session, body))
+      return failure(403, "csrf_rejected", "Deployment session nonce is invalid.");
+    if (
+      !body ||
+      body.confirmDigest !== selected.session.digest ||
+      typeof body.workerName !== "string"
+    )
+      return failure(
+        400,
+        "confirmation_required",
+        "Confirm the reviewed manifest before deploying."
+      );
+    const workerName = safeName(body.workerName);
+    if (!workerName || workerName.length > 58)
+      return failure(400, "bad_request", "Worker name is invalid.");
+    const modulePaths = Array.from(
+      new Set([manifest.worker.entrypoint, ...manifest.worker.modules])
+    );
+    const modules: Array<{ path: string; content: string }> = [];
+    let moduleBytes = 0;
+    for (const modulePath of modulePaths) {
+      const content = await readDeclaredFile(
+        env,
+        repositoryId,
+        ref,
+        user,
+        modulePath,
+        MAX_CF_BODY_BYTES
+      );
+      if (content === null)
+        return failure(404, "module_missing", "A declared Worker module was not found.");
+      const sourceIndex = declaredSourcePaths(manifest).indexOf(modulePath);
+      if (
+        sourceIndex < 0 ||
+        (await sourceDigest(content)) !== selected.session.sourceDigests[sourceIndex]
+      )
+        return failure(409, "source_changed", "A declared Worker module changed after review.");
+      if (typeof content !== "string")
+        return failure(400, "module_invalid", "A declared Worker module is binary or invalid.");
+      moduleBytes += new TextEncoder().encode(content).byteLength;
+      if (moduleBytes > MAX_CF_BODY_BYTES)
+        return failure(
+          413,
+          "modules_too_large",
+          "Declared Worker modules exceed the upload size limit."
+        );
+      modules.push({ path: modulePath, content });
+    }
+    const bindings: Array<Record<string, unknown>> = [];
+    for (const item of manifest.resources.d1)
+      bindings.push({
+        type: "d1",
+        name: item.binding,
+        id: selected.session.completed[`d1:${item.id}`],
+      });
+    for (const item of manifest.resources.r2)
+      bindings.push({
+        type: "r2_bucket",
+        name: item.binding,
+        bucket_name: selected.session.resourceNames[item.id] ?? item.name,
+      });
+    for (const item of manifest.resources.kv)
+      bindings.push({
+        type: "kv_namespace",
+        name: item.binding,
+        namespace_id: selected.session.completed[`kv:${item.id}`],
+      });
+    for (const [name, value] of Object.entries(manifest.worker.vars))
+      bindings.push({ type: "plain_text", name, text: value });
+    const metadata = {
+      main_module: manifest.worker.entrypoint,
+      compatibility_date: manifest.worker.compatibilityDate,
+      compatibility_flags: manifest.worker.compatibilityFlags,
+      bindings,
+    };
+    const form = new FormData();
+    form.append(
+      "metadata",
+      new Blob([JSON.stringify(metadata)], { type: "application/json" }),
+      "metadata.json"
+    );
+    for (const module of modules)
+      form.append(
+        module.path,
+        new Blob([module.content], { type: "application/javascript+module" }),
+        module.path
+      );
+    try {
+      await cf(
+        selected.session.token,
+        cfPath(selected.session.accountId, `workers/scripts/${encodeURIComponent(workerName)}`),
+        { method: "PUT", body: form }
+      );
+    } catch {
+      logger.warn("deploy:worker-upload-failed", { repositoryId, workerName });
+      return failure(
+        502,
+        "worker_upload_failed",
+        "Cloudflare rejected the Worker upload. You can retry this step."
+      );
+    }
+    const subdomain = await cf<{ subdomain?: string; enabled?: boolean }>(
+      selected.session.token,
+      cfPath(selected.session.accountId, "workers/subdomain")
+    ).catch(() => null);
+    const zone =
+      typeof subdomain?.subdomain === "string" && subdomain.enabled !== false
+        ? subdomain.subdomain
+        : null;
+    const result = {
+      workerName,
+      url: zone ? `https://${workerName}.${zone}.workers.dev` : null,
+      resources: Object.entries(selected.session.completed)
+        .filter(([key]) => !key.startsWith("migration:"))
+        .map(([key, id]) => ({ key, id })),
+    };
+    logger.info("deploy:worker-deployed", {
+      repositoryId,
+      workerName,
+      hasWorkersDevUrl: zone !== null,
+    });
+    return response(result, 200, {
+      "Set-Cookie": cookieHeader("", 0),
+      "Cache-Control": "no-store",
+    });
+  }
+  if (request.method === "POST" && parts[0] === "result") {
+    return response({ completed: Object.keys(selected.session.completed) }, 200, {
+      "Cache-Control": "no-store",
+    });
+  }
+  return failure(404, "not_found", "Deployment endpoint was not found.");
+}
+
+export async function handleDeploy(
+  request: Request,
+  env: DeployEnv,
+  logger: DeployLogger
+): Promise<Response> {
+  try {
+    return await handleDeployRequest(request, env, logger);
+  } catch {
+    logger.error("deploy:request-failed");
+    return failure(
+      502,
+      "deploy_request_failed",
+      "The deployment request failed. Retry the current step."
+    );
+  }
+}

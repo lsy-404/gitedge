@@ -1,0 +1,9 @@
+{
+  "name": "@gitedge/deploy",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "types:generate": "wrangler types --config wrangler.jsonc worker-configuration.d.ts",
+    "typecheck": "npm run types:generate && tsc --noEmit -p tsconfig.json"
+  }
+}
