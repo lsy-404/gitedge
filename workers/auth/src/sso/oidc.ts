@@ -38,6 +38,27 @@ function secureUrl(value: string, field: string): URL {
   return url;
 }
 
+function validateCallbackUrl(value: string): URL {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("Invalid OIDC callback URL.");
+  }
+  const isLoopback =
+    url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
+  if (
+    (url.protocol !== "https:" && !(url.protocol === "http:" && isLoopback)) ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.search !== "" ||
+    url.hash !== ""
+  ) {
+    throw new Error("Invalid OIDC callback URL.");
+  }
+  return url;
+}
+
 function clientAuthentication(
   provider: OidcProvider,
   secrets: SsoProviderSecrets
@@ -74,7 +95,7 @@ async function discover(
 function assertCallbackRequest(callbackRequest: Request, callbackUrl: string): void {
   if (callbackRequest.method !== "GET" && callbackRequest.method !== "POST")
     throw new Error("Unsupported OIDC callback method.");
-  const expected = secureUrl(callbackUrl, "callback URL");
+  const expected = validateCallbackUrl(callbackUrl);
   const actual = new URL(callbackRequest.url);
   actual.search = "";
   actual.hash = "";
@@ -100,7 +121,7 @@ export async function startOidc(
   state: string
 ): Promise<SsoAuthorization> {
   if (state.length < 16 || state.length > 512) throw new Error("Invalid OIDC state.");
-  const callback = secureUrl(callbackUrl, "callback URL");
+  const callback = validateCallbackUrl(callbackUrl);
   const configuration = await discover(provider, secrets);
   const codeVerifier = oidc.randomPKCECodeVerifier();
   const codeChallenge = await oidc.calculatePKCECodeChallenge(codeVerifier);
@@ -127,6 +148,23 @@ export async function startOidc(
   return { url: authorizationUrl.href, payload: JSON.stringify(flow) };
 }
 
+export async function startOidcLogout(
+  provider: OidcProvider,
+  secrets: SsoProviderSecrets,
+  postLogoutRedirectUri: string,
+  state: string
+): Promise<string | null> {
+  if (state.length < 16 || state.length > 512) throw new Error("Invalid OIDC state.");
+  const redirect = validateCallbackUrl(postLogoutRedirectUri);
+  const configuration = await discover(provider, secrets);
+  if (!configuration.serverMetadata().end_session_endpoint) return null;
+  return oidc.buildEndSessionUrl(configuration, {
+    client_id: provider.clientId,
+    post_logout_redirect_uri: redirect.href,
+    state,
+  }).href;
+}
+
 export async function completeOidc(
   provider: OidcProvider,
   secrets: SsoProviderSecrets,
@@ -136,7 +174,7 @@ export async function completeOidc(
   payload: string
 ): Promise<SsoIdentityClaims> {
   const flow = parsePayload(payload);
-  const callback = secureUrl(callbackUrl, "callback URL");
+  const callback = validateCallbackUrl(callbackUrl);
   if (
     flow.providerId !== provider.id ||
     flow.issuer !== provider.issuer ||
