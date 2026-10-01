@@ -74,9 +74,9 @@ export async function resolveWorkspace(
     // A published PR grants access to its head only, never to the entire private fork.
     if (!publicHeadRef) return null;
     const publicPull = await env.DB.prepare(
-      "SELECT id FROM forge_pull_requests WHERE repository_id = ? AND head_session_id = ? AND head_ref = ?"
+      "SELECT id FROM forge_pull_requests WHERE repository_id = ? AND head_session_id = ? AND (head_ref = ? OR (state = 'merged' AND merge_head_oid = ?))"
     )
-      .bind(access.repository.id, sessionId, publicHeadRef)
+      .bind(access.repository.id, sessionId, publicHeadRef, publicHeadRef)
       .first<{ id: string }>();
     if (!publicPull) return null;
   }

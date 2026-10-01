@@ -663,3 +663,23 @@ describe("Public repository boundaries", () => {
     expect(artifacts.snapshot("repo-r1").tokens).toHaveLength(before);
   });
 });
+
+it("keeps merged pull request diffs bound to the reviewed commits", async () => {
+  const merged = await env.DB.prepare(
+    "SELECT number, merge_base_oid AS base, merge_head_oid AS head FROM forge_pull_requests WHERE state = 'merged' LIMIT 1"
+  ).first<{ number: number; base: string; head: string }>();
+  expect(merged).not.toBeNull();
+  if (!merged) throw new Error("Missing merged fixture");
+  expect(merged.base).toMatch(/^[a-f0-9]{40}$/);
+  expect(merged.head).toMatch(/^[a-f0-9]{40}$/);
+  const path = `/repositories/r1/pull-requests/${merged.number}/diff`;
+  for (const request of [
+    new Request(`https://forge.test${path}`),
+    new Request(`https://forge.test${path}`, { headers: auth("u1", "alice") }),
+  ]) {
+    expect((await forge.fetch(request, forgeEnv)).status).toBe(200);
+    const url = new URL(gitRequests.at(-1)?.url ?? "https://invalid.test");
+    expect(url.searchParams.get("base")).toBe(merged.base);
+    expect(url.searchParams.get("head")).toBe(merged.head);
+  }
+});

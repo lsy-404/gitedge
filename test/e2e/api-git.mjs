@@ -244,6 +244,15 @@ try {
     "POST",
     { expectedBaseOid: comparison.baseOid, expectedHeadOid: comparison.headOid }
   );
+  const mergedDiff = await api(
+    `/api/forge/repositories/${repository.id}/pull-requests/${pull.number}/diff`
+  );
+  assert.equal(mergedDiff.headOid, heads[0]);
+  assert.equal(
+    mergedDiff.files.length,
+    1,
+    "Merged PR retains its original diff after main advances"
+  );
   await git(["pull", "--ff-only", "origin", "main"], source, credential.token);
   for (const index of [0, 1])
     assert.match(

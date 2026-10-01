@@ -457,8 +457,14 @@ async function publicRepositoryRead(
     if (!pull) return error(404, "not_found", "Pull request was not found.");
     if (parts[6] === "diff") {
       const gitUrl = new URL(`/repositories/${repository.id}/compare`, request.url);
-      gitUrl.searchParams.set("base", String(pull.base_ref));
-      gitUrl.searchParams.set("head", String(pull.head_ref));
+      gitUrl.searchParams.set(
+        "base",
+        String(pull.state === "merged" ? pull.merge_base_oid : pull.base_ref)
+      );
+      gitUrl.searchParams.set(
+        "head",
+        String(pull.state === "merged" ? pull.merge_head_oid : pull.head_ref)
+      );
       if (pull.head_session_id)
         gitUrl.searchParams.set("headSessionId", String(pull.head_session_id));
       createLogger(env.LOG_LEVEL, { service: "forge" }).debug("forge:public-pull-request-diff", {
@@ -1051,8 +1057,10 @@ async function featureRequest(
       return json({ data: presentForgeRow("checks", check) }, check.id === id ? 201 : 200);
     }
     if (targetTable === "forge_pull_requests" && action === "diff" && request.method === "GET") {
-      const baseRef = String(current.base_ref),
-        headRef = String(current.head_ref),
+      const baseRef = String(
+          current.state === "merged" ? current.merge_base_oid : current.base_ref
+        ),
+        headRef = String(current.state === "merged" ? current.merge_head_oid : current.head_ref),
         headSessionId = String(current.head_session_id ?? "");
       const gitUrl = new URL(`/repositories/${repository.id}/compare`, request.url);
       logger.debug("forge:pull-request-diff", {
@@ -1199,7 +1207,7 @@ async function featureRequest(
       }
       const now = Date.now();
       await env.DB.prepare(
-        "UPDATE forge_pull_requests SET state = 'merged', merged_oid = ?, updated_at = ?, merge_started_at = NULL, merge_base_oid = NULL, merge_head_oid = NULL WHERE id = ? AND state = 'open' AND merge_started_at = ? AND merge_base_oid = ? AND merge_head_oid = ?"
+        "UPDATE forge_pull_requests SET state = 'merged', merged_oid = ?, updated_at = ?, merge_started_at = NULL WHERE id = ? AND state = 'open' AND merge_started_at = ? AND merge_base_oid = ? AND merge_head_oid = ?"
       )
         .bind(
           oid,
