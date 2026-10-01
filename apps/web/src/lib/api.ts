@@ -165,11 +165,13 @@ export const api = {
         `compare${query({ base, head, headSessionId: headSessionId ?? undefined })}`
       )
     ),
-  repositoryToken: (
-    repositoryId: string,
-    payload: { scope: "read" | "write"; ttlSeconds: number }
-  ) =>
-    request<{ remote: string; token: string; expiresAt: number }>(gitPath(repositoryId, "tokens"), {
+  createCloneToken: (payload: {
+    repositoryId: string;
+    name: string;
+    permission: "read" | "write";
+    ttlSeconds: number;
+  }) =>
+    request<{ id: string; token: string; expiresAt: number }>("/api/auth/tokens", {
       method: "POST",
       body: JSON.stringify(payload),
     }),

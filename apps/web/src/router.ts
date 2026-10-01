@@ -20,17 +20,17 @@ export const router = createRouter({
     { path: "/settings/account", component: AccountSettingsView },
     { path: "/settings/agents", component: AgentSettingsView },
     {
-      path: "/:owner/:repo/issues/:number(\d+)",
+      path: "/:owner/:repo/issues/:number([0-9]+)",
       component: RepositoryView,
       meta: { allowAnonymous: true },
     },
     {
-      path: "/:owner/:repo/pulls/:number(\d+)",
+      path: "/:owner/:repo/pulls/:number([0-9]+)",
       component: RepositoryView,
       meta: { allowAnonymous: true },
     },
     {
-      path: "/:owner/:repo/discussions/:number(\d+)",
+      path: "/:owner/:repo/discussions/:number([0-9]+)",
       component: RepositoryView,
       meta: { allowAnonymous: true },
     },

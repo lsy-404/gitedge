@@ -14,6 +14,8 @@ import type {
 import { ApiError, api } from "../lib/api";
 import StatusState from "./StatusState.vue";
 import { clearOneTimeToken, isCredentialExpired } from "../lib/credentialSecurity";
+import { authenticatedCloneCommand, gatewayCloneUrl } from "../lib/gitClone";
+import { sessionState } from "../lib/session";
 import {
   agentSessionDisplayStatus,
   findGraphCommit,
@@ -43,7 +45,17 @@ const emptyReason = ref("");
 const offset = ref(0);
 const hasMoreCommits = ref(false);
 const limit = 50;
-const token = ref<{ remote: string; token: string; expiresAt: number } | null>(null);
+const token = ref<{ id: string; token: string; expiresAt: number } | null>(null);
+const tokenName = ref("");
+const cloneUrl = computed(() =>
+  gatewayCloneUrl(window.location.origin, props.repository.owner, props.repository.name)
+);
+const cloneCommand = computed(() =>
+  token.value?.token
+    ? authenticatedCloneCommand(cloneUrl.value, token.value.token)
+    : `git clone ${cloneUrl.value}`
+);
+const canCreateCloneToken = computed(() => props.repository.canWrite && sessionState.user !== null);
 const tokenScope = ref<"read" | "write">("read");
 const tokenBusy = ref(false);
 const tokenExpired = ref(false);
@@ -224,8 +236,11 @@ function handleCommitKeydown(event: KeyboardEvent, oid: string) {
     selectCommit(oid);
   }
 }
-function copyRemote() {
-  void navigator.clipboard.writeText(props.repository.remote);
+function copyCloneUrl() {
+  void navigator.clipboard.writeText(cloneUrl.value);
+}
+function copyCloneCommand() {
+  void navigator.clipboard.writeText(cloneCommand.value);
 }
 function openTree(path: string, type: "tree" | "blob") {
   void router.push(
@@ -238,8 +253,10 @@ async function issueToken() {
   const repositoryId = props.repository.id;
   const requestVersion = ++tokenRequestVersion;
   try {
-    const issuedToken = await api.repositoryToken(repositoryId, {
-      scope: tokenScope.value,
+    const issuedToken = await api.createCloneToken({
+      repositoryId,
+      name: tokenName.value.trim(),
+      permission: tokenScope.value,
       ttlSeconds: 3600,
     });
     if (requestVersion !== tokenRequestVersion || repositoryId !== props.repository.id) return;
@@ -364,17 +381,25 @@ onUnmounted(() => {
       }}</RouterLink>
       <div class="clone-control">
         <span>{{ t("cloneUrl") }}</span
-        ><code>{{ repository.remote }}</code
-        ><button class="text-button" @click="copyRemote">{{ t("copy") }}</button>
+        ><code>{{ cloneUrl }}</code
+        ><button class="text-button" @click="copyCloneUrl">{{ t("copy") }}</button>
       </div>
-      <template v-if="repository.canWrite"
-        ><select v-model="tokenScope">
+      <template v-if="canCreateCloneToken">
+        <input
+          v-model="tokenName"
+          class="token-name-input"
+          maxlength="80"
+          required
+          :placeholder="t('cloneTokenName')"
+        />
+        <select v-model="tokenScope">
           <option value="read">{{ t("readToken") }}</option>
-          <option value="write">{{ t("writeToken") }}</option></select
-        ><button class="button" :disabled="tokenBusy" @click="issueToken">
+          <option value="write">{{ t("writeToken") }}</option>
+        </select>
+        <button class="button" :disabled="tokenBusy || !tokenName.trim()" @click="issueToken">
           {{ t("createCloneToken") }}
-        </button></template
-      >
+        </button>
+      </template>
     </div>
     <div v-if="token" class="token-once panel">
       <div>
@@ -382,8 +407,12 @@ onUnmounted(() => {
         <p>{{ t("tokenExpiry", { date: new Date(token.expiresAt).toLocaleString() }) }}</p>
       </div>
       <code v-if="!tokenExpired">{{ token.token }}</code>
-      <code>{{ token.remote }}</code
-      ><button class="button" @click="clearToken">{{ t("close") }}</button>
+      <code>{{ cloneUrl }}</code>
+      <code v-if="!tokenExpired">{{ cloneCommand }}</code>
+      <button v-if="!tokenExpired" class="button" @click="copyCloneCommand">
+        {{ t("copyCloneCommand") }}
+      </button>
+      <button class="button" @click="clearToken">{{ t("close") }}</button>
     </div>
     <div v-if="loading || error" class="content-card">
       <StatusState :loading="loading" :error="error" :empty="false" @retry="load" />
@@ -623,6 +652,7 @@ onUnmounted(() => {
   border: 1px solid var(--line);
 }
 .code-toolbar select,
+.code-toolbar input,
 .compare-form select {
   color: inherit;
   background: var(--lift);

@@ -57,25 +57,35 @@ describe("GitEdge forge API client", () => {
     expect(tree.path).toBe("src/lib");
   });
 
-  it("never puts one-time repository tokens in request URLs", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          data: { remote: "https://git.example/o/r.git", token: "secret-once", expiresAt: 123 },
-        }),
-        { status: 200 }
-      )
-    );
+  it("creates a scoped Auth clone token without putting it or a remote in the URL", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ data: { id: "token-1", token: "secret-once", expiresAt: 123 } }),
+          { status: 201 }
+        )
+      );
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await api.repositoryToken("repo-1", { scope: "write", ttlSeconds: 3600 });
+    const result = await api.createCloneToken({
+      repositoryId: "repo-1",
+      name: "Browser clone",
+      permission: "write",
+      ttlSeconds: 3600,
+    });
 
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/git/repositories/repo-1/tokens");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/auth/tokens");
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
       method: "POST",
-      body: JSON.stringify({ scope: "write", ttlSeconds: 3600 }),
+      body: JSON.stringify({
+        repositoryId: "repo-1",
+        name: "Browser clone",
+        permission: "write",
+        ttlSeconds: 3600,
+      }),
     });
-    expect(result.token).toBe("secret-once");
+    expect(result).toEqual({ id: "token-1", token: "secret-once", expiresAt: 123 });
   });
 });
 

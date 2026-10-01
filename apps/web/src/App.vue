@@ -31,6 +31,7 @@ refreshSession();
       <nav v-if="sessionState.user" class="top-actions" :aria-label="t('mainNav')">
         <RouterLink to="/dashboard">{{ t("dashboard") }}</RouterLink
         ><RouterLink to="/organizations">{{ t("organizations") }}</RouterLink
+        ><RouterLink to="/settings/agents">{{ t("agents") }}</RouterLink
         ><RouterLink
           v-if="sessionState.user.externalIdentity"
           class="account-summary"
