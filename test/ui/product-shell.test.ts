@@ -9,19 +9,19 @@ describe("GitEdge API client", () => {
 
   it("unwraps the auth response envelope and sends the service payload", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ data: { id: "u1", identifier: "rosmontis" } }), {
+      new Response(JSON.stringify({ data: { id: "u1", identifier: "example-owner" } }), {
         status: 200,
       })
     );
 
-    const user = await api.login({ identifier: "rosmontis", password: "a".repeat(12) });
+    const user = await api.login({ identifier: "example-owner", password: "a".repeat(12) });
 
-    expect(user.identifier).toBe("rosmontis");
+    expect(user.identifier).toBe("example-owner");
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/auth/login",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ identifier: "rosmontis", password: "a".repeat(12) }),
+        body: JSON.stringify({ identifier: "example-owner", password: "a".repeat(12) }),
       })
     );
   });
@@ -39,34 +39,31 @@ describe("GitEdge API client", () => {
     );
   });
 
-  it("uses the owner and slug public Forge paths for anonymous repository reads", async () => {
-    vi.spyOn(globalThis, "fetch").mockImplementation(
-      async () => new Response(JSON.stringify({ data: [] }), { status: 200 })
-    );
+  it("resolves public and private repositories directly with server-provided permissions", async () => {
+    const repository = {
+      id: "repo-7",
+      namespaceId: "ns-1",
+      owner: "example-owner",
+      name: "edge",
+      slug: "edge",
+      artifactName: "example-owner/edge",
+      remote: "https://git.example/example-owner/edge.git",
+      description: "",
+      visibility: "public",
+      defaultBranch: "main",
+      createdAt: 1,
+      updatedAt: 1,
+      canWrite: false,
+    };
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ data: repository }), { status: 200 }));
 
-    await api.publicRepository("rosmontis", "edge");
-    await api.publicIssues("rosmontis", "edge");
-    await api.publicPulls("rosmontis", "edge");
-    await api.publicWiki("rosmontis", "edge");
+    const result = await api.repository("example-owner", "edge");
 
-    expect(globalThis.fetch).toHaveBeenNthCalledWith(
-      1,
-      "/api/forge/public/repositories/rosmontis/edge",
-      expect.objectContaining({ credentials: "include" })
-    );
-    expect(globalThis.fetch).toHaveBeenNthCalledWith(
-      2,
-      "/api/forge/public/repositories/rosmontis/edge/issues",
-      expect.objectContaining({ credentials: "include" })
-    );
-    expect(globalThis.fetch).toHaveBeenNthCalledWith(
-      3,
-      "/api/forge/public/repositories/rosmontis/edge/pull-requests",
-      expect.objectContaining({ credentials: "include" })
-    );
-    expect(globalThis.fetch).toHaveBeenNthCalledWith(
-      4,
-      "/api/forge/public/repositories/rosmontis/edge/wiki",
+    expect(result.canWrite).toBe(false);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/forge/repositories/by-name/example-owner/edge",
       expect.objectContaining({ credentials: "include" })
     );
   });
@@ -77,7 +74,7 @@ describe("GitEdge API client", () => {
     );
 
     await api.createRepository({
-      owner: "rosmontis",
+      owner: "example-owner",
       name: "edge",
       description: "At the edge",
       visibility: "public",
@@ -89,7 +86,7 @@ describe("GitEdge API client", () => {
         method: "POST",
         body: JSON.stringify({
           slug: "edge",
-          owner: "rosmontis",
+          owner: "example-owner",
           description: "At the edge",
           visibility: "public",
         }),
@@ -139,10 +136,10 @@ describe("GitEdge API client", () => {
     await api.createPullRequest("repo-7", {
       title: "Ship it",
       body: "Ready",
-      head: "feature",
-      base: "main",
+      headRef: "feature",
+      baseRef: "main",
     });
-    await api.createWikiPage("repo-7", { slug: "home", title: "Home", body: "Welcome" });
+    await api.updateWikiPage("repo-7", "home", { title: "Home", content: "Welcome" });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,

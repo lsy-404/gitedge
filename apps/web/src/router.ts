@@ -5,6 +5,7 @@ import RepositoryView from "./pages/RepositoryView.vue";
 import OrganizationsView from "./pages/OrganizationsView.vue";
 import OrganizationView from "./pages/OrganizationView.vue";
 import AccountSettingsView from "./pages/AccountSettingsView.vue";
+import AgentSettingsView from "./pages/AgentSettingsView.vue";
 import { refreshSession, sessionState } from "./lib/session";
 
 export const router = createRouter({
@@ -17,8 +18,30 @@ export const router = createRouter({
     { path: "/organizations", component: OrganizationsView },
     { path: "/organizations/:slug", component: OrganizationView },
     { path: "/settings/account", component: AccountSettingsView },
+    { path: "/settings/agents", component: AgentSettingsView },
     {
-      path: "/:owner/:repo/:section(code|issues|pulls|wiki|settings)?",
+      path: "/:owner/:repo/issues/:number(\d+)",
+      component: RepositoryView,
+      meta: { allowAnonymous: true },
+    },
+    {
+      path: "/:owner/:repo/pulls/:number(\d+)",
+      component: RepositoryView,
+      meta: { allowAnonymous: true },
+    },
+    {
+      path: "/:owner/:repo/discussions/:number(\d+)",
+      component: RepositoryView,
+      meta: { allowAnonymous: true },
+    },
+    { path: "/:owner/:repo/wiki/:slug", component: RepositoryView, meta: { allowAnonymous: true } },
+    {
+      path: "/:owner/:repo/:view(tree|blob)/:ref/:path(.*)*",
+      component: RepositoryView,
+      meta: { allowAnonymous: true },
+    },
+    {
+      path: "/:owner/:repo/:section(code|issues|pulls|discussions|wiki|commits|compare|settings)?",
       component: RepositoryView,
       meta: { allowAnonymous: true },
     },

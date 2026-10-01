@@ -1,70 +1,52 @@
-export interface User {
-  id: string;
-  identifier: string;
-  externalIdentity?: ExternalIdentity;
-}
+import type {
+  Organization,
+  OrganizationMember,
+  User,
+} from "../../../../packages/contracts/src/account";
+import type {
+  Agent,
+  AgentSession,
+  CheckRun,
+  Comment,
+  Discussion,
+  GitCommit,
+  GitComparison,
+  GitFile,
+  GitGraph,
+  GitRef,
+  GitTree,
+  Issue,
+  PullRequest,
+  Repository,
+  Review,
+  WikiPage,
+  CreatedAgentSession,
+} from "../../../../packages/contracts/src/forge";
 
-export interface ExternalIdentity {
-  provider: "github";
-  login: string;
-  avatarUrl?: string;
-  profileUrl?: string;
-  accessLevel: "identity" | "read";
-  emails?: string[];
-  organizations?: { login: string; avatarUrl?: string }[];
-}
-
-export interface Organization {
-  slug: string;
-  displayName: string;
-  description?: string;
-  avatarUrl?: string;
-  role?: "owner" | "member";
-}
-
-export interface OrganizationMember {
-  identifier: string;
-  role: "owner" | "member";
-}
-
-export interface Repository {
-  id: string;
-  owner: string;
-  name: string;
-  description?: string;
-  visibility: "public" | "private";
-  defaultBranch: string;
-  updatedAt: number;
-}
-
-export interface Issue {
-  number: number;
-  title: string;
-  body?: string;
-  state: "open" | "closed";
-  author: string;
-  updatedAt: number;
-}
-
-export interface PullRequest {
-  number: number;
-  title: string;
-  body?: string;
-  state: "open" | "closed" | "merged";
-  author: string;
-  headRef: string;
-  baseRef: string;
-  updatedAt: number;
-}
-
-export interface WikiPage {
-  slug: string;
-  title: string;
-  content?: string;
-  revision: number;
-  updatedBy: string;
-  updatedAt: number;
-}
+export type {
+  Organization,
+  OrganizationMember,
+  User,
+} from "../../../../packages/contracts/src/account";
+export type {
+  Agent,
+  AgentSession,
+  CheckRun,
+  Comment,
+  Discussion,
+  GitCommit,
+  GitComparison,
+  GitFile,
+  GitGraph,
+  GitRef,
+  GitTree,
+  Issue,
+  PullRequest,
+  Repository,
+  Review,
+  WikiPage,
+  CreatedAgentSession,
+};
 
 export class ApiError extends Error {
   constructor(
@@ -79,7 +61,13 @@ interface ApiEnvelope<T> {
   data: T;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+function request<T>(path: string, init?: RequestInit): Promise<T>;
+function request(path: string, init: RequestInit | undefined, allowNoContent: true): Promise<void>;
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  allowNoContent = false
+): Promise<T | void> {
   const response = await fetch(path, {
     credentials: "include",
     headers: { "Content-Type": "application/json", ...init?.headers },
@@ -88,28 +76,45 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     throw new ApiError(response.status, (await response.text()) || response.statusText);
   }
-  if (response.status === 204) return undefined as T;
-  const envelope = (await response.json()) as ApiEnvelope<T>;
+  if (response.status === 204) {
+    if (allowNoContent) return;
+    throw new ApiError(response.status, "Expected a response body");
+  }
+  const envelope: ApiEnvelope<T> = await response.json();
+  if (!envelope || typeof envelope !== "object" || !("data" in envelope)) {
+    throw new ApiError(response.status, "Invalid response envelope");
+  }
   return envelope.data;
+}
+
+function query(values: Record<string, string | number | undefined>): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(values)) {
+    if (value !== undefined) params.set(key, String(value));
+  }
+  const value = params.toString();
+  return value ? `?${value}` : "";
+}
+
+function repositoryPath(repositoryId: string, resource: string): string {
+  return `/api/forge/repositories/${encodeURIComponent(repositoryId)}/${resource}`;
+}
+
+function gitPath(repositoryId: string, resource: string): string {
+  return `/api/git/repositories/${encodeURIComponent(repositoryId)}/${resource}`;
 }
 
 export const api = {
   login: (payload: { identifier: string; password: string }) =>
-    request<User>("/api/auth/login", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
+    request<User>("/api/auth/login", { method: "POST", body: JSON.stringify(payload) }),
   register: (payload: { identifier: string; password: string }) =>
-    request<User>("/api/auth/register", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
-  logout: () => request<void>("/api/auth/logout", { method: "POST" }),
+    request<User>("/api/auth/register", { method: "POST", body: JSON.stringify(payload) }),
+  logout: () => request("/api/auth/logout", { method: "POST" }, true),
   session: () => request<User>("/api/auth/session"),
   repositories: () => request<Repository[]>("/api/forge/repositories"),
-  publicRepository: (owner: string, slug: string) =>
+  repository: (owner: string, repo: string) =>
     request<Repository>(
-      `/api/forge/public/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(slug)}`
+      `/api/forge/repositories/by-name/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`
     ),
   createRepository: (payload: {
     name: string;
@@ -144,61 +149,225 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  issues: (repositoryId: string) =>
-    request<Issue[]>(`/api/forge/repositories/${repositoryId}/issues`),
-  publicIssues: (owner: string, slug: string) =>
-    request<Issue[]>(
-      `/api/forge/public/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(slug)}/issues`
+  refs: (repositoryId: string) => request<GitRef[]>(gitPath(repositoryId, "refs")),
+  tree: (repositoryId: string, ref: string, path: string) =>
+    request<GitTree>(gitPath(repositoryId, `tree${query({ ref, path })}`)),
+  file: (repositoryId: string, ref: string, path: string) =>
+    request<GitFile>(gitPath(repositoryId, `file${query({ ref, path })}`)),
+  commits: (repositoryId: string, ref: string, offset: number, limit: number) =>
+    request<GitCommit[]>(gitPath(repositoryId, `commits${query({ ref, offset, limit })}`)),
+  graph: (repositoryId: string, ref: string, limit: number) =>
+    request<GitGraph>(gitPath(repositoryId, `graph${query({ ref, limit })}`)),
+  compare: (repositoryId: string, base: string, head: string, headSessionId?: string | null) =>
+    request<GitComparison>(
+      gitPath(
+        repositoryId,
+        `compare${query({ base, head, headSessionId: headSessionId ?? undefined })}`
+      )
     ),
-  createIssue: (repositoryId: string, payload: { title: string; body: string }) =>
-    request<Issue>(`/api/forge/repositories/${repositoryId}/issues`, {
+  repositoryToken: (
+    repositoryId: string,
+    payload: { scope: "read" | "write"; ttlSeconds: number }
+  ) =>
+    request<{ remote: string; token: string; expiresAt: number }>(gitPath(repositoryId, "tokens"), {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  issues: (repositoryId: string) => request<Issue[]>(repositoryPath(repositoryId, "issues")),
+  issue: (repositoryId: string, number: number) =>
+    request<Issue>(repositoryPath(repositoryId, `issues/${number}`)),
+  createIssue: (
+    repositoryId: string,
+    payload: { title: string; body: string; labels?: string[]; assignees?: string[] }
+  ) =>
+    request<Issue>(repositoryPath(repositoryId, "issues"), {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateIssue: (
+    repositoryId: string,
+    number: number,
+    payload: Partial<Pick<Issue, "title" | "body" | "state" | "labels" | "assignees">>
+  ) =>
+    request<Issue>(repositoryPath(repositoryId, `issues/${number}`), {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
   pulls: (repositoryId: string) =>
-    request<PullRequest[]>(`/api/forge/repositories/${repositoryId}/pull-requests`),
-  publicPulls: (owner: string, slug: string) =>
-    request<PullRequest[]>(
-      `/api/forge/public/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(slug)}/pull-requests`
-    ),
+    request<PullRequest[]>(repositoryPath(repositoryId, "pull-requests")),
+  pull: (repositoryId: string, number: number) =>
+    request<PullRequest>(repositoryPath(repositoryId, `pull-requests/${number}`)),
   createPullRequest: (
     repositoryId: string,
-    payload: { title: string; body: string; head: string; base: string }
+    payload: {
+      title: string;
+      body: string;
+      headRef: string;
+      baseRef: string;
+      headSessionId?: string | null;
+      draft?: boolean;
+    }
   ) =>
-    request<PullRequest>(`/api/forge/repositories/${repositoryId}/pull-requests`, {
+    request<PullRequest>(repositoryPath(repositoryId, "pull-requests"), {
       method: "POST",
-      body: JSON.stringify({
-        title: payload.title,
-        body: payload.body,
-        headRef: payload.head,
-        baseRef: payload.base,
-      }),
+      body: JSON.stringify(payload),
     }),
-  wiki: (repositoryId: string) =>
-    request<WikiPage[]>(`/api/forge/repositories/${repositoryId}/wiki`),
-  publicWiki: (owner: string, slug: string) =>
-    request<WikiPage[]>(
-      `/api/forge/public/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(slug)}/wiki`
-    ),
-  createWikiPage: (repositoryId: string, payload: { slug: string; title: string; body: string }) =>
-    request<WikiPage>(
-      `/api/forge/repositories/${repositoryId}/wiki/${encodeURIComponent(payload.slug)}`,
-      {
-        method: "PUT",
-        body: JSON.stringify({ title: payload.title, content: payload.body }),
-      }
-    ),
+  updatePullRequest: (
+    repositoryId: string,
+    number: number,
+    payload: Partial<Pick<PullRequest, "title" | "body" | "state" | "draft">>
+  ) =>
+    request<PullRequest>(repositoryPath(repositoryId, `pull-requests/${number}`), {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  pullDiff: (repositoryId: string, number: number) =>
+    request<GitComparison>(repositoryPath(repositoryId, `pull-requests/${number}/diff`)),
+  mergePull: (
+    repositoryId: string,
+    number: number,
+    payload: { expectedBaseOid: string; expectedHeadOid: string }
+  ) =>
+    request<PullRequest>(repositoryPath(repositoryId, `pull-requests/${number}/merge`), {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  discussions: (repositoryId: string) =>
+    request<Discussion[]>(repositoryPath(repositoryId, "discussions")),
+  discussion: (repositoryId: string, number: number) =>
+    request<Discussion>(repositoryPath(repositoryId, `discussions/${number}`)),
+  createDiscussion: (
+    repositoryId: string,
+    payload: { title: string; body: string; category: Discussion["category"] }
+  ) =>
+    request<Discussion>(repositoryPath(repositoryId, "discussions"), {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateDiscussion: (
+    repositoryId: string,
+    number: number,
+    payload: Partial<Pick<Discussion, "title" | "body" | "state" | "answerCommentId">>
+  ) =>
+    request<Discussion>(repositoryPath(repositoryId, `discussions/${number}`), {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  wiki: (repositoryId: string) => request<WikiPage[]>(repositoryPath(repositoryId, "wiki")),
+  wikiPage: (repositoryId: string, slug: string) =>
+    request<WikiPage>(repositoryPath(repositoryId, `wiki/${encodeURIComponent(slug)}`)),
+  wikiHistory: (repositoryId: string, slug: string) =>
+    request<WikiPage[]>(repositoryPath(repositoryId, `wiki/${encodeURIComponent(slug)}/history`)),
   updateWikiPage: (
     repositoryId: string,
     slug: string,
-    payload: { title: string; body: string; expectedRevision?: number }
+    payload: { title: string; content: string; expectedRevision?: number }
   ) =>
-    request<WikiPage>(`/api/forge/repositories/${repositoryId}/wiki/${encodeURIComponent(slug)}`, {
+    request<WikiPage>(repositoryPath(repositoryId, `wiki/${encodeURIComponent(slug)}`), {
       method: "PUT",
-      body: JSON.stringify({
-        title: payload.title,
-        content: payload.body,
-        expectedRevision: payload.expectedRevision,
-      }),
+      body: JSON.stringify(payload),
     }),
+  comments: (
+    repositoryId: string,
+    resource: "issues" | "pull-requests" | "discussions",
+    number: number
+  ) => request<Comment[]>(repositoryPath(repositoryId, `${resource}/${number}/comments`)),
+  createComment: (
+    repositoryId: string,
+    resource: "issues" | "pull-requests" | "discussions",
+    number: number,
+    body: string
+  ) =>
+    request<Comment>(repositoryPath(repositoryId, `${resource}/${number}/comments`), {
+      method: "POST",
+      body: JSON.stringify({ body }),
+    }),
+  updateComment: (
+    repositoryId: string,
+    resource: "issues" | "pull-requests" | "discussions",
+    number: number,
+    commentId: string,
+    body: string
+  ) =>
+    request<Comment>(
+      repositoryPath(
+        repositoryId,
+        `${resource}/${number}/comments/${encodeURIComponent(commentId)}`
+      ),
+      {
+        method: "PATCH",
+        body: JSON.stringify({ body }),
+      }
+    ),
+  deleteComment: (
+    repositoryId: string,
+    resource: "issues" | "pull-requests" | "discussions",
+    number: number,
+    commentId: string
+  ) =>
+    request(
+      repositoryPath(
+        repositoryId,
+        `${resource}/${number}/comments/${encodeURIComponent(commentId)}`
+      ),
+      { method: "DELETE" },
+      true
+    ),
+  reviews: (repositoryId: string, number: number) =>
+    request<Review[]>(repositoryPath(repositoryId, `pull-requests/${number}/reviews`)),
+  createReview: (
+    repositoryId: string,
+    number: number,
+    payload: { commitOid: string; state: Review["state"]; body: string }
+  ) =>
+    request<Review>(repositoryPath(repositoryId, `pull-requests/${number}/reviews`), {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  checks: (repositoryId: string, number: number) =>
+    request<CheckRun[]>(repositoryPath(repositoryId, `pull-requests/${number}/checks`)),
+  createCheck: (
+    repositoryId: string,
+    number: number,
+    payload: {
+      name: string;
+      commitOid: string;
+      status: CheckRun["status"];
+      conclusion: CheckRun["conclusion"];
+      summary: string;
+      detailsUrl?: string | null;
+    }
+  ) =>
+    request<CheckRun>(repositoryPath(repositoryId, `pull-requests/${number}/checks`), {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  agents: () => request<Agent[]>("/api/auth/agents"),
+  createAgent: (payload: { name: string; description: string }) =>
+    request<Agent>("/api/auth/agents", { method: "POST", body: JSON.stringify(payload) }),
+  disableAgent: (id: string) =>
+    request(`/api/auth/agents/${encodeURIComponent(id)}`, { method: "DELETE" }, true),
+  agentSessions: (id: string) =>
+    request<AgentSession[]>(`/api/auth/agents/${encodeURIComponent(id)}/sessions`),
+  createAgentSession: (
+    id: string,
+    payload: {
+      repositoryId: string;
+      baseRef: string;
+      permission: "read" | "write";
+      ttlSeconds: number;
+    }
+  ) =>
+    request<CreatedAgentSession>(`/api/auth/agents/${encodeURIComponent(id)}/sessions`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  revokeAgentSession: (id: string, sessionId: string) =>
+    request(
+      `/api/auth/agents/${encodeURIComponent(id)}/sessions/${encodeURIComponent(sessionId)}`,
+      { method: "DELETE" },
+      true
+    ),
+  repositorySessions: (repositoryId: string) =>
+    request<AgentSession[]>(`/api/auth/sessions${query({ repositoryId })}`),
 };
