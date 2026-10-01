@@ -20,6 +20,9 @@ CREATE TABLE forge_pull_requests (
   draft INTEGER NOT NULL DEFAULT 0 CHECK (draft IN (0, 1)),
   state TEXT NOT NULL CHECK (state IN ('open', 'closed', 'merged')),
   merged_oid TEXT,
+  merge_started_at INTEGER,
+  merge_base_oid TEXT,
+  merge_head_oid TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   UNIQUE(repository_id, number),
@@ -32,15 +35,16 @@ DROP TABLE forge_pull_requests_old;
 
 CREATE TABLE forge_counters (
   repository_id TEXT PRIMARY KEY NOT NULL,
-  issue_number INTEGER NOT NULL DEFAULT 0,
-  pull_request_number INTEGER NOT NULL DEFAULT 0,
+  conversation_number INTEGER NOT NULL DEFAULT 0,
   discussion_number INTEGER NOT NULL DEFAULT 0,
   FOREIGN KEY (repository_id) REFERENCES repositories(id) ON DELETE CASCADE
 );
-INSERT INTO forge_counters (repository_id, issue_number, pull_request_number)
+INSERT INTO forge_counters (repository_id, conversation_number)
 SELECT repositories.id,
-  COALESCE((SELECT MAX(number) FROM forge_issues WHERE repository_id = repositories.id), 0),
-  COALESCE((SELECT MAX(number) FROM forge_pull_requests WHERE repository_id = repositories.id), 0)
+  MAX(
+    COALESCE((SELECT MAX(number) FROM forge_issues WHERE repository_id = repositories.id), 0),
+    COALESCE((SELECT MAX(number) FROM forge_pull_requests WHERE repository_id = repositories.id), 0)
+  )
 FROM repositories;
 
 CREATE TABLE forge_comments (
@@ -64,6 +68,7 @@ CREATE TABLE forge_reviews (
   pull_request_id TEXT NOT NULL,
   actor_json TEXT NOT NULL,
   author_id TEXT NOT NULL,
+  actor_key TEXT NOT NULL,
   state TEXT NOT NULL CHECK (state IN ('commented', 'approved', 'changes_requested')),
   body TEXT NOT NULL,
   commit_oid TEXT NOT NULL,
@@ -73,12 +78,14 @@ CREATE TABLE forge_reviews (
   FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE RESTRICT
 );
 CREATE INDEX idx_forge_reviews_head ON forge_reviews(pull_request_id, commit_oid, created_at);
+CREATE INDEX idx_forge_reviews_actor ON forge_reviews(pull_request_id, commit_oid, actor_key, created_at);
 
 CREATE TABLE forge_check_runs (
   id TEXT PRIMARY KEY NOT NULL,
   repository_id TEXT NOT NULL,
   pull_request_id TEXT NOT NULL,
   actor_json TEXT NOT NULL,
+  actor_key TEXT NOT NULL,
   name TEXT NOT NULL,
   commit_oid TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('queued', 'in_progress', 'completed')),
@@ -90,6 +97,7 @@ CREATE TABLE forge_check_runs (
   FOREIGN KEY (repository_id) REFERENCES repositories(id) ON DELETE CASCADE,
   FOREIGN KEY (pull_request_id) REFERENCES forge_pull_requests(id) ON DELETE CASCADE
 );
+CREATE UNIQUE INDEX idx_forge_checks_identity ON forge_check_runs(pull_request_id, commit_oid, name, actor_key);
 CREATE INDEX idx_forge_checks_head ON forge_check_runs(pull_request_id, commit_oid, created_at);
 
 CREATE TABLE forge_discussions (

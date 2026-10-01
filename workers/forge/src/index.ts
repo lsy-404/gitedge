@@ -98,6 +98,10 @@ function actorFor(user: TrustedUser): Actor {
   return actorForUser(user);
 }
 
+function actorKey(actor: Actor): string {
+  return `${actor.kind}:${actor.id}:${actor.sessionId ?? ""}`;
+}
+
 async function repositoryById(env: ForgeEnv, repositoryId: string): Promise<RepositoryRow | null> {
   return env.DB.prepare(
     "SELECT repositories.id, repositories.namespace_id, namespaces.slug AS owner, repositories.slug, repositories.visibility, repositories.description, repositories.created_at, repositories.updated_at, repositories.artifact_name, repositories.remote, repositories.default_branch FROM repositories JOIN namespaces ON namespaces.id = repositories.namespace_id WHERE repositories.id = ?"
@@ -119,6 +123,13 @@ function canWriteSession(user: TrustedUser, repositoryId: string): boolean {
   return (
     !user.agentSession ||
     (user.agentSession.repositoryId === repositoryId && user.agentSession.permission === "write")
+  );
+}
+
+function hasActiveMergeLease(resource: Record<string, unknown>): boolean {
+  return (
+    typeof resource.merge_started_at === "number" &&
+    resource.merge_started_at >= Date.now() - 60_000
   );
 }
 
@@ -193,18 +204,10 @@ async function nextNumber(
   table: "forge_issues" | "forge_pull_requests" | "forge_discussions",
   repositoryId: string
 ): Promise<number> {
-  const column =
-    table === "forge_issues"
-      ? "issue_number"
-      : table === "forge_pull_requests"
-        ? "pull_request_number"
-        : "discussion_number";
-  const seeded = await env.DB.prepare(
-    "INSERT OR IGNORE INTO forge_counters (repository_id) VALUES (?)"
-  )
+  const column = table === "forge_discussions" ? "discussion_number" : "conversation_number";
+  await env.DB.prepare("INSERT OR IGNORE INTO forge_counters (repository_id) VALUES (?)")
     .bind(repositoryId)
     .run();
-  void seeded;
   const row = await env.DB.prepare(
     `UPDATE forge_counters SET ${column} = ${column} + 1 WHERE repository_id = ? RETURNING ${column} AS number`
   )
@@ -271,48 +274,89 @@ function parseActor(value: unknown, authorId: unknown): Actor {
 }
 
 function presentForgeRow(resource: string, row: Record<string, unknown>): Record<string, unknown> {
-  const result: Record<string, unknown> = { ...row };
-  let actor: Actor | null = null;
-  if ("actor_json" in row) {
-    actor = parseActor(row.actor_json, row.author_id);
-    result.actor = actor;
-    delete result.actor_json;
+  const actor = "actor_json" in row ? parseActor(row.actor_json, row.author_id) : null;
+  const createdAt = row.created_at ?? row.createdAt;
+  const updatedAt = row.updated_at ?? row.updatedAt;
+  const author = typeof row.author === "string" ? row.author : (actor?.name ?? row.author_id);
+  if (resource === "issues") {
+    return {
+      id: row.id,
+      number: row.number,
+      title: row.title,
+      body: row.body,
+      state: row.state,
+      author,
+      actor,
+      labels: parseJsonArray(row.labels_json),
+      assignees: parseJsonArray(row.assignees_json),
+      createdAt,
+      updatedAt,
+    };
   }
-  if ("labels_json" in row) {
-    result.labels = parseJsonArray(row.labels_json);
-    delete result.labels_json;
+  if (resource === "pull-requests") {
+    return {
+      id: row.id,
+      number: row.number,
+      title: row.title,
+      body: row.body,
+      state: row.state,
+      author,
+      actor,
+      baseRef: row.base_ref ?? row.baseRef,
+      headRef: row.head_ref ?? row.headRef,
+      headSessionId: row.head_session_id ?? row.headSessionId ?? null,
+      draft: row.draft === 1 || row.draft === true,
+      mergedOid: row.merged_oid ?? row.mergedOid ?? null,
+      createdAt,
+      updatedAt,
+    };
   }
-  if ("assignees_json" in row) {
-    result.assignees = parseJsonArray(row.assignees_json);
-    delete result.assignees_json;
+  if (resource === "discussions") {
+    return {
+      id: row.id,
+      number: row.number,
+      title: row.title,
+      body: row.body,
+      category: row.category,
+      state: row.state,
+      actor,
+      answerCommentId: row.answer_comment_id ?? row.answerCommentId ?? null,
+      createdAt,
+      updatedAt,
+    };
   }
-  const aliases: Record<string, string> = {
-    created_at: "createdAt",
-    updated_at: "updatedAt",
-    base_ref: "baseRef",
-    head_ref: "headRef",
-    head_session_id: "headSessionId",
-    merged_oid: "mergedOid",
-    commit_oid: "commitOid",
-    details_url: "detailsUrl",
-    answer_comment_id: "answerCommentId",
-    target_kind: "targetKind",
+  if (resource === "comments") return { id: row.id, body: row.body, actor, createdAt, updatedAt };
+  if (resource === "reviews")
+    return {
+      id: row.id,
+      body: row.body,
+      state: row.state,
+      commitOid: row.commit_oid,
+      actor,
+      createdAt,
+    };
+  if (resource === "checks")
+    return {
+      id: row.id,
+      name: row.name,
+      commitOid: row.commit_oid,
+      status: row.status,
+      conclusion: row.conclusion,
+      summary: row.summary,
+      detailsUrl: row.details_url,
+      actor,
+      createdAt,
+      updatedAt,
+    };
+  return {
+    slug: row.slug,
+    title: row.title,
+    content: row.content,
+    revision: row.revision,
+    updatedBy: row.updatedBy ?? row.updated_by,
+    actor,
+    updatedAt,
   };
-  for (const [databaseName, apiName] of Object.entries(aliases)) {
-    if (databaseName in row) {
-      result[apiName] = row[databaseName];
-      delete result[databaseName];
-    }
-  }
-  if (resource === "pull-requests" && "draft" in row) result.draft = row.draft === 1;
-  if ("author_id" in row) {
-    result.author = actor?.name ?? row.author_id;
-    delete result.author_id;
-  }
-  delete result.repository_id;
-  delete result.pull_request_id;
-  if (resource === "comments") delete result.target_id;
-  return result;
 }
 
 function organizationResponse(row: NamespaceAccessRow) {
@@ -360,7 +404,7 @@ async function publicRepositoryRead(env: ForgeEnv, parts: string[]): Promise<Res
   const resource = parts[4];
   if (resource === "issues" && parts.length === 5) {
     const rows = await env.DB.prepare(
-      "SELECT * FROM forge_issues WHERE repository_id = ? ORDER BY number DESC"
+      "SELECT forge_issues.*, users.identifier AS author FROM forge_issues JOIN users ON users.id = forge_issues.author_id WHERE forge_issues.repository_id = ? ORDER BY forge_issues.number DESC"
     )
       .bind(repository.id)
       .all<Record<string, unknown>>();
@@ -368,7 +412,7 @@ async function publicRepositoryRead(env: ForgeEnv, parts: string[]): Promise<Res
   }
   if (resource === "pull-requests" && parts.length === 5) {
     const rows = await env.DB.prepare(
-      "SELECT * FROM forge_pull_requests WHERE repository_id = ? ORDER BY number DESC"
+      "SELECT forge_pull_requests.*, users.identifier AS author FROM forge_pull_requests JOIN users ON users.id = forge_pull_requests.author_id WHERE forge_pull_requests.repository_id = ? ORDER BY forge_pull_requests.number DESC"
     )
       .bind(repository.id)
       .all<Record<string, unknown>>();
@@ -376,7 +420,7 @@ async function publicRepositoryRead(env: ForgeEnv, parts: string[]): Promise<Res
   }
   if (resource === "wiki" && parts.length === 5) {
     const rows = await env.DB.prepare(
-      "SELECT slug, title, revision, updated_by AS updatedBy, updated_at AS updatedAt FROM forge_wiki_pages WHERE repository_id = ? ORDER BY slug ASC"
+      "SELECT slug, title, content, revision, updated_by AS updatedBy, updated_at AS updatedAt FROM forge_wiki_pages WHERE repository_id = ? ORDER BY slug ASC"
     )
       .bind(repository.id)
       .all();
@@ -392,7 +436,7 @@ async function publicRepositoryRead(env: ForgeEnv, parts: string[]): Promise<Res
   }
   if (resource === "discussions" && parts.length === 5) {
     const rows = await env.DB.prepare(
-      "SELECT * FROM forge_discussions WHERE repository_id = ? ORDER BY number DESC"
+      "SELECT forge_discussions.*, users.identifier AS author FROM forge_discussions JOIN users ON users.id = forge_discussions.author_id WHERE forge_discussions.repository_id = ? ORDER BY forge_discussions.number DESC"
     )
       .bind(repository.id)
       .all<Record<string, unknown>>();
@@ -412,7 +456,7 @@ async function publicRepositoryRead(env: ForgeEnv, parts: string[]): Promise<Res
           ? "forge_pull_requests"
           : "forge_discussions";
     const row = await env.DB.prepare(
-      `SELECT * FROM ${table} WHERE repository_id = ? AND number = ?`
+      `SELECT resource.*, users.identifier AS author FROM ${table} AS resource JOIN users ON users.id = resource.author_id WHERE resource.repository_id = ? AND resource.number = ?`
     )
       .bind(repository.id, number)
       .first<Record<string, unknown>>();
@@ -485,7 +529,7 @@ async function featureRequest(
   if (targetTable && (request.method === "GET" || request.method === "POST") && !item) {
     if (request.method === "GET") {
       const rows = await env.DB.prepare(
-        `SELECT * FROM ${targetTable} WHERE repository_id = ? ORDER BY number DESC`
+        `SELECT resource.*, users.identifier AS author FROM ${targetTable} AS resource JOIN users ON users.id = resource.author_id WHERE resource.repository_id = ? ORDER BY resource.number DESC`
       )
         .bind(repository.id)
         .all<Record<string, unknown>>();
@@ -650,21 +694,31 @@ async function featureRequest(
     if (!Number.isSafeInteger(number) || number < 1)
       return error(404, "not_found", "Resource was not found.");
     const current = await env.DB.prepare(
-      `SELECT * FROM ${targetTable} WHERE repository_id = ? AND number = ?`
+      `SELECT resource.*, users.identifier AS author FROM ${targetTable} AS resource JOIN users ON users.id = resource.author_id WHERE resource.repository_id = ? AND resource.number = ?`
     )
       .bind(repository.id, number)
       .first<Record<string, unknown>>();
     if (!current) return error(404, "not_found", "Resource was not found.");
-    if (request.method === "GET" && !action)
-      return json({ data: presentForgeRow(resource, current) });
+    if (request.method === "GET" && !action) {
+      const itemRow = await env.DB.prepare(
+        `SELECT resource.*, users.identifier AS author FROM ${targetTable} AS resource JOIN users ON users.id = resource.author_id WHERE resource.id = ?`
+      )
+        .bind(current.id)
+        .first<Record<string, unknown>>();
+      return itemRow
+        ? json({ data: presentForgeRow(resource, itemRow) })
+        : error(404, "not_found", "Resource was not found.");
+    }
     if (action === "comments" && (request.method === "GET" || request.method === "POST")) {
       if (request.method === "GET") {
         const comments = await env.DB.prepare(
           "SELECT * FROM forge_comments WHERE repository_id = ? AND target_kind = ? AND target_id = ? ORDER BY created_at ASC"
         )
           .bind(repository.id, targetKind, String(current.id))
-          .all();
-        return json({ data: comments.results });
+          .all<Record<string, unknown>>();
+        return json({
+          data: comments.results.map((comment) => presentForgeRow("comments", comment)),
+        });
       }
       const denied = requireWrite();
       if (denied) return denied;
@@ -693,7 +747,18 @@ async function featureRequest(
         targetId: current.id,
         actorKind: actor.kind,
       });
-      return json({ data: { id, ...parsed.data, actor, createdAt: now, updatedAt: now } }, 201);
+      return json(
+        {
+          data: presentForgeRow("comments", {
+            id,
+            actor_json: JSON.stringify(actor),
+            body: parsed.data.body,
+            created_at: now,
+            updated_at: now,
+          }),
+        },
+        201
+      );
     }
     if (
       (request.method === "PATCH" || request.method === "DELETE") &&
@@ -723,17 +788,35 @@ async function featureRequest(
       await env.DB.prepare("UPDATE forge_comments SET body = ?, updated_at = ? WHERE id = ?")
         .bind(parsed.data.body, Date.now(), subitem)
         .run();
-      return json({ data: { id: subitem, body: parsed.data.body } });
+      const updatedComment = await env.DB.prepare("SELECT * FROM forge_comments WHERE id = ?")
+        .bind(subitem)
+        .first<Record<string, unknown>>();
+      return updatedComment
+        ? json({ data: presentForgeRow("comments", updatedComment) })
+        : error(404, "not_found", "Comment was not found.");
     }
     if (request.method === "PATCH" && !action) {
-      const denied = requireMember();
-      if (denied) return denied;
       const input = await parseJson(request);
       if (targetTable === "forge_issues") {
         const parsed = UpdateIssueInputSchema.safeParse(input);
         if (!parsed.success) return error(400, "bad_request", "Invalid issue update.");
         const p = parsed.data;
-        await env.DB.prepare(
+        const isMember = member && writeAllowed;
+        const isPublicAuthor =
+          repository.visibility === "public" && current.author_id === user.id && writeAllowed;
+        if (!isMember && !isPublicAuthor)
+          return error(
+            403,
+            "forbidden",
+            "Only repository members or the issue author may edit this issue."
+          );
+        if (!isMember && (p.labels !== undefined || p.assignees !== undefined))
+          return error(
+            403,
+            "forbidden",
+            "Only repository members may change issue labels or assignees."
+          );
+        const changed = await env.DB.prepare(
           "UPDATE forge_issues SET title = COALESCE(?, title), body = COALESCE(?, body), state = COALESCE(?, state), labels_json = COALESCE(?, labels_json), assignees_json = COALESCE(?, assignees_json), updated_at = ? WHERE id = ?"
         )
           .bind(
@@ -746,12 +829,22 @@ async function featureRequest(
             current.id
           )
           .run();
+        if (changed.meta.changes !== 1)
+          return error(409, "conflict", "Issue changed while it was being updated.");
       } else if (targetTable === "forge_pull_requests") {
+        const denied = requireMember();
+        if (denied) return denied;
+        const staleMergeCutoff = Date.now() - 60_000;
+        if (
+          typeof current.merge_started_at === "number" &&
+          current.merge_started_at >= staleMergeCutoff
+        )
+          return error(409, "conflict", "Pull request merge is in progress.");
         const parsed = UpdatePullRequestInputSchema.safeParse(input);
         if (!parsed.success) return error(400, "bad_request", "Invalid pull request update.");
         const p = parsed.data;
-        await env.DB.prepare(
-          "UPDATE forge_pull_requests SET title = COALESCE(?, title), body = COALESCE(?, body), state = COALESCE(?, state), draft = COALESCE(?, draft), updated_at = ? WHERE id = ? AND state != 'merged'"
+        const changed = await env.DB.prepare(
+          "UPDATE forge_pull_requests SET title = COALESCE(?, title), body = COALESCE(?, body), state = COALESCE(?, state), draft = COALESCE(?, draft), updated_at = ?, merge_started_at = NULL, merge_base_oid = NULL, merge_head_oid = NULL WHERE id = ? AND state != 'merged' AND (merge_started_at IS NULL OR merge_started_at < ?)"
         )
           .bind(
             p.title ?? null,
@@ -759,10 +852,19 @@ async function featureRequest(
             p.state ?? null,
             p.draft === undefined ? null : p.draft ? 1 : 0,
             Date.now(),
-            current.id
+            current.id,
+            staleMergeCutoff
           )
           .run();
+        if (changed.meta.changes !== 1)
+          return error(
+            409,
+            "conflict",
+            "Pull request changed while it was being updated or merged."
+          );
       } else {
+        const denied = requireMember();
+        if (denied) return denied;
         const parsed = UpdateDiscussionInputSchema.safeParse(input);
         if (!parsed.success) return error(400, "bad_request", "Invalid discussion update.");
         const p = parsed.data;
@@ -775,7 +877,7 @@ async function featureRequest(
           if (!answer)
             return error(400, "bad_request", "Answer comment must belong to this discussion.");
         }
-        await env.DB.prepare(
+        const changed = await env.DB.prepare(
           "UPDATE forge_discussions SET title = COALESCE(?, title), body = COALESCE(?, body), state = COALESCE(?, state), answer_comment_id = CASE WHEN ? THEN ? ELSE answer_comment_id END, updated_at = ? WHERE id = ?"
         )
           .bind(
@@ -788,8 +890,12 @@ async function featureRequest(
             current.id
           )
           .run();
+        if (changed.meta.changes !== 1)
+          return error(409, "conflict", "Discussion changed while it was being updated.");
       }
-      const updated = await env.DB.prepare(`SELECT * FROM ${targetTable} WHERE id = ?`)
+      const updated = await env.DB.prepare(
+        `SELECT resource.*, users.identifier AS author FROM ${targetTable} AS resource JOIN users ON users.id = resource.author_id WHERE resource.id = ?`
+      )
         .bind(current.id)
         .first<Record<string, unknown>>();
       return json({ data: updated ? presentForgeRow(resource, updated) : null });
@@ -800,7 +906,7 @@ async function featureRequest(
       )
         .bind(String(current.id))
         .all<Record<string, unknown>>();
-      return json({ data: rows.results.map((row) => presentForgeRow(resource, row)) });
+      return json({ data: rows.results.map((row) => presentForgeRow("reviews", row)) });
     }
     if (
       targetTable === "forge_pull_requests" &&
@@ -809,6 +915,12 @@ async function featureRequest(
     ) {
       const denied = requireWrite();
       if (denied) return denied;
+      if (current.state !== "open" || hasActiveMergeLease(current))
+        return error(
+          409,
+          "conflict",
+          "Reviews cannot change while this pull request is closed or merging."
+        );
       const parsed = CreateReviewInputSchema.safeParse(await parseJson(request));
       if (!parsed.success) return error(400, "bad_request", "Invalid review payload.");
       if (actor.kind === "agent" && !user.agentSession)
@@ -816,7 +928,7 @@ async function featureRequest(
       const id = crypto.randomUUID(),
         now = Date.now();
       await env.DB.prepare(
-        "INSERT INTO forge_reviews (id, repository_id, pull_request_id, actor_json, author_id, state, body, commit_oid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO forge_reviews (id, repository_id, pull_request_id, actor_json, author_id, actor_key, state, body, commit_oid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
       )
         .bind(
           id,
@@ -824,6 +936,7 @@ async function featureRequest(
           String(current.id),
           JSON.stringify(actor),
           user.id,
+          actorKey(actor),
           parsed.data.state,
           parsed.data.body,
           parsed.data.commitOid,
@@ -842,7 +955,7 @@ async function featureRequest(
     if (
       targetTable === "forge_pull_requests" &&
       action === "checks" &&
-      (request.method === "GET" || request.method === "PUT")
+      (request.method === "GET" || request.method === "POST")
     ) {
       if (request.method === "GET") {
         const rows = await env.DB.prepare(
@@ -850,22 +963,30 @@ async function featureRequest(
         )
           .bind(String(current.id))
           .all<Record<string, unknown>>();
-        return json({ data: rows.results.map((row) => presentForgeRow(resource, row)) });
+        return json({ data: rows.results.map((row) => presentForgeRow("checks", row)) });
       }
       const denied = requireMember();
       if (denied) return denied;
+      if (current.state !== "open" || hasActiveMergeLease(current))
+        return error(
+          409,
+          "conflict",
+          "Checks cannot change while this pull request is closed or merging."
+        );
       const parsed = PutCheckRunInputSchema.safeParse(await parseJson(request));
       if (!parsed.success) return error(400, "bad_request", "Invalid check run payload.");
       const id = crypto.randomUUID(),
-        now = Date.now();
-      await env.DB.prepare(
-        "INSERT INTO forge_check_runs (id, repository_id, pull_request_id, actor_json, name, commit_oid, status, conclusion, summary, details_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        now = Date.now(),
+        key = actorKey(actor);
+      const check = await env.DB.prepare(
+        "INSERT INTO forge_check_runs (id, repository_id, pull_request_id, actor_json, actor_key, name, commit_oid, status, conclusion, summary, details_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(pull_request_id, commit_oid, name, actor_key) DO UPDATE SET actor_json = excluded.actor_json, status = excluded.status, conclusion = excluded.conclusion, summary = excluded.summary, details_url = excluded.details_url, updated_at = excluded.updated_at WHERE (forge_check_runs.status = 'queued' AND excluded.status IN ('queued', 'in_progress', 'completed')) OR (forge_check_runs.status = 'in_progress' AND excluded.status IN ('in_progress', 'completed')) OR (forge_check_runs.status = 'completed' AND excluded.status = 'completed') RETURNING *"
       )
         .bind(
           id,
           repository.id,
           String(current.id),
           JSON.stringify(actor),
+          key,
           parsed.data.name,
           parsed.data.commitOid,
           parsed.data.status,
@@ -875,7 +996,9 @@ async function featureRequest(
           now,
           now
         )
-        .run();
+        .first<Record<string, unknown>>();
+      if (!check)
+        return error(409, "conflict", "Check run cannot move backwards from its current status.");
       logger.info("forge:check-run-recorded", {
         repositoryId: repository.id,
         pullRequestNumber: number,
@@ -884,14 +1007,14 @@ async function featureRequest(
         status: parsed.data.status,
         conclusion: parsed.data.conclusion,
       });
-      return json({ data: { id, ...parsed.data, actor, createdAt: now, updatedAt: now } }, 201);
+      return json({ data: presentForgeRow("checks", check) }, check.id === id ? 201 : 200);
     }
-    if (targetTable === "forge_pull_requests" && action === "compare" && request.method === "GET") {
+    if (targetTable === "forge_pull_requests" && action === "diff" && request.method === "GET") {
       const baseRef = String(current.base_ref),
         headRef = String(current.head_ref),
         headSessionId = String(current.head_session_id ?? "");
       const gitUrl = new URL(`/repositories/${repository.id}/compare`, request.url);
-      logger.debug("forge:pull-request-compare", {
+      logger.debug("forge:pull-request-diff", {
         repositoryId: repository.id,
         pullRequestNumber: number,
         baseRef,
@@ -910,42 +1033,112 @@ async function featureRequest(
         return error(403, "forbidden", "Only a human repository member may merge.");
       const parsed = MergePullRequestInputSchema.safeParse(await parseJson(request));
       if (!parsed.success) return error(400, "bad_request", "Invalid merge payload.");
-      if (current.state === "merged" && current.merged_oid)
-        return json({ data: presentForgeRow(resource, current) });
+      if (current.state === "merged" && current.merged_oid) {
+        const merged = await env.DB.prepare(
+          "SELECT pull.*, users.identifier AS author FROM forge_pull_requests AS pull JOIN users ON users.id = pull.author_id WHERE pull.id = ?"
+        )
+          .bind(current.id)
+          .first<Record<string, unknown>>();
+        return merged
+          ? json({ data: presentForgeRow(resource, merged) })
+          : error(404, "not_found", "Pull request was not found.");
+      }
       if (current.state !== "open" || current.draft)
         return error(409, "conflict", "Pull request must be open and ready to merge.");
-      const expectedHead = parsed.data.expectedHeadOid;
-      const reviews = await env.DB.prepare(
-        "SELECT state FROM forge_reviews WHERE pull_request_id = ? AND commit_oid = ?"
+
+      const leaseAt = Date.now();
+      const staleBefore = leaseAt - 60_000;
+      const lease = await env.DB.prepare(
+        "UPDATE forge_pull_requests SET merge_started_at = ?, merge_base_oid = ?, merge_head_oid = ? WHERE id = ? AND state = 'open' AND draft = 0 AND (merge_started_at IS NULL OR merge_started_at < ?) RETURNING id"
       )
-        .bind(String(current.id), expectedHead)
-        .all<{ state: string }>();
-      if (reviews.results.some((r) => r.state === "changes_requested")) {
+        .bind(
+          leaseAt,
+          parsed.data.expectedBaseOid,
+          parsed.data.expectedHeadOid,
+          current.id,
+          staleBefore
+        )
+        .first<{ id: string }>();
+      if (!lease)
+        return error(409, "conflict", "Another merge is in progress for this pull request.");
+      const releaseLease = async (): Promise<void> => {
+        await env.DB.prepare(
+          "UPDATE forge_pull_requests SET merge_started_at = NULL, merge_base_oid = NULL, merge_head_oid = NULL WHERE id = ? AND merge_started_at = ?"
+        )
+          .bind(current.id, leaseAt)
+          .run();
+      };
+
+      const reviewRows = await env.DB.prepare(
+        "SELECT state, actor_json, actor_key, author_id, EXISTS (SELECT 1 FROM repositories r JOIN namespace_memberships m ON m.namespace_id = r.namespace_id WHERE r.id = forge_reviews.repository_id AND m.user_id = forge_reviews.author_id) AS reviewer_is_member FROM forge_reviews WHERE pull_request_id = ? AND commit_oid = ? ORDER BY created_at DESC, rowid DESC"
+      )
+        .bind(String(current.id), parsed.data.expectedHeadOid)
+        .all<{
+          state: string;
+          actor_json: string;
+          actor_key: string;
+          author_id: string;
+          reviewer_is_member: number;
+        }>();
+      const latestByActor = new Map<
+        string,
+        { state: string; actor_json: string; author_id: string; reviewer_is_member: number }
+      >();
+      for (const review of reviewRows.results)
+        if (!latestByActor.has(review.actor_key)) latestByActor.set(review.actor_key, review);
+      const latestReviews = [...latestByActor.values()];
+      if (
+        latestReviews.some(
+          (review) => review.state === "changes_requested" && review.reviewer_is_member === 1
+        )
+      ) {
+        await releaseLease();
         logger.warn("forge:pull-request-merge-blocked-review", {
           repositoryId: repository.id,
           pullRequestNumber: number,
-          commitOid: expectedHead,
+          commitOid: parsed.data.expectedHeadOid,
         });
-        return error(409, "conflict", "The current commit has requested changes.");
+        return error(409, "conflict", "The latest review for the current commit requests changes.");
+      }
+      const hasIndependentHumanApproval = latestReviews.some((review) => {
+        const reviewer = parseActor(review.actor_json, review.author_id);
+        const pullRequestActor = parseActor(current.actor_json, current.author_id);
+        return (
+          review.state === "approved" &&
+          review.reviewer_is_member === 1 &&
+          reviewer.kind === "user" &&
+          (reviewer.kind !== pullRequestActor.kind || reviewer.id !== pullRequestActor.id)
+        );
+      });
+      if (!hasIndependentHumanApproval) {
+        await releaseLease();
+        return error(
+          409,
+          "conflict",
+          "A human approval from someone other than the pull request author is required."
+        );
       }
       const checks = await env.DB.prepare(
         "SELECT status, conclusion FROM forge_check_runs WHERE pull_request_id = ? AND commit_oid = ?"
       )
-        .bind(String(current.id), expectedHead)
+        .bind(String(current.id), parsed.data.expectedHeadOid)
         .all<{ status: string; conclusion: string | null }>();
       if (
         checks.results.some(
-          (c) =>
-            c.status !== "completed" || (c.conclusion !== "success" && c.conclusion !== "neutral")
+          (check) =>
+            check.status !== "completed" ||
+            (check.conclusion !== "success" && check.conclusion !== "neutral")
         )
       ) {
+        await releaseLease();
         logger.warn("forge:pull-request-merge-blocked-checks", {
           repositoryId: repository.id,
           pullRequestNumber: number,
-          commitOid: expectedHead,
+          commitOid: parsed.data.expectedHeadOid,
         });
         return error(409, "conflict", "Checks for the current commit are incomplete or failed.");
       }
+
       const gitUrl = new URL(`/repositories/${repository.id}/merge`, request.url);
       const headSessionId =
         current.head_session_id == null ? null : String(current.head_session_id);
@@ -969,6 +1162,7 @@ async function featureRequest(
       const payload: unknown = await gitResponse.json().catch(() => null);
       const oid = mergeResultOid(payload);
       if (!gitResponse.ok || !oid) {
+        await releaseLease();
         logger.warn("forge:pull-request-git-merge-failed", {
           repositoryId: repository.id,
           pullRequestNumber: number,
@@ -981,29 +1175,51 @@ async function featureRequest(
         );
       }
       const now = Date.now();
-      const updated = await env.DB.prepare(
-        "UPDATE forge_pull_requests SET state = 'merged', merged_oid = ?, updated_at = ? WHERE id = ? AND state = 'open' RETURNING *"
+      await env.DB.prepare(
+        "UPDATE forge_pull_requests SET state = 'merged', merged_oid = ?, updated_at = ?, merge_started_at = NULL, merge_base_oid = NULL, merge_head_oid = NULL WHERE id = ? AND state = 'open' AND merge_started_at = ? AND merge_base_oid = ? AND merge_head_oid = ?"
       )
-        .bind(oid, now, current.id)
-        .first();
-      if (!updated) return error(409, "conflict", "Pull request state changed after Git merge.");
-      logger.info("forge:pull-request-merged", {
-        repositoryId: repository.id,
-        pullRequestNumber: number,
-        mergedOid: oid,
-      });
-      return json({ data: updated });
+        .bind(
+          oid,
+          now,
+          current.id,
+          leaseAt,
+          parsed.data.expectedBaseOid,
+          parsed.data.expectedHeadOid
+        )
+        .run();
+      const merged = await env.DB.prepare(
+        "SELECT pull.*, users.identifier AS author FROM forge_pull_requests AS pull JOIN users ON users.id = pull.author_id WHERE pull.id = ?"
+      )
+        .bind(current.id)
+        .first<Record<string, unknown>>();
+      if (merged?.state === "merged" && merged.merged_oid) {
+        logger.info("forge:pull-request-merged", {
+          repositoryId: repository.id,
+          pullRequestNumber: number,
+          mergedOid: merged.merged_oid,
+        });
+        return json({ data: presentForgeRow(resource, merged) });
+      }
+      return error(409, "conflict", "Pull request state changed after Git merge.");
     }
   }
+
   if (resource === "wiki" && item) {
     if (request.method === "GET") {
       if (action === "history") {
         const rows = await env.DB.prepare(
-          "SELECT slug, revision, title, updated_by AS updatedBy, actor_json, updated_at AS updatedAt FROM forge_wiki_revisions WHERE repository_id = ? AND slug = ? ORDER BY revision DESC"
+          "SELECT slug, title, content, revision, updated_by AS updatedBy, updated_at AS updatedAt FROM forge_wiki_revisions WHERE repository_id = ? AND slug = ? ORDER BY revision DESC"
         )
           .bind(repository.id, item)
-          .all<Record<string, unknown>>();
-        return json({ data: rows.results.map((row) => presentForgeRow("wiki_revisions", row)) });
+          .all<{
+            slug: string;
+            title: string;
+            content: string;
+            revision: number;
+            updatedBy: string;
+            updatedAt: number;
+          }>();
+        return json({ data: rows.results });
       }
       if (action === "revisions" && subitem) {
         const page = await env.DB.prepare(
@@ -1411,7 +1627,7 @@ export default {
     }
     if (parts[2] === "wiki" && !parts[3] && request.method === "GET") {
       const rows = await env.DB.prepare(
-        "SELECT slug, title, revision, updated_by AS updatedBy, updated_at AS updatedAt FROM forge_wiki_pages WHERE repository_id = ? ORDER BY slug ASC"
+        "SELECT slug, title, content, revision, updated_by AS updatedBy, updated_at AS updatedAt FROM forge_wiki_pages WHERE repository_id = ? ORDER BY slug ASC"
       )
         .bind(repositoryId)
         .all();

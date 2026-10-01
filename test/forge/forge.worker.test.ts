@@ -30,10 +30,27 @@ async function runSqlScript(sql: string): Promise<void> {
 }
 
 async function applyForgeMigrations(): Promise<void> {
-  for (const path of Object.keys(migrations).sort()) await runSqlScript(migrations[path]);
+  const paths = Object.keys(migrations).sort();
+  for (const path of paths) {
+    if ((path.split("/").at(-1) ?? "") >= "0005_") continue;
+    await runSqlScript(migrations[path]);
+  }
+  await runSqlScript(`INSERT INTO users (id, identifier, password_salt, password_hash, created_at) VALUES ('u1','alice','x','x',1), ('u2','bob','x','x',1), ('u3','eve','x','x',1);
+INSERT INTO namespaces (id, slug, created_by, created_at, kind, display_name, description) VALUES ('n1','alice','u1',1,'personal','Alice','');
+INSERT INTO namespace_memberships (namespace_id,user_id,created_at,role) VALUES ('n1','u1',1,'owner');
+INSERT INTO repositories (id,namespace_id,created_by,slug,do_name,visibility,description,created_at,updated_at) VALUES ('r1','n1','u1','demo','repo:r1','public','',1,1);
+INSERT INTO forge_issues (id,repository_id,number,author_id,title,body,state,created_at,updated_at) VALUES ('legacy-issue','r1',6,'u1','Legacy issue','', 'open',1,1);
+INSERT INTO forge_pull_requests (id,repository_id,number,author_id,title,body,base_ref,head_ref,state,created_at,updated_at) VALUES ('legacy-pr','r1',8,'u1','Legacy PR','', 'main','topic','open',1,1);`);
+  for (const path of paths) {
+    if ((path.split("/").at(-1) ?? "") < "0005_") continue;
+    await runSqlScript(migrations[path]);
+  }
 }
 
 const gitCalls: Array<Record<string, unknown>> = [];
+const gitRequests: Array<{ method: string; url: string }> = [];
+let mergeGate: Promise<void> | null = null;
+let onMergeStarted: (() => void) | null = null;
 const forgeEnv: Parameters<typeof forge.fetch>[1] = {
   DB: env.DB,
   ARTIFACTS: {
@@ -51,9 +68,14 @@ const forgeEnv: Parameters<typeof forge.fetch>[1] = {
   },
   GIT: {
     async fetch(request: Request) {
+      gitRequests.push({ method: request.method, url: request.url });
       const body =
         request.method === "POST" ? ((await request.json()) as Record<string, unknown>) : {};
       gitCalls.push(body);
+      if (request.method === "POST" && mergeGate) {
+        onMergeStarted?.();
+        await mergeGate;
+      }
       return Response.json({ data: { oid: "c".repeat(40) } });
     },
   },
@@ -90,9 +112,16 @@ async function call(
 
 beforeAll(async () => {
   await applyForgeMigrations();
+  const counter = await env.DB.prepare(
+    "SELECT conversation_number FROM forge_counters WHERE repository_id = 'r1'"
+  ).first<{ conversation_number: number }>();
+  expect(counter?.conversation_number).toBe(8);
   await runSqlScript(
-    "CREATE TABLE auth_agents (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, disabled_at INTEGER); CREATE TABLE auth_agent_sessions (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, user_id TEXT NOT NULL, repository_id TEXT NOT NULL, workspace_name TEXT NOT NULL, remote TEXT NOT NULL, base_ref TEXT NOT NULL, base_oid TEXT, permission TEXT NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL); INSERT INTO auth_agents (id,user_id,name) VALUES ('a1','u2','reviewer'); INSERT INTO auth_agent_sessions (id,agent_id,user_id,repository_id,workspace_name,remote,base_ref,base_oid,permission,status,created_at,expires_at) VALUES ('s1','a1','u2','r1','review','artifact://repo-r1','main',NULL,'read','active',1,9999999999999); INSERT INTO users (id, identifier, password_salt, password_hash, created_at) VALUES ('u1','alice','x','x',1), ('u2','bob','x','x',1); INSERT INTO namespaces (id, slug, created_by, created_at, kind, display_name, description) VALUES ('n1','alice','u1',1,'personal','Alice',''); INSERT INTO namespace_memberships (namespace_id,user_id,created_at,role) VALUES ('n1','u1',1,'owner'); INSERT INTO repositories (id,namespace_id,created_by,slug,do_name,artifact_name,remote,default_branch,visibility,description,created_at,updated_at) VALUES ('r1','n1','u1','demo','repo:r1','repo-r1','artifact://repo-r1','main','public','',1,1); INSERT INTO forge_counters (repository_id) VALUES ('r1');"
+    "UPDATE repositories SET artifact_name = 'repo-r1', remote = 'artifact://repo-r1', default_branch = 'main' WHERE id = 'r1';"
   );
+  await runSqlScript(`INSERT INTO auth_agents (id,user_id,name,description,created_at) VALUES ('a1','u2','reviewer','',1);
+INSERT INTO auth_git_tokens (id,user_id,repository_id,name,token_hash,permission,expires_at,created_at) VALUES ('gt1','u2','r1','test','git-hash','read',9999999999999,1);
+INSERT INTO auth_agent_sessions (id,agent_id,user_id,repository_id,token_hash,git_token_id,workspace_name,remote,base_ref,base_oid,permission,status,created_at,expires_at) VALUES ('s1','a1','u2','r1','session-hash','gt1','review','artifact://repo-r1','main',NULL,'read','active',1,9999999999999);`);
 });
 
 describe("Forge collaboration", () => {
@@ -109,6 +138,16 @@ describe("Forge collaboration", () => {
       )
     );
     expect(new Set(numbers).size).toBe(12);
+    const pullRequest = await call("/repositories/r1/pull-requests", "POST", "u1", "alice", {
+      title: "Shared number",
+      baseRef: "main",
+      headRef: "topic",
+    });
+    expect(((await pullRequest.json()) as { data: { number: number } }).data.number).toBe(21);
+    const nextIssue = await call("/repositories/r1/issues", "POST", "u2", "bob", {
+      title: "Next shared number",
+    });
+    expect(((await nextIssue.json()) as { data: { number: number } }).data.number).toBe(22);
   });
 
   it("uses atomic wiki revision compare-and-swap", async () => {
@@ -131,8 +170,14 @@ describe("Forge collaboration", () => {
       }),
     ]);
     expect(edits.map((result) => result.status).sort()).toEqual([200, 409]);
+    const wikiIndex = await call("/repositories/r1/wiki", "GET", "u2", "bob");
+    expect(await wikiIndex.json()).toMatchObject({
+      data: [{ slug: "home", content: expect.any(String) }],
+    });
     const history = await call("/repositories/r1/wiki/home/history", "GET", "u2", "bob");
-    expect(((await history.json()) as { data: unknown[] }).data).toHaveLength(2);
+    const historyPages = ((await history.json()) as { data: Array<{ content: string }> }).data;
+    expect(historyPages).toHaveLength(2);
+    expect(historyPages.every((page) => typeof page.content === "string")).toBe(true);
     const restored = await call("/repositories/r1/wiki/home/restore/1", "POST", "u1", "alice", {
       expectedRevision: 2,
     });
@@ -147,8 +192,19 @@ describe("Forge collaboration", () => {
     expect(issue.status).toBe(201);
     const number = ((await issue.json()) as { data: { number: number } }).data.number;
     expect(
-      (await call(`/repositories/r1/issues/${number}`, "PATCH", "u2", "bob", { state: "closed" }))
-        .status
+      (
+        await call(`/repositories/r1/issues/${number}`, "PATCH", "u2", "bob", {
+          title: "Edited by author",
+          state: "closed",
+        })
+      ).status
+    ).toBe(200);
+    expect(
+      (
+        await call(`/repositories/r1/issues/${number}`, "PATCH", "u2", "bob", {
+          labels: ["triaged"],
+        })
+      ).status
     ).toBe(403);
     const session = {
       id: "s1",
@@ -192,6 +248,17 @@ describe("Forge collaboration", () => {
       (await commentResponse.json()) as { data: { id: string; actor: { kind: string } } }
     ).data;
     expect(comment.actor.kind).toBe("user");
+    const comments = await call(
+      `/repositories/r1/discussions/${discussion.number}/comments`,
+      "GET",
+      "u2",
+      "bob"
+    );
+    expect(await comments.json()).toMatchObject({
+      data: [
+        { actor: { kind: "user" }, createdAt: expect.any(Number), updatedAt: expect.any(Number) },
+      ],
+    });
     const edit = await call(
       `/repositories/r1/discussions/${discussion.number}/comments/${comment.id}`,
       "PATCH",
@@ -254,9 +321,172 @@ describe("Forge collaboration", () => {
     );
     expect(valid.status).toBe(201);
     const record = (await valid.json()) as {
-      data: { actor: { kind: string; id: string; sessionId: string } };
+      data: { number: number; actor: { kind: string; id: string; sessionId: string } };
     };
     expect(record.data.actor).toMatchObject({ kind: "agent", id: "a1", sessionId: "s1" });
+    const patch = await call(
+      `/repositories/r1/pull-requests/${record.data.number}`,
+      "PATCH",
+      "u2",
+      "bob",
+      { title: "Agent PR edited" }
+    );
+    expect(patch.status).toBe(200);
+    gitRequests.length = 0;
+    const diff = await call(
+      `/repositories/r1/pull-requests/${record.data.number}/diff`,
+      "GET",
+      "u2",
+      "bob",
+      undefined,
+      { ...session, permission: "write" }
+    );
+    expect(diff.status).toBe(200);
+    const gitDiffRequest = gitRequests.at(-1);
+    expect(gitDiffRequest?.method).toBe("GET");
+    const diffUrl = new URL(gitDiffRequest?.url ?? "https://example.invalid");
+    expect(diffUrl.pathname).toBe("/repositories/r1/compare");
+    expect(diffUrl.searchParams.get("headSessionId")).toBe("s1");
+    const detail = await call(
+      `/repositories/r1/pull-requests/${record.data.number}`,
+      "GET",
+      "u2",
+      "bob",
+      undefined,
+      { ...session, permission: "write" }
+    );
+    expect(await detail.json()).toMatchObject({
+      data: { author: "bob", actor: { name: "reviewer" } },
+    });
+  });
+
+  it("does not treat an agent author's self-review as independent human approval", async () => {
+    const session = {
+      id: "s1",
+      agentId: "a1",
+      agentName: "reviewer",
+      repositoryId: "r1",
+      workspaceName: "review",
+      permission: "write",
+    };
+    const created = await call(
+      "/repositories/r1/pull-requests",
+      "POST",
+      "u2",
+      "bob",
+      { title: "Agent authored", baseRef: "main", headRef: "agents/review", headSessionId: "s1" },
+      session
+    );
+    const pr = ((await created.json()) as { data: { number: number } }).data;
+    const head = "d".repeat(40);
+    await call(
+      `/repositories/r1/pull-requests/${pr.number}/reviews`,
+      "POST",
+      "u2",
+      "bob",
+      { state: "approved", commitOid: head },
+      session
+    );
+    gitCalls.length = 0;
+    const response = await call(
+      `/repositories/r1/pull-requests/${pr.number}/merge`,
+      "POST",
+      "u2",
+      "bob",
+      { expectedBaseOid: "e".repeat(40), expectedHeadOid: head }
+    );
+    expect(response.status).toBe(409);
+    expect(gitCalls).toHaveLength(0);
+    await call(`/repositories/r1/pull-requests/${pr.number}/reviews`, "POST", "u2", "bob", {
+      state: "approved",
+      commitOid: head,
+    });
+    const ownerApproval = await call(
+      `/repositories/r1/pull-requests/${pr.number}/merge`,
+      "POST",
+      "u2",
+      "bob",
+      { expectedBaseOid: "e".repeat(40), expectedHeadOid: head }
+    );
+    expect(ownerApproval.status).toBe(200);
+  });
+
+  it("leases a merge so concurrent PR edits cannot race Git", async () => {
+    const created = await call("/repositories/r1/pull-requests", "POST", "u1", "alice", {
+      title: "Lease",
+      baseRef: "main",
+      headRef: "lease",
+    });
+    const pr = ((await created.json()) as { data: { number: number } }).data;
+    const head = "f".repeat(40),
+      base = "1".repeat(40);
+    await call(`/repositories/r1/pull-requests/${pr.number}/checks`, "POST", "u1", "alice", {
+      name: "CI",
+      commitOid: head,
+      status: "completed",
+      conclusion: "success",
+    });
+    await call(`/repositories/r1/pull-requests/${pr.number}/reviews`, "POST", "u2", "bob", {
+      state: "approved",
+      commitOid: head,
+    });
+    let signalStarted: () => void = () => {};
+    let releaseMerge: () => void = () => {};
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    mergeGate = new Promise<void>((resolve) => {
+      releaseMerge = resolve;
+    });
+    onMergeStarted = signalStarted;
+    try {
+      const merge = call(
+        `/repositories/r1/pull-requests/${pr.number}/merge`,
+        "POST",
+        "u1",
+        "alice",
+        { expectedBaseOid: base, expectedHeadOid: head }
+      );
+      await started;
+      const patch = await call(
+        `/repositories/r1/pull-requests/${pr.number}`,
+        "PATCH",
+        "u1",
+        "alice",
+        { title: "Raced edit" }
+      );
+      expect(patch.status).toBe(409);
+      const lateCheck = await call(
+        `/repositories/r1/pull-requests/${pr.number}/checks`,
+        "POST",
+        "u1",
+        "alice",
+        { name: "CI", commitOid: head, status: "completed", conclusion: "failure" }
+      );
+      expect(lateCheck.status).toBe(409);
+      const lateReview = await call(
+        `/repositories/r1/pull-requests/${pr.number}/reviews`,
+        "POST",
+        "u2",
+        "bob",
+        { state: "changes_requested", commitOid: head }
+      );
+      expect(lateReview.status).toBe(409);
+      const concurrentMerge = await call(
+        `/repositories/r1/pull-requests/${pr.number}/merge`,
+        "POST",
+        "u1",
+        "alice",
+        { expectedBaseOid: base, expectedHeadOid: head }
+      );
+      expect(concurrentMerge.status).toBe(409);
+      releaseMerge();
+      expect((await merge).status).toBe(200);
+    } finally {
+      releaseMerge();
+      mergeGate = null;
+      onMergeStarted = null;
+    }
   });
 
   it("blocks merge for changes requested and forwards the reviewed SHA pair", async () => {
@@ -268,7 +498,7 @@ describe("Forge collaboration", () => {
     const pr = ((await created.json()) as { data: { number: number } }).data;
     const head = "a".repeat(40),
       base = "b".repeat(40);
-    await call(`/repositories/r1/pull-requests/${pr.number}/checks`, "PUT", "u1", "alice", {
+    await call(`/repositories/r1/pull-requests/${pr.number}/checks`, "POST", "u1", "alice", {
       name: "CI",
       commitOid: head,
       status: "completed",
@@ -296,15 +526,50 @@ describe("Forge collaboration", () => {
       headRef: "topic",
     });
     const readyPr = ((await ready.json()) as { data: { number: number } }).data;
-    await call(`/repositories/r1/pull-requests/${readyPr.number}/checks`, "PUT", "u1", "alice", {
-      name: "CI",
+    const queued = await call(
+      `/repositories/r1/pull-requests/${readyPr.number}/checks`,
+      "POST",
+      "u1",
+      "alice",
+      { name: "CI", commitOid: head, status: "queued" }
+    );
+    const queuedData = ((await queued.json()) as { data: { id: string } }).data;
+    const running = await call(
+      `/repositories/r1/pull-requests/${readyPr.number}/checks`,
+      "POST",
+      "u1",
+      "alice",
+      { name: "CI", commitOid: head, status: "in_progress" }
+    );
+    expect(running.status).toBe(200);
+    expect(((await running.json()) as { data: { id: string } }).data.id).toBe(queuedData.id);
+    const completed = await call(
+      `/repositories/r1/pull-requests/${readyPr.number}/checks`,
+      "POST",
+      "u1",
+      "alice",
+      { name: "CI", commitOid: head, status: "completed", conclusion: "success" }
+    );
+    expect(completed.status).toBe(200);
+    const checkCount = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM forge_check_runs WHERE pull_request_id = (SELECT id FROM forge_pull_requests WHERE repository_id = 'r1' AND number = ?)"
+    )
+      .bind(readyPr.number)
+      .first<{ count: number }>();
+    expect(checkCount?.count).toBe(1);
+    await call(`/repositories/r1/pull-requests/${readyPr.number}/reviews`, "POST", "u3", "eve", {
+      state: "changes_requested",
+      body: "External advisory feedback",
       commitOid: head,
-      status: "completed",
-      conclusion: "success",
     });
-    await call(`/repositories/r1/pull-requests/${readyPr.number}/reviews`, "POST", "u1", "alice", {
+    await call(`/repositories/r1/pull-requests/${readyPr.number}/reviews`, "POST", "u2", "bob", {
+      state: "changes_requested",
+      body: "Needs one edit",
+      commitOid: head,
+    });
+    await call(`/repositories/r1/pull-requests/${readyPr.number}/reviews`, "POST", "u2", "bob", {
       state: "approved",
-      body: "Looks good",
+      body: "Fixed and approved",
       commitOid: head,
     });
     const merged = await call(
@@ -315,6 +580,9 @@ describe("Forge collaboration", () => {
       { expectedBaseOid: base, expectedHeadOid: head }
     );
     expect(merged.status).toBe(200);
+    expect(await merged.json()).toMatchObject({
+      data: { state: "merged", author: "alice", mergedOid: "c".repeat(40) },
+    });
     expect(gitCalls.at(-1)).toMatchObject({
       expectedBaseOid: base,
       expectedHeadOid: head,
