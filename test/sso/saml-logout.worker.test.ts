@@ -207,8 +207,13 @@ function assertionXml(requestId: string): string {
   return `<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_encrypted_assertion1" Version="2.0" IssueInstant="${instant}"><saml:Issuer>${idpIssuer}</saml:Issuer><saml:Subject><saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress">person@example.test</saml:NameID><saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer"><saml:SubjectConfirmationData InResponseTo="${requestId}" Recipient="${loginCallbackUrl}" NotOnOrAfter="${expiry}"/></saml:SubjectConfirmation></saml:Subject><saml:Conditions NotBefore="${start}" NotOnOrAfter="${expiry}"><saml:AudienceRestriction><saml:Audience>https://gitedge.example.test/saml/sp</saml:Audience></saml:AudienceRestriction></saml:Conditions><saml:AuthnStatement AuthnInstant="${instant}" SessionIndex="session-encrypted"><saml:AuthnContext><saml:AuthnContextClassRef>urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport</saml:AuthnContextClassRef></saml:AuthnContext></saml:AuthnStatement><saml:AttributeStatement><saml:Attribute Name="email"><saml:AttributeValue>person@example.test</saml:AttributeValue></saml:Attribute></saml:AttributeStatement></saml:Assertion>`;
 }
 
-function signedEncryptedResponse(requestId: string, encrypted: string): string {
+function signedEncryptedResponse(
+  requestId: string,
+  encrypted: string,
+  signResponse = true
+): string {
   const response = `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_encrypted_response1" Version="2.0" IssueInstant="${new Date().toISOString()}" Destination="${loginCallbackUrl}" InResponseTo="${requestId}"><saml:Issuer>${idpIssuer}</saml:Issuer><samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status><saml:EncryptedAssertion>${encrypted}</saml:EncryptedAssertion></samlp:Response>`;
+  if (!signResponse) return response;
   const signature = new SignedXml({
     privateKey,
     signatureAlgorithm: "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
@@ -405,7 +410,7 @@ describe("SAML federated logout and encrypted assertions", () => {
     });
   });
 
-  it("rejects RSA-OAEP encrypted assertions that specify a SHA-1 digest", async () => {
+  it("accepts the standard RSA-OAEP SHA-1 encryption digest without allowing SHA-1 signatures", async () => {
     const selectedProvider = provider("response");
     const authorization = await startSaml(
       selectedProvider,
@@ -432,6 +437,88 @@ describe("SAML federated logout and encrypted assertions", () => {
         Buffer.from(response).toString("base64"),
         authorization.payload
       )
-    ).rejects.toThrow("SHA-256 or SHA-512");
+    ).resolves.toMatchObject({ subject: "person@example.test" });
   });
+});
+
+it("validates a signed encrypted assertion without requiring an unsigned outer response signature", async () => {
+  const selected = provider("assertion");
+  const authorization = await startSaml(
+    selected,
+    secrets,
+    loginCallbackUrl,
+    "encrypted-assertion-state"
+  );
+  const requestId = stateField(authorization.payload, "requestId");
+  const signature = new SignedXml({
+    privateKey,
+    signatureAlgorithm: "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
+    canonicalizationAlgorithm: "http://www.w3.org/2001/10/xml-exc-c14n#",
+  });
+  signature.addReference({
+    xpath: "/*[local-name()='Assertion']",
+    transforms: [
+      "http://www.w3.org/2000/09/xmldsig#enveloped-signature",
+      "http://www.w3.org/2001/10/xml-exc-c14n#",
+    ],
+    digestAlgorithm: "http://www.w3.org/2001/04/xmlenc#sha256",
+  });
+  signature.computeSignature(assertionXml(requestId));
+  const encrypted = await encryptedAssertion(signature.getSignedXml());
+  const response = signedEncryptedResponse(requestId, encrypted, false);
+  expect(
+    await completeSaml(
+      selected,
+      secrets,
+      loginCallbackUrl,
+      Buffer.from(response).toString("base64"),
+      authorization.payload
+    )
+  ).toMatchObject({ subject: "person@example.test" });
+  signature.signatureAlgorithm = "http://www.w3.org/2000/09/xmldsig#rsa-sha1";
+  signature.computeSignature(assertionXml(requestId));
+  const weakSignature = await encryptedAssertion(signature.getSignedXml());
+  await expect(
+    completeSaml(
+      selected,
+      secrets,
+      loginCallbackUrl,
+      Buffer.from(signedEncryptedResponse(requestId, weakSignature, false)).toString("base64"),
+      authorization.payload
+    )
+  ).rejects.toThrow("SHA-256 or SHA-512");
+  const unsignedEncrypted = await encryptedAssertion(assertionXml(requestId));
+  await expect(
+    completeSaml(
+      selected,
+      secrets,
+      loginCallbackUrl,
+      Buffer.from(signedEncryptedResponse(requestId, unsignedEncrypted, false)).toString("base64"),
+      authorization.payload
+    )
+  ).rejects.toThrow();
+});
+
+it("rejects insecure RSA v1.5 key transport before decryption", async () => {
+  const selected = provider("response");
+  const authorization = await startSaml(
+    selected,
+    secrets,
+    loginCallbackUrl,
+    "insecure-encryption-state"
+  );
+  const requestId = stateField(authorization.payload, "requestId");
+  const encrypted = (await encryptedAssertion(assertionXml(requestId))).replaceAll(
+    "rsa-oaep-mgf1p",
+    "rsa-1_5"
+  );
+  await expect(
+    completeSaml(
+      selected,
+      secrets,
+      loginCallbackUrl,
+      Buffer.from(signedEncryptedResponse(requestId, encrypted)).toString("base64"),
+      authorization.payload
+    )
+  ).rejects.toThrow("AES and RSA-OAEP");
 });

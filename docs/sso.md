@@ -68,7 +68,7 @@ Import the SP metadata from `https://git.example.com/api/auth/sso/enterprise/met
 
 GitEdge initiates login with the HTTP-Redirect binding and receives assertions through HTTP-POST. Responses must match the one-time request, issuer, audience, destination, bearer recipient and validity window. `signatureValidation` can be `both`, `assertion` or `response`; the default requires signatures on both. SHA-1 signatures and unsigned authentication are rejected. The `certificates` array permits up to five trusted IdP signing certificates for rotation.
 
-To sign SP requests, set public `signingCertificate` and secret `privateKey` together. For encrypted assertions, set public `decryptionCertificate` and secret `decryptionKey` together. The secret values live under the provider ID in `SSO_SECRETS_JSON`, alongside any OIDC client credentials.
+To sign SP requests, set public `signingCertificate` and secret `privateKey` together. For encrypted assertions, set public `decryptionCertificate` and secret `decryptionKey` together. The secret values live under the provider ID in `SSO_SECRETS_JSON`, alongside any OIDC client credentials. Encrypted assertions support AES and RSA-OAEP, including its standard default OAEP digest; message signatures still require SHA-256 or SHA-512. RSA v1.5 key transport is rejected.
 
 To enable SP-initiated Single Logout, configure the IdP's `logoutUrl` and the SP signing key/certificate pair. The SP logout callback is `https://git.example.com/api/auth/sso/enterprise/logout-callback` and appears in SP metadata. Logout responses must be signed and match the issued request. Local sessions are ended before redirecting to the provider.
 

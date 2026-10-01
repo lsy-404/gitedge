@@ -11,7 +11,7 @@ import {
   type SamlConfig,
 } from "@node-saml/node-saml";
 // POST logout has no signed profile, so verify its root with the library's XML verifier.
-import { getVerifiedXml } from "@node-saml/node-saml/lib/xml";
+import { getVerifiedXml, decryptXml } from "@node-saml/node-saml/lib/xml";
 import { z } from "zod";
 import type {
   SamlProvider,
@@ -268,9 +268,34 @@ export async function completeSaml(
 
   const cache = new SingleRequestCache(state);
   const responseXml = Buffer.from(samlResponse, "base64").toString("utf8");
-  assertModernSignatureAlgorithms(responseXml);
-  assertSecureEncryptionAlgorithms(responseXml);
+  const encrypted = assertSecureEncryptionAlgorithms(responseXml);
+  assertModernSignatureAlgorithms(
+    responseXml,
+    !encrypted || provider.signatureValidation !== "assertion"
+  );
   const saml = createSaml(provider, secrets, callbackUrl, cache);
+  if (encrypted) {
+    const document = parseXml(responseXml);
+    if (
+      provider.signatureValidation !== "assertion" &&
+      !getVerifiedXml(
+        responseXml,
+        document.documentElement,
+        await saml.trustedSigningCertificates()
+      )
+    )
+      throw new Error("SAML encrypted response signature is invalid.");
+    const encryptedAssertion = elementChildren(
+      document.documentElement,
+      SAML_ASSERTION_NS,
+      "EncryptedAssertion"
+    )[0];
+    if (!encryptedAssertion || !secrets.decryptionKey)
+      throw new Error("SAML assertion decryption is not configured.");
+    // The verified assertion returned by the library has its enveloped signature removed.
+    const clearAssertion = await decryptXml(encryptedAssertion.toString(), secrets.decryptionKey);
+    assertModernSignatureAlgorithms(clearAssertion, provider.signatureValidation !== "response");
+  }
   const result = await saml.validatePostResponseAsync({ SAMLResponse: samlResponse });
   if (!result.profile || result.loggedOut || !cache.wasConsumed()) {
     throw new Error("SAML response did not complete an SP-initiated login.");
@@ -542,14 +567,14 @@ function assertModernSignatureAlgorithms(xml: string, requireSignature = true): 
   }
 }
 
-function assertSecureEncryptionAlgorithms(xml: string): void {
+function assertSecureEncryptionAlgorithms(xml: string): boolean {
   const document = parseXml(xml);
   const encryptedAssertions = descendantElements(
     document.documentElement,
     SAML_ASSERTION_NS,
     "EncryptedAssertion"
   );
-  if (encryptedAssertions.length === 0) return;
+  if (encryptedAssertions.length === 0) return false;
   if (encryptedAssertions.length !== 1)
     throw new Error("SAML response contains multiple encrypted assertions.");
   const encryptedData = elementChildren(encryptedAssertions[0], XML_ENCRYPTION_NS, "EncryptedData");
@@ -575,6 +600,7 @@ function assertSecureEncryptionAlgorithms(xml: string): void {
       ? elementChildren(keyMethods[0], "http://www.w3.org/2000/09/xmldsig#", "DigestMethod")
       : [];
   const allowedKeyDigests = new Set([
+    "http://www.w3.org/2000/09/xmldsig#sha1",
     "http://www.w3.org/2001/04/xmlenc#sha256",
     "http://www.w3.org/2001/04/xmlenc#sha512",
     "http://www.w3.org/2000/09/xmldsig#sha256",
@@ -586,11 +612,13 @@ function assertSecureEncryptionAlgorithms(xml: string): void {
     !allowedDataAlgorithms.has(dataMethods[0].getAttribute("Algorithm") ?? "") ||
     keyMethods.length !== 1 ||
     keyMethods[0].getAttribute("Algorithm") !== `${XML_ENCRYPTION_NS}rsa-oaep-mgf1p` ||
-    keyDigests.length !== 1 ||
-    !allowedKeyDigests.has(keyDigests[0].getAttribute("Algorithm") ?? "")
+    keyDigests.length > 1 ||
+    (keyDigests.length === 1 &&
+      !allowedKeyDigests.has(keyDigests[0].getAttribute("Algorithm") ?? ""))
   ) {
-    throw new Error("SAML assertion encryption must use AES, RSA-OAEP and SHA-256 or SHA-512.");
+    throw new Error("SAML assertion encryption must use AES and RSA-OAEP.");
   }
+  return true;
 }
 
 function elementChildren(parent: Element, namespace: string, localName: string): Element[] {

@@ -176,7 +176,6 @@ onMounted(load);
     </div>
     <div v-else class="panel state github-identity-empty">
       <p>{{ t("noGithubIdentity") }}</p>
-      <RouterLink class="button primary" to="/login">{{ t("signIn") }}</RouterLink>
     </div>
 
     <section class="panel sso-settings" :aria-labelledby="`sso-identities-heading`">
