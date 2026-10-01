@@ -15,6 +15,11 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["test/**/*.test.ts"],
-    exclude: ["test/**/*.worker.test.ts"],
+    exclude: [
+      "test/**/*.worker.test.ts",
+      "**/node_modules/**",
+      "**/.wrangler/**",
+      "**/.cloudflare/**",
+    ],
   },
 });

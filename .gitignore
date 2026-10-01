@@ -1,4 +1,4 @@
-node_modules/
+node_modules
 .wrangler/
 .dev.vars
 dist/
@@ -8,3 +8,5 @@ worker-configuration.d.ts
 .env*
 .cloudflare/
 coverage/
+
+!/test/

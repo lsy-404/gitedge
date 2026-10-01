@@ -59,9 +59,14 @@ export async function handleGitApi(request: Request, env: GitEnv): Promise<Respo
   const sessionId = url.searchParams.get("sessionId") ?? userSession?.id;
   const session = sessionId ? await resolveWorkspace(env, access, sessionId) : null;
   if (sessionId && !session) return fail(404, "not_found", "Session workspace was not found.");
-  using repo = await env.ARTIFACTS.get(session?.workspaceName ?? access.repository.artifactName);
-  const logger = createLogger(env.LOG_LEVEL, { service: "artifacts-git", repoId: repositoryId });
   const resource = parts[2];
+  const proposalComparison = resource === "compare" && url.searchParams.has("headSessionId");
+  using repo = await env.ARTIFACTS.get(
+    proposalComparison
+      ? access.repository.artifactName
+      : (session?.workspaceName ?? access.repository.artifactName)
+  );
+  const logger = createLogger(env.LOG_LEVEL, { service: "artifacts-git", repoId: repositoryId });
   const ref = url.searchParams.get("ref") ?? access.repository.defaultBranch;
   const path = url.searchParams.get("path") ?? "";
   if (!validPath(path) || ref.length > 255 || !ref.length)

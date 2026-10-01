@@ -1,5 +1,10 @@
 import { DeployManifestSchema, type DeployManifest } from "../../../packages/contracts/src/deploy";
-import type { TrustedUser } from "../../../packages/contracts/src/index";
+import {
+  readTrustedUser,
+  trustedHeaders,
+  type TrustedUser,
+} from "../../../packages/contracts/src/index";
+import type { Logger } from "../../../src/worker/common/logger";
 
 const API = "https://api.cloudflare.com/client/v4";
 const MANIFEST_PATH = "gitedge.deploy.json";
@@ -14,26 +19,14 @@ const MAX_TOTAL_MIGRATION_BYTES = 4 * 1024 * 1024;
 export interface DeployGitService {
   fetch(request: Request): Promise<Response>;
 }
-export interface DeployDb {
-  prepare(query: string): { bind(...values: (string | number | null)[]): DeployStatement };
-  batch(statements: DeployStatement[]): Promise<unknown>;
-}
-interface DeployStatement {
-  first<T>(): Promise<T | null>;
-  run(): Promise<unknown>;
-}
 export interface DeployEnv {
-  DB: DeployDb;
+  DB: D1Database;
   GIT: DeployGitService;
   DEPLOY_SESSION_KEY: string;
   DEPLOY_ORIGIN?: string;
   LOG_LEVEL?: string;
 }
-export interface DeployLogger {
-  info(message: string, fields?: Record<string, unknown>): void;
-  warn(message: string, fields?: Record<string, unknown>): void;
-  error(message: string, fields?: Record<string, unknown>): void;
-}
+export type DeployLogger = Pick<Logger, "info" | "warn" | "error">;
 
 interface DeploymentSession {
   version: 1;
@@ -94,21 +87,8 @@ function safeName(value: string): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, 63);
 }
-function trustedUser(request: Request): TrustedUser | null {
-  const id = request.headers.get("X-GitEdge-User-Id");
-  const identifier = request.headers.get("X-GitEdge-User-Name");
-  const groupKey = request.headers.get("X-GitEdge-User-Group");
-  return id && identifier && groupKey ? { id, identifier, groupKey } : null;
-}
-function trustedUserHeaders(user: TrustedUser): Headers {
-  return new Headers({
-    "X-GitEdge-User-Id": user.id,
-    "X-GitEdge-User-Name": user.identifier,
-    "X-GitEdge-User-Group": user.groupKey,
-  });
-}
 async function gitFetch(env: DeployEnv, url: URL, user: TrustedUser): Promise<Response> {
-  const headers = trustedUserHeaders(user);
+  const headers = trustedHeaders(user);
   headers.set("Accept", "application/json");
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10_000);
@@ -394,7 +374,12 @@ function isAgent(user: TrustedUser): boolean {
 function sameOrigin(request: Request, env: DeployEnv): boolean {
   const origin = request.headers.get("Origin");
   const expected = env.DEPLOY_ORIGIN ?? new URL(request.url).origin;
-  return origin === expected && request.headers.get("Sec-Fetch-Site") !== "cross-site";
+  if (request.headers.get("Sec-Fetch-Site") === "cross-site") return false;
+  if (origin !== null) return origin === expected;
+  if (request.method !== "GET" && request.method !== "HEAD") return false;
+  if (request.headers.get("Sec-Fetch-Site") === "same-origin") return true;
+  const referer = request.headers.get("Referer");
+  return referer !== null && new URL(referer).origin === expected;
 }
 async function cfEnvelope<T>(
   token: string,
@@ -676,7 +661,7 @@ async function handleDeployRequest(
       "agent_deploy_forbidden",
       "Agent sessions cannot access Cloudflare deployment credentials."
     );
-  const user = trustedUser(request);
+  const user = readTrustedUser(request);
   if (!user) return failure(401, "unauthorized", "Trusted user context is required.");
   if (!sameOrigin(request, env))
     return failure(403, "origin_rejected", "Request origin was rejected.");

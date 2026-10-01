@@ -5,6 +5,7 @@ import {
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
 import { createLogger } from "../../../src/worker/common/logger";
+import { PBKDF2_ITERATIONS } from "./password";
 import { authenticateAgentSession, authenticateGitToken, handleAgentManagement } from "./agents";
 
 type AuthEnv = {
@@ -65,7 +66,6 @@ const SESSION_COOKIE = "gitedge_session";
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
 const GITHUB_STATE_MAX_AGE_MS = 10 * 60 * 1000;
 const GITHUB_READ_SCOPES = ["read:user", "user:email", "read:org"] as const;
-export const PBKDF2_ITERATIONS = 100_000;
 
 function json(body: unknown, status = 200, headers?: HeadersInit): Response {
   const responseHeaders = new Headers(headers);
@@ -285,7 +285,7 @@ export async function register(
       "INSERT INTO namespaces (id, slug, created_by, created_at) VALUES (?, ?, ?, ?)"
     ).bind(namespaceId, identifier, user.id, now),
     env.DB.prepare(
-      "INSERT INTO namespace_memberships (namespace_id, user_id, created_at) VALUES (?, ?, ?)"
+      "INSERT INTO namespace_memberships (namespace_id, user_id, created_at, role) VALUES (?, ?, ?, 'owner')"
     ).bind(namespaceId, user.id, now),
   ]);
   return { ok: true, data: { ...user, sessionToken: await issueSession(env, user.id) } };
@@ -588,7 +588,7 @@ async function findOrCreateGithubUser(
       "INSERT INTO namespaces (id, slug, created_by, created_at) VALUES (?, ?, ?, ?)"
     ).bind(namespaceId, user.identifier, user.id, now),
     env.DB.prepare(
-      "INSERT INTO namespace_memberships (namespace_id, user_id, created_at) VALUES (?, ?, ?)"
+      "INSERT INTO namespace_memberships (namespace_id, user_id, created_at, role) VALUES (?, ?, ?, 'owner')"
     ).bind(namespaceId, user.id, now),
   ]);
   return user;

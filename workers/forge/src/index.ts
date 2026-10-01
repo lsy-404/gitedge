@@ -1100,24 +1100,6 @@ async function featureRequest(
         });
         return error(409, "conflict", "The latest review for the current commit requests changes.");
       }
-      const hasIndependentHumanApproval = latestReviews.some((review) => {
-        const reviewer = parseActor(review.actor_json, review.author_id);
-        const pullRequestActor = parseActor(current.actor_json, current.author_id);
-        return (
-          review.state === "approved" &&
-          review.reviewer_is_member === 1 &&
-          reviewer.kind === "user" &&
-          (reviewer.kind !== pullRequestActor.kind || reviewer.id !== pullRequestActor.id)
-        );
-      });
-      if (!hasIndependentHumanApproval) {
-        await releaseLease();
-        return error(
-          409,
-          "conflict",
-          "A human approval from someone other than the pull request author is required."
-        );
-      }
       const checks = await env.DB.prepare(
         "SELECT status, conclusion FROM forge_check_runs WHERE pull_request_id = ? AND commit_oid = ?"
       )

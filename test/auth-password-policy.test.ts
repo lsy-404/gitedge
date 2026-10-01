@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PBKDF2_ITERATIONS } from "../workers/auth/src/index";
+import { PBKDF2_ITERATIONS } from "../workers/auth/src/password";
 
 describe("Auth password policy", () => {
   it("uses the maximum PBKDF2 iteration count supported by Workers", () => {

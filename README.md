@@ -1,69 +1,57 @@
 # GitEdge / 码锋
 
-GitEdge（码锋）是在 Cloudflare 边缘运行的轻量 Git Forge。产品包含 Vue 3 中英双语前端、独立授权门户、个人与组织命名空间，以及仓库、Issue、Pull Request、Wiki 和 Git Smart HTTP v2 路径。
+GitEdge is an MIT-licensed Git forge on Cloudflare Workers and Artifacts. The Vue interface supports repositories, Git file browsing and commit graphs, Issues, Pull Requests, Discussions, Wiki revisions, and repository deployment.
 
-## 当前能力
+Each account can create multiple agents. An agent session receives an isolated Artifacts fork, a repository-scoped API credential, and a short-lived Git credential. Pull requests can propose changes from a session fork. Reviews and CI results carry the authenticated actor and the exact reviewed commit.
 
-- Vue 3 + TypeScript + Vite，使用 Vue I18n 提供简体中文和英文界面。
-- Gateway 是唯一公开入口，Auth、Forge、Git 通过 Service Bindings 内部调用。
-- Auth 使用 D1、PBKDF2-HMAC-SHA256 和 HttpOnly/Secure/SameSite=Lax 会话 Cookie，并支持 GitHub OAuth 外部登录。
-- GitHub 登录提供“仅身份识别”和“读取账户资料”两档；读取档只请求 `read:user user:email read:org`，不请求仓库权限，OAuth token 不落盘。
-- Forge 提供个人/组织命名空间、组织成员、仓库、Issue、Pull Request 元数据和 Wiki 页面 API。
-- Git Worker 复用 `git-on-cloudflare` 的 Smart HTTP v2、Durable Objects、R2、KV 与 Queue 核心。
-- 公开仓库创建时同步 Git 路由缓存，可以通过标准 Git 客户端发现和拉取。
+## Run locally
 
-首批 Pull Request 是协作元数据，不包含 diff、ref 校验或 merge；Git push 所需的 PAT 数据模型与协议鉴权核心已保留，但 PAT 签发界面尚未接入。因此当前版本是可运行的项目框架，不应当作完整 GitHub/GitLab 替代品。
+Requires Node.js 24+, Git, and a Cloudflare Workers Paid account with Artifacts access for remote verification.
 
-## 架构
-
-| 服务    | 公网入口 | 主要职责                                     | 资源                            |
-| ------- | -------- | -------------------------------------------- | ------------------------------- |
-| Gateway | 是       | SPA、路由、会话校验、可信身份注入            | Static Assets、Service Bindings |
-| Auth    | 否       | 注册、密码/GitHub 登录、外部身份、会话验证   | D1                              |
-| Forge   | 否       | 组织、仓库与 Issue/PR/Wiki API、Git 路由同步 | D1、KV                          |
-| Git     | 否       | Smart HTTP、refs、pack、对象存储与维护任务   | DO、R2、D1、KV、Queue           |
-
-浏览器请求经 Gateway 转发；客户端提供的 `X-GitEdge-*` 身份头会被删除，Forge 只接收 Gateway 从 Auth 会话中生成的可信身份。Git pack body 由 Gateway 流式转发给 Git Worker。
-
-## 本地开发
-
-需要 Node.js、npm 和已登录或可本地运行的 Wrangler。
-
-```bash
+```sh
 npm ci
 npm --prefix apps/web ci
 npm run db:migrate:local
-npm run build:web
 npm run dev
 ```
 
-Gateway 默认监听 `http://localhost:8877`。四个本地 Worker 共用 `.wrangler/state`，因此 Auth、Forge 与 Git 看到同一个 D1 和 KV 状态。
+The local application opens at `http://localhost:8877`. D1 and the internal Workers run locally; Artifacts binds to the configured remote namespace. Check account and namespace access before starting. The isolated remote smoke project lives under `test/artifacts-smoke/`. Its namespace is `gitedge`; the local server must remain on loopback.
 
-常用验证命令：
+Configure a random `DEPLOY_SESSION_KEY` of at least 32 characters in `workers/deploy/.dev.vars` for the local deployment wizard. For production, set it with Wrangler's secret command as described in [deployment configuration](docs/deploy.md). This secret encrypts short-lived Cloudflare credential cookies; it is never committed.
 
-```bash
+## Verify
+
+```sh
 npm run typecheck
 npm test
-npm run test:web
-npm run deploy:dry-run
 npm run test:workers
+npm run build
 ```
 
-## Cloudflare 部署
+`build` builds the Vue interface and bundles every Worker with Wrangler's dry-run mode. Production deployment is a separate `npm run deploy` operation that applies D1 migrations and deploys internal services before the Gateway.
 
-1. 在同一个 Cloudflare 账户创建 D1 数据库 `gitedge`、KV namespace、R2 bucket `gitedge-git-repos` 和 Queue `gitedge-git-repo-maint`。
-2. 将 `workers/auth`、`workers/forge`、`workers/git` 配置中的资源占位符替换为实际 ID。
-3. 将 Gateway 的示例自定义域名替换为实际域名；若仅使用 `workers.dev`，移除示例 route 并启用 `workers_dev`。
-4. 如需 GitHub 登录，在 GitHub 创建 OAuth App，将 callback URL 设置为 `https://<你的域名>/api/auth/github/callback`，然后为 Auth Worker 配置 `GITHUB_CLIENT_ID` 与 `GITHUB_CLIENT_SECRET` secret。不要把凭据写入 JSONC 或提交到 Git。
-5. 先执行 `npm run deploy:dry-run`，再执行 `npm run deploy`。脚本会构建前端、应用 D1 migration，并按 Auth → Forge → Git → Gateway 顺序部署。
+## Git and agents
 
-```bash
-npx wrangler secret put GITHUB_CLIENT_ID --config workers/auth/wrangler.jsonc
-npx wrangler secret put GITHUB_CLIENT_SECRET --config workers/auth/wrangler.jsonc
-```
+Repository pages issue scoped, expiring Artifacts Git tokens. Keep credentials in process environment or a credential helper, and keep the remote URL free of credentials. Standard Git clone, fetch and push use the Artifacts remote, or the GitEdge Smart HTTP route with a repository-scoped GitEdge credential.
 
-详细边界见 `docs/gateway-topology.md`。
+Account agent sessions return their API and Git tokens once. Use the API token as `Authorization: Bearer <session-token>` and the Git token for the returned workspace remote. Tokens cannot manage account credentials or grant Cloudflare deployment access. Revoking a session disables its API identity and revokes its issued Git token.
 
-## 来源与许可证
+The commit graph includes all commit parents and session fork refs. Pull request merging verifies both expected OIDs and uses Git's atomic non-force ref update. Text conflicts require resolution in the session repository before retrying. Reviews and checks for previous head commits remain in history and do not satisfy the current head.
 
-Git 协议和存储核心基于 `zllovesuki/git-on-cloudflare` 的固定基线。上游 MIT 声明保存在 `LICENSES/MIT-git-on-cloudflare.txt`；本仓库的发行条款见根目录 `LICENSE`。
+CI runners submit check results through the authenticated Pull Request checks API. Agent reviews are explicitly marked separately from human reviews; the marker identifies the authenticated author, while the result and summary describe the runner's work.
+
+## Architecture
+
+The public Gateway serves Vue assets and authenticates requests before forwarding to internal Auth, Forge, Git and Deploy Workers. Auth owns credentials and agent sessions. Forge owns collaboration records in D1. Git owns Artifacts operations and forwards Smart HTTP streams. Deploy interprets a reviewed deployment manifest and relays a fixed set of Cloudflare operations.
+
+Artifacts owns repository contents, refs and Git protocol behavior. Older repositories without an Artifacts mapping must be imported before use. Preserve the prior deployment and its storage until their data has been transferred and verified; deploying the new application does not transfer existing Git data.
+
+Browser previews support text files up to 2 MiB. Diffs show up to 200 changed files and report truncation. In-Worker comparisons inspect up to 250 commits per side; in-Worker merge transfer is limited to 24 MiB per remote. Larger histories and merges can be handled with a regular Git client, while transport streams remain unbuffered.
+
+Repository deployment accepts prebuilt JavaScript modules plus declared D1, R2 and KV resources. The wizard shows permissions, license, terms, source digest, resource names and progress, and reuses completed provisioning work on retry. See the [manifest format](docs/deploy.md).
+
+[Cloudflare Artifacts](https://developers.cloudflare.com/artifacts/) supplies the Git foundation. Overture informed the permission-first deployment interaction; GitEdge's deployment implementation is independently written under MIT.
+
+## License
+
+[MIT](LICENSE). The retained upstream logger attribution is in [LICENSES/MIT-git-on-cloudflare.txt](LICENSES/MIT-git-on-cloudflare.txt).

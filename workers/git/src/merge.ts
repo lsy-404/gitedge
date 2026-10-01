@@ -26,8 +26,19 @@ export async function mergeArtifacts(
 ): Promise<GitMergeResult> {
   const base = await resolveCommit(baseRepo, input.baseRef);
   const head = await resolveCommit(headRepo, input.headRef);
-  if (base?.hash !== input.expectedBaseOid || head?.hash !== input.expectedHeadOid)
+  if (head?.hash !== input.expectedHeadOid) return { ok: false, reason: "refs_changed" };
+  if (base?.hash !== input.expectedBaseOid) {
+    // Recover a completed ref update when its response was lost before Forge saved the result.
+    if (
+      base &&
+      (base.hash === input.expectedHeadOid ||
+        (base.parents[0] === input.expectedBaseOid &&
+          base.parents[1] === input.expectedHeadOid &&
+          base.message === input.message))
+    )
+      return { ok: true, oid: base.hash };
     return { ok: false, reason: "refs_changed" };
+  }
   const baseInfo = await baseRepo.info();
   const headInfo = await headRepo.info();
   const baseToken = await baseRepo.createToken("write", 60);
@@ -49,7 +60,8 @@ export async function mergeArtifacts(
     });
     const localBase = await git.resolveRef({ fs, dir, ref: input.baseRef });
     if (localBase !== input.expectedBaseOid) return { ok: false, reason: "refs_changed" };
-    await git.fetch({
+    await git.addRemote({ fs, dir, remote: "proposal", url: headInfo.remote });
+    const fetched = await git.fetch({
       fs,
       http: gitHttpClient(headInfo.remote),
       dir,
@@ -60,11 +72,7 @@ export async function mergeArtifacts(
       tags: false,
       headers: { Authorization: `Bearer ${headToken.plaintext}` },
     });
-    const localHead = await git.resolveRef({
-      fs,
-      dir,
-      ref: `refs/remotes/proposal/${input.headRef}`,
-    });
+    const localHead = fetched.fetchHead;
     if (localHead !== input.expectedHeadOid) return { ok: false, reason: "refs_changed" };
     let result: git.MergeResult;
     try {
@@ -72,7 +80,7 @@ export async function mergeArtifacts(
         fs,
         dir,
         ours: input.baseRef,
-        theirs: `refs/remotes/proposal/${input.headRef}`,
+        theirs: localHead,
         abortOnConflict: true,
         message: input.message,
         author: input.author,
@@ -83,7 +91,8 @@ export async function mergeArtifacts(
         return { ok: false, reason: "merge_conflict" };
       throw error;
     }
-    if (!result.oid || result.alreadyMerged) return { ok: false, reason: "already_merged" };
+    if (!result.oid) return { ok: false, reason: "already_merged" };
+    if (result.alreadyMerged) return { ok: true, oid: result.oid };
     const latestHead = await resolveCommit(headRepo, input.headRef);
     if (latestHead?.hash !== input.expectedHeadOid) return { ok: false, reason: "refs_changed" };
     try {

@@ -28,7 +28,8 @@
   "artifacts": [
     {
       "binding": "ARTIFACTS",
-      "namespace": "gitedge"
+      "namespace": "gitedge",
+      "remote": true
     }
   ]
 }

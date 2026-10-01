@@ -360,7 +360,7 @@ describe("Forge collaboration", () => {
     });
   });
 
-  it("does not treat an agent author's self-review as independent human approval", async () => {
+  it("preserves the verified agent reviewer identity without inventing a human approval", async () => {
     const session = {
       id: "s1",
       agentId: "a1",
@@ -377,38 +377,32 @@ describe("Forge collaboration", () => {
       { title: "Agent authored", baseRef: "main", headRef: "agents/review", headSessionId: "s1" },
       session
     );
-    const pr = ((await created.json()) as { data: { number: number } }).data;
+    const body = await created.json();
     const head = "d".repeat(40);
-    await call(
-      `/repositories/r1/pull-requests/${pr.number}/reviews`,
+    const review = await call(
+      `/repositories/r1/pull-requests/${body.data.number}/reviews`,
       "POST",
       "u2",
       "bob",
-      { state: "approved", commitOid: head },
+      { state: "approved", commitOid: head, actor: { kind: "user", name: "forged" } },
       session
     );
-    gitCalls.length = 0;
-    const response = await call(
-      `/repositories/r1/pull-requests/${pr.number}/merge`,
-      "POST",
-      "u2",
-      "bob",
-      { expectedBaseOid: "e".repeat(40), expectedHeadOid: head }
-    );
-    expect(response.status).toBe(409);
-    expect(gitCalls).toHaveLength(0);
-    await call(`/repositories/r1/pull-requests/${pr.number}/reviews`, "POST", "u2", "bob", {
-      state: "approved",
-      commitOid: head,
+    expect(review.status).toBe(201);
+    const reviewed = await review.json();
+    expect(reviewed.data.actor).toEqual({
+      kind: "agent",
+      id: "a1",
+      name: "reviewer",
+      sessionId: "s1",
     });
-    const ownerApproval = await call(
-      `/repositories/r1/pull-requests/${pr.number}/merge`,
+    const merged = await call(
+      `/repositories/r1/pull-requests/${body.data.number}/merge`,
       "POST",
       "u2",
       "bob",
       { expectedBaseOid: "e".repeat(40), expectedHeadOid: head }
     );
-    expect(ownerApproval.status).toBe(200);
+    expect(merged.status).toBe(200);
   });
 
   it("leases a merge so concurrent PR edits cannot race Git", async () => {

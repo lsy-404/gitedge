@@ -1,36 +1,13 @@
-# GitEdge / 码锋产品约束
+# GitEdge / 码锋
 
-## 产品定位
+码锋面向个人开发者、小团队和协作智能体，提供真实 Git 仓库与可操作的协作流程。默认简体中文，支持英文；深色工具界面保留明确的加载、错误、空状态和键盘焦点。
 
-码锋是面向个人开发者和小团队的边缘 Git Forge。首批目标不是复刻大型代码托管平台，而是让授权、仓库、Git transport、Issue、Pull Request 和 Wiki 形成一个可信的最小端到端产品。
+仓库导航包含 Code、提交图、提交历史、比较、Issues、Pull Requests、Discussions、Wiki 与部署。所有数据来自服务。文件浏览、PR diff/merge、评论、Discussion 答案和 Wiki 修订应形成完整操作闭环。
 
-## 品牌与语言
+一个用户可以创建多个智能体。一个智能体可以开启多个受限仓库 session，每个 session 使用独立 Artifacts fork。界面说明当前仓库、工作副本、凭证权限、到期和撤销状态。API/Git 凭证仅展示一次。
 
-- 英文名称：GitEdge
-- 中文名称：码锋
-- 界面默认简体中文，并提供英文切换。
-- 气质：精确、克制、偏工具化；技术事实优先于营销文案。
+人类、智能体审核和 CI 结果按服务端认证身份标记，并绑定具体 commit OID。旧提交的审核不能代表新提交。合并需要当前分支 SHA；冲突或并发变化应给出可恢复的状态。
 
-## 前端
+仓库部署向导依次呈现部署清单、权限、许可/条款、账户与资源、确认和执行进度。凭证不进入网页持久存储或日志。失败重试复用已创建资源；源码变化需要重新审阅部署计划。
 
-- Vue 3、TypeScript、Vite、Vue Router、Vue I18n。
-- 深色界面优先，保留明确的键盘焦点、错误、加载和空状态。
-- 不用演示数据掩盖 API 故障；页面只呈现真实服务数据。
-- 仓库一级导航固定为 Code、Issues、Pull Requests、Wiki。
-
-## 服务边界
-
-- Gateway 是唯一公开 Worker，负责静态资源、路由和可信身份转换。
-- Auth、Forge、Git 关闭 `workers.dev` 与公开 route，只允许 Service Binding 访问。
-- Auth 拥有凭证与会话；Forge 拥有协作元数据；Git 拥有协议、refs 与对象存储。
-- D1 是用户、namespace、仓库和协作元数据的事实来源；KV 只作为 Git 路由候选缓存，不能独立授权。
-
-## 首批明确边界
-
-- Issue 支持创建、列表和状态更新 API。
-- Pull Request 支持创建、列表和状态更新 API，但不声称已有 diff 或 merge。
-- Wiki 使用 D1 保存正文与 revision，不建立第二套 Git 仓库。
-- Git Smart HTTP v2 核心保留；公开 fetch 路径可用，push 需要后续接通 PAT 签发与管理界面。
-- 组织提供 owner/member 基础成员语义和组织仓库归属；团队、细粒度仓库角色与邀请流程不在当前范围。
-- 外部登录首个 provider 为 GitHub OAuth，提供仅身份识别与账户资料只读两档，不请求 GitHub 仓库 scope。
-- CI、SSH、代码评审线程和通知不在当前范围。
+公开仓库允许匿名读取；私有仓库对无权访问者返回 404。Gateway 是唯一公开 Worker。Artifacts 管理 Git 内容与 refs，D1 管理账户、组织、仓库映射和协作记录。

@@ -55,7 +55,8 @@ export async function readArtifactTree(
   path: string
 ): Promise<GitTree | null> {
   const commit = await resolveCommit(repo, ref);
-  if (!commit) return { ref, oid: null, path, entries: [] };
+  if (!commit)
+    return (await repo.info()).lastPushAt === null ? { ref, oid: null, path, entries: [] } : null;
   let oid = commit.treeHash;
   for (const segment of path.split("/").filter(Boolean)) {
     const entries = await repo.readTree(oid);
@@ -88,7 +89,7 @@ export async function readArtifactFile(
   const parent = await readArtifactTree(repo, ref, parentPath);
   const entry = parent?.entries.find((item) => item.path === path && item.type === "blob");
   if (!entry) return null;
-  const blob = await repo.readFile({ ref, path });
+  const blob = await repo.readBlob(entry.oid);
   if (!blob) return null;
   if (blob.size > 2 * 1024 * 1024)
     return { path, oid: entry.oid, size: blob.size, binary: true, content: null };
