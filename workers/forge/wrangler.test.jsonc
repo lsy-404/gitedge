@@ -9,7 +9,7 @@
       "binding": "DB",
       "database_name": "gitedge-forge-tests",
       "database_id": "00000000-0000-0000-0000-000000000001",
-      "migrations_dir": "../../migrations",
-    },
-  ],
+      "migrations_dir": "../../migrations"
+    }
+  ]
 }

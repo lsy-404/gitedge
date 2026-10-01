@@ -10,26 +10,26 @@
     "bindings": [
       {
         "name": "RATE_LIMITER",
-        "class_name": "SharedRateLimitDurableObject",
-      },
-    ],
+        "class_name": "SharedRateLimitDurableObject"
+      }
+    ]
   },
   "migrations": [
     {
       "tag": "v1",
-      "new_sqlite_classes": ["RateLimitDurableObject"],
+      "new_sqlite_classes": ["RateLimitDurableObject"]
     },
     {
       "tag": "v2",
       "renamed_classes": [
         {
           "from": "RateLimitDurableObject",
-          "to": "SharedRateLimitDurableObject",
-        },
-      ],
-    },
+          "to": "SharedRateLimitDurableObject"
+        }
+      ]
+    }
   ],
   "observability": {
-    "enabled": true,
-  },
+    "enabled": true
+  }
 }
