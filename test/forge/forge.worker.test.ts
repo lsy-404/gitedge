@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
 import forge from "../../workers/forge/src/index";
+import { FixtureArtifacts } from "../support/artifacts";
 
 const migrations = import.meta.glob("../../migrations/000*.sql", {
   query: "?raw",
@@ -47,25 +48,14 @@ INSERT INTO forge_pull_requests (id,repository_id,number,author_id,title,body,ba
   }
 }
 
+const artifacts = new FixtureArtifacts();
 const gitCalls: Array<Record<string, unknown>> = [];
 const gitRequests: Array<{ method: string; url: string }> = [];
 let mergeGate: Promise<void> | null = null;
 let onMergeStarted: (() => void) | null = null;
 const forgeEnv: Parameters<typeof forge.fetch>[1] = {
   DB: env.DB,
-  ARTIFACTS: {
-    async create(name: string) {
-      return { name, token: "initial" };
-    },
-    async get(name: string) {
-      return {
-        remote: `artifact://${name}`,
-        async revokeToken() {
-          return true;
-        },
-      };
-    },
-  },
+  ARTIFACTS: artifacts,
   GIT: {
     async fetch(request: Request) {
       gitRequests.push({ method: request.method, url: request.url });
@@ -111,14 +101,20 @@ async function call(
 }
 
 beforeAll(async () => {
+  const sourceArtifact = await artifacts.create("repo-r1", { setDefaultBranch: "main" });
+  using source = await artifacts.get(sourceArtifact.name);
+  await source.revokeToken(sourceArtifact.token);
   await applyForgeMigrations();
   const counter = await env.DB.prepare(
     "SELECT conversation_number FROM forge_counters WHERE repository_id = 'r1'"
   ).first<{ conversation_number: number }>();
   expect(counter?.conversation_number).toBe(8);
-  await runSqlScript(
-    "UPDATE repositories SET artifact_name = 'repo-r1', remote = 'artifact://repo-r1', default_branch = 'main' WHERE id = 'r1';"
-  );
+  await env.DB.prepare(
+    "UPDATE repositories SET artifact_name = ?, remote = ?, default_branch = 'main' WHERE id = 'r1'"
+  )
+    .bind(sourceArtifact.name, sourceArtifact.remote)
+    .run();
+  expect(artifacts.snapshot(sourceArtifact.name).tokens[0]?.state).toBe("revoked");
   await runSqlScript(`INSERT INTO auth_agents (id,user_id,name,description,created_at) VALUES ('a1','u2','reviewer','',1);
 INSERT INTO auth_git_tokens (id,user_id,repository_id,name,token_hash,permission,expires_at,created_at) VALUES ('gt1','u2','r1','test','git-hash','read',9999999999999,1);
 INSERT INTO auth_agent_sessions (id,agent_id,user_id,repository_id,token_hash,git_token_id,workspace_name,remote,base_ref,base_oid,permission,status,created_at,expires_at) VALUES ('s1','a1','u2','r1','session-hash','gt1','review','artifact://repo-r1','main',NULL,'read','active',1,9999999999999);`);
