@@ -1,4 +1,5 @@
 import { createI18n } from "vue-i18n";
+import github from "./i18n/github";
 
 const messages = {
   "zh-CN": {
@@ -607,4 +608,12 @@ const messages = {
   },
 };
 
-export const i18n = createI18n({ legacy: false, locale: "zh-CN", fallbackLocale: "en", messages });
+export const i18n = createI18n({
+  legacy: false,
+  locale: "zh-CN",
+  fallbackLocale: "en",
+  messages: {
+    "zh-CN": { ...messages["zh-CN"], ...github["zh-CN"] },
+    en: { ...messages.en, ...github.en },
+  },
+});

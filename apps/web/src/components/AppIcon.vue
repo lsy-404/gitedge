@@ -109,6 +109,6 @@ defineProps<{ name: IconName; size?: number }>();
     aria-hidden="true"
     focusable="false"
   >
-    <path v-for="(d, index) in icons[name]" :key="index" :d="d" />
+    <path v-for="(d, index) in icons[name]" :key="index" :d="d" fill-rule="evenodd" />
   </svg>
 </template>

@@ -4,28 +4,16 @@ import { hexToHsl, hslToHex } from "./color";
 
 export type ColorScheme = "light" | "dark";
 
-/** Cloudflare orange. It is the brand ramp's key 90 and the primary button fill in both schemes. */
 export const BRAND_SEED = "#f6821f";
 
-/** Dark ink for text on orange fills; white on this orange is only 2.6:1. */
+// Dark text maintains contrast on the orange button fill.
 const ON_BRAND_INK = "#1a0e04";
 
 const FONT_SANS =
-  '"Hanken Grotesk", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif';
-const FONT_MONO = '"IBM Plex Mono", ui-monospace, SFMono-Regular, monospace';
+  '-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif';
+const FONT_MONO =
+  'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace';
 
-/**
- * Brand ramp lightness (HSL percent) for keys 10 (darkest) to 160 (lightest), at the seed's hue
- * and saturation. Key 90 is the seed itself (about 54%).
- *
- * Fluent maps ramp keys to roles differently per scheme, which is what makes dark mode
- * lighter without a second ramp:
- *  - light: link 70 (36%, 5.0:1 on white), indicators/focus/strokes 80 (45%, 3.4:1 on white)
- *  - dark: link 100 (62%), foreground 110 (69%), indicators/strokes 100-110; all above 7:1 on
- *    the dark surfaces
- * Primary button fills are pinned to the seed (key 90) with hover 100 and pressed 80 in both
- * schemes, because every one of those steps keeps at least 4.5:1 against the dark ink text.
- */
 const RAMP_LIGHTNESS = {
   10: 7,
   20: 11,
@@ -68,18 +56,29 @@ export function createBrandRamp(seed: string): BrandVariants {
   };
 }
 
-/** Dark is the default look; light only when the system explicitly asks for it. */
+// Follow an explicit light preference; otherwise use dark mode.
 export function resolveColorScheme(prefersLight: boolean): ColorScheme {
   return prefersLight ? "light" : "dark";
 }
 
-/** Flat token map that `setTheme` accepts, with the app's orange and typography applied. */
 export function createAppTheme(scheme: ColorScheme, seed: string = BRAND_SEED): Theme {
   const brand = createBrandRamp(seed);
   const base = scheme === "light" ? createLightTheme(brand) : createDarkTheme(brand);
   const focusRing = scheme === "light" ? brand[80] : brand[110];
   return {
     ...Object.fromEntries(Object.entries(base)),
+    colorNeutralBackground1: scheme === "light" ? "#ffffff" : "#0d1117",
+    colorNeutralBackground2: scheme === "light" ? "#f6f8fa" : "#151b23",
+    colorNeutralBackground3: scheme === "light" ? "#f6f8fa" : "#151b23",
+    colorNeutralBackground1Hover: scheme === "light" ? "#f3f4f6" : "#212830",
+    colorNeutralForeground1: scheme === "light" ? "#1f2328" : "#f0f6fc",
+    colorNeutralForeground2: scheme === "light" ? "#59636e" : "#b1bac4",
+    colorNeutralForeground3: scheme === "light" ? "#59636e" : "#9198a1",
+    colorNeutralStroke1: scheme === "light" ? "#d1d9e0" : "#3d444d",
+    colorNeutralStroke2: scheme === "light" ? "#d1d9e0" : "#3d444d",
+    colorBrandForegroundLink: scheme === "light" ? "#0969da" : "#79c0ff",
+    colorBrandForegroundLinkHover: scheme === "light" ? "#0550ae" : "#a5d6ff",
+    borderRadiusMedium: "6px",
     fontFamilyBase: FONT_SANS,
     fontFamilyMonospace: FONT_MONO,
     colorNeutralForegroundOnBrand: ON_BRAND_INK,
@@ -103,7 +102,6 @@ function applyColorScheme(scheme: ColorScheme): void {
   setMetaThemeColor(String(theme.colorNeutralBackground1));
 }
 
-/** Applies the theme now and keeps it in sync with the system setting. Returns a cleanup. */
 export function installColorScheme(): () => void {
   const light = window.matchMedia("(prefers-color-scheme: light)");
   const sync = () => applyColorScheme(resolveColorScheme(light.matches));

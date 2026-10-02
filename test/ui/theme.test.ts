@@ -68,16 +68,16 @@ describe("color scheme", () => {
     expect(contrastRatio(token(scheme, "colorStrokeFocus2"), background)).toBeGreaterThanOrEqual(3);
   });
 
-  it("uses a lighter orange for links in dark mode than in light mode", () => {
+  it("keeps dark-mode links lighter than light-mode links", () => {
     const light = hexToHsl(token("light", "colorBrandForegroundLink")).l;
     const dark = hexToHsl(token("dark", "colorBrandForegroundLink")).l;
     expect(dark).toBeGreaterThan(light);
   });
 
-  it("applies the app font stacks on top of the Fluent tokens", () => {
+  it("applies system UI and code font stacks", () => {
     const theme = createAppTheme("dark");
-    expect(String(theme.fontFamilyBase)).toContain("Hanken Grotesk");
-    expect(String(theme.fontFamilyMonospace)).toContain("IBM Plex Mono");
+    expect(String(theme.fontFamilyBase)).toContain("-apple-system");
+    expect(String(theme.fontFamilyMonospace)).toContain("ui-monospace");
     expect(theme.spacingVerticalM).toBeDefined();
   });
 });
