@@ -22,7 +22,7 @@
     },
     {
       "binding": "GIT",
-      "service": "gitedge-git"
+      "service": "gitedge-git-artifacts"
     },
     {
       "binding": "DEPLOY",

@@ -6,7 +6,7 @@
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
-  "services": [{ "binding": "GIT", "service": "gitedge-git" }],
+  "services": [{ "binding": "GIT", "service": "gitedge-git-artifacts" }],
   "d1_databases": [
     {
       "binding": "DB",

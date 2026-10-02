@@ -19,6 +19,9 @@ assert.ok(configuredHost, "Gateway wrangler.jsonc must define a custom HTTPS dom
 const origin = new URL(process.env.GITEDGE_PRODUCTION_URL ?? `https://${configuredHost}`);
 assert.equal(origin.protocol, "https:", "Production smoke requires an HTTPS Gateway URL.");
 assert.equal(origin.hostname, configuredHost, "Target must match the Gateway custom domain.");
+assert.equal(origin.username, "");
+assert.equal(origin.password, "");
+assert.equal(origin.port, "");
 assert.equal(origin.pathname, "/", "Production URL must be an origin without a path.");
 assert.equal(origin.search, "");
 assert.equal(origin.hash, "");
@@ -126,7 +129,11 @@ await persistCredentials();
 try {
   const registerResponse = await fetch(new URL("/api/auth/register", origin), {
     method: "POST",
-    headers: { Accept: "application/json", "Content-Type": "application/json", Origin: origin.origin },
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      Origin: origin.origin,
+    },
     body: JSON.stringify({ identifier, password }),
   });
   const registerText = await registerResponse.text();
@@ -187,9 +194,13 @@ try {
     await mkdir(sourceDirectory, { mode: 0o700 });
     await git(["init", "-b", "main"], sourceDirectory);
     await git(["remote", "add", "origin", repositoryUrl], sourceDirectory);
-    await writeFile(path.join(sourceDirectory, "README.md"), "# Production smoke\n\nGitEdge readback.\n", {
-      mode: 0o600,
-    });
+    await writeFile(
+      path.join(sourceDirectory, "README.md"),
+      "# Production smoke\n\nGitEdge readback.\n",
+      {
+        mode: 0o600,
+      }
+    );
     await git(["add", "README.md"], sourceDirectory);
     await git(
       [
@@ -209,10 +220,7 @@ try {
     await git(["clone", repositoryUrl, cloneDirectory], rootDirectory, credential.token);
     const cloneContent = await readFile(path.join(cloneDirectory, "README.md"), "utf8");
     assert.equal(cloneContent, "# Production smoke\n\nGitEdge readback.\n");
-    const tree = await api(
-      `/api/git/repositories/${repository.id}/tree?ref=main`,
-      "GET"
-    );
+    const tree = await api(`/api/git/repositories/${repository.id}/tree?ref=main`, "GET");
     assert.ok(tree.entries.some((entry) => entry.name === "README.md"));
     const file = await api(
       `/api/git/repositories/${repository.id}/file?ref=main&path=README.md`,
@@ -247,6 +255,10 @@ try {
     if (visibility === "public")
       assert.ok(anonymousTree.entries.some((entry) => entry.name === "README.md"));
     if (visibility === "private") {
+      const privateAdvertisement = await fetch(
+        `${repositoryUrl}/info/refs?service=git-upload-pack`
+      );
+      assert.equal(privateAdvertisement.status, 404);
       await expectGitFailure(["ls-remote", repositoryUrl], rootDirectory);
     } else {
       assert.match(await git(["ls-remote", repositoryUrl], rootDirectory), /refs\/heads\/main/);
@@ -255,6 +267,10 @@ try {
 
     await api(`/api/auth/tokens/${credential.id}`, "DELETE", undefined, { status: 200 });
     result.checks.patRevoked = true;
+    const rejectedToken = await fetch(`${repositoryUrl}/info/refs?service=git-upload-pack`, {
+      headers: { Authorization: basicAuthorization(credential.token) },
+    });
+    assert.equal(rejectedToken.status, 401);
     await expectGitFailure(["ls-remote", "origin"], cloneDirectory, credential.token);
     result.checks.revokedPatRejectedByGitTransport = true;
     result.completed = true;
