@@ -98,6 +98,7 @@ onMounted(load);
           v-model="filter"
           type="search"
           :placeholder="t('findOrganization')"
+          :aria-label="t('findOrganization')"
       /></label>
       <div class="organization-list-sidebar-title">{{ t("yourOrganizations") }}</div>
       <RouterLink
@@ -141,6 +142,7 @@ onMounted(load);
               v-model="filter"
               type="search"
               :placeholder="t('findOrganization')"
+              :aria-label="t('findOrganization')"
           /></label>
         </div>
         <StatusState

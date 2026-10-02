@@ -550,3 +550,62 @@ details > summary::-webkit-details-marker {
 .deploy-progress li[data-state="failed"] {
   color: var(--colorPaletteRedForeground1);
 }
+
+.text-field,
+.textarea-field,
+.select-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+  font-weight: 400;
+}
+.field-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 14px;
+  line-height: 20px;
+}
+.text-field > input,
+.textarea-field > textarea {
+  width: 100%;
+}
+.select-control {
+  display: flex;
+  position: relative;
+  min-width: 0;
+}
+.select-control > select {
+  width: 100%;
+  appearance: none;
+  padding-right: 32px;
+  background: var(--subtle);
+  cursor: pointer;
+}
+.select-control > .icon {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  pointer-events: none;
+  color: var(--muted);
+}
+.ref-picker > .field-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.startup-state {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  background: var(--bg);
+  font-size: 14px;
+}

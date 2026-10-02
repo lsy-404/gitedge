@@ -21,7 +21,10 @@ const loading = ref(true);
 const error = ref("");
 const formError = ref("");
 const saving = ref(false);
-const form = ref({ identifier: "", role: "member" as "owner" | "member" });
+const form = ref<{ identifier: string; role: "owner" | "member" }>({
+  identifier: "",
+  role: "member",
+});
 async function load() {
   loading.value = true;
   try {
@@ -142,8 +145,8 @@ onMounted(load);
               :label="t('role')"
               @update:model-value="form.role = oneOf(roles, $event, 'member')"
             >
-              <fluent-option value="member">{{ t("memberRole") }}</fluent-option
-              ><fluent-option value="owner">{{ t("ownerRole") }}</fluent-option>
+              <option value="member">{{ t("memberRole") }}</option>
+              <option value="owner">{{ t("ownerRole") }}</option>
             </SelectField>
             <NoticeBar v-if="formError" intent="error">{{ formError }}</NoticeBar>
             <div class="form-actions">

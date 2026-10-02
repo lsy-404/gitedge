@@ -137,7 +137,10 @@ watch(
           }}</span></RouterLink
         >
       </nav>
-      <div class="repository-heading">
+      <div
+        v-if="!['issues', 'pulls', 'discussions', 'wiki'].includes(section)"
+        class="repository-heading"
+      >
         <div class="repository-heading-inner">
           <AppIcon name="repo" :size="20" />
           <h1>

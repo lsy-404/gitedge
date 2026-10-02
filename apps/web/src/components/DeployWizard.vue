@@ -323,10 +323,10 @@ const migrationPaths = computed(
             :label="t('deployWizard.account')"
             @update:model-value="accountConfirmed = false"
           >
-            <fluent-option value="" disabled>{{ t("deployWizard.chooseAccount") }}</fluent-option>
-            <fluent-option v-for="account in accounts" :key="account.id" :value="account.id">
+            <option value="" disabled>{{ t("deployWizard.chooseAccount") }}</option>
+            <option v-for="account in accounts" :key="account.id" :value="account.id">
               {{ account.name }}
-            </fluent-option>
+            </option>
           </SelectField>
           <fluent-button type="button" :disabled="loading" @click="chooseAccount">
             {{ t("deployWizard.chooseAccount") }}

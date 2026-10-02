@@ -23,7 +23,11 @@ const error = ref("");
 const showForm = ref(false);
 const saving = ref(false);
 const formError = ref("");
-const form = ref({ name: "", description: "", visibility: "private" as "public" | "private" });
+const form = ref<{ name: string; description: string; visibility: Repository["visibility"] }>({
+  name: "",
+  description: "",
+  visibility: "private",
+});
 const organizations = ref<Organization[]>([]);
 const owner = ref("");
 const filter = ref(typeof route.query.q === "string" ? route.query.q : "");
@@ -130,7 +134,12 @@ onMounted(load);
       </div>
       <label class="workspace-search">
         <AppIcon name="search" />
-        <input v-model="filter" type="search" :placeholder="t('findRepository')" />
+        <input
+          v-model="filter"
+          type="search"
+          :placeholder="t('findRepository')"
+          :aria-label="t('findRepository')"
+        />
       </label>
       <StatusState
         v-if="loading || error"
@@ -189,7 +198,12 @@ onMounted(load);
               </div>
               <label class="workspace-search dashboard-list-search">
                 <AppIcon name="search" />
-                <input v-model="filter" type="search" :placeholder="t('findRepository')" />
+                <input
+                  v-model="filter"
+                  type="search"
+                  :placeholder="t('findRepository')"
+                  :aria-label="t('findRepository')"
+                />
               </label>
             </div>
             <StatusState
@@ -339,15 +353,16 @@ onMounted(load);
         <p class="muted">{{ t("repositoryOnboardingText") }}</p>
         <form class="form-stack" @submit.prevent="createRepository">
           <SelectField v-model="owner" :label="t('repositoryOwner')" required>
-            <fluent-option :value="sessionState.user?.identifier"
-              >{{ sessionState.user?.identifier }} ({{ t("personal") }})</fluent-option
-            >
-            <fluent-option
+            <option :value="sessionState.user?.identifier">
+              {{ sessionState.user?.identifier }} ({{ t("personal") }})
+            </option>
+            <option
               v-for="organization in organizations"
               :key="organization.slug"
               :value="organization.slug"
-              >{{ organization.displayName }}</fluent-option
             >
+              {{ organization.displayName }}
+            </option>
           </SelectField>
           <TextField v-model="form.name" required>{{ t("repositoryName") }}</TextField>
           <TextField v-model="form.description">{{ t("description") }}</TextField>
@@ -356,8 +371,8 @@ onMounted(load);
             :label="t('visibility')"
             @update:model-value="form.visibility = oneOf(visibilities, $event, 'private')"
           >
-            <fluent-option value="private">{{ t("private") }}</fluent-option
-            ><fluent-option value="public">{{ t("public") }}</fluent-option>
+            <option value="private">{{ t("private") }}</option>
+            <option value="public">{{ t("public") }}</option>
           </SelectField>
           <FormActions :saving="saving" :error="formError" @cancel="closeForm" />
         </form>

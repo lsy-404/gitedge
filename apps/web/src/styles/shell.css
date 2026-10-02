@@ -414,11 +414,11 @@
   }
 }
 
-.mobile-search {
+.global-bar > .mobile-search {
   display: none;
 }
 @media (max-width: 760px) {
-  .mobile-search {
+  .global-bar > .mobile-search {
     display: inline-flex;
   }
   .global-search {

@@ -1088,3 +1088,26 @@
     flex-wrap: wrap;
   }
 }
+
+.workspace-search input[type="search"] {
+  border: 0;
+  border-radius: 0;
+  min-height: 26px;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  outline: 0;
+}
+.workspace-page {
+  --workspace-panel: var(--bg);
+}
+.dashboard-repositories > header,
+.dashboard-guide > header {
+  background: var(--subtle);
+}
+.auth-page {
+  max-width: 360px;
+}
+.auth-page .auth-card {
+  background: var(--subtle);
+}

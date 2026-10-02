@@ -115,6 +115,15 @@ describe("repository Code view", () => {
         const url = new URL(String(input), "https://gitedge.test");
         if (url.pathname.endsWith("/refs"))
           return jsonResponse([{ name: "refs/heads/main", oid: "commit-1" }]);
+        if (url.pathname.endsWith("/tree"))
+          return jsonResponse({
+            ref: "main",
+            oid: "tree-1",
+            path: "",
+            entries: [
+              { name: "empty.txt", path: "empty.txt", oid: "blob-1", mode: "100644", type: "blob" },
+            ],
+          });
         if (url.pathname.endsWith("/file"))
           return jsonResponse({
             path: "empty.txt",

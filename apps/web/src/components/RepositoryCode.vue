@@ -32,6 +32,7 @@ import {
 import TextField from "./TextField.vue";
 import { highlightedCode } from "../lib/markdown";
 import MarkdownContent from "./MarkdownContent.vue";
+import DiffViewer from "./DiffViewer.vue";
 
 const props = defineProps<{ repository: Repository; section: string }>();
 const { t } = useI18n();
@@ -70,9 +71,9 @@ const tokenScopes = ["read", "write"] as const;
 const tokenScope = ref<(typeof tokenScopes)[number]>("read");
 const tokenBusy = ref(false);
 const tokenExpired = ref(false);
-let tokenExpiryTimer: ReturnType<typeof setTimeout> | undefined;
+let tokenExpiryTimer: number | undefined;
 let tokenRequestVersion = 0;
-let clockTimer: ReturnType<typeof setInterval> | undefined;
+let clockTimer: number | undefined;
 const refName = computed(() => String(route.query.ref || props.repository.defaultBranch));
 const filePath = computed(() => {
   const value = route.params.path;
@@ -91,6 +92,12 @@ const sessionMarkers = computed(
   () => graphView.value?.sessionsByOid ?? new Map<string, GraphSessionMarker[]>()
 );
 const title = computed(() => filePath.value.split("/").at(-1) || props.repository.name);
+const fileMode = ref<"preview" | "code">("preview");
+const markdownFile = computed(() => /\.(md|markdown)$/i.test(filePath.value));
+const markdownBase = computed(
+  () =>
+    `/${props.repository.owner}/${props.repository.name}/blob/${filePath.value.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(refName.value)}`
+);
 const queryText = ref("");
 const showFileSearch = ref(false);
 const showCloneMenu = ref(false);
@@ -188,9 +195,14 @@ async function load() {
       if (version !== requestVersion) return;
     }
     if (isBlob.value && filePath.value) {
-      const fileData = await api.file(props.repository.id, refName.value, filePath.value);
+      const parent = filePath.value.split("/").slice(0, -1).join("/");
+      const [fileData, directory] = await Promise.all([
+        api.file(props.repository.id, refName.value, filePath.value),
+        api.tree(props.repository.id, refName.value, parent),
+      ]);
       if (version !== requestVersion) return;
       file.value = fileData;
+      tree.value = directory;
       return;
     }
     const treeData = await api.tree(props.repository.id, refName.value, filePath.value);
@@ -268,7 +280,7 @@ async function issueToken() {
     if (tokenExpired.value) token.value = clearOneTimeToken(issuedToken);
     clearTimeout(tokenExpiryTimer);
     if (!tokenExpired.value) {
-      tokenExpiryTimer = setTimeout(
+      tokenExpiryTimer = window.setTimeout(
         () => {
           if (requestVersion !== tokenRequestVersion || !token.value) return;
           token.value = clearOneTimeToken(token.value);
@@ -319,6 +331,24 @@ function rawFile() {
   window.open(url, "_blank", "noopener");
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
+function dismissCodeMenu(event: Event) {
+  if (event instanceof KeyboardEvent && event.key === "Escape") showCloneMenu.value = false;
+  if (
+    event instanceof PointerEvent &&
+    event.target instanceof Element &&
+    !event.target.closest(".clone-menu-wrap")
+  )
+    showCloneMenu.value = false;
+}
+watch(
+  () => route.fullPath,
+  () => {
+    showCloneMenu.value = false;
+    showFileSearch.value = false;
+    queryText.value = "";
+    fileMode.value = "preview";
+  }
+);
 function fileHref(path: string, view: "tree" | "blob" = "blob") {
   return repositoryCodeLocation(
     props.repository.owner,
@@ -360,11 +390,15 @@ watch(
   { immediate: true }
 );
 onMounted(() => {
-  clockTimer = setInterval(() => {
+  document.addEventListener("keydown", dismissCodeMenu);
+  document.addEventListener("pointerdown", dismissCodeMenu);
+  clockTimer = window.setInterval(() => {
     now.value = Date.now();
   }, 30_000);
 });
 onUnmounted(() => {
+  document.removeEventListener("keydown", dismissCodeMenu);
+  document.removeEventListener("pointerdown", dismissCodeMenu);
   clearInterval(clockTimer);
   clearTimeout(tokenExpiryTimer);
   tokenRequestVersion += 1;
@@ -379,22 +413,15 @@ onUnmounted(() => {
           class="ref-picker"
           :model-value="refName"
           :label="t('branchOrTag')"
+          :disabled="!refs.length"
           @update:model-value="changeRef"
         >
-          <fluent-option
-            v-for="item in shortRefs(branchRefs)"
-            :key="item.name"
-            :value="item.shortName"
-          >
+          <option v-for="item in shortRefs(branchRefs)" :key="item.name" :value="item.shortName">
             {{ item.shortName }}
-          </fluent-option>
-          <fluent-option
-            v-for="item in shortRefs(tagRefs)"
-            :key="item.name"
-            :value="item.shortName"
-          >
+          </option>
+          <option v-for="item in shortRefs(tagRefs)" :key="item.name" :value="item.shortName">
             {{ item.shortName }} · {{ t("tags") }}
-          </fluent-option>
+          </option>
         </SelectField>
         <span class="repo-count"
           >{{ branchRefs.length }} {{ t("branches") }} · {{ tagRefs.length }} {{ t("tags") }}</span
@@ -416,10 +443,15 @@ onUnmounted(() => {
           ><AppIcon slot="start" name="search" />{{ t("goToFile") }}</fluent-button
         >
         <div class="clone-menu-wrap">
-          <fluent-button appearance="primary" @click="showCloneMenu = !showCloneMenu"
-            ><AppIcon slot="start" name="code" />{{ t("codeMenu") }}
-            <AppIcon slot="end" name="chevron"
-          /></fluent-button>
+          <button
+            type="button"
+            class="btn btn-primary"
+            :aria-expanded="showCloneMenu"
+            @click="showCloneMenu = !showCloneMenu"
+          >
+            <AppIcon slot="start" name="code" />{{ t("codeMenu") }}
+            <AppIcon slot="end" name="chevron" />
+          </button>
           <div v-if="showCloneMenu" class="clone-menu box">
             <strong>{{ t("cloneWithHttps") }}</strong>
             <div class="clone-url">
@@ -442,8 +474,8 @@ onUnmounted(() => {
                 :label="t('permission')"
                 @update:model-value="tokenScope = oneOf(tokenScopes, $event, 'read')"
               >
-                <fluent-option value="read">{{ t("readToken") }}</fluent-option
-                ><fluent-option value="write">{{ t("writeToken") }}</fluent-option>
+                <option value="read">{{ t("readToken") }}</option>
+                <option value="write">{{ t("writeToken") }}</option>
               </SelectField>
               <fluent-button
                 type="button"
@@ -477,11 +509,17 @@ onUnmounted(() => {
     <div v-else-if="emptyRepository" class="empty-repository box">
       <h2>{{ t("emptyRepositoryTitle") }}</h2>
       <p>{{ t("emptyRepositoryText") }}</p>
+      <code>mkdir {{ repository.name }} &amp;&amp; cd {{ repository.name }}</code>
+      <code>git init</code>
       <code>echo "# {{ repository.name }}" &gt; README.md</code
       ><code>git add README.md &amp;&amp; git commit -m "first commit"</code
       ><code>git branch -M {{ repository.defaultBranch }}</code
       ><code>git remote add origin {{ cloneUrl }}</code
       ><code>git push -u origin {{ repository.defaultBranch }}</code>
+      <h3>{{ t("pushExistingRepository") }}</h3>
+      <code>git remote add gitedge {{ cloneUrl }}</code>
+      <code>git push gitedge --all</code>
+      <code>git push gitedge --tags</code>
     </div>
     <template v-else-if="section === 'code'">
       <div v-if="latestCommit && !isBlob" class="latest-commit box">
@@ -526,11 +564,37 @@ onUnmounted(() => {
             )
           "
         >
-          <AppIcon :name="entry.type === 'tree' ? 'folder' : 'file'" /><span>{{ entry.name }}</span
+          <AppIcon
+            :name="entry.type === 'tree' ? 'folder' : 'file'"
+            :class="{ 'folder-icon': entry.type === 'tree' }"
+          /><span>{{ entry.name }}</span
           ><small>{{ entry.type === "tree" ? t("directory") : entry.oid.slice(0, 8) }}</small>
         </RouterLink>
         <div v-if="emptyReason === 'tree'" class="state">{{ t("emptyTree") }}</div>
       </div>
+      <aside v-if="isBlob && file" class="file-tree-panel">
+        <div class="file-tree-heading">
+          <AppIcon name="folder" /><strong>{{ t("files") }}</strong>
+        </div>
+        <RouterLink
+          class="file-tree-root"
+          :to="`/${repository.owner}/${repository.name}?ref=${encodeURIComponent(refName)}`"
+          ><AppIcon name="repo" />{{ repository.name }}</RouterLink
+        >
+        <div class="file-tree-directory muted">
+          {{ filePath.split("/").slice(0, -1).join("/") || "/" }}
+        </div>
+        <RouterLink
+          v-for="entry in filteredEntries"
+          :key="entry.path"
+          class="file-tree-item"
+          :class="{ selected: entry.path === filePath }"
+          :to="fileHref(entry.path, entry.type === 'tree' ? 'tree' : 'blob')"
+          ><AppIcon :name="entry.type === 'tree' ? 'folder' : 'file'" /><span>{{
+            entry.name
+          }}</span></RouterLink
+        >
+      </aside>
       <div v-if="isBlob && file" class="file-view box">
         <div class="file-breadcrumb">
           <RouterLink
@@ -545,10 +609,31 @@ onUnmounted(() => {
           >
         </div>
         <div class="file-actions">
-          <span>{{ file.size }} {{ t("bytes") }} · {{ file.oid.slice(0, 7) }}</span>
+          <span v-if="markdownFile" class="file-mode-tabs"
+            ><button
+              class="btn btn-sm"
+              :aria-pressed="fileMode === 'preview'"
+              @click="fileMode = 'preview'"
+            >
+              {{ t("preview") }}</button
+            ><button
+              class="btn btn-sm"
+              :aria-pressed="fileMode === 'code'"
+              @click="fileMode = 'code'"
+            >
+              {{ t("code") }}
+            </button></span
+          ><span>{{ file.size }} {{ t("bytes") }} · {{ file.oid.slice(0, 7) }}</span>
           <div>
-            <fluent-button appearance="outline" @click="rawFile">{{ t("raw") }}</fluent-button
-            ><fluent-button appearance="outline" @click="downloadText"
+            <fluent-button
+              appearance="outline"
+              :disabled="file.binary || file.content === null"
+              @click="rawFile"
+              >{{ t("raw") }}</fluent-button
+            ><fluent-button
+              appearance="outline"
+              :disabled="file.binary || file.content === null"
+              @click="downloadText"
               ><AppIcon slot="start" name="download" />{{ t("download") }}</fluent-button
             >
           </div>
@@ -556,11 +641,17 @@ onUnmounted(() => {
         <p v-if="file.binary || file.content === null" class="muted box-form">
           {{ t("binaryPreviewUnavailable") }}
         </p>
+        <MarkdownContent
+          v-else-if="markdownFile && fileMode === 'preview'"
+          class="file-markdown"
+          :source="file.content"
+          :base-url="markdownBase"
+        />
         <pre v-else class="code-source"><code class="line-gutter" aria-hidden="true">{{
           fileLineNumbers.join("\n")
         }}</code><code class="highlighted-file" v-html="highlightedContent"></code></pre>
       </div>
-      <aside class="about-panel box">
+      <aside v-if="!isBlob" class="about-panel box">
         <div class="box-header">
           <strong>{{ t("about") }}</strong
           ><RouterLink
@@ -748,22 +839,14 @@ onUnmounted(() => {
       <p class="eyebrow">{{ t("compare") }}</p>
       <div class="compare-form">
         <SelectField v-model="compareBase" :label="t('baseBranch')">
-          <fluent-option
-            v-for="item in shortRefs(branchRefs)"
-            :key="item.name"
-            :value="item.shortName"
-          >
+          <option v-for="item in shortRefs(branchRefs)" :key="item.name" :value="item.shortName">
             {{ item.shortName }}
-          </fluent-option>
+          </option>
         </SelectField>
         <SelectField v-model="compareHead" :label="t('headBranch')">
-          <fluent-option
-            v-for="item in shortRefs(branchRefs)"
-            :key="item.name"
-            :value="item.shortName"
-          >
+          <option v-for="item in shortRefs(branchRefs)" :key="item.name" :value="item.shortName">
             {{ item.shortName }}
-          </fluent-option>
+          </option>
         </SelectField>
         <fluent-button type="button" appearance="primary" @click="load">{{
           t("compare")
@@ -776,7 +859,7 @@ onUnmounted(() => {
       <div v-for="change in comparison?.files" :key="change.path" class="item-row">
         <strong>{{ change.path }}</strong
         ><StatusBadge>{{ change.type }}</StatusBadge>
-        <pre v-if="change.patch" class="diff-preview">{{ change.patch }}</pre>
+        <DiffViewer v-if="change.patch" :patch="change.patch" />
       </div>
     </section>
   </section>

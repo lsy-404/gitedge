@@ -67,7 +67,10 @@ export function renderMarkdown(source: string, baseUrl?: string): string {
   });
   for (const input of fragment.querySelectorAll("input")) {
     if (input.type !== "checkbox") input.remove();
-    else input.disabled = true;
+    else {
+      input.disabled = true;
+      input.closest("li")?.classList.add("task-list-item");
+    }
   }
   for (const element of fragment.querySelectorAll("a[href], img[src]")) {
     const attribute = element.tagName === "A" ? "href" : "src";

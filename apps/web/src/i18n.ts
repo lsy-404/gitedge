@@ -1,5 +1,8 @@
 import { createI18n } from "vue-i18n";
 import github from "./i18n/github";
+import workspace from "./i18n/workspace";
+import codeMessages from "./i18n/code";
+import collaborationMessages from "./i18n/collaboration";
 
 const messages = {
   "zh-CN": {
@@ -613,7 +616,19 @@ export const i18n = createI18n({
   locale: "zh-CN",
   fallbackLocale: "en",
   messages: {
-    "zh-CN": { ...messages["zh-CN"], ...github["zh-CN"] },
-    en: { ...messages.en, ...github.en },
+    "zh-CN": {
+      ...messages["zh-CN"],
+      ...github["zh-CN"],
+      ...workspace["zh-CN"],
+      ...codeMessages["zh-CN"],
+      ...collaborationMessages["zh-CN"],
+    },
+    en: {
+      ...messages.en,
+      ...github.en,
+      ...workspace.en,
+      ...codeMessages.en,
+      ...collaborationMessages.en,
+    },
   },
 });

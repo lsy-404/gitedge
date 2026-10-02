@@ -1,15 +1,19 @@
 import { createRouter, createWebHistory } from "vue-router";
-import AuthView from "./pages/AuthView.vue";
-import DashboardView from "./pages/DashboardView.vue";
-import RepositoryView from "./pages/RepositoryView.vue";
-import OrganizationsView from "./pages/OrganizationsView.vue";
-import OrganizationView from "./pages/OrganizationView.vue";
-import AccountSettingsView from "./pages/AccountSettingsView.vue";
-import AgentSettingsView from "./pages/AgentSettingsView.vue";
+const AuthView = () => import("./pages/AuthView.vue");
+const DashboardView = () => import("./pages/DashboardView.vue");
+const RepositoryView = () => import("./pages/RepositoryView.vue");
+const OrganizationsView = () => import("./pages/OrganizationsView.vue");
+const OrganizationView = () => import("./pages/OrganizationView.vue");
+const AccountSettingsView = () => import("./pages/AccountSettingsView.vue");
+const AgentSettingsView = () => import("./pages/AgentSettingsView.vue");
 import { refreshSession, sessionState } from "./lib/session";
 
 export const router = createRouter({
   history: createWebHistory(),
+  scrollBehavior(to, from, savedPosition) {
+    if (savedPosition) return savedPosition;
+    return to.path !== from.path ? { top: 0 } : false;
+  },
   routes: [
     { path: "/", redirect: "/dashboard" },
     { path: "/login", component: AuthView, meta: { public: true } },

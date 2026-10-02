@@ -128,3 +128,8 @@
 .hljs-attribute {
   color: light-dark(#116329, #7ee787);
 }
+
+.markdown-body .task-list-item {
+  list-style: none;
+  margin-left: -1.3em;
+}

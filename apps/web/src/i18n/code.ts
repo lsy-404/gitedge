@@ -1,5 +1,7 @@
 export const codeMessages = {
   "zh-CN": {
+    files: "文件",
+    pushExistingRepository: "或推送已有仓库",
     codeSearchPlaceholder: "按名称筛选文件…",
     goToFile: "转到文件",
     codeMenu: "代码",
@@ -15,6 +17,8 @@ export const codeMessages = {
     raw: "原始文件",
   },
   en: {
+    files: "Files",
+    pushExistingRepository: "Or push an existing repository",
     codeSearchPlaceholder: "Filter files by name…",
     goToFile: "Go to file",
     codeMenu: "Code",

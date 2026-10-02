@@ -32,7 +32,7 @@
   gap: 8px;
   flex-wrap: wrap;
 }
-.toolbar-row.code-controls > fluent-field.ref-picker {
+.toolbar-row.code-controls > .ref-picker {
   width: 190px;
   min-width: 190px;
   max-width: 190px;
@@ -40,7 +40,7 @@
   height: 32px;
   position: relative;
 }
-.toolbar-row.code-controls > fluent-field.ref-picker > label[slot="label"] {
+.toolbar-row.code-controls > .ref-picker > .field-label {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -285,5 +285,131 @@
   }
   .about-panel {
     position: static;
+  }
+}
+
+.code-section > .about-panel {
+  grid-row: 1 / span 4;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.code-section > .about-panel .box-header {
+  padding: 0 0 12px;
+  background: none;
+  border: 0;
+  font-size: 16px;
+}
+.code-section > .about-panel > p {
+  padding: 0;
+  margin: 0 0 16px;
+  line-height: 1.5;
+}
+.code-section > .about-panel > dl {
+  padding: 16px 0;
+  margin: 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.code-section > .about-panel > a {
+  display: block;
+  margin-top: 16px;
+  padding: 0;
+}
+.code-section > .latest-commit {
+  margin-bottom: -16px;
+  border-radius: 6px 6px 0 0;
+  background: var(--subtle);
+}
+.code-section > .latest-commit + .file-panel {
+  border-radius: 0 0 6px 6px;
+}
+.file-panel > .file-table-head {
+  display: none;
+}
+.file-entry .folder-icon {
+  color: light-dark(#54aeff, #54aeff);
+}
+
+.file-mode-tabs {
+  display: flex;
+  gap: 0;
+}
+.file-mode-tabs .btn {
+  border-radius: 0;
+}
+.file-mode-tabs .btn:first-child {
+  border-radius: 6px 0 0 6px;
+}
+.file-mode-tabs .btn:last-child {
+  border-radius: 0 6px 6px 0;
+  margin-left: -1px;
+}
+.file-mode-tabs .btn[aria-pressed="true"] {
+  background: var(--bg);
+  font-weight: 600;
+}
+.file-markdown {
+  padding: 24px 32px;
+}
+
+.code-section:has(> .file-view) {
+  grid-template-columns: 220px minmax(0, 1fr);
+}
+.code-section:has(> .file-view) > .code-toolbar,
+.code-section:has(> .file-view) > .token-once {
+  grid-column: 1 / -1;
+}
+.code-section:has(> .file-view) > .file-view {
+  grid-column: 2;
+}
+.file-tree-panel {
+  grid-column: 1;
+  min-width: 0;
+  padding-right: 16px;
+  border-right: 1px solid var(--border);
+}
+.file-tree-heading {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 10px 0 20px;
+}
+.file-tree-root,
+.file-tree-item {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 8px;
+  border-radius: 6px;
+  color: var(--text);
+}
+.file-tree-directory {
+  padding: 12px 8px 4px;
+  font-size: 12px;
+}
+.file-tree-item > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-tree-item:hover,
+.file-tree-item.selected {
+  text-decoration: none;
+  background: var(--subtle);
+}
+.file-tree-item.selected {
+  box-shadow: -3px 0 var(--accent);
+  font-weight: 600;
+}
+@media (max-width: 760px) {
+  .code-section:has(> .file-view) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .code-section:has(> .file-view) > .file-view {
+    grid-column: 1;
+  }
+  .file-tree-panel {
+    display: none;
   }
 }

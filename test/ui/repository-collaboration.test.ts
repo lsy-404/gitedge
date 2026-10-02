@@ -147,7 +147,7 @@ function findButton(root: HTMLElement, text: string): HTMLElement {
 function fill(field: HTMLElement, value: string): void {
   Reflect.set(field, "value", value);
   field.dispatchEvent(
-    new Event(field.localName === "fluent-dropdown" ? "change" : "input", { bubbles: true })
+    new Event(field.localName === "select" ? "change" : "input", { bubbles: true })
   );
 }
 
@@ -321,9 +321,9 @@ describe("RepositoryCollaboration rendered workflows", () => {
     await settle();
     const createForm = mounted.root.querySelector<HTMLFormElement>(".create-form");
     if (!createForm) throw new Error("Issue creation form did not open.");
-    const createInputs = createForm.querySelectorAll<HTMLElement>("fluent-text-input");
+    const createInputs = createForm.querySelectorAll<HTMLElement>("input");
     fill(createInputs[0], "Parser regression");
-    fill(control(createForm, "fluent-textarea"), "Steps to reproduce");
+    fill(control(createForm, "textarea"), "Steps to reproduce");
     fill(createInputs[1], "bug, regression");
     fill(createInputs[2], "alice, bob");
     submit(createForm);
@@ -335,8 +335,12 @@ describe("RepositoryCollaboration rendered workflows", () => {
       labels: ["bug", "regression"],
       assignees: ["alice", "bob"],
     });
-    expect(mounted.root.querySelector(".detail-card h2")?.textContent).toContain(
-      "Parser regression"
+    await vi.waitFor(
+      () =>
+        expect(mounted.root.querySelector(".detail-heading h2")?.textContent).toContain(
+          "Parser regression"
+        ),
+      { timeout: 10000 }
     );
     expect(issuesSpy).toHaveBeenCalled();
 
@@ -344,10 +348,10 @@ describe("RepositoryCollaboration rendered workflows", () => {
     await settle();
     const editForm = mounted.root.querySelector<HTMLFormElement>(".item-edit");
     if (!editForm) throw new Error("Issue edit form did not open.");
-    fill(control(editForm, "fluent-text-input"), "Parser regression fixed");
-    fill(control(editForm, "fluent-textarea"), "Updated reproduction details");
-    fill(editForm.querySelectorAll<HTMLElement>("fluent-text-input")[1], "bug, fixed");
-    fill(editForm.querySelectorAll<HTMLElement>("fluent-text-input")[2], "alice");
+    fill(control(editForm, "input"), "Parser regression fixed");
+    fill(control(editForm, "textarea"), "Updated reproduction details");
+    fill(editForm.querySelectorAll<HTMLElement>("input")[1], "bug, fixed");
+    fill(editForm.querySelectorAll<HTMLElement>("input")[2], "alice");
     submit(editForm);
     await settle();
     expect(updateIssueSpy).toHaveBeenCalledWith("repo-1", 7, {
@@ -356,13 +360,13 @@ describe("RepositoryCollaboration rendered workflows", () => {
       labels: ["bug", "fixed"],
       assignees: ["alice"],
     });
-    expect(mounted.root.querySelector(".detail-card h2")?.textContent).toContain(
+    expect(mounted.root.querySelector(".detail-titlebar h2")?.textContent).toContain(
       "Parser regression fixed"
     );
 
     const commentForm = mounted.root.querySelector<HTMLFormElement>(".comments-panel form");
     if (!commentForm) throw new Error("Issue comment form was not rendered.");
-    fill(control(commentForm, "fluent-textarea"), "Confirmed on latest build");
+    fill(control(commentForm, "textarea"), "Confirmed on latest build");
     submit(commentForm);
     await settle();
     expect(createCommentSpy).toHaveBeenCalledWith(
@@ -377,7 +381,7 @@ describe("RepositoryCollaboration rendered workflows", () => {
     findButton(mounted.root, "Close item").click();
     await settle();
     expect(updateIssueSpy).toHaveBeenLastCalledWith("repo-1", 7, { state: "closed" });
-    expect(mounted.root.querySelector(".detail-heading .eyebrow")?.textContent).toContain("Closed");
+    expect(mounted.root.querySelector(".detail-state-row .badge")?.textContent).toContain("Closed");
     mounted.unmount();
   });
 
@@ -460,7 +464,9 @@ describe("RepositoryCollaboration rendered workflows", () => {
     const mergePullSpy = vi.spyOn(api, "mergePull").mockResolvedValue(mergedPull);
     const mounted = await mountSection("/_verify/pulls/12", "pulls");
 
-    expect(mounted.root.querySelector(".detail-titlebar h2")?.textContent).toBe(openPull.title);
+    expect(mounted.root.querySelector(".detail-titlebar h2")?.textContent).toContain(
+      openPull.title
+    );
     expect(mounted.root.querySelector(".detail-card h2")).toBeNull();
     expect(mounted.root.textContent).toContain("Review is for an older head");
     mounted.root.querySelectorAll<HTMLElement>(".pull-tabs button")[2]?.click();
@@ -473,8 +479,8 @@ describe("RepositoryCollaboration rendered workflows", () => {
 
     const reviewForm = mounted.root.querySelector<HTMLFormElement>(".review-panel form");
     if (!reviewForm) throw new Error("Review form was not rendered.");
-    fill(control(reviewForm, "fluent-dropdown"), "approved");
-    fill(control(reviewForm, "fluent-textarea"), "Approved current head");
+    fill(control(reviewForm, "select"), "approved");
+    fill(control(reviewForm, "textarea"), "Approved current head");
     submit(reviewForm);
     await settle();
     expect(createReviewSpy).toHaveBeenCalledWith("repo-1", 12, {
@@ -487,10 +493,10 @@ describe("RepositoryCollaboration rendered workflows", () => {
     await settle();
     const checkForm = mounted.root.querySelector<HTMLFormElement>(".checks-panel form");
     if (!checkForm) throw new Error("CI check form was not rendered.");
-    const checkInputs = checkForm.querySelectorAll<HTMLElement>("fluent-text-input");
+    const checkInputs = checkForm.querySelectorAll<HTMLElement>("input");
     fill(checkInputs[0], "integration");
     fill(checkInputs[1], "head-current-oid");
-    fill(control(checkForm, "fluent-textarea"), "All integration tests passed");
+    fill(control(checkForm, "textarea"), "All integration tests passed");
     submit(checkForm);
     await settle();
     expect(createCheckSpy).toHaveBeenCalledWith("repo-1", 12, {
@@ -542,9 +548,7 @@ describe("RepositoryCollaboration rendered workflows", () => {
     mounted.root.querySelectorAll<HTMLElement>(".comment-row fluent-button").item(2)?.click();
     await settle();
     expect(updateDiscussionSpy).toHaveBeenLastCalledWith("repo-1", 4, { answerCommentId: null });
-    expect(mounted.root.querySelector(".answer-panel")?.textContent).not.toContain(
-      "Use the stable branch API."
-    );
+    expect(mounted.root.querySelector(".answer-panel")).toBeNull();
     mounted.unmount();
   });
 
@@ -584,7 +588,7 @@ describe("RepositoryCollaboration rendered workflows", () => {
     await settle();
     const wikiEdit = mounted.root.querySelector<HTMLFormElement>(".wiki-edit-actions form");
     if (!wikiEdit) throw new Error("Wiki editor did not open.");
-    fill(control(wikiEdit, "fluent-textarea"), "Draft based on stale page");
+    fill(control(wikiEdit, "textarea"), "Draft based on stale page");
     submit(wikiEdit);
     await settle();
     expect(mounted.root.querySelector('[role="alert"]')?.textContent).toContain(
@@ -593,7 +597,7 @@ describe("RepositoryCollaboration rendered workflows", () => {
 
     findButton(mounted.root, "Retry").click();
     await settle();
-    expect(mounted.root.querySelector(".detail-card h2")?.textContent).toContain(
+    expect(mounted.root.querySelector(".detail-titlebar h2")?.textContent).toContain(
       "Guide updated elsewhere"
     );
 
@@ -602,7 +606,7 @@ describe("RepositoryCollaboration rendered workflows", () => {
     const retryEditor = mounted.root.querySelector<HTMLFormElement>(".wiki-edit-actions form");
     if (!retryEditor)
       throw new Error("Wiki editor did not reopen after reloading the latest revision.");
-    fill(control(retryEditor, "fluent-textarea"), "Saved against latest revision");
+    fill(control(retryEditor, "textarea"), "Saved against latest revision");
     submit(retryEditor);
     await settle();
     expect(updateWikiSpy).toHaveBeenNthCalledWith(2, "repo-1", "guide", {
@@ -624,7 +628,7 @@ describe("RepositoryCollaboration rendered workflows", () => {
       expectedRevision: 4,
     });
     expect(mounted.root.querySelector(".body-content")?.textContent).toContain("Original docs");
-    expect(mounted.root.querySelector(".detail-card .eyebrow")?.textContent).toContain("r5");
+    expect(mounted.root.querySelector(".detail-state-row .badge")?.textContent).toContain("r5");
     mounted.unmount();
   });
 });

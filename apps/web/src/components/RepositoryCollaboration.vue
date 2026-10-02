@@ -26,6 +26,7 @@ import StatusState from "./StatusState.vue";
 import TextField from "./TextField.vue";
 import TextAreaField from "./TextAreaField.vue";
 import MarkdownContent from "./MarkdownContent.vue";
+import DiffViewer from "./DiffViewer.vue";
 
 const discussionCategories = [
   "general",
@@ -220,12 +221,12 @@ function userMessage(cause: unknown): string {
   return t("apiError");
 }
 function goTo(number: number) {
-  void router.push(
+  return router.push(
     `/${props.repository.owner}/${props.repository.name}/${props.section}/${number}`
   );
 }
 function goToWiki(slug: string) {
-  void router.push(
+  return router.push(
     `/${props.repository.owner}/${props.repository.name}/wiki/${encodeURIComponent(slug)}`
   );
 }
@@ -362,7 +363,7 @@ async function submitCreate() {
           .map((x) => x.trim())
           .filter(Boolean),
       });
-      goTo(created.number);
+      await goTo(created.number);
     } else if (props.section === "pulls") {
       const created = await api.createPullRequest(props.repository.id, {
         title: form.value.title,
@@ -371,20 +372,20 @@ async function submitCreate() {
         baseRef: form.value.baseRef,
         headSessionId: form.value.headSessionId || null,
       });
-      goTo(created.number);
+      await goTo(created.number);
     } else if (props.section === "discussions") {
       const created = await api.createDiscussion(props.repository.id, {
         title: form.value.title,
         body: form.value.body,
         category: form.value.category,
       });
-      goTo(created.number);
+      await goTo(created.number);
     } else {
       const created = await api.updateWikiPage(props.repository.id, form.value.slug, {
         title: form.value.title,
         content: form.value.body,
       });
-      goToWiki(created.slug);
+      await goToWiki(created.slug);
     }
     resetForm();
     showForm.value = false;
@@ -669,14 +670,14 @@ watch(
           <TextField v-model="form.headRef" required>{{ t("headBranch") }}</TextField>
           <TextField v-model="form.baseRef" required>{{ t("baseBranch") }}</TextField>
           <SelectField v-model="form.headSessionId" :label="t('sessionFork')">
-            <fluent-option value="">{{ t("noSessionFork") }}</fluent-option>
-            <fluent-option
+            <option value="">{{ t("noSessionFork") }}</option>
+            <option
               v-for="session in agentSessions.filter((value) => value.status === 'active')"
               :key="session.id"
               :value="session.id"
             >
               {{ session.agentName }} / {{ session.workspaceName }}
-            </fluent-option>
+            </option>
           </SelectField>
         </template>
         <SelectField
@@ -685,13 +686,20 @@ watch(
           :label="t('category')"
           @update:model-value="form.category = oneOf(discussionCategories, $event, 'general')"
         >
-          <fluent-option value="general">{{ t("categoryGeneral") }}</fluent-option>
-          <fluent-option value="ideas">{{ t("categoryIdeas") }}</fluent-option>
-          <fluent-option value="q-and-a">{{ t("categoryQa") }}</fluent-option>
-          <fluent-option value="announcements">{{ t("categoryAnnouncements") }}</fluent-option>
+          <option value="general">{{ t("categoryGeneral") }}</option>
+          <option value="ideas">{{ t("categoryIdeas") }}</option>
+          <option value="q-and-a">{{ t("categoryQa") }}</option>
+          <option value="announcements">{{ t("categoryAnnouncements") }}</option>
         </SelectField>
         <FormActions :saving="saving" :error="formError" @cancel="showForm = false" />
       </form>
+      <label v-if="section !== 'wiki'" class="search-field list-search"
+        ><AppIcon name="search" /><input
+          v-model="queryText"
+          type="search"
+          :placeholder="t('searchItems')"
+          :aria-label="t('searchItems')"
+      /></label>
       <div v-if="section !== 'wiki'" class="list-toolbar box">
         <div class="list-filters" role="group" :aria-label="t('filterItems')">
           <button
@@ -713,19 +721,13 @@ watch(
             v-model="categoryFilter"
             :label="t('category')"
           >
-            <fluent-option value="all">{{ t("allCategories") }}</fluent-option>
-            <fluent-option value="general">{{ t("categoryGeneral") }}</fluent-option>
-            <fluent-option value="ideas">{{ t("categoryIdeas") }}</fluent-option>
-            <fluent-option value="q-and-a">{{ t("categoryQa") }}</fluent-option>
-            <fluent-option value="announcements">{{ t("categoryAnnouncements") }}</fluent-option>
+            <option value="all">{{ t("allCategories") }}</option>
+            <option value="general">{{ t("categoryGeneral") }}</option>
+            <option value="ideas">{{ t("categoryIdeas") }}</option>
+            <option value="q-and-a">{{ t("categoryQa") }}</option>
+            <option value="announcements">{{ t("categoryAnnouncements") }}</option>
           </SelectField>
         </div>
-        <label class="search-field"
-          ><AppIcon name="search" /><input
-            v-model="queryText"
-            type="search"
-            :placeholder="t('searchItems')"
-        /></label>
       </div>
       <div v-if="section === 'issues'" class="box">
         <RouterLink
@@ -733,14 +735,24 @@ watch(
           :key="row.number"
           class="box-row item-link"
           :to="`/${repository.owner}/${repository.name}/issues/${row.number}`"
-          ><AppIcon name="issue" /><span class="number">#{{ row.number }}</span
-          ><strong>{{ row.title }}</strong
-          ><StatusBadge :tone="stateTone(row.state)">{{ t(row.state) }}</StatusBadge
-          ><small>{{ actorName(row) }}</small
-          ><small>{{ new Date(row.updatedAt).toLocaleDateString() }}</small
-          ><StatusBadge v-for="label in row.labels" :key="label">{{
-            label
-          }}</StatusBadge></RouterLink
+          ><AppIcon
+            :name="row.state === 'open' ? 'issue' : 'checkCircle'"
+            :class="row.state === 'open' ? 'state-open' : 'state-closed'"
+          />
+          <span class="collab-row-content"
+            ><span class="collab-row-title"
+              ><strong>{{ row.title }}</strong
+              ><StatusBadge
+                v-for="label in row.labels"
+                :key="label"
+                :tone="label === 'bug' ? 'danger' : label === 'enhancement' ? 'brand' : 'neutral'"
+                >{{ label }}</StatusBadge
+              ></span
+            ><span class="collab-row-meta"
+              >#{{ row.number }} · {{ t("openedBy", { author: actorName(row) }) }} ·
+              {{ new Date(row.createdAt).toLocaleDateString() }}</span
+            ></span
+          ></RouterLink
         >
         <div v-if="!issues.length" class="empty-onboarding">
           <AppIcon name="issue" />
@@ -751,7 +763,6 @@ watch(
           </button>
         </div>
         <p v-else-if="!filteredIssues.length" class="state">{{ t("noMatchingItems") }}</p>
-        <p v-if="issues.length >= 100" class="list-limit-note">{{ t("listLimited") }}</p>
       </div>
       <div v-else-if="section === 'pulls'" class="box">
         <RouterLink
@@ -759,14 +770,22 @@ watch(
           :key="row.number"
           class="box-row item-link"
           :to="`/${repository.owner}/${repository.name}/pulls/${row.number}`"
-          ><AppIcon name="pr" /><span class="number">#{{ row.number }}</span
-          ><strong>{{ row.title }}</strong
-          ><StatusBadge :tone="stateTone(row.state)">{{ t(row.state) }}</StatusBadge
-          ><small>{{ row.headRef }} → {{ row.baseRef }}</small
-          ><small>{{ actorName(row) }} · {{ new Date(row.updatedAt).toLocaleDateString() }}</small
-          ><StatusBadge v-if="row.headSessionId" tone="brand">{{
-            t("agentSession")
-          }}</StatusBadge></RouterLink
+          ><AppIcon
+            :name="row.state === 'merged' ? 'gitMerge' : 'pr'"
+            :class="row.state === 'open' ? 'state-open' : 'state-closed'"
+          />
+          <span class="collab-row-content"
+            ><span class="collab-row-title"
+              ><strong>{{ row.title }}</strong
+              ><StatusBadge v-if="row.draft">{{ t("draftPull") }}</StatusBadge
+              ><StatusBadge v-if="row.headSessionId" tone="brand">{{
+                t("agentSession")
+              }}</StatusBadge></span
+            ><span class="collab-row-meta"
+              >#{{ row.number }} · {{ t("openedBy", { author: actorName(row) }) }} ·
+              {{ row.headRef }} → {{ row.baseRef }}</span
+            ></span
+          ></RouterLink
         >
         <div v-if="!pulls.length" class="empty-onboarding">
           <AppIcon name="pr" />
@@ -777,7 +796,6 @@ watch(
           </button>
         </div>
         <p v-else-if="!filteredPulls.length" class="state">{{ t("noMatchingItems") }}</p>
-        <p v-if="pulls.length >= 100" class="list-limit-note">{{ t("listLimited") }}</p>
       </div>
       <div v-else-if="section === 'discussions'" class="box">
         <RouterLink
@@ -785,14 +803,17 @@ watch(
           :key="row.number"
           class="box-row item-link"
           :to="`/${repository.owner}/${repository.name}/discussions/${row.number}`"
-          ><AppIcon name="discussion" /><span class="number">#{{ row.number }}</span
-          ><strong>{{ row.title }}</strong
-          ><StatusBadge>{{ t(`category${row.category}`) }}</StatusBadge
-          ><StatusBadge :tone="stateTone(row.state)">{{ t(row.state) }}</StatusBadge
-          ><small>{{ actorName(row) }} · {{ new Date(row.updatedAt).toLocaleDateString() }}</small
-          ><StatusBadge v-if="row.answerCommentId" tone="success">{{
-            t("answered")
-          }}</StatusBadge></RouterLink
+          ><AppIcon name="discussion" /><span class="collab-row-content"
+            ><span class="collab-row-title"
+              ><strong>{{ row.title }}</strong
+              ><StatusBadge v-if="row.answerCommentId" tone="success">{{
+                t("answered")
+              }}</StatusBadge></span
+            ><span class="collab-row-meta"
+              >#{{ row.number }} · {{ actorName(row) }} · {{ t(`category${row.category}`) }} ·
+              {{ new Date(row.createdAt).toLocaleDateString() }}</span
+            ></span
+          ></RouterLink
         >
         <div v-if="!discussions.length" class="empty-onboarding">
           <AppIcon name="discussion" />
@@ -803,7 +824,6 @@ watch(
           </button>
         </div>
         <p v-else-if="!filteredDiscussions.length" class="state">{{ t("noMatchingItems") }}</p>
-        <p v-if="discussions.length >= 100" class="list-limit-note">{{ t("listLimited") }}</p>
       </div>
       <div v-else-if="section === 'wiki'" class="box">
         <RouterLink
@@ -828,17 +848,31 @@ watch(
             {{ t("createWiki") }}
           </button>
         </div>
-        <p v-if="pages.length >= 100" class="list-limit-note">{{ t("listLimited") }}</p>
       </div>
     </template>
     <template v-else-if="item">
       <AppLink class="back-link" :to="`/${repository.owner}/${repository.name}/${section}`"
         >← {{ t(section === "wiki" ? "wiki" : section) }}</AppLink
       >
-      <header v-if="section === 'pulls'" class="detail-titlebar box">
+      <header class="detail-titlebar detail-heading box">
         <div>
-          <p class="eyebrow">#{{ detailNumber }} · {{ itemStatus(item) }}</p>
-          <h2>{{ "title" in item ? item.title : "" }}</h2>
+          <h2>
+            {{ item.title }}
+            <span v-if="detailNumber" class="detail-number">#{{ detailNumber }}</span>
+          </h2>
+          <div class="detail-state-row">
+            <StatusBadge v-if="'state' in item" :tone="stateTone(item.state)"
+              ><AppIcon :name="item.state === 'open' ? 'issue' : 'checkCircle'" />{{
+                itemStatus(item)
+              }}</StatusBadge
+            ><StatusBadge v-else>{{ itemStatus(item) }}</StatusBadge>
+            <code v-if="'mergedOid' in item && item.mergedOid"
+              >{{ t("mergedCommit") }} {{ item.mergedOid.slice(0, 8) }}</code
+            ><span class="muted"
+              >{{ t("openedBy", { author: actorName(item) }) }} ·
+              {{ new Date(itemCreatedAt(item)).toLocaleDateString() }}</span
+            >
+          </div>
         </div>
         <div
           v-if="showEditActions && 'state' in item && item.state !== 'merged'"
@@ -863,39 +897,14 @@ watch(
           </fluent-button>
         </div>
       </header>
-      <article class="box box-form detail-card">
-        <div v-if="section !== 'pulls'" class="detail-heading">
-          <div>
-            <p class="eyebrow">
-              {{ section === "wiki" ? t("wiki") : `#${detailNumber}` }} · {{ itemStatus(item) }}
-            </p>
-            <h2>{{ "title" in item ? item.title : "" }}</h2>
-          </div>
-          <div
-            v-if="showEditActions && 'state' in item && item.state !== 'merged'"
-            class="detail-actions"
-          >
-            <fluent-button type="button" @click="editMode = !editMode">
-              {{ editMode ? t("cancel") : t("edit") }}</fluent-button
-            ><fluent-button
-              v-if="'state' in item && item.state === 'closed'"
-              type="button"
-              :disabled="saving"
-              @click="updateState('open')"
-            >
-              {{ t("reopen") }}</fluent-button
-            ><fluent-button
-              v-if="'state' in item && item.state === 'open'"
-              type="button"
-              :disabled="saving"
-              @click="updateState('closed')"
-            >
-              {{ t("closeIssue") }}
-            </fluent-button>
-          </div>
-        </div>
+      <article
+        v-if="section !== 'pulls' || detailTab === 'conversation'"
+        class="box box-form detail-card"
+      >
         <div v-if="'actor' in item" class="actor-line">
-          {{ actorName(item) }} · {{ new Date(itemCreatedAt(item)).toLocaleString()
+          <span class="avatar avatar-sm">{{ actorName(item).slice(0, 2).toUpperCase() }}</span
+          ><strong>{{ actorName(item) }}</strong> ·
+          {{ new Date(itemCreatedAt(item)).toLocaleString()
           }}<StatusBadge v-if="item.actor.kind === 'agent'" tone="brand">{{
             t("agentAuthored")
           }}</StatusBadge>
@@ -994,7 +1003,10 @@ watch(
           </div>
         </div>
       </article>
-      <aside v-if="section !== 'wiki'" class="detail-sidebar box">
+      <aside
+        v-if="section !== 'wiki' && (section !== 'pulls' || detailTab === 'conversation')"
+        class="detail-sidebar box"
+      >
         <section v-if="'labels' in item" class="sidebar-section">
           <h3>{{ t("labels") }}</h3>
           <div v-if="item.labels.length" class="sidebar-tags">
@@ -1075,7 +1087,7 @@ watch(
         </p>
         <div v-for="change in diff.files" :key="change.path" class="changed-file">
           <strong>{{ change.type }} · {{ change.path }}</strong>
-          <pre v-if="change.patch" class="diff-preview">{{ change.patch }}</pre>
+          <DiffViewer v-if="change.patch" :patch="change.patch" />
           <span v-else class="muted">{{ t("binaryPreviewUnavailable") }}</span>
         </div>
         <div v-if="showEditActions && pullIsOpen" class="merge-actions">
@@ -1115,11 +1127,9 @@ watch(
             :label="t('reviewVerdict')"
             @update:model-value="reviewForm.state = oneOf(reviewStates, $event, 'commented')"
           >
-            <fluent-option value="commented">{{ t("reviewcommented") }}</fluent-option>
-            <fluent-option value="approved">{{ t("reviewapproved") }}</fluent-option>
-            <fluent-option value="changes_requested">{{
-              t("reviewchanges_requested")
-            }}</fluent-option>
+            <option value="commented">{{ t("reviewcommented") }}</option>
+            <option value="approved">{{ t("reviewapproved") }}</option>
+            <option value="changes_requested">{{ t("reviewchanges_requested") }}</option>
           </SelectField>
           <TextAreaField
             v-model="reviewForm.body"
@@ -1169,9 +1179,9 @@ watch(
             :label="t('checkStatus')"
             @update:model-value="checkForm.status = oneOf(checkStatuses, $event, 'completed')"
           >
-            <fluent-option value="queued">queued</fluent-option>
-            <fluent-option value="in_progress">in_progress</fluent-option>
-            <fluent-option value="completed">completed</fluent-option>
+            <option value="queued">queued</option>
+            <option value="in_progress">in_progress</option>
+            <option value="completed">completed</option>
           </SelectField>
           <SelectField
             v-if="checkForm.status === 'completed'"
@@ -1179,10 +1189,10 @@ watch(
             :label="t('checkConclusion')"
             @update:model-value="checkForm.conclusion = oneOf(checkConclusions, $event, 'success')"
           >
-            <fluent-option value="success">success</fluent-option>
-            <fluent-option value="failure">failure</fluent-option>
-            <fluent-option value="neutral">neutral</fluent-option>
-            <fluent-option value="cancelled">cancelled</fluent-option>
+            <option value="success">success</option>
+            <option value="failure">failure</option>
+            <option value="neutral">neutral</option>
+            <option value="cancelled">cancelled</option>
           </SelectField>
           <TextAreaField
             v-model="checkForm.summary"
@@ -1195,7 +1205,10 @@ watch(
           </div>
         </form>
       </section>
-      <section v-if="section === 'discussions'" class="box box-form answer-panel">
+      <section
+        v-if="section === 'discussions' && discussionItem?.answerCommentId"
+        class="box box-form answer-panel"
+      >
         <div v-if="discussionItem">
           <p class="eyebrow">{{ t("acceptedAnswer") }}</p>
           <p v-if="discussionItem?.answerCommentId">

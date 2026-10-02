@@ -7,6 +7,8 @@ export default defineConfig({
   server: { fs: { allow: ["../.."] } },
   test: {
     environment: "jsdom",
+    maxWorkers: 2,
+    setupFiles: ["../../test/ui/setup.ts"],
     include: ["../../test/ui/**/*.test.ts"],
   },
 });

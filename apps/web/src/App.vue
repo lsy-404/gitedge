@@ -36,7 +36,7 @@ async function openSearch() {
 }
 function closeMenus() {
   searchExpanded.value = false;
-  navigation.value?.close();
+  if (navigation.value?.open) navigation.value.close();
   if (userMenu.value) userMenu.value.open = false;
   if (createMenu.value) createMenu.value.open = false;
 }
@@ -74,7 +74,7 @@ watch(locale, (value) => {
 });
 onMounted(() => document.addEventListener("keydown", keyboard));
 onUnmounted(() => document.removeEventListener("keydown", keyboard));
-void refreshSession();
+if (!sessionState.checked) void refreshSession();
 </script>
 <template>
   <div class="app-shell">

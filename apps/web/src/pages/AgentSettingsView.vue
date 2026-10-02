@@ -36,9 +36,9 @@ const sessionsLoading = ref(false);
 const sessionsRequestVersion = ref(0);
 const sessionNow = ref(Date.now());
 const credentialsExpired = ref(false);
-let credentialExpiryTimer: ReturnType<typeof setTimeout> | undefined;
+let credentialExpiryTimer: number | undefined;
 let createSessionVersion = 0;
-let sessionClockTimer: ReturnType<typeof setInterval> | undefined;
+let sessionClockTimer: number | undefined;
 const saving = ref(false);
 const error = ref("");
 const createdSession = ref<CreatedAgentSession | null>(null);
@@ -109,7 +109,7 @@ function showCreatedCredentials(session: CreatedAgentSession): void {
   credentialsExpired.value = isCredentialExpired(session.expiresAt, Date.now());
   createdSession.value = credentialsExpired.value ? clearAgentSessionSecrets(session) : session;
   if (!credentialsExpired.value) {
-    credentialExpiryTimer = setTimeout(
+    credentialExpiryTimer = window.setTimeout(
       () => {
         const current = createdSession.value;
         if (!current || current.id !== session.id) return;
@@ -224,7 +224,7 @@ onUnmounted(() => {
   createSessionVersion += 1;
   createdSession.value = null;
 });
-sessionClockTimer = setInterval(() => {
+sessionClockTimer = window.setInterval(() => {
   sessionNow.value = Date.now();
 }, 30_000);
 </script>
@@ -479,10 +479,10 @@ sessionClockTimer = setInterval(() => {
             <p class="muted">{{ t("sessionScopeHint") }}</p>
             <form class="form-stack" @submit.prevent="createSession">
               <SelectField v-model="sessionForm.repositoryId" :label="t('repository')" required>
-                <fluent-option value="" disabled>{{ t("selectRepository") }}</fluent-option>
-                <fluent-option v-for="repo in repositories" :key="repo.id" :value="repo.id"
-                  >{{ repo.owner }}/{{ repo.name }}</fluent-option
-                >
+                <option value="" disabled>{{ t("selectRepository") }}</option>
+                <option v-for="repo in repositories" :key="repo.id" :value="repo.id">
+                  {{ repo.owner }}/{{ repo.name }}
+                </option>
               </SelectField>
               <TextField v-model="sessionForm.baseRef" required>{{ t("baseBranch") }}</TextField>
               <SelectField
@@ -490,17 +490,17 @@ sessionClockTimer = setInterval(() => {
                 :label="t('permission')"
                 @update:model-value="sessionForm.permission = oneOf(permissions, $event, 'write')"
               >
-                <fluent-option value="read">{{ t("readOnly") }}</fluent-option
-                ><fluent-option value="write">{{ t("writeAccess") }}</fluent-option>
+                <option value="read">{{ t("readOnly") }}</option>
+                <option value="write">{{ t("writeAccess") }}</option>
               </SelectField>
               <SelectField
                 :model-value="String(sessionForm.ttlSeconds)"
                 :label="t('sessionLifetime')"
                 @update:model-value="sessionForm.ttlSeconds = Number($event)"
               >
-                <fluent-option value="3600">1 {{ t("hour") }}</fluent-option
-                ><fluent-option value="86400">1 {{ t("day") }}</fluent-option
-                ><fluent-option value="604800">7 {{ t("days") }}</fluent-option>
+                <option value="3600">1 {{ t("hour") }}</option>
+                <option value="86400">1 {{ t("day") }}</option>
+                <option value="604800">7 {{ t("days") }}</option>
               </SelectField>
               <p v-if="error" class="workspace-form-error">{{ error }}</p>
               <div class="form-actions">
