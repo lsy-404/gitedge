@@ -140,7 +140,7 @@ export async function mountAt(routePath: string, path: string, render: () => VNo
     path: routePath,
     alias: routePath.startsWith("/_verify/tasks")
       ? `/${repository.owner}/${repository.name}/tasks/:number?`
-      : undefined,
+      : [],
     name: routeName,
     component: Host,
     meta: { public: true },
