@@ -16,8 +16,38 @@ import type {
 } from "../lib/api";
 import { ApiError, api } from "../lib/api";
 import { sessionState } from "../lib/session";
+import { eventChecked, oneOf } from "../ui/formEvents";
+import AppIcon from "./AppIcon.vue";
+import AppLink from "./AppLink.vue";
 import FormActions from "./FormActions.vue";
+import SelectField from "./SelectField.vue";
+import StatusBadge from "./StatusBadge.vue";
 import StatusState from "./StatusState.vue";
+import TextField from "./TextField.vue";
+import TextAreaField from "./TextAreaField.vue";
+
+const discussionCategories = [
+  "general",
+  "ideas",
+  "q-and-a",
+  "announcements",
+] as const satisfies readonly Discussion["category"][];
+const reviewStates = [
+  "commented",
+  "approved",
+  "changes_requested",
+] as const satisfies readonly Review["state"][];
+const checkStatuses = [
+  "queued",
+  "in_progress",
+  "completed",
+] as const satisfies readonly CheckRun["status"][];
+const checkConclusions = [
+  "success",
+  "failure",
+  "neutral",
+  "cancelled",
+] as const satisfies readonly NonNullable<CheckRun["conclusion"]>[];
 
 const props = defineProps<{ repository: Repository; section: string }>();
 const { t } = useI18n();
@@ -97,6 +127,10 @@ const resource = computed<"issues" | "pull-requests" | "discussions">(() =>
 );
 let loadVersion = 0;
 
+function stateTone(state: Issue["state"] | PullRequest["state"]): "success" | "danger" | "brand" {
+  if (state === "open") return "success";
+  return state === "merged" ? "brand" : "danger";
+}
 function isCurrentRevision(revision: number): boolean {
   const current = item.value;
   return current !== null && "revision" in current && current.revision === revision;
@@ -476,19 +510,20 @@ watch(
 
 <template>
   <section class="collab-section">
-    <div v-if="loading || error || notFound" class="content-card">
+    <div v-if="loading || error || notFound" class="box">
       <StatusState :loading="loading" :error="error" :empty="notFound" @retry="load"
         ><template #empty>{{ t("resourceNotFound") }}</template></StatusState
       >
     </div>
     <template v-else-if="!isDetail">
       <div class="section-actions">
-        <button
+        <fluent-button
           v-if="canCreate && (section !== 'wiki' || repository.canWrite)"
-          class="btn primary"
+          type="button"
+          appearance="primary"
           @click="showForm = !showForm"
         >
-          +
+          <AppIcon slot="start" name="plus" />
           {{
             section === "issues"
               ? t("createIssue")
@@ -498,122 +533,124 @@ watch(
                   ? t("createDiscussion")
                   : t("createWiki")
           }}
-        </button>
+        </fluent-button>
       </div>
-      <form v-if="showForm" class="content-card create-form" @submit.prevent="submitCreate">
-        <label>{{ t("issueTitle") }}<input v-model="form.title" required /></label>
-        <label
-          >{{ section === "wiki" ? t("slug") : t("issueBody")
-          }}<input v-if="section === 'wiki'" v-model="form.slug" required /><textarea
-            v-model="form.body"
-            rows="5"
-          />
-        </label>
-        <template v-if="section === 'issues'"
-          ><label
-            >{{ t("labels")
-            }}<input v-model="form.labels" :placeholder="t('commaSeparated')" /></label
-          ><label
-            >{{ t("assignees")
-            }}<input v-model="form.assignees" :placeholder="t('commaSeparated')" /></label
-        ></template>
-        <template v-if="section === 'pulls'"
-          ><label>{{ t("headBranch") }}<input v-model="form.headRef" required /></label
-          ><label>{{ t("baseBranch") }}<input v-model="form.baseRef" required /></label
-          ><label
-            >{{ t("sessionFork")
-            }}<select v-model="form.headSessionId">
-              <option value="">{{ t("noSessionFork") }}</option>
-              <option
-                v-for="session in agentSessions.filter((value) => value.status === 'active')"
-                :key="session.id"
-                :value="session.id"
-              >
-                {{ session.agentName }} / {{ session.workspaceName }}
-              </option>
-            </select></label
-          ></template
+      <form
+        v-if="showForm"
+        class="box box-form form-stack create-form"
+        @submit.prevent="submitCreate"
+      >
+        <TextField v-model="form.title" required>{{ t("issueTitle") }}</TextField>
+        <TextField v-if="section === 'wiki'" v-model="form.slug" required>{{
+          t("slug")
+        }}</TextField>
+        <TextAreaField v-model="form.body" rows="5" :label="t('issueBody')" />
+        <template v-if="section === 'issues'">
+          <TextField v-model="form.labels" :placeholder="t('commaSeparated')">{{
+            t("labels")
+          }}</TextField>
+          <TextField v-model="form.assignees" :placeholder="t('commaSeparated')">{{
+            t("assignees")
+          }}</TextField>
+        </template>
+        <template v-if="section === 'pulls'">
+          <TextField v-model="form.headRef" required>{{ t("headBranch") }}</TextField>
+          <TextField v-model="form.baseRef" required>{{ t("baseBranch") }}</TextField>
+          <SelectField v-model="form.headSessionId" :label="t('sessionFork')">
+            <fluent-option value="">{{ t("noSessionFork") }}</fluent-option>
+            <fluent-option
+              v-for="session in agentSessions.filter((value) => value.status === 'active')"
+              :key="session.id"
+              :value="session.id"
+            >
+              {{ session.agentName }} / {{ session.workspaceName }}
+            </fluent-option>
+          </SelectField>
+        </template>
+        <SelectField
+          v-if="section === 'discussions'"
+          :model-value="form.category"
+          :label="t('category')"
+          @update:model-value="form.category = oneOf(discussionCategories, $event, 'general')"
         >
-        <label v-if="section === 'discussions'"
-          >{{ t("category")
-          }}<select v-model="form.category">
-            <option value="general">{{ t("categoryGeneral") }}</option>
-            <option value="ideas">{{ t("categoryIdeas") }}</option>
-            <option value="q-and-a">{{ t("categoryQa") }}</option>
-            <option value="announcements">{{ t("categoryAnnouncements") }}</option>
-          </select></label
-        >
+          <fluent-option value="general">{{ t("categoryGeneral") }}</fluent-option>
+          <fluent-option value="ideas">{{ t("categoryIdeas") }}</fluent-option>
+          <fluent-option value="q-and-a">{{ t("categoryQa") }}</fluent-option>
+          <fluent-option value="announcements">{{ t("categoryAnnouncements") }}</fluent-option>
+        </SelectField>
         <FormActions :saving="saving" :error="formError" @cancel="showForm = false" />
       </form>
-      <div v-if="section === 'issues'" class="content-card">
+      <div v-if="section === 'issues'" class="box">
         <RouterLink
           v-for="row in issues"
           :key="row.number"
-          class="item-row item-link"
+          class="box-row item-link"
           :to="`/${repository.owner}/${repository.name}/issues/${row.number}`"
           ><span class="number">#{{ row.number }}</span
           ><strong>{{ row.title }}</strong
-          ><span class="pill" :class="row.state">{{ t(row.state) }}</span
+          ><StatusBadge :tone="stateTone(row.state)">{{ t(row.state) }}</StatusBadge
           ><small>{{ actorName(row) }}</small
-          ><span v-for="label in row.labels" :key="label" class="pill">{{
+          ><StatusBadge v-for="label in row.labels" :key="label">{{
             label
-          }}</span></RouterLink
+          }}</StatusBadge></RouterLink
         >
-        <p v-if="!issues.length" class="empty-inline">{{ t("empty") }}</p>
+        <p v-if="!issues.length" class="state">{{ t("empty") }}</p>
         <p v-if="issues.length >= 100" class="list-limit-note">{{ t("listLimited") }}</p>
       </div>
-      <div v-else-if="section === 'pulls'" class="content-card">
+      <div v-else-if="section === 'pulls'" class="box">
         <RouterLink
           v-for="row in pulls"
           :key="row.number"
-          class="item-row item-link"
+          class="box-row item-link"
           :to="`/${repository.owner}/${repository.name}/pulls/${row.number}`"
           ><span class="number">#{{ row.number }}</span
           ><strong>{{ row.title }}</strong
-          ><span class="pill" :class="row.state">{{ t(row.state) }}</span
+          ><StatusBadge :tone="stateTone(row.state)">{{ t(row.state) }}</StatusBadge
           ><small>{{ row.headRef }} → {{ row.baseRef }}</small
-          ><span v-if="row.headSessionId" class="pill agent-badge">{{
+          ><StatusBadge v-if="row.headSessionId" tone="brand">{{
             t("agentSession")
-          }}</span></RouterLink
+          }}</StatusBadge></RouterLink
         >
-        <p v-if="!pulls.length" class="empty-inline">{{ t("empty") }}</p>
+        <p v-if="!pulls.length" class="state">{{ t("empty") }}</p>
         <p v-if="pulls.length >= 100" class="list-limit-note">{{ t("listLimited") }}</p>
       </div>
-      <div v-else-if="section === 'discussions'" class="content-card">
+      <div v-else-if="section === 'discussions'" class="box">
         <RouterLink
           v-for="row in discussions"
           :key="row.number"
-          class="item-row item-link"
+          class="box-row item-link"
           :to="`/${repository.owner}/${repository.name}/discussions/${row.number}`"
           ><span class="number">#{{ row.number }}</span
           ><strong>{{ row.title }}</strong
-          ><span class="pill">{{ t(`category${row.category}`) }}</span
-          ><span class="pill" :class="row.state">{{ t(row.state) }}</span
+          ><StatusBadge>{{ t(`category${row.category}`) }}</StatusBadge
+          ><StatusBadge :tone="stateTone(row.state)">{{ t(row.state) }}</StatusBadge
           ><small>{{ actorName(row) }}</small
-          ><span v-if="row.answerCommentId" class="pill open">{{ t("answered") }}</span></RouterLink
+          ><StatusBadge v-if="row.answerCommentId" tone="success">{{
+            t("answered")
+          }}</StatusBadge></RouterLink
         >
-        <p v-if="!discussions.length" class="empty-inline">{{ t("empty") }}</p>
+        <p v-if="!discussions.length" class="state">{{ t("empty") }}</p>
         <p v-if="discussions.length >= 100" class="list-limit-note">{{ t("listLimited") }}</p>
       </div>
-      <div v-else-if="section === 'wiki'" class="content-card">
+      <div v-else-if="section === 'wiki'" class="box">
         <RouterLink
           v-for="page in pages"
           :key="page.slug"
-          class="item-row item-link"
+          class="box-row item-link"
           :to="`/${repository.owner}/${repository.name}/wiki/${encodeURIComponent(page.slug)}`"
           ><strong>{{ page.title }}</strong
           ><code>{{ page.slug }}</code
           ><small>r{{ page.revision }} · {{ page.updatedBy }}</small></RouterLink
         >
-        <p v-if="!pages.length" class="empty-inline">{{ t("empty") }}</p>
+        <p v-if="!pages.length" class="state">{{ t("empty") }}</p>
         <p v-if="pages.length >= 100" class="list-limit-note">{{ t("listLimited") }}</p>
       </div>
     </template>
     <template v-else-if="item">
-      <RouterLink class="back-link" :to="`/${repository.owner}/${repository.name}/${section}`"
-        >← {{ t(section === "wiki" ? "wiki" : section) }}</RouterLink
+      <AppLink class="back-link" :to="`/${repository.owner}/${repository.name}/${section}`"
+        >← {{ t(section === "wiki" ? "wiki" : section) }}</AppLink
       >
-      <article class="content-card detail-card">
+      <article class="box box-form detail-card">
         <div class="detail-heading">
           <div>
             <p class="eyebrow">
@@ -625,75 +662,87 @@ watch(
             v-if="showEditActions && 'state' in item && item.state !== 'merged'"
             class="detail-actions"
           >
-            <button class="btn" @click="editMode = !editMode">
-              {{ editMode ? t("cancel") : t("edit") }}</button
-            ><button
+            <fluent-button type="button" @click="editMode = !editMode">
+              {{ editMode ? t("cancel") : t("edit") }}</fluent-button
+            ><fluent-button
               v-if="'state' in item && item.state === 'closed'"
-              class="btn"
+              type="button"
               :disabled="saving"
               @click="updateState('open')"
             >
-              {{ t("reopen") }}</button
-            ><button
+              {{ t("reopen") }}</fluent-button
+            ><fluent-button
               v-if="'state' in item && item.state === 'open'"
-              class="btn"
+              type="button"
               :disabled="saving"
               @click="updateState('closed')"
             >
               {{ t("closeIssue") }}
-            </button>
+            </fluent-button>
           </div>
         </div>
         <div v-if="'actor' in item" class="actor-line">
           {{ actorName(item) }} · {{ new Date(itemCreatedAt(item)).toLocaleString()
-          }}<span v-if="item.actor.kind === 'agent'" class="pill agent-badge">{{
+          }}<StatusBadge v-if="item.actor.kind === 'agent'" tone="brand">{{
             t("agentAuthored")
-          }}</span>
+          }}</StatusBadge>
         </div>
         <p v-else-if="'author' in item" class="actor-line">
           {{ item.author }} · {{ new Date(itemCreatedAt(item)).toLocaleString() }}
         </p>
-        <form v-if="editMode" class="inline-form item-edit" @submit.prevent="saveItem">
-          <input v-model="editDraft.title" required /><textarea
-            v-model="editDraft.body"
-            rows="6"
-          /><template v-if="section === 'issues'"
-            ><label
-              >{{ t("labels")
-              }}<input v-model="editDraft.labels" :placeholder="t('commaSeparated')" /></label
-            ><label
-              >{{ t("assignees")
-              }}<input
-                v-model="editDraft.assignees"
-                :placeholder="t('commaSeparated')" /></label></template
-          ><label v-if="section === 'pulls'" class="checkbox-line"
-            ><input v-model="editDraft.draft" type="checkbox" />{{ t("draftPull") }}</label
-          ><button class="btn primary" :disabled="saving">{{ t("save") }}</button>
+        <form v-if="editMode" class="form-stack inline-form item-edit" @submit.prevent="saveItem">
+          <TextField v-model="editDraft.title" required>{{ t("issueTitle") }}</TextField>
+          <TextAreaField v-model="editDraft.body" rows="6" :label="t('issueBody')" />
+          <template v-if="section === 'issues'">
+            <TextField v-model="editDraft.labels" :placeholder="t('commaSeparated')">{{
+              t("labels")
+            }}</TextField>
+            <TextField v-model="editDraft.assignees" :placeholder="t('commaSeparated')">{{
+              t("assignees")
+            }}</TextField>
+          </template>
+          <fluent-field v-if="section === 'pulls'" label-position="after">
+            <label slot="label" for="edit-draft">{{ t("draftPull") }}</label>
+            <fluent-checkbox
+              id="edit-draft"
+              slot="input"
+              :checked="editDraft.draft"
+              @change="editDraft.draft = eventChecked($event)"
+            />
+          </fluent-field>
+          <div class="form-actions">
+            <fluent-button type="submit" appearance="primary" :disabled="saving">{{
+              t("save")
+            }}</fluent-button>
+          </div>
         </form>
         <pre v-else class="body-content">{{ "content" in item ? item.content : item.body }}</pre>
         <div v-if="'labels' in item" class="metadata-row">
-          <span v-for="label in item.labels" :key="label" class="pill">{{ label }}</span
-          ><span v-for="assignee in item.assignees" :key="assignee" class="pill"
-            >{{ t("assignee") }}: {{ assignee }}</span
+          <StatusBadge v-for="label in item.labels" :key="label">{{ label }}</StatusBadge
+          ><StatusBadge v-for="assignee in item.assignees" :key="assignee"
+            >{{ t("assignee") }}: {{ assignee }}</StatusBadge
           >
         </div>
         <div v-if="'headRef' in item" class="pull-meta">
           <span>{{ item.headRef }} → {{ item.baseRef }}</span
-          ><span v-if="item.headSessionId" class="pill agent-badge"
-            >{{ t("sessionFork") }} · {{ item.headSessionId }}</span
-          ><span v-if="'mergedOid' in item && item.mergedOid" class="pill open"
-            >{{ t("mergedCommit") }} {{ item.mergedOid.slice(0, 8) }}</span
+          ><StatusBadge v-if="item.headSessionId" tone="brand"
+            >{{ t("sessionFork") }} · {{ item.headSessionId }}</StatusBadge
+          ><StatusBadge v-if="'mergedOid' in item && item.mergedOid" tone="success"
+            >{{ t("mergedCommit") }} {{ item.mergedOid.slice(0, 8) }}</StatusBadge
           >
         </div>
         <div v-if="section === 'wiki' && showEditActions" class="wiki-edit-actions">
-          <button class="btn" @click="wikiEditing = !wikiEditing">
+          <fluent-button type="button" @click="wikiEditing = !wikiEditing">
             {{ wikiEditing ? t("cancel") : t("edit") }}
-          </button>
-          <form v-if="wikiEditing" class="inline-form" @submit.prevent="saveWiki">
-            <input v-model="wikiDraft.title" required /><textarea
-              v-model="wikiDraft.content"
-              rows="8"
-            /><button class="btn primary" :disabled="saving">{{ t("save") }}</button>
+          </fluent-button>
+          <form v-if="wikiEditing" class="form-stack inline-form" @submit.prevent="saveWiki">
+            <TextField v-model="wikiDraft.title" required>{{ t("issueTitle") }}</TextField>
+            <TextAreaField v-model="wikiDraft.content" rows="8" :label="t('issueBody')" />
+            <div class="form-actions">
+              <fluent-button type="submit" appearance="primary" :disabled="saving">{{
+                t("save")
+              }}</fluent-button>
+            </div>
           </form>
         </div>
         <div v-if="section === 'wiki'" class="wiki-history">
@@ -706,14 +755,15 @@ watch(
             <strong>r{{ revision.revision }} · {{ revision.title }}</strong
             ><small
               >{{ revision.updatedBy }} · {{ new Date(revision.updatedAt).toLocaleString() }}</small
-            ><button
+            ><fluent-button
               v-if="showEditActions"
-              class="btn"
+              type="button"
+              size="small"
               :disabled="saving || isCurrentRevision(revision.revision)"
               @click="restoreWiki(revision)"
             >
               {{ t("restoreRevision") }}
-            </button>
+            </fluent-button>
           </div>
         </div>
         <div v-if="section === 'pulls' && diff" class="pull-review">
@@ -728,83 +778,118 @@ watch(
             <span v-else class="muted">{{ t("binaryPreviewUnavailable") }}</span>
           </div>
           <div v-if="showEditActions && pullIsOpen" class="merge-actions">
-            <button class="btn primary" :disabled="saving || !diff.headOid" @click="mergePull">
-              {{ t("mergePull") }}</button
+            <fluent-button
+              type="button"
+              appearance="primary"
+              :disabled="saving || !diff.headOid"
+              @click="mergePull"
+            >
+              {{ t("mergePull") }}</fluent-button
             ><span class="muted">{{ t("mergeUsesCurrentHeads") }}</span>
           </div>
         </div>
       </article>
-      <section v-if="section === 'pulls'" class="content-card review-panel">
+      <section v-if="section === 'pulls'" class="box box-form review-panel">
         <p class="eyebrow">{{ t("reviews") }}</p>
         <div v-for="review in reviews" :key="review.id" class="item-row">
           <strong>{{ t(`review${review.state}`) }}</strong
-          ><span class="pill" :class="review.actor.kind === 'agent' ? 'agent-badge' : ''">{{
+          ><StatusBadge :tone="review.actor.kind === 'agent' ? 'brand' : 'neutral'">{{
             actorName(review)
-          }}</span
+          }}</StatusBadge
           ><code>{{ review.commitOid.slice(0, 8) }}</code
-          ><span v-if="review.commitOid !== diff?.headOid" class="pill stale-check">{{
+          ><StatusBadge v-if="review.commitOid !== diff?.headOid" tone="warning">{{
             t("outdatedReview")
-          }}</span>
+          }}</StatusBadge>
           <p>{{ review.body }}</p>
         </div>
-        <form v-if="canCreate && pullIsOpen" class="inline-form" @submit.prevent="addReview">
-          <select v-model="reviewForm.state">
-            <option value="commented">{{ t("reviewcommented") }}</option>
-            <option value="approved">{{ t("reviewapproved") }}</option>
-            <option value="changes_requested">{{ t("reviewchanges_requested") }}</option></select
-          ><textarea v-model="reviewForm.body" :placeholder="t('reviewBody')" rows="2" /><button
-            class="btn"
-            type="submit"
+        <form
+          v-if="canCreate && pullIsOpen"
+          class="form-stack inline-form"
+          @submit.prevent="addReview"
+        >
+          <SelectField
+            :model-value="reviewForm.state"
+            :label="t('reviewVerdict')"
+            @update:model-value="reviewForm.state = oneOf(reviewStates, $event, 'commented')"
           >
-            {{ t("submitReview") }}
-          </button>
+            <fluent-option value="commented">{{ t("reviewcommented") }}</fluent-option>
+            <fluent-option value="approved">{{ t("reviewapproved") }}</fluent-option>
+            <fluent-option value="changes_requested">{{
+              t("reviewchanges_requested")
+            }}</fluent-option>
+          </SelectField>
+          <TextAreaField
+            v-model="reviewForm.body"
+            :placeholder="t('reviewBody')"
+            rows="2"
+            :label="t('reviewBody')"
+          />
+          <div class="form-actions">
+            <fluent-button type="submit">{{ t("submitReview") }}</fluent-button>
+          </div>
         </form>
       </section>
-      <section v-if="section === 'pulls'" class="content-card checks-panel">
+      <section v-if="section === 'pulls'" class="box box-form checks-panel">
         <p class="eyebrow">{{ t("checks") }}</p>
         <div v-for="check in checks" :key="check.id" class="item-row">
           <strong>{{ check.name }}</strong
-          ><span class="pill" :class="check.conclusion === 'success' ? 'open' : ''"
-            >{{ check.status }} · {{ check.conclusion || t("pending") }}</span
-          ><span class="pill" :class="check.actor.kind === 'agent' ? 'agent-badge' : ''">{{
+          ><StatusBadge :tone="check.conclusion === 'success' ? 'success' : 'neutral'"
+            >{{ check.status }} · {{ check.conclusion || t("pending") }}</StatusBadge
+          ><StatusBadge :tone="check.actor.kind === 'agent' ? 'brand' : 'neutral'">{{
             actorName(check)
-          }}</span
+          }}</StatusBadge
           ><code>{{ check.commitOid.slice(0, 8) }}</code
-          ><span v-if="check.commitOid !== diff?.headOid" class="pill stale-check">{{
+          ><StatusBadge v-if="check.commitOid !== diff?.headOid" tone="warning">{{
             t("outdatedCheck")
-          }}</span>
+          }}</StatusBadge>
           <p>{{ check.summary }}</p>
-          <a v-if="check.detailsUrl" :href="check.detailsUrl" target="_blank" rel="noreferrer">{{
-            t("details")
-          }}</a>
+          <fluent-link
+            v-if="check.detailsUrl"
+            :href="check.detailsUrl"
+            target="_blank"
+            rel="noreferrer"
+            >{{ t("details") }}</fluent-link
+          >
         </div>
         <form
           v-if="repository.canWrite && pullIsOpen"
-          class="inline-form"
+          class="form-stack inline-form"
           @submit.prevent="addCheck"
         >
-          <input v-model="checkForm.name" :placeholder="t('checkName')" required /><input
-            v-model="checkForm.commitOid"
-            :placeholder="t('commitOid')"
-            required
-          /><select v-model="checkForm.status">
-            <option value="queued">queued</option>
-            <option value="in_progress">in_progress</option>
-            <option value="completed">completed</option></select
-          ><select v-if="checkForm.status === 'completed'" v-model="checkForm.conclusion">
-            <option value="success">success</option>
-            <option value="failure">failure</option>
-            <option value="neutral">neutral</option>
-            <option value="cancelled">cancelled</option></select
-          ><textarea v-model="checkForm.summary" :placeholder="t('summary')" rows="2" /><button
-            class="btn"
-            type="submit"
+          <TextField v-model="checkForm.name" required>{{ t("checkName") }}</TextField>
+          <TextField v-model="checkForm.commitOid" required>{{ t("commitOid") }}</TextField>
+          <SelectField
+            :model-value="checkForm.status"
+            :label="t('checkStatus')"
+            @update:model-value="checkForm.status = oneOf(checkStatuses, $event, 'completed')"
           >
-            {{ t("addCheck") }}
-          </button>
+            <fluent-option value="queued">queued</fluent-option>
+            <fluent-option value="in_progress">in_progress</fluent-option>
+            <fluent-option value="completed">completed</fluent-option>
+          </SelectField>
+          <SelectField
+            v-if="checkForm.status === 'completed'"
+            :model-value="checkForm.conclusion"
+            :label="t('checkConclusion')"
+            @update:model-value="checkForm.conclusion = oneOf(checkConclusions, $event, 'success')"
+          >
+            <fluent-option value="success">success</fluent-option>
+            <fluent-option value="failure">failure</fluent-option>
+            <fluent-option value="neutral">neutral</fluent-option>
+            <fluent-option value="cancelled">cancelled</fluent-option>
+          </SelectField>
+          <TextAreaField
+            v-model="checkForm.summary"
+            :placeholder="t('summary')"
+            rows="2"
+            :label="t('summary')"
+          />
+          <div class="form-actions">
+            <fluent-button type="submit">{{ t("addCheck") }}</fluent-button>
+          </div>
         </form>
       </section>
-      <section v-if="section === 'discussions'" class="content-card answer-panel">
+      <section v-if="section === 'discussions'" class="box box-form answer-panel">
         <div v-if="discussionItem">
           <p class="eyebrow">{{ t("acceptedAnswer") }}</p>
           <p v-if="discussionItem?.answerCommentId">
@@ -813,43 +898,61 @@ watch(
               t("answerMarked")
             }}
           </p>
-          <button v-if="showEditActions" class="btn" @click="markAnswer(null)">
+          <fluent-button v-if="showEditActions" type="button" @click="markAnswer(null)">
             {{ t("clearAnswer") }}
-          </button>
+          </fluent-button>
         </div>
       </section>
-      <section v-if="section !== 'wiki'" class="content-card comments-panel">
+      <section v-if="section !== 'wiki'" class="box box-form comments-panel">
         <p class="eyebrow">{{ t("comments") }}</p>
         <article v-for="comment in comments" :key="comment.id" class="comment-row">
           <div class="actor-line">
             <strong>{{ actorName(comment) }}</strong
-            ><span class="pill agent-badge" v-if="comment.actor.kind === 'agent'">{{
+            ><StatusBadge v-if="comment.actor.kind === 'agent'" tone="brand">{{
               t("agentAuthored")
-            }}</span
+            }}</StatusBadge
             ><small>{{ new Date(comment.createdAt).toLocaleString() }}</small
-            ><button v-if="showEditActions" class="text-button" @click="startEditComment(comment)">
-              {{ t("edit") }}</button
-            ><button v-if="showEditActions" class="text-button" @click="removeComment(comment)">
-              {{ t("delete") }}</button
-            ><button
+            ><fluent-button
+              v-if="showEditActions"
+              type="button"
+              appearance="transparent"
+              size="small"
+              @click="startEditComment(comment)"
+            >
+              {{ t("edit") }}</fluent-button
+            ><fluent-button
+              v-if="showEditActions"
+              type="button"
+              appearance="transparent"
+              size="small"
+              @click="removeComment(comment)"
+            >
+              {{ t("delete") }}</fluent-button
+            ><fluent-button
               v-if="section === 'discussions' && showEditActions"
-              class="text-button"
+              type="button"
+              appearance="transparent"
+              size="small"
               @click="markAnswer(comment)"
             >
               {{ t("markAnswer") }}
-            </button>
+            </fluent-button>
           </div>
           <pre class="body-content">{{ comment.body }}</pre>
         </article>
-        <form v-if="canCreate" class="inline-form" @submit.prevent="postComment">
-          <textarea
+        <form v-if="canCreate" class="form-stack inline-form" @submit.prevent="postComment">
+          <TextAreaField
             v-model="commentBody"
             :placeholder="t('writeComment')"
             rows="4"
             required
-          /><button class="btn primary" type="submit" :disabled="saving">
-            {{ editCommentId ? t("save") : t("comment") }}
-          </button>
+            :label="t('writeComment')"
+          />
+          <div class="form-actions">
+            <fluent-button type="submit" appearance="primary" :disabled="saving">
+              {{ editCommentId ? t("save") : t("comment") }}
+            </fluent-button>
+          </div>
         </form>
         <p v-else class="muted">{{ t("signInToComment") }}</p>
       </section>
@@ -860,198 +963,134 @@ watch(
 <style scoped>
 .collab-section {
   display: grid;
-  gap: 18px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--spacingVerticalL);
 }
 .section-actions {
   display: flex;
   justify-content: flex-end;
 }
-.content-card {
-  border-radius: 6px;
-  border: 1px solid var(--line);
-  background: var(--surface);
-  padding: 18px;
-  min-width: 0;
+.item-link {
+  flex-wrap: wrap;
+  align-items: center;
+  color: inherit;
+}
+.item-link:hover {
+  text-decoration: none;
+}
+.item-link:hover strong {
+  color: var(--colorBrandForegroundLink);
 }
 .item-row {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: var(--spacingHorizontalM);
   min-height: 48px;
-  padding: 10px 4px;
-  border-bottom: 1px solid var(--line);
-}
-.item-link {
-  text-decoration: none;
-}
-.item-link:hover strong {
-  color: var(--accent);
+  padding: var(--spacingVerticalS) 0;
+  border-bottom: 1px solid var(--colorNeutralStroke2);
 }
 .item-row small,
-.actor-line,
-.muted {
-  color: var(--muted);
+.item-link small,
+.actor-line {
+  color: var(--colorNeutralForeground3);
 }
-.item-row small {
+.item-row small,
+.item-link small {
   margin-left: auto;
 }
 .number,
 code {
-  color: var(--link);
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 12px;
-}
-.pill {
-  border: 1px solid var(--line);
-  border-radius: 99px;
-  padding: 2px 7px;
-  color: var(--muted);
-  font: 10px "IBM Plex Mono";
-}
-.pill.open {
-  color: var(--ok);
-  border-color: var(--ok);
-}
-.pill.agent-badge {
-  color: var(--link);
-  border-color: var(--line);
-}
-.pill.stale-check {
-  color: var(--link);
-  border-color: var(--link);
-}
-.empty-inline {
-  padding: 28px;
-  text-align: center;
-  color: var(--muted);
+  color: var(--colorBrandForegroundLink);
+  font-family: var(--fontFamilyMonospace);
+  font-size: var(--fontSizeBase200);
 }
 .list-limit-note {
-  color: var(--muted);
-  font-size: 12px;
+  padding: var(--spacingVerticalM);
+  color: var(--colorNeutralForeground3);
+  font-size: var(--fontSizeBase200);
   text-align: center;
 }
-.create-form,
-.inline-form {
-  display: grid;
-  gap: 12px;
-}
-.create-form label {
-  display: grid;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 12px;
-}
-.create-form input,
-.create-form textarea,
-.create-form select,
-.inline-form input,
-.inline-form textarea,
-.inline-form select {
-  width: 100%;
-  padding: 10px;
-  border: 1px solid var(--line);
-  color: inherit;
-  background: var(--subtle);
-  font: inherit;
-}
 .detail-card {
-  margin-top: 16px;
+  margin-top: var(--spacingVerticalM);
 }
 .detail-heading {
   display: flex;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--spacingHorizontalL);
   align-items: flex-start;
 }
 .detail-heading h2 {
-  margin: 0 0 16px;
-  font-size: 30px;
+  margin: 0 0 var(--spacingVerticalL);
+  font-size: var(--fontSizeHero700);
+  line-height: var(--lineHeightHero700);
 }
 .detail-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--spacingHorizontalS);
 }
 .actor-line {
   display: flex;
-  gap: 10px;
+  gap: var(--spacingHorizontalM);
   align-items: center;
   flex-wrap: wrap;
-  font-size: 12px;
+  font-size: var(--fontSizeBase200);
 }
 .body-content {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  color: var(--text);
-  font: 14px/1.7 inherit;
-  margin: 18px 0;
+  font: var(--fontSizeBase300) / 1.7 var(--fontFamilyBase);
+  margin: var(--spacingVerticalL) 0;
 }
 .metadata-row,
 .pull-meta {
   display: flex;
-  gap: 8px;
+  gap: var(--spacingHorizontalS);
   flex-wrap: wrap;
-  padding: 12px 0;
+  align-items: center;
+  padding: var(--spacingVerticalM) 0;
 }
 .wiki-history,
 .wiki-edit-actions,
-.pull-review,
-.review-panel,
-.checks-panel,
-.answer-panel,
-.comments-panel {
-  margin-top: 18px;
+.pull-review {
+  margin-top: var(--spacingVerticalL);
 }
 .changed-file {
-  border-top: 1px solid var(--line);
-  padding: 12px 0;
+  border-top: 1px solid var(--colorNeutralStroke2);
+  padding: var(--spacingVerticalM) 0;
 }
 .diff-preview {
   max-height: 420px;
   overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  color: var(--text);
-  background: var(--subtle);
-  padding: 12px;
-  font:
-    12px/1.6 "IBM Plex Mono",
-    monospace;
+  background: var(--colorNeutralBackground3);
+  border-radius: var(--borderRadiusMedium);
+  padding: var(--spacingVerticalM);
+  font: var(--fontSizeBase200) / 1.6 var(--fontFamilyMonospace);
 }
 .merge-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding-top: 10px;
+  gap: var(--spacingHorizontalM);
+  padding-top: var(--spacingVerticalM);
 }
 .comment-row {
-  border-bottom: 1px solid var(--line);
-  padding: 12px 0;
+  border-bottom: 1px solid var(--colorNeutralStroke2);
+  padding: var(--spacingVerticalM) 0;
 }
 .comment-row .actor-line small {
   margin-left: auto;
 }
 .inline-form {
-  margin-top: 14px;
-}
-.item-edit label {
-  display: grid;
-  gap: 6px;
-  color: var(--muted);
-}
-.checkbox-line {
-  display: flex !important;
-  align-items: center;
-}
-.checkbox-line input {
-  width: auto !important;
+  margin-top: var(--spacingVerticalM);
 }
 @media (max-width: 640px) {
   .detail-heading {
     display: block;
   }
   .detail-actions {
-    margin-bottom: 12px;
+    margin-bottom: var(--spacingVerticalM);
   }
 }
 </style>

@@ -4,6 +4,8 @@ import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import type { SsoIdentity, SsoProviderSummary } from "../lib/api";
 import { api, ssoAuthorizationUrl } from "../lib/api";
+import NoticeBar from "../components/NoticeBar.vue";
+import StatusBadge from "../components/StatusBadge.vue";
 import { clearSession, sessionState } from "../lib/session";
 
 const { t } = useI18n();
@@ -24,6 +26,16 @@ const callbackError = computed(() => {
   if (code === "sso_identity_in_use") return t("ssoIdentityInUse");
   if (code === "sso_expired") return t("ssoExpired");
   return code.startsWith("sso_") ? t("ssoLinkError") : "";
+});
+const externalIdentity = computed(() => {
+  const identity = sessionState.user?.externalIdentity;
+  if (!identity) return null;
+  return {
+    login: identity.login,
+    label: identity.provider === "github" ? t("providerGithub") : t("providerOidc"),
+    avatarUrl: identity.avatarUrl ? ssoAuthorizationUrl(identity.avatarUrl)?.href : undefined,
+    profileUrl: identity.profileUrl ? ssoAuthorizationUrl(identity.profileUrl)?.href : undefined,
+  };
 });
 const availableProviders = computed(() =>
   providers.value.filter(
@@ -123,96 +135,83 @@ onMounted(load);
     <div class="page-head">
       <h1>{{ t("account") }}</h1>
     </div>
-    <p v-if="linkedNotice" class="state success" role="status">{{ t("ssoLinked") }}</p>
-    <p v-if="callbackError" class="state error" role="alert">{{ callbackError }}</p>
-    <p v-if="loadingError" class="state error" role="alert">{{ loadingError }}</p>
-    <p v-if="actionError" class="state error" role="alert">{{ actionError }}</p>
-    <p v-if="notice" class="state success" role="status">{{ notice }}</p>
+    <div class="notices">
+      <NoticeBar v-if="linkedNotice" intent="success">{{ t("ssoLinked") }}</NoticeBar>
+      <NoticeBar v-if="callbackError" intent="error">{{ callbackError }}</NoticeBar>
+      <NoticeBar v-if="loadingError" intent="error">{{ loadingError }}</NoticeBar>
+      <NoticeBar v-if="actionError" intent="error">{{ actionError }}</NoticeBar>
+      <NoticeBar v-if="notice" intent="success">{{ notice }}</NoticeBar>
+    </div>
 
-    <div v-if="sessionState.user?.externalIdentity" class="box">
-      <div class="box-header identity">
-        <img
-          v-if="sessionState.user.externalIdentity.avatarUrl"
-          :src="sessionState.user.externalIdentity.avatarUrl"
-          alt=""
-        />
-        <div>
-          <div>GitHub</div>
-          <a
-            v-if="sessionState.user.externalIdentity.profileUrl"
-            :href="sessionState.user.externalIdentity.profileUrl"
+    <section v-if="externalIdentity" class="box" aria-labelledby="linked-provider-heading">
+      <div class="box-header">
+        <h2 id="linked-provider-heading">{{ t("linkedProvider") }}</h2>
+      </div>
+      <div class="box-row identity">
+        <fluent-avatar size="48" :name="externalIdentity.login">
+          <img v-if="externalIdentity.avatarUrl" :src="externalIdentity.avatarUrl" alt="" />
+        </fluent-avatar>
+        <div class="grow">
+          <div class="row-title">
+            @{{ externalIdentity.login }}
+            <StatusBadge>{{ externalIdentity.label }}</StatusBadge>
+          </div>
+          <fluent-link
+            v-if="externalIdentity.profileUrl"
+            :href="externalIdentity.profileUrl"
             target="_blank"
             rel="noreferrer"
-            >@{{ sessionState.user.externalIdentity.login }}</a
-          ><span v-else class="muted">@{{ sessionState.user.externalIdentity.login }}</span>
+            >{{ t("viewProfile") }}</fluent-link
+          >
         </div>
       </div>
-      <dl class="kv">
-        <dt>{{ t("accessLevel") }}</dt>
-        <dd>
-          {{
-            sessionState.user.externalIdentity.accessLevel === "read"
-              ? t("readAccess")
-              : t("identityAccess")
-          }}
-        </dd>
-        <dt>{{ t("emails") }}</dt>
-        <dd>
-          <span v-if="sessionState.user.externalIdentity.emails?.length">{{
-            sessionState.user.externalIdentity.emails.join(", ")
-          }}</span
-          ><span v-else class="muted">{{ t("noConnectedData") }}</span>
-        </dd>
-        <dt>{{ t("organizations") }}</dt>
-        <dd>
-          <span v-if="sessionState.user.externalIdentity.organizations?.length">{{
-            sessionState.user.externalIdentity.organizations.map((item) => item.login).join(", ")
-          }}</span
-          ><span v-else class="muted">{{ t("noConnectedData") }}</span>
-        </dd>
-      </dl>
-    </div>
-    <div v-else class="box box-form state github-identity-empty">
-      <p>{{ t("noGithubIdentity") }}</p>
+    </section>
+    <div v-else class="box box-form state">
+      <p>{{ t("noExternalIdentity") }}</p>
     </div>
 
-    <section class="box box-form sso-settings" :aria-labelledby="`sso-identities-heading`">
+    <section class="box box-form sso-settings" aria-labelledby="sso-identities-heading">
       <div class="sso-section-heading">
         <div>
           <h2 id="sso-identities-heading">{{ t("ssoIdentities") }}</h2>
           <p class="muted">{{ t("ssoIdentitiesHint") }}</p>
           <p class="muted">{{ t("ssoFederatedLogoutHint") }}</p>
         </div>
-        <button class="btn ghost" :disabled="loading" @click="load">{{ t("refresh") }}</button>
+        <fluent-button type="button" appearance="subtle" :disabled="loading" @click="load">{{
+          t("refresh")
+        }}</fluent-button>
       </div>
       <p v-if="!loading && !identities.length" class="muted">{{ t("ssoNoIdentities") }}</p>
       <ul v-else class="sso-identity-list">
         <li v-for="identity in identities" :key="identity.id" class="sso-identity">
           <div>
             <strong>{{ identity.displayName }}</strong>
-            <span class="protocol-badge">{{ identity.protocol.toUpperCase() }}</span>
+            <StatusBadge>{{ identity.protocol.toUpperCase() }}</StatusBadge>
             <p>
               {{ identity.providerLabel }}<span v-if="identity.email"> · {{ identity.email }}</span>
             </p>
-            <small v-if="identity.email && identity.emailVerified" class="verified-email">{{
+            <StatusBadge v-if="identity.email && identity.emailVerified" tone="success">{{
               t("ssoVerifiedEmail")
-            }}</small>
+            }}</StatusBadge>
           </div>
-          <button
-            class="btn ghost"
-            :disabled="loading || busyIdentityId === identity.id"
-            @click="unlink(identity)"
-          >
-            {{ busyIdentityId === identity.id ? t("loading") : t("ssoUnlink") }}
-          </button>
-          <button
-            class="btn"
-            :aria-label="`${t('ssoFederatedLogout')} · ${identity.providerLabel}`"
-            :disabled="loading || busyLogoutIdentityId === identity.id"
-            @click="federatedLogout(identity)"
-          >
-            {{ busyLogoutIdentityId === identity.id ? t("loading") : t("ssoFederatedLogout") }}
-          </button>
+          <div class="sso-actions">
+            <fluent-button
+              type="button"
+              appearance="subtle"
+              :disabled="loading || busyIdentityId === identity.id"
+              @click="unlink(identity)"
+            >
+              {{ busyIdentityId === identity.id ? t("loading") : t("ssoUnlink") }}
+            </fluent-button>
+            <fluent-button
+              type="button"
+              :aria-label="`${t('ssoFederatedLogout')} · ${identity.providerLabel}`"
+              :disabled="loading || busyLogoutIdentityId === identity.id"
+              @click="federatedLogout(identity)"
+            >
+              {{ busyLogoutIdentityId === identity.id ? t("loading") : t("ssoFederatedLogout") }}
+            </fluent-button>
+          </div>
         </li>
       </ul>
       <div class="sso-provider-list">
@@ -221,23 +220,22 @@ onMounted(load);
         <article v-for="provider in availableProviders" :key="provider.id" class="sso-provider">
           <div>
             <strong>{{ provider.label }}</strong>
-            <span class="protocol-badge">{{ provider.protocol.toUpperCase() }}</span>
-            <a
+            <StatusBadge>{{ provider.protocol.toUpperCase() }}</StatusBadge>
+            <fluent-link
               v-if="provider.protocol === 'saml' && metadataHref(provider.metadataUrl)"
-              class="metadata-link"
               :href="metadataHref(provider.metadataUrl) || undefined"
               target="_blank"
               rel="noreferrer"
-              >{{ t("ssoMetadata") }}</a
+              >{{ t("ssoMetadata") }}</fluent-link
             >
           </div>
-          <button
-            class="btn"
+          <fluent-button
+            type="button"
             :disabled="loading || busyProviderId === provider.id"
             @click="link(provider)"
           >
             {{ busyProviderId === provider.id ? t("loading") : t("ssoLink") }}
-          </button>
+          </fluent-button>
         </article>
       </div>
     </section>

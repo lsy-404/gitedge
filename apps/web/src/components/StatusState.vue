@@ -1,17 +1,23 @@
 <script setup lang="ts">
+import NoticeBar from "./NoticeBar.vue";
+
 defineProps<{ loading?: boolean; error?: string; empty?: boolean }>();
 defineEmits<{ retry: [] }>();
 </script>
 
 <template>
   <div v-if="loading" class="state" role="status">
-    <span class="spinner" aria-hidden="true" />{{ $t("loading") }}
+    <fluent-spinner size="small" />{{ $t("loading") }}
   </div>
-  <div v-else-if="error" class="state error" role="alert">
-    <strong>{{ error }}</strong
-    ><button class="btn ghost" @click="$emit('retry')">{{ $t("retry") }}</button>
+  <div v-else-if="error" class="state-error">
+    <NoticeBar intent="error">
+      {{ error }}
+      <fluent-button slot="actions" size="small" type="button" @click="$emit('retry')">{{
+        $t("retry")
+      }}</fluent-button>
+    </NoticeBar>
   </div>
   <div v-else-if="empty" class="state">
-    <span class="empty-dot" aria-hidden="true" /><slot name="empty">{{ $t("empty") }}</slot>
+    <slot name="empty">{{ $t("empty") }}</slot>
   </div>
 </template>

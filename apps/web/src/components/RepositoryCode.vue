@@ -12,7 +12,12 @@ import type {
   Repository,
 } from "../lib/api";
 import { ApiError, api } from "../lib/api";
+import AppIcon from "./AppIcon.vue";
+import AppLink from "./AppLink.vue";
+import SelectField from "./SelectField.vue";
+import StatusBadge from "./StatusBadge.vue";
 import StatusState from "./StatusState.vue";
+import { oneOf } from "../ui/formEvents";
 import { clearOneTimeToken, isCredentialExpired } from "../lib/credentialSecurity";
 import { authenticatedCloneCommand, gatewayCloneUrl } from "../lib/gitClone";
 import { sessionState } from "../lib/session";
@@ -24,6 +29,7 @@ import {
   repositoryCodeLocation,
   type GraphSessionMarker,
 } from "../lib/gitGraphView";
+import TextField from "./TextField.vue";
 
 const props = defineProps<{ repository: Repository; section: string }>();
 const { t } = useI18n();
@@ -57,7 +63,8 @@ const cloneCommand = computed(() =>
     : `git clone ${cloneUrl.value}`
 );
 const canCreateCloneToken = computed(() => props.repository.canWrite && sessionState.user !== null);
-const tokenScope = ref<"read" | "write">("read");
+const tokenScopes = ["read", "write"] as const;
+const tokenScope = ref<(typeof tokenScopes)[number]>("read");
 const tokenBusy = ref(false);
 const tokenExpired = ref(false);
 let tokenExpiryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -185,10 +192,6 @@ async function changeRef(value: string) {
     path: `/${props.repository.owner}/${props.repository.name}`,
     query: value ? { ref: value } : {},
   });
-}
-function handleRefChange(event: Event) {
-  const target = event.target;
-  if (target instanceof HTMLSelectElement) void changeRef(target.value);
 }
 function selectCommit(oid: string) {
   void router.push({
@@ -321,51 +324,67 @@ onUnmounted(() => {
 
 <template>
   <section class="code-section">
-    <div v-if="section === 'code'" class="code-toolbar">
-      <label class="ref-picker"
-        >{{ t("branchOrTag") }}
-        <select :value="refName" @change="handleRefChange">
-          <optgroup :label="t('branches')">
-            <option v-for="item in shortRefs(branchRefs)" :key="item.name" :value="item.shortName">
-              {{ item.shortName }}
-            </option>
-          </optgroup>
-          <optgroup v-if="tagRefs.length" :label="t('tags')">
-            <option v-for="item in shortRefs(tagRefs)" :key="item.name" :value="item.shortName">
-              {{ item.shortName }}
-            </option>
-          </optgroup>
-        </select>
-      </label>
-      <RouterLink
-        class="btn ghost"
-        :to="`/${repository.owner}/${repository.name}/commits?ref=${encodeURIComponent(refName)}`"
-        >{{ t("commitGraph") }}</RouterLink
-      >
-      <RouterLink class="btn ghost" :to="`/${repository.owner}/${repository.name}/compare`">{{
-        t("compare")
-      }}</RouterLink>
-      <div class="clone-control">
-        <span>{{ t("cloneUrl") }}</span
-        ><code>{{ cloneUrl }}</code
-        ><button class="text-button" @click="copyCloneUrl">{{ t("copy") }}</button>
+    <div v-if="section === 'code'" class="box box-form code-toolbar">
+      <div class="toolbar-row">
+        <SelectField
+          class="ref-picker"
+          :model-value="refName"
+          :label="t('branchOrTag')"
+          @update:model-value="changeRef"
+        >
+          <fluent-option
+            v-for="item in shortRefs(branchRefs)"
+            :key="item.name"
+            :value="item.shortName"
+          >
+            {{ item.shortName }}
+          </fluent-option>
+          <fluent-option
+            v-for="item in shortRefs(tagRefs)"
+            :key="item.name"
+            :value="item.shortName"
+          >
+            {{ item.shortName }} · {{ t("tags") }}
+          </fluent-option>
+        </SelectField>
+        <AppLink
+          button="outline"
+          :to="`/${repository.owner}/${repository.name}/commits?ref=${encodeURIComponent(refName)}`"
+          >{{ t("commitGraph") }}</AppLink
+        >
+        <AppLink button="outline" :to="`/${repository.owner}/${repository.name}/compare`">{{
+          t("compare")
+        }}</AppLink>
+        <div class="clone-control">
+          <span>{{ t("cloneUrl") }}</span
+          ><code>{{ cloneUrl }}</code>
+          <fluent-button
+            id="copy-clone-url"
+            type="button"
+            appearance="subtle"
+            icon-only
+            :aria-label="t('copy')"
+            @click="copyCloneUrl"
+          >
+            <AppIcon name="copy" />
+          </fluent-button>
+          <fluent-tooltip anchor="copy-clone-url">{{ t("copy") }}</fluent-tooltip>
+        </div>
       </div>
-      <template v-if="canCreateCloneToken">
-        <input
-          v-model="tokenName"
-          class="token-name-input"
-          maxlength="80"
-          required
-          :placeholder="t('cloneTokenName')"
-        />
-        <select v-model="tokenScope">
-          <option value="read">{{ t("readToken") }}</option>
-          <option value="write">{{ t("writeToken") }}</option>
-        </select>
-        <button class="btn" :disabled="tokenBusy || !tokenName.trim()" @click="issueToken">
+      <div v-if="canCreateCloneToken" class="toolbar-row">
+        <TextField v-model="tokenName" maxlength="80" required>{{ t("cloneTokenName") }}</TextField>
+        <SelectField
+          :model-value="tokenScope"
+          :label="t('permission')"
+          @update:model-value="tokenScope = oneOf(tokenScopes, $event, 'read')"
+        >
+          <fluent-option value="read">{{ t("readToken") }}</fluent-option>
+          <fluent-option value="write">{{ t("writeToken") }}</fluent-option>
+        </SelectField>
+        <fluent-button type="button" :disabled="tokenBusy || !tokenName.trim()" @click="issueToken">
           {{ t("createCloneToken") }}
-        </button>
-      </template>
+        </fluent-button>
+      </div>
     </div>
     <div v-if="token" class="token-once box box-form">
       <div>
@@ -375,52 +394,63 @@ onUnmounted(() => {
       <code v-if="!tokenExpired">{{ token.token }}</code>
       <code>{{ cloneUrl }}</code>
       <code v-if="!tokenExpired">{{ cloneCommand }}</code>
-      <button v-if="!tokenExpired" class="btn" @click="copyCloneCommand">
-        {{ t("copyCloneCommand") }}
-      </button>
-      <button class="btn" @click="clearToken">{{ t("close") }}</button>
+      <div class="form-actions">
+        <fluent-button v-if="!tokenExpired" type="button" @click="copyCloneCommand">
+          {{ t("copyCloneCommand") }}
+        </fluent-button>
+        <fluent-button type="button" @click="clearToken">{{ t("close") }}</fluent-button>
+      </div>
     </div>
-    <div v-if="loading || error" class="content-card">
+    <div v-if="loading || error" class="box">
       <StatusState :loading="loading" :error="error" :empty="false" @retry="load" />
     </div>
     <template v-else-if="section === 'code'">
       <div class="browser-grid">
-        <section class="content-card file-panel">
-          <div class="panel-heading">
+        <section class="box file-panel">
+          <div class="box-header panel-heading">
             <strong>{{ filePath || refName }}</strong
-            ><span>{{ tree?.entries.length ?? 0 }} {{ t("items") }}</span>
+            ><span class="muted">{{ tree?.entries.length ?? 0 }} {{ t("items") }}</span>
           </div>
-          <div v-if="filePath" class="file-entry">
-            <button
-              class="text-button"
-              @click="
-                router.push(
-                  `/${repository.owner}/${repository.name}?ref=${encodeURIComponent(refName)}`
-                )
-              "
-            >
-              ↑ {{ t("repositoryRoot") }}
-            </button>
-          </div>
-          <button
+          <fluent-button
+            v-if="filePath"
+            type="button"
+            appearance="transparent"
+            class="file-entry"
+            @click="
+              router.push(
+                `/${repository.owner}/${repository.name}?ref=${encodeURIComponent(refName)}`
+              )
+            "
+          >
+            ↑ {{ t("repositoryRoot") }}
+          </fluent-button>
+          <fluent-button
             v-for="entry in tree?.entries"
             :key="entry.path"
+            type="button"
+            appearance="transparent"
             class="file-entry"
             @click="openTree(entry.path, entry.type === 'tree' ? 'tree' : 'blob')"
           >
             <span class="file-type">{{ entry.type === "tree" ? "▸" : "·" }}</span
             ><span>{{ entry.name }}</span
             ><small>{{ entry.type === "tree" ? t("directory") : entry.oid.slice(0, 8) }}</small>
-          </button>
-          <div v-if="emptyReason === 'tree'" class="empty-inline">{{ t("emptyTree") }}</div>
+          </fluent-button>
+          <div v-if="emptyReason === 'tree'" class="state">{{ t("emptyTree") }}</div>
         </section>
-        <section v-if="file || emptyReason === 'tree'" class="content-card preview-panel">
+        <section v-if="file || emptyReason === 'tree'" class="box preview-panel">
           <template v-if="file"
-            ><div class="panel-heading">
+            ><div class="box-header panel-heading">
               <strong>{{ title }}</strong
-              ><button class="text-button" @click="downloadText">{{ t("download") }}</button>
+              ><fluent-button
+                type="button"
+                appearance="subtle"
+                size="small"
+                @click="downloadText"
+                >{{ t("download") }}</fluent-button
+              >
             </div>
-            <p v-if="file.binary || file.content === null" class="muted">
+            <p v-if="file.binary || file.content === null" class="muted box-form">
               {{ t("binaryPreviewUnavailable") }}
             </p>
             <pre v-else class="text-preview">{{ file.content }}</pre>
@@ -429,15 +459,15 @@ onUnmounted(() => {
       </div>
       <section
         v-if="file?.path.toLowerCase().endsWith('.md') && file.content !== null"
-        class="content-card readme-panel"
+        class="box readme-panel"
       >
-        <p class="eyebrow">{{ t("readme") }}</p>
-        <h2>{{ title }}</h2>
+        <div class="box-header">{{ t("readme") }}</div>
+        <h2 class="readme-title">{{ title }}</h2>
         <pre class="text-preview">{{ file.content }}</pre>
       </section>
     </template>
     <template v-else-if="section === 'commits'">
-      <section class="content-card graph-panel">
+      <section class="box box-form graph-panel">
         <div class="panel-heading">
           <div>
             <p class="eyebrow">{{ t("commitGraph") }}</p>
@@ -447,7 +477,7 @@ onUnmounted(() => {
             t("graphTruncated", { count: graph.commits.length })
           }}</span>
         </div>
-        <p v-if="!graph?.commits.length && !loading" class="empty-inline">{{ t("noCommits") }}</p>
+        <p v-if="!graph?.commits.length && !loading" class="state">{{ t("noCommits") }}</p>
         <div v-else class="graph-history">
           <div class="graph-scroll">
             <svg
@@ -463,7 +493,11 @@ onUnmounted(() => {
                 :y1="20 + edge.fromRow * graphLayout.rowHeight"
                 :x2="12 + edge.toLane * 22"
                 :y2="20 + edge.toRow * graphLayout.rowHeight"
-                :stroke="edge.fromLane === edge.toLane ? '#8b83f7' : '#d5a36a'"
+                :stroke="
+                  edge.fromLane === edge.toLane
+                    ? 'var(--colorCompoundBrandStroke)'
+                    : 'var(--colorNeutralForeground3)'
+                "
                 stroke-width="2"
               />
               <circle
@@ -476,7 +510,9 @@ onUnmounted(() => {
                 role="link"
                 :aria-label="`${t('openCommit')} ${point.commit.oid}`"
                 :fill="
-                  (sessionMarkers.get(point.commit.oid)?.length ?? 0) > 0 ? '#e6c99a' : '#8b83f7'
+                  (sessionMarkers.get(point.commit.oid)?.length ?? 0) > 0
+                    ? 'var(--colorPaletteMarigoldForeground2)'
+                    : 'var(--colorCompoundBrandForeground1)'
                 "
                 @click="selectCommit(point.commit.oid)"
                 @keydown="handleCommitKeydown($event, point.commit.oid)"
@@ -507,14 +543,15 @@ onUnmounted(() => {
               >
             </div>
             <div class="commit-labels">
-              <span v-for="name in commitRefs.get(point.commit.oid)" :key="name" class="pill">{{
+              <StatusBadge v-for="name in commitRefs.get(point.commit.oid)" :key="name">{{
                 name
-              }}</span
-              ><span
+              }}</StatusBadge
+              ><StatusBadge
                 v-for="marker in sessionMarkers.get(point.commit.oid)"
                 :key="`${marker.session.id}-${marker.kind}-${marker.branchName}`"
-                class="pill agent-badge"
-                >{{ sessionMarkerLabel(marker) }} · {{ sessionPermission(marker.session) }}</span
+                tone="brand"
+                >{{ sessionMarkerLabel(marker) }} ·
+                {{ sessionPermission(marker.session) }}</StatusBadge
               >
             </div>
           </div>
@@ -534,21 +571,21 @@ onUnmounted(() => {
             {{ t("forkRefsMissing", { count: graphView?.sessionsWithoutForkRefs ?? 0 }) }}
           </p>
           <div v-for="session in graph.sessions" :key="session.id" class="session-overlay-row">
-            <RouterLink
+            <AppLink
               v-if="session.baseOid"
               :to="{
                 path: `/${repository.owner}/${repository.name}/commits`,
                 query: { ref: refName, oid: session.baseOid },
               }"
               >{{ session.agentName }} / {{ session.workspaceName }} ·
-              {{ t("sessionBase") }}</RouterLink
+              {{ t("sessionBase") }}</AppLink
             >
             <span v-else>{{ session.agentName }} / {{ session.workspaceName }}</span>
             <small
               >{{ sessionPermission(session) }} · {{ sessionStatus(session) }} ·
               {{ new Date(session.expiresAt).toLocaleString() }}</small
             >
-            <RouterLink
+            <AppLink
               v-for="forkRef in sessionForkRefs(session.id)"
               :key="forkRef.name"
               :to="{
@@ -556,49 +593,55 @@ onUnmounted(() => {
                 query: { ref: refName, oid: forkRef.oid },
               }"
               >{{ forkRef.name.slice(`session/${session.id}/`.length) }} ·
-              {{ forkRef.oid.slice(0, 8) }}</RouterLink
+              {{ forkRef.oid.slice(0, 8) }}</AppLink
             >
           </div>
         </div>
-        <button v-if="hasMoreCommits" class="btn" @click="loadMore">
+        <fluent-button v-if="hasMoreCommits" type="button" @click="loadMore">
           {{ t("loadMore") }}
-        </button>
+        </fluent-button>
       </section>
-      <section v-if="route.query.oid" class="content-card commit-detail">
+      <section v-if="route.query.oid" class="box box-form commit-detail">
         <p class="eyebrow">{{ t("commitDetails") }}</p>
         <code>{{ route.query.oid }}</code>
         <p v-if="selectedCommit">{{ selectedCommit.message }}</p>
         <p v-else class="muted">{{ t("commitNotInGraph") }}</p>
         <strong>{{ t("parents") }}</strong>
         <div v-for="parent in selectedCommit?.parents" :key="parent">
-          <RouterLink
+          <AppLink
             :to="{
               path: `/${repository.owner}/${repository.name}/commits`,
               query: { ref: refName, oid: parent },
             }"
-            >{{ parent }}</RouterLink
+            >{{ parent }}</AppLink
           >
         </div>
       </section>
     </template>
-    <section v-else class="content-card compare-panel">
+    <section v-else class="box box-form compare-panel">
       <p class="eyebrow">{{ t("compare") }}</p>
       <div class="compare-form">
-        <label
-          >{{ t("baseBranch")
-          }}<select v-model="compareBase">
-            <option v-for="item in shortRefs(branchRefs)" :key="item.name" :value="item.shortName">
-              {{ item.shortName }}
-            </option>
-          </select></label
-        ><label
-          >{{ t("headBranch")
-          }}<select v-model="compareHead">
-            <option v-for="item in shortRefs(branchRefs)" :key="item.name" :value="item.shortName">
-              {{ item.shortName }}
-            </option>
-          </select></label
-        ><button class="btn primary" @click="load">{{ t("compare") }}</button>
+        <SelectField v-model="compareBase" :label="t('baseBranch')">
+          <fluent-option
+            v-for="item in shortRefs(branchRefs)"
+            :key="item.name"
+            :value="item.shortName"
+          >
+            {{ item.shortName }}
+          </fluent-option>
+        </SelectField>
+        <SelectField v-model="compareHead" :label="t('headBranch')">
+          <fluent-option
+            v-for="item in shortRefs(branchRefs)"
+            :key="item.name"
+            :value="item.shortName"
+          >
+            {{ item.shortName }}
+          </fluent-option>
+        </SelectField>
+        <fluent-button type="button" appearance="primary" @click="load">{{
+          t("compare")
+        }}</fluent-button>
       </div>
       <p v-if="comparison" class="muted">
         {{ comparison.commits.length }} {{ t("commits") }} · {{ comparison.files.length }}
@@ -606,7 +649,7 @@ onUnmounted(() => {
       </p>
       <div v-for="change in comparison?.files" :key="change.path" class="item-row">
         <strong>{{ change.path }}</strong
-        ><span class="pill">{{ change.type }}</span>
+        ><StatusBadge>{{ change.type }}</StatusBadge>
         <pre v-if="change.patch" class="diff-preview">{{ change.patch }}</pre>
       </div>
     </section>
@@ -616,117 +659,93 @@ onUnmounted(() => {
 <style scoped>
 .code-section {
   display: grid;
-  gap: 18px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--spacingVerticalL);
 }
 .code-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--spacingVerticalM);
+}
+.toolbar-row {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  align-items: flex-end;
+  gap: var(--spacingHorizontalM);
   flex-wrap: wrap;
-  padding: 14px;
-  background: var(--surface);
-  border: 1px solid var(--line);
 }
-.code-toolbar select,
-.code-toolbar input,
-.compare-form select {
-  color: inherit;
-  background: var(--subtle);
-  border: 1px solid var(--line);
-  padding: 8px;
-}
-.ref-picker {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--muted);
-  font-size: 12px;
+.toolbar-row > fluent-field,
+.toolbar-row > fluent-text-input {
+  width: auto;
+  min-width: 0;
+  flex: 1 1 200px;
+  max-width: 320px;
 }
 .clone-control {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--spacingHorizontalS);
   flex: 1 1 320px;
-  color: var(--muted);
-  font-size: 12px;
+  min-width: 0;
+  color: var(--colorNeutralForeground2);
+  font-size: var(--fontSizeBase200);
 }
 .clone-control code {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  background: var(--subtle);
-  padding: 7px;
-  color: var(--link);
+  padding: var(--spacingVerticalXS) var(--spacingHorizontalS);
+  border-radius: var(--borderRadiusMedium);
+  background: var(--colorNeutralBackground3);
+  color: var(--colorBrandForegroundLink);
 }
 .browser-grid {
   display: grid;
   grid-template-columns: minmax(260px, 0.8fr) minmax(0, 1.2fr);
-  gap: 18px;
-}
-.content-card {
-  border-radius: 6px;
-  border: 1px solid var(--line);
-  background: var(--surface);
-  padding: 16px;
-  min-width: 0;
+  gap: var(--spacingHorizontalL);
+  align-items: start;
 }
 .panel-heading {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 12px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--line);
-}
-.panel-heading span,
-.file-entry small,
-.commit-row small {
-  color: var(--muted);
+  gap: var(--spacingHorizontalM);
 }
 .file-entry {
+  display: flex;
   width: 100%;
-  min-height: 42px;
+  justify-content: flex-start;
+  border-radius: 0;
+  border-bottom: 1px solid var(--colorNeutralStroke2);
+}
+.file-entry::part(content) {
   display: flex;
   align-items: center;
-  gap: 10px;
-  text-align: left;
-  color: inherit;
-  background: transparent;
-  border: 0;
-  border-bottom: 1px solid var(--line-soft);
-  padding: 8px 4px;
-}
-.file-entry:hover {
-  background: var(--subtle);
+  gap: var(--spacingHorizontalM);
+  width: 100%;
 }
 .file-entry small {
   margin-left: auto;
-  font-family: monospace;
+  color: var(--colorNeutralForeground3);
+  font-family: var(--fontFamilyMonospace);
 }
 .file-type {
-  color: var(--accent);
-}
-.empty-inline {
-  padding: 24px;
-  text-align: center;
-  color: var(--muted);
+  color: var(--colorCompoundBrandForeground1);
 }
 .text-preview,
 .diff-preview {
   overflow: auto;
   max-height: 70vh;
+  margin: 0;
+  padding: var(--spacingVerticalM) var(--spacingHorizontalL);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  color: var(--text);
-  font:
-    12px/1.65 "IBM Plex Mono",
-    monospace;
+  font: var(--fontSizeBase200) / 1.65 var(--fontFamilyMonospace);
 }
-.readme-panel {
-  margin-top: 18px;
-}
-.readme-panel h2 {
-  margin-top: 0;
+.readme-title {
+  margin: 0;
+  padding: var(--spacingVerticalM) var(--spacingHorizontalL) 0;
 }
 .graph-panel {
   position: relative;
@@ -742,15 +761,15 @@ onUnmounted(() => {
   pointer-events: none;
 }
 .commit-row {
-  padding-block: 8px;
-  border-bottom: 1px solid var(--line-soft);
-  color: var(--muted);
-  font-size: 12px;
+  padding-block: var(--spacingVerticalS);
+  border-bottom: 1px solid var(--colorNeutralStroke2);
+  color: var(--colorNeutralForeground3);
+  font-size: var(--fontSizeBase200);
 }
 .commit-title {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--spacingHorizontalM);
   height: 24px;
   min-width: 0;
 }
@@ -759,87 +778,80 @@ onUnmounted(() => {
 }
 .commit-labels {
   display: flex;
-  gap: 8px;
+  gap: var(--spacingHorizontalS);
   overflow-x: auto;
   min-width: 0;
 }
-.commit-labels .pill {
+.commit-labels > * {
   flex-shrink: 0;
 }
 .commit-subject {
-  color: var(--strong);
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--colorNeutralForeground1);
 }
 .commit-row code,
 .commit-detail code {
-  color: var(--link);
-  font: 11px monospace;
-}
-.pill.agent-badge {
-  color: var(--link);
-  border-color: var(--line);
+  color: var(--colorBrandForegroundLink);
+  font: var(--fontSizeBase200) var(--fontFamilyMonospace);
 }
 .session-overlay-row {
   display: grid;
-  gap: 4px;
-  border-top: 1px solid var(--line);
-  padding: 8px 0;
+  gap: var(--spacingVerticalXXS);
+  border-top: 1px solid var(--colorNeutralStroke2);
+  padding: var(--spacingVerticalS) 0;
 }
 .graph-scroll svg circle {
   pointer-events: all;
   cursor: pointer;
 }
 .session-overlay-row small {
-  color: var(--muted);
+  color: var(--colorNeutralForeground3);
 }
 .session-overlay {
   display: grid;
-  gap: 5px;
-  padding-top: 14px;
-  color: var(--muted);
-  font-size: 12px;
+  gap: var(--spacingVerticalXS);
+  padding-top: var(--spacingVerticalM);
+  color: var(--colorNeutralForeground2);
+  font-size: var(--fontSizeBase200);
 }
 .token-once {
   display: grid;
-  gap: 12px;
+  gap: var(--spacingVerticalM);
   overflow-wrap: anywhere;
 }
 .token-once p {
-  margin: 5px 0 0;
-  color: var(--muted);
+  margin: var(--spacingVerticalXS) 0 0;
+  color: var(--colorNeutralForeground2);
 }
 .token-once code {
-  padding: 10px;
-  background: var(--subtle);
-  color: var(--link);
+  padding: var(--spacingVerticalS) var(--spacingHorizontalM);
+  border-radius: var(--borderRadiusMedium);
+  background: var(--colorNeutralBackground3);
+  color: var(--colorBrandForegroundLink);
 }
 .compare-form {
   display: flex;
-  align-items: end;
-  gap: 12px;
+  align-items: flex-end;
+  gap: var(--spacingHorizontalM);
   flex-wrap: wrap;
-}
-.compare-form label {
-  display: grid;
-  gap: 6px;
-  color: var(--muted);
 }
 .diff-preview {
   flex-basis: 100%;
   width: 100%;
   max-height: 320px;
+  padding: 0;
 }
 .item-row {
   display: flex;
   align-items: flex-start;
   flex-wrap: wrap;
-  gap: 8px;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--line);
+  gap: var(--spacingHorizontalS);
+  padding: var(--spacingVerticalM) 0;
+  border-bottom: 1px solid var(--colorNeutralStroke2);
 }
 @media (max-width: 720px) {
   .browser-grid {

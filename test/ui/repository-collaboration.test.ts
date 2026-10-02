@@ -124,8 +124,15 @@ function settle(): Promise<void> {
   })();
 }
 
-function findButton(root: HTMLElement, text: string): HTMLButtonElement {
-  const found = Array.from(root.querySelectorAll<HTMLButtonElement>("button")).find((button) =>
+/** Fluent controls are custom elements; without their definitions they are plain HTMLElements. */
+function control(root: ParentNode, selector: string): HTMLElement {
+  const field = root.querySelector<HTMLElement>(selector);
+  if (!field) throw new Error(`Expected control: ${selector}`);
+  return field;
+}
+
+function findButton(root: HTMLElement, text: string): HTMLElement {
+  const found = Array.from(root.querySelectorAll<HTMLElement>("fluent-button")).find((button) =>
     button.textContent?.replace(/\s+/g, " ").includes(text)
   );
   if (!found)
@@ -135,32 +142,12 @@ function findButton(root: HTMLElement, text: string): HTMLButtonElement {
   return found;
 }
 
-function fill(
-  field: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
-  value: string
-): void {
-  field.value = value;
+/** Sets the control's value property and emits the event Fluent would: `change` for dropdowns. */
+function fill(field: HTMLElement, value: string): void {
+  Reflect.set(field, "value", value);
   field.dispatchEvent(
-    new Event(field instanceof HTMLSelectElement ? "change" : "input", { bubbles: true })
+    new Event(field.localName === "fluent-dropdown" ? "change" : "input", { bubbles: true })
   );
-}
-
-function inputField(root: ParentNode, selector: string): HTMLInputElement {
-  const field = root.querySelector(selector);
-  if (!(field instanceof HTMLInputElement)) throw new Error(`Expected input field: ${selector}`);
-  return field;
-}
-
-function textArea(root: ParentNode, selector: string): HTMLTextAreaElement {
-  const field = root.querySelector(selector);
-  if (!(field instanceof HTMLTextAreaElement)) throw new Error(`Expected text area: ${selector}`);
-  return field;
-}
-
-function selectField(root: ParentNode, selector: string): HTMLSelectElement {
-  const field = root.querySelector(selector);
-  if (!(field instanceof HTMLSelectElement)) throw new Error(`Expected select field: ${selector}`);
-  return field;
 }
 
 function submit(form: HTMLFormElement): void {
@@ -264,9 +251,9 @@ describe("RepositoryCollaboration rendered workflows", () => {
     await settle();
     const createForm = mounted.root.querySelector<HTMLFormElement>(".create-form");
     if (!createForm) throw new Error("Issue creation form did not open.");
-    const createInputs = createForm.querySelectorAll<HTMLInputElement>("input");
+    const createInputs = createForm.querySelectorAll<HTMLElement>("fluent-text-input");
     fill(createInputs[0], "Parser regression");
-    fill(textArea(createForm, "textarea"), "Steps to reproduce");
+    fill(control(createForm, "fluent-textarea"), "Steps to reproduce");
     fill(createInputs[1], "bug, regression");
     fill(createInputs[2], "alice, bob");
     submit(createForm);
@@ -287,10 +274,10 @@ describe("RepositoryCollaboration rendered workflows", () => {
     await settle();
     const editForm = mounted.root.querySelector<HTMLFormElement>(".item-edit");
     if (!editForm) throw new Error("Issue edit form did not open.");
-    fill(inputField(editForm, "input"), "Parser regression fixed");
-    fill(textArea(editForm, "textarea"), "Updated reproduction details");
-    fill(editForm.querySelectorAll<HTMLInputElement>("input")[1], "bug, fixed");
-    fill(editForm.querySelectorAll<HTMLInputElement>("input")[2], "alice");
+    fill(control(editForm, "fluent-text-input"), "Parser regression fixed");
+    fill(control(editForm, "fluent-textarea"), "Updated reproduction details");
+    fill(editForm.querySelectorAll<HTMLElement>("fluent-text-input")[1], "bug, fixed");
+    fill(editForm.querySelectorAll<HTMLElement>("fluent-text-input")[2], "alice");
     submit(editForm);
     await settle();
     expect(updateIssueSpy).toHaveBeenCalledWith("repo-1", 7, {
@@ -305,7 +292,7 @@ describe("RepositoryCollaboration rendered workflows", () => {
 
     const commentForm = mounted.root.querySelector<HTMLFormElement>(".comments-panel form");
     if (!commentForm) throw new Error("Issue comment form was not rendered.");
-    fill(textArea(commentForm, "textarea"), "Confirmed on latest build");
+    fill(control(commentForm, "fluent-textarea"), "Confirmed on latest build");
     submit(commentForm);
     await settle();
     expect(createCommentSpy).toHaveBeenCalledWith(
@@ -408,8 +395,8 @@ describe("RepositoryCollaboration rendered workflows", () => {
 
     const reviewForm = mounted.root.querySelector<HTMLFormElement>(".review-panel form");
     if (!reviewForm) throw new Error("Review form was not rendered.");
-    fill(selectField(reviewForm, "select"), "approved");
-    fill(textArea(reviewForm, "textarea"), "Approved current head");
+    fill(control(reviewForm, "fluent-dropdown"), "approved");
+    fill(control(reviewForm, "fluent-textarea"), "Approved current head");
     submit(reviewForm);
     await settle();
     expect(createReviewSpy).toHaveBeenCalledWith("repo-1", 12, {
@@ -420,10 +407,10 @@ describe("RepositoryCollaboration rendered workflows", () => {
 
     const checkForm = mounted.root.querySelector<HTMLFormElement>(".checks-panel form");
     if (!checkForm) throw new Error("CI check form was not rendered.");
-    const checkInputs = checkForm.querySelectorAll<HTMLInputElement>("input");
+    const checkInputs = checkForm.querySelectorAll<HTMLElement>("fluent-text-input");
     fill(checkInputs[0], "integration");
     fill(checkInputs[1], "head-current-oid");
-    fill(textArea(checkForm, "textarea"), "All integration tests passed");
+    fill(control(checkForm, "fluent-textarea"), "All integration tests passed");
     submit(checkForm);
     await settle();
     expect(createCheckSpy).toHaveBeenCalledWith("repo-1", 12, {
@@ -506,7 +493,7 @@ describe("RepositoryCollaboration rendered workflows", () => {
     await settle();
     const wikiEdit = mounted.root.querySelector<HTMLFormElement>(".wiki-edit-actions form");
     if (!wikiEdit) throw new Error("Wiki editor did not open.");
-    fill(textArea(wikiEdit, "textarea"), "Draft based on stale page");
+    fill(control(wikiEdit, "fluent-textarea"), "Draft based on stale page");
     submit(wikiEdit);
     await settle();
     expect(mounted.root.querySelector('[role="alert"]')?.textContent).toContain(
@@ -524,7 +511,7 @@ describe("RepositoryCollaboration rendered workflows", () => {
     const retryEditor = mounted.root.querySelector<HTMLFormElement>(".wiki-edit-actions form");
     if (!retryEditor)
       throw new Error("Wiki editor did not reopen after reloading the latest revision.");
-    fill(textArea(retryEditor, "textarea"), "Saved against latest revision");
+    fill(control(retryEditor, "fluent-textarea"), "Saved against latest revision");
     submit(retryEditor);
     await settle();
     expect(updateWikiSpy).toHaveBeenNthCalledWith(2, "repo-1", "guide", {
@@ -538,7 +525,7 @@ describe("RepositoryCollaboration rendered workflows", () => {
 
     const firstHistoryRow = mounted.root.querySelector<HTMLElement>(".wiki-history .item-row");
     if (!firstHistoryRow) throw new Error("Wiki revision history was not rendered.");
-    firstHistoryRow.querySelector("button")?.click();
+    firstHistoryRow.querySelector<HTMLElement>("fluent-button")?.click();
     await settle();
     expect(updateWikiSpy).toHaveBeenLastCalledWith("repo-1", "guide", {
       title: "Guide v1",

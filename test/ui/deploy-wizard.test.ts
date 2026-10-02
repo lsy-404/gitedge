@@ -54,6 +54,13 @@ async function settle() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/** Fluent buttons only submit their form once the element is defined, so tests submit directly. */
+function submitForm(root: HTMLElement, selector: string): void {
+  const form = root.querySelector(selector);
+  if (!(form instanceof HTMLFormElement)) throw new Error(`Expected form: ${selector}`);
+  form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+}
+
 function mountWizard() {
   const root = document.createElement("div");
   document.body.append(root);
@@ -84,7 +91,7 @@ describe("Cloudflare deployment wizard", () => {
     vi.stubGlobal("fetch", fetchMock);
     const mounted = mountWizard();
 
-    mounted.root.querySelector<HTMLButtonElement>(".deploy-read-form button")?.click();
+    submitForm(mounted.root, ".deploy-read-form");
     await settle();
 
     expect(mounted.root.textContent).toContain("sha256:review-this-digest");
@@ -93,7 +100,7 @@ describe("Cloudflare deployment wizard", () => {
     expect(mounted.root.textContent).toContain("D1 · DB · sample-db");
     expect(mounted.root.textContent).toContain("MIT license terms");
     expect(mounted.root.textContent).toContain("Service usage terms");
-    expect(mounted.root.querySelector<HTMLInputElement>("#deploy-token")).not.toBeNull();
+    expect(mounted.root.querySelector<HTMLElement>("#deploy-token")).not.toBeNull();
     expect(mounted.root.querySelector(".deploy-confirm-form")).toBeNull();
 
     mounted.unmount();
@@ -136,25 +143,26 @@ describe("Cloudflare deployment wizard", () => {
     vi.stubGlobal("fetch", fetchMock);
     const mounted = mountWizard();
 
-    mounted.root.querySelector<HTMLButtonElement>(".deploy-read-form button")?.click();
+    submitForm(mounted.root, ".deploy-read-form");
     await settle();
-    const tokenInput = mounted.root.querySelector<HTMLInputElement>("#deploy-token");
+    const tokenInput = mounted.root.querySelector<HTMLElement>("#deploy-token");
     if (!tokenInput) throw new Error("Token field was not rendered");
-    tokenInput.value = "temporary-test-token";
+    Reflect.set(tokenInput, "value", "temporary-test-token");
     tokenInput.dispatchEvent(new Event("input", { bubbles: true }));
-    mounted.root.querySelector<HTMLButtonElement>(".deploy-token-form button")?.click();
+    submitForm(mounted.root, ".deploy-token-form");
     await settle();
 
-    const confirm = mounted.root.querySelector<HTMLInputElement>("#deploy-confirm");
+    const confirm = mounted.root.querySelector<HTMLElement>("#deploy-confirm");
     if (!confirm) throw new Error("Deployment confirmation was not rendered");
-    confirm.click();
+    Reflect.set(confirm, "checked", true);
+    confirm.dispatchEvent(new Event("change", { bubbles: true }));
     await settle();
-    mounted.root.querySelector<HTMLButtonElement>(".deploy-confirm-form button")?.click();
+    submitForm(mounted.root, ".deploy-confirm-form");
     await settle();
     expect(mounted.root.textContent).toContain("Migration service busy");
     expect(requests.slice(-2)).toEqual(["provision", "migrate"]);
 
-    mounted.root.querySelector<HTMLButtonElement>("[role='alert'] button")?.click();
+    mounted.root.querySelector<HTMLElement>("[role='alert'] fluent-button")?.click();
     await settle();
 
     expect(requests.slice(-2)).toEqual(["migrate", "deploy"]);

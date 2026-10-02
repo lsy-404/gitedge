@@ -177,4 +177,42 @@ describe("GitEdge product shell", () => {
     expect(i18n.global.t("welcome")).toBe("Code at the edge");
     i18n.global.locale.value = "zh-CN";
   });
+
+  it("keeps both locales in step and has dropped the GitHub access-level copy", () => {
+    const messages = i18n.global.messages.value;
+    const keys = (tree: object, prefix = ""): string[] =>
+      Object.entries(tree).flatMap(([name, value]) =>
+        typeof value === "object" && value !== null
+          ? keys(value, `${prefix}${name}.`)
+          : [`${prefix}${name}`]
+      );
+    const chinese = keys(messages["zh-CN"]).sort();
+    const english = keys(messages.en).sort();
+    expect(chinese).toEqual(english);
+
+    const retired = [
+      "githubIdentity",
+      "githubRead",
+      "identityTitle",
+      "identityText",
+      "readTitle",
+      "readText",
+      "noWriteScope",
+      "identityAccess",
+      "readAccess",
+      "accessLevel",
+      "emails",
+      "noConnectedData",
+      "oauthError",
+    ];
+    for (const key of retired) expect(english).not.toContain(key);
+  });
+
+  it("labels external sign-in providers neutrally", () => {
+    i18n.global.locale.value = "en";
+    expect(i18n.global.t("providerGithub")).toBe("GitHub");
+    expect(i18n.global.t("providerOidc")).toBe("SSO");
+    expect(i18n.global.t("continueWith", { provider: "Acme" })).toBe("Continue with Acme");
+    i18n.global.locale.value = "zh-CN";
+  });
 });
