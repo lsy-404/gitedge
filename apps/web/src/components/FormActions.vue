@@ -1,14 +1,16 @@
 <script setup lang="ts">
+import NoticeBar from "./NoticeBar.vue";
+
 defineProps<{ saving: boolean; error: string }>();
 defineEmits<{ cancel: [] }>();
 </script>
 
 <template>
-  <p v-if="error" class="form-error" role="alert">{{ error }}</p>
+  <NoticeBar v-if="error" intent="error">{{ error }}</NoticeBar>
   <div class="form-actions">
-    <button type="button" class="btn" @click="$emit('cancel')">{{ $t("cancel") }}</button>
-    <button class="btn primary" :disabled="saving">
+    <fluent-button type="button" @click="$emit('cancel')">{{ $t("cancel") }}</fluent-button>
+    <fluent-button type="submit" appearance="primary" :disabled="saving">
       {{ saving ? $t("loading") : $t("create") }}
-    </button>
+    </fluent-button>
   </div>
 </template>

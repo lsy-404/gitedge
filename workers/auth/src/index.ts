@@ -46,38 +46,23 @@ type SessionWithExternalIdentityRow = SessionRow & {
   provider_login: string | null;
   avatar_url: string | null;
   profile_url: string | null;
-  access_level: "identity" | "read" | null;
-  emails_json: string | null;
-  organizations_json: string | null;
 };
 type ExternalIdentitySummary = {
   readonly provider: "github";
   readonly login: string;
   readonly avatarUrl?: string;
   readonly profileUrl?: string;
-  readonly accessLevel: "identity" | "read";
-  readonly emails?: readonly string[];
-  readonly organizations?: readonly GithubOrganizationSummary[];
 };
 type SessionData = TrustedUser & { readonly externalIdentity?: ExternalIdentitySummary };
 type GithubOAuthStateRow = {
   code_verifier: string;
-  access_level: "identity" | "read";
   return_to: string;
 };
 type GithubTokenResponse = { access_token: string; token_type: string; scope: string };
 type GithubUserResponse = { id: number; login: string; avatar_url: string; html_url: string };
-type GithubEmail = { email: string; verified: boolean };
-type GithubOrganization = { id: number; login: string; avatar_url: string };
-type GithubOrganizationSummary = {
-  readonly id: number;
-  readonly login: string;
-  readonly avatarUrl: string;
-};
 
 const GITHUB_STATE_MAX_AGE_MS = 10 * 60 * 1000;
 const GITHUB_FLOW_COOKIE = "gitedge_github_flow";
-const GITHUB_READ_SCOPES = ["read:user", "user:email", "read:org"] as const;
 
 function json(body: unknown, status = 200, headers?: HeadersInit): Response {
   const responseHeaders = new Headers(headers);
@@ -153,14 +138,9 @@ function githubErrorRedirect(returnTo: string): Response {
   });
 }
 
-function splitScopes(value: string): Set<string> {
-  return new Set(value.split(/[,\s]+/).filter((scope) => scope.length > 0));
-}
-
-function scopesMatch(accessLevel: "identity" | "read", value: string): boolean {
-  const actual = splitScopes(value);
-  const expected = accessLevel === "identity" ? [] : GITHUB_READ_SCOPES;
-  return actual.size === expected.length && expected.every((scope) => actual.has(scope));
+// Identity-only sign-in requests no scopes, so GitHub must grant none.
+function grantsNoScopes(value: string): boolean {
+  return value.split(/[,\s]+/).every((scope) => scope.length === 0);
 }
 
 function isGithubTokenResponse(value: unknown): value is GithubTokenResponse {
@@ -332,68 +312,15 @@ export async function login(
   };
 }
 
-function parseStringArray(value: string | null): readonly string[] | undefined {
-  if (!value) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(value);
-    return Array.isArray(parsed) && parsed.every((entry) => typeof entry === "string")
-      ? parsed
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function parseOrganizations(
-  value: string | null
-): readonly GithubOrganizationSummary[] | undefined {
-  if (!value) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(value);
-    if (!Array.isArray(parsed)) return undefined;
-    const organizations: GithubOrganizationSummary[] = [];
-    for (const entry of parsed) {
-      if (
-        !entry ||
-        typeof entry !== "object" ||
-        Array.isArray(entry) ||
-        !("id" in entry) ||
-        typeof entry.id !== "number" ||
-        !Number.isSafeInteger(entry.id) ||
-        !("login" in entry) ||
-        typeof entry.login !== "string" ||
-        !("avatarUrl" in entry) ||
-        typeof entry.avatarUrl !== "string"
-      )
-        return undefined;
-      organizations.push({ id: entry.id, login: entry.login, avatarUrl: entry.avatarUrl });
-    }
-    return organizations;
-  } catch {
-    return undefined;
-  }
-}
-
 function externalIdentityFromRow(
   row: SessionWithExternalIdentityRow
 ): ExternalIdentitySummary | undefined {
-  if (
-    row.provider !== "github" ||
-    !row.provider_login ||
-    (row.access_level !== "identity" && row.access_level !== "read")
-  )
-    return undefined;
-  const emails = row.access_level === "read" ? parseStringArray(row.emails_json) : undefined;
-  const organizations =
-    row.access_level === "read" ? parseOrganizations(row.organizations_json) : undefined;
+  if (row.provider !== "github" || !row.provider_login) return undefined;
   return {
     provider: "github",
     login: row.provider_login,
     ...(row.avatar_url ? { avatarUrl: row.avatar_url } : {}),
     ...(row.profile_url ? { profileUrl: row.profile_url } : {}),
-    accessLevel: row.access_level,
-    ...(emails ? { emails } : {}),
-    ...(organizations ? { organizations } : {}),
   };
 }
 
@@ -408,7 +335,7 @@ export async function session(
       error: { code: "unauthorized", message: "Authentication is required." },
     };
   const row = await env.DB.prepare(
-    "SELECT users.id, users.identifier, users.group_key, external_identities.provider, external_identities.provider_login, external_identities.avatar_url, external_identities.profile_url, external_identities.access_level, external_identities.emails_json, external_identities.organizations_json FROM auth_sessions JOIN users ON users.id = auth_sessions.user_id LEFT JOIN external_identities ON external_identities.user_id = users.id AND external_identities.provider = 'github' WHERE auth_sessions.token_hash = ? AND auth_sessions.expires_at > ?"
+    "SELECT users.id, users.identifier, users.group_key, external_identities.provider, external_identities.provider_login, external_identities.avatar_url, external_identities.profile_url FROM auth_sessions JOIN users ON users.id = auth_sessions.user_id LEFT JOIN external_identities ON external_identities.user_id = users.id AND external_identities.provider = 'github' WHERE auth_sessions.token_hash = ? AND auth_sessions.expires_at > ?"
   )
     .bind(await hashToken(token), Date.now())
     .first<SessionWithExternalIdentityRow>();
@@ -457,61 +384,16 @@ function githubHeaders(token: string): Headers {
   });
 }
 
-async function fetchGithubApi(
-  env: AuthEnv,
-  token: string,
-  path: string,
-  accessLevel: "identity" | "read"
-): Promise<unknown | null> {
+async function fetchGithubApi(env: AuthEnv, token: string, path: string): Promise<unknown | null> {
   const response = await fetch(githubApiUrl(env, path), { headers: githubHeaders(token) });
   const grantedScopes = response.headers.get("X-OAuth-Scopes");
-  if (!response.ok || grantedScopes === null || !scopesMatch(accessLevel, grantedScopes))
-    return null;
+  if (!response.ok || grantedScopes === null || !grantsNoScopes(grantedScopes)) return null;
   return readGithubJson(response);
-}
-
-function isGithubEmailsResponse(value: unknown): value is GithubEmail[] {
-  return (
-    Array.isArray(value) &&
-    value.every(
-      (entry) =>
-        !!entry &&
-        typeof entry === "object" &&
-        !Array.isArray(entry) &&
-        "email" in entry &&
-        typeof entry.email === "string" &&
-        "verified" in entry &&
-        typeof entry.verified === "boolean"
-    )
-  );
-}
-
-function isGithubOrganizationsResponse(value: unknown): value is GithubOrganization[] {
-  return (
-    Array.isArray(value) &&
-    value.every(
-      (entry) =>
-        !!entry &&
-        typeof entry === "object" &&
-        !Array.isArray(entry) &&
-        "id" in entry &&
-        typeof entry.id === "number" &&
-        Number.isSafeInteger(entry.id) &&
-        entry.id > 0 &&
-        "login" in entry &&
-        typeof entry.login === "string" &&
-        "avatar_url" in entry &&
-        typeof entry.avatar_url === "string"
-    )
-  );
 }
 
 async function findOrCreateGithubUser(
   env: AuthEnv,
-  githubUser: GithubUserResponse,
-  accessLevel: "identity" | "read",
-  emails: readonly string[] | undefined,
-  organizations: readonly GithubOrganizationSummary[] | undefined
+  githubUser: GithubUserResponse
 ): Promise<TrustedUser> {
   const providerUserId = String(githubUser.id);
   const existing = await env.DB.prepare(
@@ -522,15 +404,12 @@ async function findOrCreateGithubUser(
   const now = Date.now();
   if (existing) {
     await env.DB.prepare(
-      "UPDATE external_identities SET provider_login = ?, avatar_url = ?, profile_url = ?, access_level = ?, emails_json = ?, organizations_json = ?, last_verified_at = ? WHERE provider = ? AND provider_user_id = ?"
+      "UPDATE external_identities SET provider_login = ?, avatar_url = ?, profile_url = ?, last_verified_at = ? WHERE provider = ? AND provider_user_id = ?"
     )
       .bind(
         githubUser.login,
         githubUser.avatar_url || null,
         githubUser.html_url || null,
-        accessLevel,
-        emails ? JSON.stringify(emails) : null,
-        organizations ? JSON.stringify(organizations) : null,
         now,
         "github",
         providerUserId
@@ -551,7 +430,7 @@ async function findOrCreateGithubUser(
       "INSERT INTO users (id, identifier, group_key, password_salt, password_hash, password_auth_enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
     ).bind(user.id, user.identifier, user.groupKey, "", "", 0, now),
     env.DB.prepare(
-      "INSERT INTO external_identities (provider, provider_user_id, user_id, provider_login, avatar_url, profile_url, access_level, emails_json, organizations_json, created_at, last_verified_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      "INSERT INTO external_identities (provider, provider_user_id, user_id, provider_login, avatar_url, profile_url, created_at, last_verified_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
     ).bind(
       "github",
       providerUserId,
@@ -559,9 +438,6 @@ async function findOrCreateGithubUser(
       githubUser.login,
       githubUser.avatar_url || null,
       githubUser.html_url || null,
-      accessLevel,
-      emails ? JSON.stringify(emails) : null,
-      organizations ? JSON.stringify(organizations) : null,
       now,
       now
     ),
@@ -582,9 +458,8 @@ export async function startGithubOAuth(request: Request, env: AuthEnv): Promise<
     return fail(503, "bad_request", "GitHub sign-in is not configured.");
   }
   const url = new URL(request.url);
-  const access = url.searchParams.get("access");
   const returnTo = url.searchParams.get("returnTo");
-  if ((access !== "identity" && access !== "read") || !isSafeReturnTo(returnTo, request))
+  if (!isSafeReturnTo(returnTo, request))
     return fail(400, "bad_request", "Invalid GitHub sign-in request.");
 
   const state = createToken();
@@ -593,12 +468,11 @@ export async function startGithubOAuth(request: Request, env: AuthEnv): Promise<
   const now = Date.now();
   await env.DB.prepare("DELETE FROM github_oauth_states WHERE expires_at <= ?").bind(now).run();
   await env.DB.prepare(
-    "INSERT INTO github_oauth_states (state_hash, code_verifier, access_level, return_to, expires_at, created_at, browser_hash) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    "INSERT INTO github_oauth_states (state_hash, code_verifier, return_to, expires_at, created_at, browser_hash) VALUES (?, ?, ?, ?, ?, ?)"
   )
     .bind(
       await hashToken(state),
       verifier,
-      access,
       returnTo,
       now + GITHUB_STATE_MAX_AGE_MS,
       now,
@@ -611,8 +485,7 @@ export async function startGithubOAuth(request: Request, env: AuthEnv): Promise<
   authorizationUrl.searchParams.set("state", state);
   authorizationUrl.searchParams.set("code_challenge", await createPkceChallenge(verifier));
   authorizationUrl.searchParams.set("code_challenge_method", "S256");
-  if (access === "read") authorizationUrl.searchParams.set("scope", GITHUB_READ_SCOPES.join(" "));
-  logger.info("github-oauth:started", { access });
+  logger.info("github-oauth:started");
   return new Response(null, {
     status: 302,
     headers: {
@@ -643,7 +516,7 @@ export async function completeGithubOAuth(request: Request, env: AuthEnv): Promi
     ?.slice(GITHUB_FLOW_COOKIE.length + 1);
   if (!state || !proof) return fail(400, "bad_request", "Invalid GitHub sign-in response.");
   const oauthState = await env.DB.prepare(
-    "DELETE FROM github_oauth_states WHERE state_hash = ? AND expires_at > ? AND browser_hash = ? RETURNING code_verifier, access_level, return_to"
+    "DELETE FROM github_oauth_states WHERE state_hash = ? AND expires_at > ? AND browser_hash = ? RETURNING code_verifier, return_to"
   )
     .bind(await hashToken(state), Date.now(), await hashToken(proof))
     .first<GithubOAuthStateRow>();
@@ -652,7 +525,7 @@ export async function completeGithubOAuth(request: Request, env: AuthEnv): Promi
     return fail(400, "bad_request", "GitHub sign-in session has expired.");
   }
   if (url.searchParams.has("error")) {
-    logger.warn("github-oauth:provider-denied", { access: oauthState.access_level });
+    logger.warn("github-oauth:provider-denied");
     return githubErrorRedirect(oauthState.return_to);
   }
   const code = url.searchParams.get("code");
@@ -675,54 +548,21 @@ export async function completeGithubOAuth(request: Request, env: AuthEnv): Promi
   if (
     !tokenResponse.ok ||
     !isGithubTokenResponse(tokenPayload) ||
-    !scopesMatch(oauthState.access_level, tokenPayload.scope)
+    !grantsNoScopes(tokenPayload.scope)
   ) {
-    logger.warn("github-oauth:token-rejected", { access: oauthState.access_level });
+    logger.warn("github-oauth:token-rejected");
     return githubErrorRedirect(oauthState.return_to);
   }
 
-  const userPayload = await fetchGithubApi(
-    env,
-    tokenPayload.access_token,
-    "/user",
-    oauthState.access_level
-  );
+  const userPayload = await fetchGithubApi(env, tokenPayload.access_token, "/user");
   if (!isGithubUserResponse(userPayload)) {
-    logger.warn("github-oauth:user-verification-failed", { access: oauthState.access_level });
+    logger.warn("github-oauth:user-verification-failed");
     return githubErrorRedirect(oauthState.return_to);
   }
-  let emails: readonly string[] | undefined;
-  let organizations: readonly GithubOrganizationSummary[] | undefined;
-  if (oauthState.access_level === "read") {
-    const [emailsResponse, organizationsResponse] = await Promise.all([
-      fetchGithubApi(env, tokenPayload.access_token, "/user/emails", oauthState.access_level),
-      fetchGithubApi(env, tokenPayload.access_token, "/user/orgs", oauthState.access_level),
-    ]);
-    if (!isGithubEmailsResponse(emailsResponse)) {
-      logger.warn("github-oauth:read-verification-failed");
-      return githubErrorRedirect(oauthState.return_to);
-    }
-    if (!isGithubOrganizationsResponse(organizationsResponse)) {
-      logger.warn("github-oauth:read-verification-failed");
-      return githubErrorRedirect(oauthState.return_to);
-    }
-    emails = emailsResponse.filter((email) => email.verified).map((email) => email.email);
-    organizations = organizationsResponse.map((organization) => ({
-      id: organization.id,
-      login: organization.login,
-      avatarUrl: organization.avatar_url,
-    }));
-  }
 
-  const user = await findOrCreateGithubUser(
-    env,
-    userPayload,
-    oauthState.access_level,
-    emails,
-    organizations
-  );
+  const user = await findOrCreateGithubUser(env, userPayload);
   const sessionToken = await issueSession(env, user.id);
-  logger.info("github-oauth:completed", { userId: user.id, access: oauthState.access_level });
+  logger.info("github-oauth:completed", { userId: user.id });
   return new Response(null, {
     status: 302,
     headers: {

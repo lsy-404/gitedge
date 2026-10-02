@@ -5,6 +5,8 @@ import { api, type Organization } from "../lib/api";
 import AppIcon from "../components/AppIcon.vue";
 import FormActions from "../components/FormActions.vue";
 import StatusState from "../components/StatusState.vue";
+import TextField from "../components/TextField.vue";
+import TextAreaField from "../components/TextAreaField.vue";
 const { t } = useI18n();
 const organizations = ref<Organization[]>([]);
 const loading = ref(true);
@@ -44,18 +46,14 @@ onMounted(load);
   <section class="page">
     <div class="page-head">
       <h1>{{ t("organizations") }}</h1>
-      <button class="btn primary" @click="showForm = !showForm">
-        <AppIcon name="plus" />{{ t("newOrganization") }}
-      </button>
+      <fluent-button type="button" appearance="primary" @click="showForm = !showForm">
+        <AppIcon slot="start" name="plus" />{{ t("newOrganization") }}
+      </fluent-button>
     </div>
     <form v-if="showForm" class="box box-form form-stack" @submit.prevent="create">
-      <label class="field">{{ t("slug") }}<input v-model="form.slug" required /></label>
-      <label class="field"
-        >{{ t("displayName") }}<input v-model="form.displayName" required
-      /></label>
-      <label class="field"
-        >{{ t("description") }}<textarea v-model="form.description" rows="3" />
-      </label>
+      <TextField v-model="form.slug" required>{{ t("slug") }}</TextField>
+      <TextField v-model="form.displayName" required>{{ t("displayName") }}</TextField>
+      <TextAreaField v-model="form.description" rows="3" :label="t('description')" />
       <FormActions :saving="saving" :error="formError" @cancel="showForm = false" />
     </form>
     <div class="box">

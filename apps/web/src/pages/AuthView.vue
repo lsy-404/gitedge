@@ -2,9 +2,13 @@
 import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
+import AppLink from "../components/AppLink.vue";
+import NoticeBar from "../components/NoticeBar.vue";
+import StatusBadge from "../components/StatusBadge.vue";
 import { api } from "../lib/api";
 import type { SsoProviderSummary } from "../lib/api";
 import { setSession } from "../lib/session";
+import TextField from "../components/TextField.vue";
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
@@ -13,21 +17,22 @@ const identifier = ref("");
 const password = ref("");
 const error = ref("");
 const busy = ref(false);
-const oauthError = computed(() => String(route.query.error || ""));
 const providers = ref<SsoProviderSummary[]>([]);
 const providersError = ref(false);
-const ssoErrorCodes = [
-  "sso_invalid_response",
-  "sso_expired",
-  "sso_identity_in_use",
-  "sso_signup_disabled",
-  "sso_configuration",
-  "sso_logout_unavailable",
-];
-const hasSsoError = computed(() => ssoErrorCodes.includes(String(route.query.error || "")));
-const ssoLogoutUnavailable = computed(() => route.query.error === "sso_logout_unavailable");
-const githubOauthError = computed(() => (hasSsoError.value ? "" : oauthError.value));
 const returnTo = computed(() => safeReturnTo(route.query.redirect));
+const samlProviders = computed(() =>
+  providers.value.filter((item) => item.protocol === "saml" && metadataHref(item.metadataUrl))
+);
+
+/** Maps the `error` code the OAuth/SSO callbacks redirect with to a localized message. */
+const callbackError = computed(() => {
+  const code = Array.isArray(route.query.error) ? route.query.error[0] : route.query.error;
+  if (!code) return "";
+  if (code === "sso_logout_unavailable") return t("ssoLogoutUnavailable");
+  if (code === "github_oauth_failed") return t("githubLoginError");
+  if (code.startsWith("sso_")) return t("ssoLoginError");
+  return t("oauthGenericError");
+});
 
 function safeReturnTo(candidate: unknown): string {
   const fallback = "/dashboard";
@@ -63,10 +68,8 @@ onMounted(async () => {
   }
 });
 
-function githubLogin(access: "identity" | "read") {
-  window.location.assign(
-    `/api/auth/github/start?access=${access}&returnTo=${encodeURIComponent(returnTo.value)}`
-  );
+function githubLogin() {
+  window.location.assign(`/api/auth/github/start?returnTo=${encodeURIComponent(returnTo.value)}`);
 }
 async function submit() {
   busy.value = true;
@@ -76,7 +79,7 @@ async function submit() {
       ? await api.register({ identifier: identifier.value, password: password.value })
       : await api.login({ identifier: identifier.value, password: password.value });
     setSession(user);
-    await router.push(String(route.query.redirect || "/dashboard"));
+    await router.push(returnTo.value);
   } catch {
     error.value = t("apiError");
   } finally {
@@ -88,74 +91,61 @@ async function submit() {
   <section class="auth">
     <img class="auth-logo" src="/logo.svg" alt="" width="48" height="48" />
     <h1>{{ register ? t("registerTitle") : t("loginTitle") }}</h1>
-    <form class="box auth-card form-stack" @submit.prevent="submit">
-      <label class="field"
-        >{{ t(register ? "registrationIdentifier" : "identifier")
-        }}<input
+    <div class="box auth-card form-stack">
+      <form class="form-stack" @submit.prevent="submit">
+        <TextField
           v-model="identifier"
           required
           autocomplete="username"
           :pattern="register ? '[A-Za-z0-9][A-Za-z0-9-]{2,62}' : undefined"
           :maxlength="register ? 63 : 64"
-      /></label>
-      <label class="field"
-        >{{ t("password")
-        }}<input
+          >{{ t(register ? "registrationIdentifier" : "identifier") }}</TextField
+        >
+        <TextField
           v-model="password"
           type="password"
           required
           minlength="12"
           :autocomplete="register ? 'new-password' : 'current-password'"
-      /></label>
-      <p v-if="error" class="form-error" role="alert">{{ error }}</p>
-      <button class="btn primary block" :disabled="busy">
-        {{ busy ? t("loading") : register ? t("signUp") : t("signIn") }}
-      </button>
-      <div class="divider">{{ t("orContinue") }}</div>
+          >{{ t("password") }}</TextField
+        >
+        <NoticeBar v-if="error" intent="error">{{ error }}</NoticeBar>
+        <fluent-button type="submit" appearance="primary" class="block" :disabled="busy">
+          {{ busy ? t("loading") : register ? t("signUp") : t("signIn") }}
+        </fluent-button>
+      </form>
+      <fluent-divider>{{ t("orContinue") }}</fluent-divider>
       <div class="oauth">
-        <a
+        <fluent-anchor-button
           v-for="provider in providers"
           :key="provider.id"
-          class="btn federation-provider"
+          class="federation-provider block"
           :href="providerHref(provider.id)"
         >
-          <span>{{ provider.label }}</span>
-          <span class="protocol-badge">{{ provider.protocol.toUpperCase() }}</span>
-        </a>
-        <p v-if="providersError" class="form-error" role="status">{{ t("ssoProvidersError") }}</p>
-        <a
-          v-for="provider in providers.filter(
-            (item) => item.protocol === 'saml' && metadataHref(item.metadataUrl)
-          )"
+          {{ t("continueWith", { provider: provider.label }) }}
+          <StatusBadge slot="end">{{ provider.protocol.toUpperCase() }}</StatusBadge>
+        </fluent-anchor-button>
+        <NoticeBar v-if="providersError" intent="warning">{{ t("ssoProvidersError") }}</NoticeBar>
+        <fluent-link
+          v-for="provider in samlProviders"
           :key="`${provider.id}-metadata`"
-          class="metadata-link"
           :href="metadataHref(provider.metadataUrl) || undefined"
           target="_blank"
           rel="noreferrer"
         >
           {{ provider.label }} · {{ t("ssoMetadata") }}
-        </a>
-        <button type="button" class="btn block" @click="githubLogin('identity')">
-          {{ t("githubIdentity") }}
-        </button>
-        <p class="oauth-hint">{{ t("identityText") }}</p>
-        <button type="button" class="btn block" @click="githubLogin('read')">
-          {{ t("githubRead") }}
-        </button>
-        <p class="oauth-hint">{{ t("readText") }} {{ t("noWriteScope") }}</p>
+        </fluent-link>
+        <fluent-button type="button" class="block" @click="githubLogin">
+          {{ t("githubSignIn") }}
+        </fluent-button>
       </div>
-      <p v-if="hasSsoError" class="form-error" role="alert">
-        {{ ssoLogoutUnavailable ? t("ssoLogoutUnavailable") : t("ssoLoginError") }}
-      </p>
-      <p v-else-if="githubOauthError" class="form-error" role="alert">
-        {{ t("oauthError", { error: githubOauthError }) }}
-      </p>
-    </form>
+      <NoticeBar v-if="callbackError" intent="error">{{ callbackError }}</NoticeBar>
+    </div>
     <p class="auth-switch">
       {{ register ? t("hasAccount") : t("needsAccount") }}
-      <RouterLink :to="register ? '/login' : '/register'">{{
+      <AppLink :to="register ? '/login' : '/register'">{{
         register ? t("signIn") : t("signUp")
-      }}</RouterLink>
+      }}</AppLink>
     </p>
   </section>
 </template>

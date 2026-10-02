@@ -6,7 +6,12 @@ import { sessionState } from "../lib/session";
 import FormActions from "../components/FormActions.vue";
 import StatusState from "../components/StatusState.vue";
 import AppIcon from "../components/AppIcon.vue";
+import SelectField from "../components/SelectField.vue";
+import StatusBadge from "../components/StatusBadge.vue";
+import { oneOf } from "../ui/formEvents";
+import TextField from "../components/TextField.vue";
 
+const visibilities = ["private", "public"] as const;
 const { t, locale } = useI18n();
 const repos = ref<Repository[]>([]);
 const loading = ref(true);
@@ -64,45 +69,40 @@ onMounted(load);
   <section class="page">
     <div class="page-head">
       <h1>{{ t("repositories") }}</h1>
-      <button class="btn primary" @click="showForm = !showForm">
-        <AppIcon name="plus" />{{ t("newRepo") }}
-      </button>
+      <fluent-button type="button" appearance="primary" @click="showForm = !showForm">
+        <AppIcon slot="start" name="plus" />{{ t("newRepo") }}
+      </fluent-button>
     </div>
     <form v-if="showForm" class="box box-form form-stack" @submit.prevent="createRepository">
-      <label class="field"
-        >{{ t("repositoryOwner")
-        }}<select v-model="owner" required>
-          <option :value="sessionState.user?.identifier">
-            {{ sessionState.user?.identifier }} ({{ t("personal") }})
-          </option>
-          <option
-            v-for="organization in organizations"
-            :key="organization.slug"
-            :value="organization.slug"
-          >
-            {{ organization.displayName }}
-          </option>
-        </select></label
+      <SelectField v-model="owner" :label="t('repositoryOwner')" required>
+        <fluent-option :value="sessionState.user?.identifier">
+          {{ sessionState.user?.identifier }} ({{ t("personal") }})
+        </fluent-option>
+        <fluent-option
+          v-for="organization in organizations"
+          :key="organization.slug"
+          :value="organization.slug"
+        >
+          {{ organization.displayName }}
+        </fluent-option>
+      </SelectField>
+      <TextField v-model="form.name" required>{{ t("repositoryName") }}</TextField>
+      <TextField v-model="form.description">{{ t("description") }}</TextField>
+      <SelectField
+        :model-value="form.visibility"
+        :label="t('visibility')"
+        @update:model-value="form.visibility = oneOf(visibilities, $event, 'private')"
       >
-      <label class="field">{{ t("repositoryName") }}<input v-model="form.name" required /></label>
-      <label class="field">{{ t("description") }}<input v-model="form.description" /></label>
-      <label class="field"
-        >{{ t("visibility")
-        }}<select v-model="form.visibility">
-          <option value="private">{{ t("private") }}</option>
-          <option value="public">{{ t("public") }}</option>
-        </select></label
-      >
+        <fluent-option value="private">{{ t("private") }}</fluent-option>
+        <fluent-option value="public">{{ t("public") }}</fluent-option>
+      </SelectField>
       <FormActions :saving="saving" :error="formError" @cancel="showForm = false" />
     </form>
     <div v-if="!loading && !error && repos.length" class="toolbar">
-      <input
-        v-model="filter"
-        class="search"
-        type="search"
-        :placeholder="t('findRepository')"
-        :aria-label="t('findRepository')"
-      />
+      <TextField v-model="filter" type="search" :placeholder="t('findRepository')">
+        <AppIcon slot="start" name="search" />
+        <span class="visually-hidden">{{ t("findRepository") }}</span>
+      </TextField>
     </div>
     <div class="box">
       <StatusState
@@ -122,9 +122,9 @@ onMounted(load);
           <div class="grow">
             <div class="row-title">
               {{ repo.owner }} / {{ repo.name }}
-              <span class="pill">{{
+              <StatusBadge>{{
                 repo.visibility === "private" ? t("private") : t("public")
-              }}</span>
+              }}</StatusBadge>
             </div>
             <p class="muted">{{ repo.description || t("noDescription") }}</p>
             <div class="row-meta">

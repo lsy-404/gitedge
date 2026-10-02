@@ -90,21 +90,19 @@ describe("OIDC and SAML account flows", () => {
     const mounted = await mountRoute("/login?redirect=https%3A%2F%2Fevil.example%2Fsteal");
     await settle();
 
-    const acmeLink = mounted.root.querySelector<HTMLAnchorElement>(
-      '.federation-provider[href*="acme-oidc"]'
-    );
-    const samlLink = mounted.root.querySelector<HTMLAnchorElement>(
-      '.federation-provider[href*="corp-saml"]'
-    );
+    const acmeLink = mounted.root.querySelector('.federation-provider[href*="acme-oidc"]');
+    const samlLink = mounted.root.querySelector('.federation-provider[href*="corp-saml"]');
+    expect(acmeLink?.textContent).toContain("Continue with Acme");
     expect(acmeLink?.textContent).toContain("OIDC");
     expect(samlLink?.textContent).toContain("SAML");
     expect(
-      new URL(acmeLink?.href || "https://gitedge.test/", "https://gitedge.test").searchParams.get(
+      new URL(acmeLink?.getAttribute("href") ?? "", "https://gitedge.test").searchParams.get(
         "returnTo"
       )
     ).toBe("/dashboard");
     expect(
-      mounted.root.querySelector('a[href="https://idp.example.test/metadata.xml"]')?.textContent
+      mounted.root.querySelector('fluent-link[href="https://idp.example.test/metadata.xml"]')
+        ?.textContent
     ).toContain("SAML metadata");
 
     await mounted.navigate("/login?error=sso_invalid_response");
@@ -122,7 +120,6 @@ describe("OIDC and SAML account flows", () => {
       externalIdentity: {
         provider: "github",
         login: "person",
-        accessLevel: "identity",
       },
     });
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -133,7 +130,7 @@ describe("OIDC and SAML account flows", () => {
             data: {
               id: "user-1",
               identifier: "person@example.test",
-              externalIdentity: { provider: "github", login: "person", accessLevel: "identity" },
+              externalIdentity: { provider: "github", login: "person" },
             },
           }),
           { status: 200 }
@@ -160,7 +157,7 @@ describe("OIDC and SAML account flows", () => {
     expect(mounted.root.textContent).toContain("GitHub");
     expect(mounted.root.querySelectorAll(".sso-provider")).toHaveLength(1);
 
-    mounted.root.querySelector<HTMLButtonElement>(".sso-identity .btn")?.click();
+    mounted.root.querySelector<HTMLElement>(".sso-identity fluent-button")?.click();
     await settle();
     expect(mounted.root.querySelector('[role="alert"]')?.textContent).toContain(
       "Keep another sign-in method before unlinking."
@@ -206,7 +203,7 @@ describe("OIDC and SAML account flows", () => {
     const mounted = await mountRoute("/settings/account");
     await settle();
 
-    mounted.root.querySelector<HTMLButtonElement>(".sso-provider .btn")?.click();
+    mounted.root.querySelector<HTMLElement>(".sso-provider fluent-button")?.click();
     await settle();
 
     const linkCall = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
@@ -242,7 +239,7 @@ describe("OIDC and SAML account flows", () => {
     const mounted = await mountRoute("/settings/account");
     await settle();
 
-    mounted.root.querySelectorAll<HTMLButtonElement>(".sso-identity .btn")[1]?.click();
+    mounted.root.querySelectorAll<HTMLElement>(".sso-identity fluent-button")[1]?.click();
     await settle();
 
     expect(sessionState.user).toBeNull();
@@ -253,6 +250,87 @@ describe("OIDC and SAML account flows", () => {
     const logoutCall = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
     expect(logoutCall?.[0]).toContain("/api/auth/sso/acme-oidc/logout");
     expect(JSON.parse(String(logoutCall?.[1]?.body))).toEqual({ identityId: identity.id });
+    mounted.unmount();
+  });
+});
+
+describe("External sign-in options", () => {
+  it("starts GitHub sign-in without an access level and keeps the return path in-site", async () => {
+    const assign = vi.fn();
+    vi.stubGlobal("location", { origin: "https://gitedge.test", assign });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("Not signed in", { status: 401 }))
+    );
+    const mounted = await mountRoute("/login?redirect=%2Fsettings%2Faccount%3Ftab%3Dsecurity");
+    await settle();
+
+    const github = Array.from(mounted.root.querySelectorAll<HTMLElement>("fluent-button")).find(
+      (button) => button.textContent?.includes("Continue with GitHub")
+    );
+    github?.click();
+
+    expect(assign).toHaveBeenCalledTimes(1);
+    const target = new URL(String(assign.mock.calls[0][0]), "https://gitedge.test");
+    expect(target.pathname).toBe("/api/auth/github/start");
+    expect(target.searchParams.has("access")).toBe(false);
+    expect(target.searchParams.get("returnTo")).toBe("/settings/account?tab=security");
+    mounted.unmount();
+  });
+
+  it("maps callback error codes to localized messages and never prints the raw code", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("Not signed in", { status: 401 }))
+    );
+    const mounted = await mountRoute("/login?error=github_oauth_failed");
+    await settle();
+    const alertText = () =>
+      Array.from(mounted.root.querySelectorAll('[role="alert"]'))
+        .map((alert) => alert.textContent)
+        .join(" ");
+
+    expect(alertText()).toContain("GitHub sign-in did not finish");
+    await mounted.navigate("/login?error=sso_failed");
+    expect(alertText()).toContain("Single sign-on could not be completed");
+    await mounted.navigate("/login?error=%3Cb%3Eunexpected%3C%2Fb%3E");
+    expect(alertText()).toContain("Sign-in did not finish");
+    expect(mounted.root.textContent).not.toContain("unexpected");
+    mounted.unmount();
+  });
+
+  it("shows the linked SSO identity with a neutral provider label and no access details", async () => {
+    const user = {
+      id: "user-1",
+      identifier: "sso-abc123",
+      externalIdentity: {
+        provider: "oidc" as const,
+        login: "sso-person",
+        avatarUrl: "https://avatars.example.test/person.png",
+        profileUrl: "https://id.example.test/people/person",
+      },
+    };
+    setSession(user);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(String(input), "https://gitedge.test");
+        if (url.pathname === "/api/auth/session")
+          return new Response(JSON.stringify({ data: user }), { status: 200 });
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      })
+    );
+    const mounted = await mountRoute("/settings/account");
+    await settle();
+
+    const text = mounted.root.textContent ?? "";
+    expect(text).toContain("@sso-person");
+    expect(text).toContain("SSO");
+    expect(text).not.toContain("Access level");
+    expect(
+      mounted.root.querySelector('fluent-link[href="https://id.example.test/people/person"]')
+    ).not.toBeNull();
+    expect(mounted.root.querySelector('fluent-avatar img[src$="person.png"]')).not.toBeNull();
     mounted.unmount();
   });
 });
