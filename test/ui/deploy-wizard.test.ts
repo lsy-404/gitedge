@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp, nextTick } from "vue";
 import { i18n } from "../../apps/web/src/i18n";
+import { fluentUi } from "../../apps/web/src/ui/fluent";
 import DeployWizard from "../../apps/web/src/components/DeployWizard.vue";
 
 const repository = {
@@ -54,7 +55,6 @@ async function settle() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-/** Fluent buttons only submit their form once the element is defined, so tests submit directly. */
 function submitForm(root: HTMLElement, selector: string): void {
   const form = root.querySelector(selector);
   if (!(form instanceof HTMLFormElement)) throw new Error(`Expected form: ${selector}`);
@@ -66,6 +66,7 @@ function mountWizard() {
   document.body.append(root);
   const app = createApp(DeployWizard, { repository });
   app.use(i18n);
+  app.use(fluentUi);
   app.mount(root);
   return {
     root,
@@ -162,7 +163,7 @@ describe("Cloudflare deployment wizard", () => {
     expect(mounted.root.textContent).toContain("Migration service busy");
     expect(requests.slice(-2)).toEqual(["provision", "migrate"]);
 
-    mounted.root.querySelector<HTMLElement>("[role='alert'] fluent-button")?.click();
+    mounted.root.querySelector<HTMLElement>("[role='alert'] .fluent-button")?.click();
     await settle();
 
     expect(requests.slice(-2)).toEqual(["migrate", "deploy"]);

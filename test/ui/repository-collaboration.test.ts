@@ -4,6 +4,7 @@ import { i18n } from "../../apps/web/src/i18n";
 import collaborationMessages from "../../apps/web/src/i18n/collaboration";
 import { ApiError, api } from "../../apps/web/src/lib/api";
 import { clearSession, setSession } from "../../apps/web/src/lib/session";
+import { fluentUi } from "../../apps/web/src/ui/fluent";
 import { router } from "../../apps/web/src/router";
 import RepositoryCollaboration from "../../apps/web/src/components/RepositoryCollaboration.vue";
 import type {
@@ -128,16 +129,15 @@ function settle(): Promise<void> {
   })();
 }
 
-/** Fluent controls are custom elements; without their definitions they are plain HTMLElements. */
 function control(root: ParentNode, selector: string): HTMLElement {
   const field = root.querySelector<HTMLElement>(selector);
   if (!field) throw new Error(`Expected control: ${selector}`);
   return field;
 }
 
-function findButton(root: HTMLElement, text: string): HTMLElement {
-  const found = Array.from(root.querySelectorAll<HTMLElement>("fluent-button")).find((button) =>
-    button.textContent?.replace(/\s+/g, " ").includes(text)
+function findButton(root: HTMLElement, text: string): HTMLButtonElement {
+  const found = Array.from(root.querySelectorAll<HTMLButtonElement>("button.fluent-button")).find(
+    (button) => button.textContent?.replace(/\s+/g, " ").includes(text)
   );
   if (!found)
     throw new Error(
@@ -196,6 +196,7 @@ async function mountSection(path: string, section: string) {
   const app = createApp(Host);
   app.use(router);
   app.use(i18n);
+  app.use(fluentUi);
   app.mount(root);
   await settle();
   let active = true;
@@ -556,7 +557,10 @@ describe("RepositoryCollaboration rendered workflows", () => {
     expect(mounted.root.querySelector(".answer-panel")?.textContent).toContain(
       "Use the stable branch API."
     );
-    mounted.root.querySelectorAll<HTMLElement>(".comment-row fluent-button").item(2)?.click();
+    mounted.root
+      .querySelectorAll<HTMLButtonElement>(".comment-row .fluent-button")
+      .item(2)
+      ?.click();
     await settle();
     expect(updateDiscussionSpy).toHaveBeenLastCalledWith("repo-1", 4, { answerCommentId: null });
     expect(mounted.root.querySelector(".answer-panel")).toBeNull();
@@ -631,7 +635,7 @@ describe("RepositoryCollaboration rendered workflows", () => {
 
     const firstHistoryRow = mounted.root.querySelector<HTMLElement>(".wiki-history .item-row");
     if (!firstHistoryRow) throw new Error("Wiki revision history was not rendered.");
-    firstHistoryRow.querySelector<HTMLElement>("fluent-button")?.click();
+    firstHistoryRow.querySelector<HTMLButtonElement>(".fluent-button")?.click();
     await settle();
     expect(updateWikiSpy).toHaveBeenLastCalledWith("repo-1", "guide", {
       title: "Guide v1",

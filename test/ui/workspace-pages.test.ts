@@ -5,6 +5,7 @@ import { i18n } from "../../apps/web/src/i18n";
 import { api, type Organization, type Repository, type User } from "../../apps/web/src/lib/api";
 import { clearSession, setSession } from "../../apps/web/src/lib/session";
 import { router } from "../../apps/web/src/router";
+import { fluentUi } from "../../apps/web/src/ui/fluent";
 
 const user: User = { id: "user-1", identifier: "octocat" };
 const repository: Repository = {
@@ -46,6 +47,7 @@ async function mount(path: string) {
   const app = createApp(App);
   app.use(router);
   app.use(i18n);
+  app.use(fluentUi);
   app.mount(root);
   await settle();
   return {

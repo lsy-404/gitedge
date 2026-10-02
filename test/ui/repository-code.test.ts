@@ -4,6 +4,7 @@ import RepositoryCode from "../../apps/web/src/components/RepositoryCode.vue";
 import { i18n } from "../../apps/web/src/i18n";
 import { router } from "../../apps/web/src/router";
 import { clearSession, setSession } from "../../apps/web/src/lib/session";
+import { fluentUi } from "../../apps/web/src/ui/fluent";
 
 const repository = {
   id: "repo-1",
@@ -37,6 +38,7 @@ async function mountCode(path: string, section: string) {
   const app = createApp(RepositoryCode, { repository, section });
   app.use(router);
   app.use(i18n);
+  app.use(fluentUi);
   app.mount(root);
   await settle();
   return {
@@ -144,7 +146,9 @@ describe("repository Code view", () => {
       .spyOn(HTMLAnchorElement.prototype, "click")
       .mockImplementation(() => undefined);
     const mounted = await mountCode("/example/sample/blob/empty.txt?ref=main", "code");
-    const buttons = Array.from(mounted.root.querySelectorAll(".file-actions fluent-button"));
+    const buttons = Array.from(
+      mounted.root.querySelectorAll<HTMLButtonElement>(".file-actions .fluent-button")
+    );
 
     buttons[0]?.click();
     buttons[1]?.click();

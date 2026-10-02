@@ -2,6 +2,7 @@ import { createApp, defineComponent, h, nextTick, type Component, type VNode } f
 import { i18n } from "../../apps/web/src/i18n";
 import { router } from "../../apps/web/src/router";
 import { setSession } from "../../apps/web/src/lib/session";
+import { fluentUi } from "../../apps/web/src/ui/fluent";
 import type { Actor, Repository } from "../../packages/contracts/src/forge";
 import type {
   Task,
@@ -91,9 +92,9 @@ export function control(root: ParentNode, selector: string): HTMLElement {
   return found;
 }
 
-export function findButton(root: ParentNode, text: string): HTMLElement {
-  const found = Array.from(root.querySelectorAll<HTMLElement>("fluent-button")).find((button) =>
-    button.textContent?.replace(/\s+/g, " ").includes(text)
+export function findButton(root: ParentNode, text: string): HTMLButtonElement {
+  const found = Array.from(root.querySelectorAll<HTMLButtonElement>("button.fluent-button")).find(
+    (button) => button.textContent?.replace(/\s+/g, " ").includes(text)
   );
   if (!found) throw new Error(`Could not find button containing: ${text}`);
   return found;
@@ -152,6 +153,7 @@ export async function mountAt(routePath: string, path: string, render: () => VNo
   const app = createApp(Host);
   app.use(router);
   app.use(i18n);
+  app.use(fluentUi);
   app.mount(root);
   await settle();
   let active = true;

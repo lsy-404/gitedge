@@ -5,6 +5,7 @@ import { router } from "../../apps/web/src/router";
 import { i18n } from "../../apps/web/src/i18n";
 import { ssoAuthorizationUrl } from "../../apps/web/src/lib/api";
 import { clearSession, sessionState, setSession } from "../../apps/web/src/lib/session";
+import { fluentUi } from "../../apps/web/src/ui/fluent";
 
 const providers = [
   { id: "acme-oidc", label: "Acme", protocol: "oidc" },
@@ -44,6 +45,7 @@ async function mountRoute(path: string) {
   const app = createApp(App);
   app.use(router);
   app.use(i18n);
+  app.use(fluentUi);
   app.mount(root);
   return {
     root,
@@ -101,8 +103,7 @@ describe("OIDC and SAML account flows", () => {
       )
     ).toBe("/dashboard");
     expect(
-      mounted.root.querySelector('fluent-link[href="https://idp.example.test/metadata.xml"]')
-        ?.textContent
+      mounted.root.querySelector('a[href="https://idp.example.test/metadata.xml"]')?.textContent
     ).toContain("SAML metadata");
 
     await mounted.navigate("/login?error=sso_invalid_response");
@@ -157,7 +158,7 @@ describe("OIDC and SAML account flows", () => {
     expect(mounted.root.textContent).toContain("GitHub");
     expect(mounted.root.querySelectorAll(".sso-provider")).toHaveLength(1);
 
-    mounted.root.querySelector<HTMLElement>(".sso-identity fluent-button")?.click();
+    mounted.root.querySelector<HTMLButtonElement>(".sso-identity .fluent-button")?.click();
     await settle();
     expect(mounted.root.querySelector('[role="alert"]')?.textContent).toContain(
       "Keep another sign-in method before unlinking."
@@ -200,10 +201,10 @@ describe("OIDC and SAML account flows", () => {
       return new Response(JSON.stringify({ data: {} }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
-    const mounted = await mountRoute("/settings/account");
+    const mounted = await mountRoute("/settings/account?section=connections");
     await settle();
 
-    mounted.root.querySelector<HTMLElement>(".sso-provider fluent-button")?.click();
+    mounted.root.querySelector<HTMLButtonElement>(".sso-provider .fluent-button")?.click();
     await settle();
 
     const linkCall = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
@@ -236,10 +237,10 @@ describe("OIDC and SAML account flows", () => {
       return new Response(JSON.stringify({ data: {} }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
-    const mounted = await mountRoute("/settings/account");
+    const mounted = await mountRoute("/settings/account?section=connections");
     await settle();
 
-    mounted.root.querySelectorAll<HTMLElement>(".sso-identity fluent-button")[1]?.click();
+    mounted.root.querySelectorAll<HTMLButtonElement>(".sso-identity .fluent-button")[1]?.click();
     await settle();
 
     expect(sessionState.user).toBeNull();
@@ -265,9 +266,9 @@ describe("External sign-in options", () => {
     const mounted = await mountRoute("/login?redirect=%2Fsettings%2Faccount%3Ftab%3Dsecurity");
     await settle();
 
-    const github = Array.from(mounted.root.querySelectorAll<HTMLElement>("fluent-button")).find(
-      (button) => button.textContent?.includes("Continue with GitHub")
-    );
+    const github = Array.from(
+      mounted.root.querySelectorAll<HTMLButtonElement>("button.fluent-button")
+    ).find((button) => button.textContent?.includes("Continue with GitHub"));
     github?.click();
 
     expect(assign).toHaveBeenCalledTimes(1);
@@ -347,7 +348,7 @@ describe("External sign-in options", () => {
         return new Response(JSON.stringify({ data: [] }), { status: 200 });
       })
     );
-    const mounted = await mountRoute("/settings/account");
+    const mounted = await mountRoute("/settings/account?section=connections");
     await settle();
 
     const text = mounted.root.textContent ?? "";
@@ -355,9 +356,9 @@ describe("External sign-in options", () => {
     expect(text).toContain("SSO");
     expect(text).not.toContain("Access level");
     expect(
-      mounted.root.querySelector('fluent-link[href="https://id.example.test/people/person"]')
+      mounted.root.querySelector('a[href="https://id.example.test/people/person"]')
     ).not.toBeNull();
-    expect(mounted.root.querySelector('fluent-avatar img[src$="person.png"]')).not.toBeNull();
+    expect(mounted.root.querySelector('.avatar img[src$="person.png"]')).not.toBeNull();
     mounted.unmount();
   });
 });
