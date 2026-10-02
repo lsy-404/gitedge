@@ -10,6 +10,9 @@ import StatusState from "../components/StatusState.vue";
 import DeployWizard from "../components/DeployWizard.vue";
 import RepositoryCode from "../components/RepositoryCode.vue";
 import RepositoryCollaboration from "../components/RepositoryCollaboration.vue";
+import RepositorySettings from "../components/RepositorySettings.vue";
+import RepositoryTasks from "../components/RepositoryTasks.vue";
+import { sessionState } from "../lib/session";
 import { eventActiveId } from "../ui/formEvents";
 
 const route = useRoute();
@@ -20,10 +23,14 @@ const repoName = computed(() => String(route.params.repo));
 const section = computed(() =>
   route.params.view ? "code" : String(route.params.section || route.path.split("/")[3] || "code")
 );
-const tabs = ["code", "issues", "pulls", "discussions", "wiki"] as const;
+const tabs = ["code", "issues", "pulls", "discussions", "wiki", "tasks", "settings"] as const;
 /** Commit graph and compare views belong to the Code tab. */
 const activeTab = computed(() => tabs.find((tab) => tab === section.value) ?? "code");
 const repository = ref<Repository | null>(null);
+/** Settings are only offered to signed-in members; the server still decides who may change them. */
+const showSettings = computed(
+  () => Boolean(sessionState.user) && repository.value?.canWrite === true
+);
 const loading = ref(true);
 const error = ref("");
 const notFound = ref(false);
@@ -119,12 +126,18 @@ watch(() => [route.params.owner, route.params.repo], load, { immediate: true });
         <fluent-tab id="tab-pulls"><AppIcon slot="start" name="pr" />{{ t("pulls") }}</fluent-tab>
         <fluent-tab id="tab-discussions">{{ t("discussions") }}</fluent-tab>
         <fluent-tab id="tab-wiki"><AppIcon slot="start" name="wiki" />{{ t("wiki") }}</fluent-tab>
+        <fluent-tab id="tab-tasks"><AppIcon slot="start" name="task" />{{ t("tasks") }}</fluent-tab>
+        <fluent-tab v-if="showSettings || activeTab === 'settings'" id="tab-settings"
+          ><AppIcon slot="start" name="settings" />{{ t("settings") }}</fluent-tab
+        >
       </fluent-tablist>
       <RepositoryCode
         v-if="section === 'code' || section === 'commits' || section === 'compare'"
         :repository="repository"
         :section="section"
       />
+      <RepositoryTasks v-else-if="section === 'tasks'" :repository="repository" />
+      <RepositorySettings v-else-if="section === 'settings'" :repository="repository" />
       <RepositoryCollaboration v-else :repository="repository" :section="section" />
     </template>
   </section>

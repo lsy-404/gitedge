@@ -19,6 +19,7 @@ import { sessionState } from "../lib/session";
 import { eventChecked, oneOf } from "../ui/formEvents";
 import AppIcon from "./AppIcon.vue";
 import AppLink from "./AppLink.vue";
+import AssignmentPanel from "./AssignmentPanel.vue";
 import FormActions from "./FormActions.vue";
 import SelectField from "./SelectField.vue";
 import StatusBadge from "./StatusBadge.vue";
@@ -698,10 +699,7 @@ watch(
         </form>
         <pre v-else class="body-content">{{ "content" in item ? item.content : item.body }}</pre>
         <div v-if="'labels' in item" class="metadata-row">
-          <StatusBadge v-for="label in item.labels" :key="label">{{ label }}</StatusBadge
-          ><StatusBadge v-for="assignee in item.assignees" :key="`${assignee.kind}:${assignee.id}`"
-            >{{ t("assignee") }}: {{ assignee.name }}</StatusBadge
-          >
+          <StatusBadge v-for="label in item.labels" :key="label">{{ label }}</StatusBadge>
         </div>
         <div v-if="'headRef' in item" class="pull-meta">
           <span>{{ item.headRef }} → {{ item.baseRef }}</span
@@ -711,6 +709,13 @@ watch(
             >{{ t("mergedCommit") }} {{ item.mergedOid.slice(0, 8) }}</StatusBadge
           >
         </div>
+        <AssignmentPanel
+          v-if="(section === 'issues' || section === 'pulls') && 'assignees' in item"
+          :repository="repository"
+          :kind="section === 'issues' ? 'issue' : 'pull_request'"
+          :item="item"
+          @updated="item = $event"
+        />
         <div v-if="section === 'wiki' && showEditActions" class="wiki-edit-actions">
           <fluent-button type="button" @click="wikiEditing = !wikiEditing">
             {{ wikiEditing ? t("cancel") : t("edit") }}

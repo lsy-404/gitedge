@@ -2,12 +2,15 @@
 import add from "@fluentui/svg-icons/icons/add_16_regular.svg?raw";
 import branch from "@fluentui/svg-icons/icons/branch_16_regular.svg?raw";
 import code from "@fluentui/svg-icons/icons/code_16_regular.svg?raw";
+import clipboardTask from "@fluentui/svg-icons/icons/clipboard_task_16_regular.svg?raw";
 import copy from "@fluentui/svg-icons/icons/copy_16_regular.svg?raw";
 import issue from "@fluentui/svg-icons/icons/record_16_regular.svg?raw";
 import lock from "@fluentui/svg-icons/icons/lock_closed_16_regular.svg?raw";
 import pullRequest from "@fluentui/svg-icons/icons/branch_request_16_regular.svg?raw";
 import repo from "@fluentui/svg-icons/icons/book_16_regular.svg?raw";
 import search from "@fluentui/svg-icons/icons/search_16_regular.svg?raw";
+import settings from "@fluentui/svg-icons/icons/settings_16_regular.svg?raw";
+import target from "@fluentui/svg-icons/icons/target_16_regular.svg?raw";
 import wiki from "@fluentui/svg-icons/icons/book_open_16_regular.svg?raw";
 
 const sources = {
@@ -20,6 +23,9 @@ const sources = {
   pr: pullRequest,
   repo,
   search,
+  settings,
+  target,
+  task: clipboardTask,
   wiki,
 };
 

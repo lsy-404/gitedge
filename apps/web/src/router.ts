@@ -34,6 +34,11 @@ export const router = createRouter({
       component: RepositoryView,
       meta: { allowAnonymous: true },
     },
+    {
+      path: "/:owner/:repo/tasks/:number([0-9]+)",
+      component: RepositoryView,
+      meta: { allowAnonymous: true },
+    },
     { path: "/:owner/:repo/wiki/:slug", component: RepositoryView, meta: { allowAnonymous: true } },
     {
       path: "/:owner/:repo/:view(tree|blob)/:path(.*)*",
@@ -41,7 +46,7 @@ export const router = createRouter({
       meta: { allowAnonymous: true },
     },
     {
-      path: "/:owner/:repo/:section(code|issues|pulls|discussions|wiki|commits|compare|settings)?",
+      path: "/:owner/:repo/:section(code|issues|pulls|discussions|wiki|tasks|commits|compare|settings)?",
       component: RepositoryView,
       meta: { allowAnonymous: true },
     },
