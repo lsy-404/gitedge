@@ -120,7 +120,7 @@ const branchChoices = computed<readonly FluentSelectOption[]>(() => {
   if (current && !branches.value.includes(current))
     options.unshift({
       value: current,
-      label: `${current} (${t("repoSettingsBranchUnavailable")})`,
+      label: current,
       disabled: true,
     });
   return options;
