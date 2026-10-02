@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp, defineComponent, h, nextTick } from "vue";
 import { i18n } from "../../apps/web/src/i18n";
+import collaborationMessages from "../../apps/web/src/i18n/collaboration";
 import { ApiError, api } from "../../apps/web/src/lib/api";
 import { clearSession, setSession } from "../../apps/web/src/lib/session";
 import { router } from "../../apps/web/src/router";
@@ -155,6 +156,8 @@ function submit(form: HTMLFormElement): void {
 }
 
 beforeEach(() => {
+  i18n.global.mergeLocaleMessage("zh-CN", collaborationMessages["zh-CN"]);
+  i18n.global.mergeLocaleMessage("en", collaborationMessages.en);
   i18n.global.locale.value = "en";
 });
 
@@ -214,6 +217,35 @@ afterEach(async () => {
 });
 
 describe("RepositoryCollaboration rendered workflows", () => {
+  it("filters loaded issues by state and search text with real state counts", async () => {
+    vi.spyOn(api, "issues").mockResolvedValue([
+      issue({ number: 7, title: "Parser regression", labels: ["bug"] }),
+      issue({
+        id: "issue-2",
+        number: 8,
+        title: "Document setup",
+        state: "closed",
+        labels: ["docs"],
+      }),
+    ]);
+    const mounted = await mountSection("/_verify/issues", "issues");
+
+    expect(mounted.root.querySelectorAll(".item-link")).toHaveLength(1);
+    expect(mounted.root.querySelectorAll(".filter-count")[0]?.textContent).toBe("1");
+    expect(mounted.root.querySelectorAll(".filter-count")[1]?.textContent).toBe("1");
+
+    mounted.root.querySelectorAll<HTMLElement>(".filter-button")[1]?.click();
+    await settle();
+    expect(mounted.root.querySelectorAll(".item-link")).toHaveLength(1);
+    expect(mounted.root.textContent).toContain("Document setup");
+
+    fill(control(mounted.root, ".search-field input"), "missing text");
+    await settle();
+    expect(mounted.root.querySelectorAll(".item-link")).toHaveLength(0);
+    expect(mounted.root.textContent).toContain("No items match the current filters.");
+    mounted.unmount();
+  });
+
   it("creates an issue with labels and assignees, edits it, comments, and closes it", async () => {
     const initial = issue();
     let latest = initial;
@@ -391,7 +423,11 @@ describe("RepositoryCollaboration rendered workflows", () => {
     const mounted = await mountSection("/_verify/pulls/12", "pulls");
 
     expect(mounted.root.textContent).toContain("Review is for an older head");
+    mounted.root.querySelectorAll<HTMLElement>(".pull-tabs button")[2]?.click();
+    await settle();
     expect(mounted.root.textContent).toContain("Check is for an older commit");
+    mounted.root.querySelectorAll<HTMLElement>(".pull-tabs button")[0]?.click();
+    await settle();
 
     const reviewForm = mounted.root.querySelector<HTMLFormElement>(".review-panel form");
     if (!reviewForm) throw new Error("Review form was not rendered.");
@@ -405,6 +441,8 @@ describe("RepositoryCollaboration rendered workflows", () => {
       body: "Approved current head",
     });
 
+    mounted.root.querySelectorAll<HTMLElement>(".pull-tabs button")[2]?.click();
+    await settle();
     const checkForm = mounted.root.querySelector<HTMLFormElement>(".checks-panel form");
     if (!checkForm) throw new Error("CI check form was not rendered.");
     const checkInputs = checkForm.querySelectorAll<HTMLElement>("fluent-text-input");
@@ -423,6 +461,8 @@ describe("RepositoryCollaboration rendered workflows", () => {
     expect(mounted.root.textContent).toContain("All integration tests passed");
     expect(mounted.root.textContent).toContain("Check is for an older commit");
 
+    mounted.root.querySelectorAll<HTMLElement>(".pull-tabs button")[1]?.click();
+    await settle();
     findButton(mounted.root, "Merge pull request").click();
     await settle();
     expect(mergePullSpy).toHaveBeenCalledWith("repo-1", 12, {
@@ -455,6 +495,12 @@ describe("RepositoryCollaboration rendered workflows", () => {
     expect(mounted.root.querySelector(".answer-panel")?.textContent).toContain(
       "Use the stable branch API."
     );
+    mounted.root.querySelectorAll<HTMLElement>(".comment-row fluent-button").item(2)?.click();
+    await settle();
+    expect(updateDiscussionSpy).toHaveBeenLastCalledWith("repo-1", 4, { answerCommentId: null });
+    expect(mounted.root.querySelector(".answer-panel")?.textContent).not.toContain(
+      "Use the stable branch API."
+    );
     mounted.unmount();
   });
 
@@ -465,6 +511,7 @@ describe("RepositoryCollaboration rendered workflows", () => {
     let updates = 0;
     vi.spyOn(api, "wikiPage").mockImplementation(async () => current);
     vi.spyOn(api, "wikiHistory").mockImplementation(async () => history);
+    vi.spyOn(api, "wiki").mockResolvedValue([current]);
     const updateWikiSpy = vi
       .spyOn(api, "updateWikiPage")
       .mockImplementation(async (_id, _slug, patch) => {

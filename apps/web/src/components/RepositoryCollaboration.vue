@@ -25,6 +25,7 @@ import StatusBadge from "./StatusBadge.vue";
 import StatusState from "./StatusState.vue";
 import TextField from "./TextField.vue";
 import TextAreaField from "./TextAreaField.vue";
+import MarkdownContent from "./MarkdownContent.vue";
 
 const discussionCategories = [
   "general",
@@ -105,6 +106,62 @@ const checkForm = ref<{
   conclusion: NonNullable<CheckRun["conclusion"]>;
   summary: string;
 }>({ name: "", commitOid: "", status: "completed", conclusion: "success", summary: "" });
+const queryText = ref("");
+const stateFilter = ref<"open" | "closed" | "all">("open");
+const categoryFilter = ref<"all" | Discussion["category"]>("all");
+const detailTab = ref<"conversation" | "files" | "checks">("conversation");
+const commentPreview = ref(false);
+const wikiPreview = ref(false);
+const filteredRows = computed(() => {
+  const rows =
+    props.section === "issues"
+      ? issues.value
+      : props.section === "pulls"
+        ? pulls.value
+        : discussions.value;
+  return rows.filter((row) => {
+    const matchesState =
+      stateFilter.value === "all" ||
+      row.state === stateFilter.value ||
+      (stateFilter.value === "closed" && "mergedOid" in row && row.state === "merged");
+    const matchesCategory =
+      !("category" in row) ||
+      categoryFilter.value === "all" ||
+      row.category === categoryFilter.value;
+    const matchesText =
+      `${row.title} ${row.number} ${"author" in row ? row.author : row.actor.name} ${"labels" in row ? row.labels.join(" ") : ""}`
+        .toLocaleLowerCase()
+        .includes(queryText.value.trim().toLocaleLowerCase());
+    return matchesState && matchesCategory && matchesText;
+  });
+});
+const openCount = computed(
+  () =>
+    (props.section === "issues"
+      ? issues.value
+      : props.section === "pulls"
+        ? pulls.value
+        : discussions.value
+    ).filter((row) => row.state === "open").length
+);
+const closedCount = computed(
+  () =>
+    (props.section === "issues"
+      ? issues.value
+      : props.section === "pulls"
+        ? pulls.value
+        : discussions.value
+    ).filter((row) => row.state !== "open").length
+);
+const totalCount = computed(
+  () =>
+    (props.section === "issues"
+      ? issues.value
+      : props.section === "pulls"
+        ? pulls.value
+        : discussions.value
+    ).length
+);
 const detailNumber = computed(() => Number(route.params.number) || 0);
 const wikiSlug = computed(() => String(route.params.slug || ""));
 const isDetail = computed(() => detailNumber.value > 0 || Boolean(wikiSlug.value));
@@ -135,10 +192,14 @@ function isCurrentRevision(revision: number): boolean {
   const current = item.value;
   return current !== null && "revision" in current && current.revision === revision;
 }
-function actorName(value: { actor?: { kind: string; name: string }; author?: string }): string {
+function actorName(value: {
+  actor?: { kind: string; name: string };
+  author?: string;
+  updatedBy?: string;
+}): string {
   return value.actor
     ? `${value.actor.name}${value.actor.kind === "agent" ? ` · ${t("agent")}` : ""}`
-    : value.author || "";
+    : value.author || value.updatedBy || "";
 }
 function itemStatus(value: Issue | PullRequest | Discussion | WikiPage): string {
   return "state" in value ? t(value.state) : `r${value.revision}`;
@@ -160,6 +221,10 @@ function goToWiki(slug: string) {
   void router.push(
     `/${props.repository.owner}/${props.repository.name}/wiki/${encodeURIComponent(slug)}`
   );
+}
+function startWikiPage() {
+  showForm.value = true;
+  void router.push(`/${props.repository.owner}/${props.repository.name}/wiki`);
 }
 async function load() {
   const version = ++loadVersion;
@@ -237,15 +302,17 @@ async function load() {
       } else discussions.value = await api.discussions(props.repository.id);
     } else if (props.section === "wiki") {
       if (wikiSlug.value) {
-        const [detail, history] = await Promise.all([
+        const [detail, history, pageRows] = await Promise.all([
           api.wikiPage(props.repository.id, wikiSlug.value),
           api.wikiHistory(props.repository.id, wikiSlug.value),
+          api.wiki(props.repository.id),
         ]);
         if (version !== loadVersion) return;
         item.value = detail;
         wikiDraft.value = { title: detail.title, content: detail.content };
         wikiEditing.value = false;
         wikiHistory.value = history;
+        pages.value = pageRows;
       } else pages.value = await api.wiki(props.repository.id);
     } else {
       error.value = t("unknownSection");
@@ -499,6 +566,9 @@ async function markAnswer(comment: Comment | null) {
     error.value = userMessage(cause);
   }
 }
+function toggleAnswer(comment: Comment) {
+  void markAnswer(discussionItem.value?.answerCommentId === comment.id ? null : comment);
+}
 watch(
   () => [props.repository.id, props.section, route.fullPath],
   () => {
@@ -580,56 +650,117 @@ watch(
         </SelectField>
         <FormActions :saving="saving" :error="formError" @cancel="showForm = false" />
       </form>
+      <div v-if="section !== 'wiki'" class="list-toolbar box">
+        <div class="list-filters" role="group" :aria-label="t('filterItems')">
+          <button
+            v-for="state in ['open', 'closed', 'all'] as const"
+            :key="state"
+            type="button"
+            class="filter-button"
+            :aria-pressed="stateFilter === state"
+            @click="stateFilter = state"
+          >
+            <AppIcon :name="state === 'open' ? 'issue' : state === 'closed' ? 'check' : 'filter'" />
+            {{ t(state === "all" ? "allItems" : state) }}
+            <span class="filter-count">{{
+              state === "open" ? openCount : state === "closed" ? closedCount : totalCount
+            }}</span>
+          </button>
+          <SelectField
+            v-if="section === 'discussions'"
+            v-model="categoryFilter"
+            :label="t('category')"
+          >
+            <fluent-option value="all">{{ t("allCategories") }}</fluent-option>
+            <fluent-option value="general">{{ t("categoryGeneral") }}</fluent-option>
+            <fluent-option value="ideas">{{ t("categoryIdeas") }}</fluent-option>
+            <fluent-option value="q-and-a">{{ t("categoryQa") }}</fluent-option>
+            <fluent-option value="announcements">{{ t("categoryAnnouncements") }}</fluent-option>
+          </SelectField>
+        </div>
+        <label class="search-field"
+          ><AppIcon name="search" /><input
+            v-model="queryText"
+            type="search"
+            :placeholder="t('searchItems')"
+        /></label>
+      </div>
       <div v-if="section === 'issues'" class="box">
         <RouterLink
-          v-for="row in issues"
+          v-for="row in filteredRows as Issue[]"
           :key="row.number"
           class="box-row item-link"
           :to="`/${repository.owner}/${repository.name}/issues/${row.number}`"
-          ><span class="number">#{{ row.number }}</span
+          ><AppIcon name="issue" /><span class="number">#{{ row.number }}</span
           ><strong>{{ row.title }}</strong
           ><StatusBadge :tone="stateTone(row.state)">{{ t(row.state) }}</StatusBadge
           ><small>{{ actorName(row) }}</small
+          ><small>{{ new Date(row.updatedAt).toLocaleDateString() }}</small
           ><StatusBadge v-for="label in row.labels" :key="label">{{
             label
           }}</StatusBadge></RouterLink
         >
-        <p v-if="!issues.length" class="state">{{ t("empty") }}</p>
+        <div v-if="!issues.length" class="empty-onboarding">
+          <AppIcon name="issue" />
+          <h3>{{ t("noIssuesTitle") }}</h3>
+          <p>{{ t("noIssuesBody") }}</p>
+          <button v-if="canCreate" class="btn btn-primary" type="button" @click="showForm = true">
+            {{ t("createIssue") }}
+          </button>
+        </div>
+        <p v-else-if="!filteredRows.length" class="state">{{ t("noMatchingItems") }}</p>
         <p v-if="issues.length >= 100" class="list-limit-note">{{ t("listLimited") }}</p>
       </div>
       <div v-else-if="section === 'pulls'" class="box">
         <RouterLink
-          v-for="row in pulls"
+          v-for="row in filteredRows as PullRequest[]"
           :key="row.number"
           class="box-row item-link"
           :to="`/${repository.owner}/${repository.name}/pulls/${row.number}`"
-          ><span class="number">#{{ row.number }}</span
+          ><AppIcon name="pr" /><span class="number">#{{ row.number }}</span
           ><strong>{{ row.title }}</strong
           ><StatusBadge :tone="stateTone(row.state)">{{ t(row.state) }}</StatusBadge
           ><small>{{ row.headRef }} → {{ row.baseRef }}</small
+          ><small>{{ actorName(row) }} · {{ new Date(row.updatedAt).toLocaleDateString() }}</small
           ><StatusBadge v-if="row.headSessionId" tone="brand">{{
             t("agentSession")
           }}</StatusBadge></RouterLink
         >
-        <p v-if="!pulls.length" class="state">{{ t("empty") }}</p>
+        <div v-if="!pulls.length" class="empty-onboarding">
+          <AppIcon name="pr" />
+          <h3>{{ t("noPullsTitle") }}</h3>
+          <p>{{ t("noPullsBody") }}</p>
+          <button v-if="canCreate" class="btn btn-primary" type="button" @click="showForm = true">
+            {{ t("createPull") }}
+          </button>
+        </div>
+        <p v-else-if="!filteredRows.length" class="state">{{ t("noMatchingItems") }}</p>
         <p v-if="pulls.length >= 100" class="list-limit-note">{{ t("listLimited") }}</p>
       </div>
       <div v-else-if="section === 'discussions'" class="box">
         <RouterLink
-          v-for="row in discussions"
+          v-for="row in filteredRows as Discussion[]"
           :key="row.number"
           class="box-row item-link"
           :to="`/${repository.owner}/${repository.name}/discussions/${row.number}`"
-          ><span class="number">#{{ row.number }}</span
+          ><AppIcon name="discussion" /><span class="number">#{{ row.number }}</span
           ><strong>{{ row.title }}</strong
           ><StatusBadge>{{ t(`category${row.category}`) }}</StatusBadge
           ><StatusBadge :tone="stateTone(row.state)">{{ t(row.state) }}</StatusBadge
-          ><small>{{ actorName(row) }}</small
+          ><small>{{ actorName(row) }} · {{ new Date(row.updatedAt).toLocaleDateString() }}</small
           ><StatusBadge v-if="row.answerCommentId" tone="success">{{
             t("answered")
           }}</StatusBadge></RouterLink
         >
-        <p v-if="!discussions.length" class="state">{{ t("empty") }}</p>
+        <div v-if="!discussions.length" class="empty-onboarding">
+          <AppIcon name="discussion" />
+          <h3>{{ t("noDiscussionsTitle") }}</h3>
+          <p>{{ t("noDiscussionsBody") }}</p>
+          <button v-if="canCreate" class="btn btn-primary" type="button" @click="showForm = true">
+            {{ t("createDiscussion") }}
+          </button>
+        </div>
+        <p v-else-if="!filteredRows.length" class="state">{{ t("noMatchingItems") }}</p>
         <p v-if="discussions.length >= 100" class="list-limit-note">{{ t("listLimited") }}</p>
       </div>
       <div v-else-if="section === 'wiki'" class="box">
@@ -642,7 +773,19 @@ watch(
           ><code>{{ page.slug }}</code
           ><small>r{{ page.revision }} · {{ page.updatedBy }}</small></RouterLink
         >
-        <p v-if="!pages.length" class="state">{{ t("empty") }}</p>
+        <div v-if="!pages.length" class="empty-onboarding">
+          <AppIcon name="wiki" />
+          <h3>{{ t("noWikiTitle") }}</h3>
+          <p>{{ t("noWikiBody") }}</p>
+          <button
+            v-if="repository.canWrite"
+            class="btn btn-primary"
+            type="button"
+            @click="showForm = true"
+          >
+            {{ t("createWiki") }}
+          </button>
+        </div>
         <p v-if="pages.length >= 100" class="list-limit-note">{{ t("listLimited") }}</p>
       </div>
     </template>
@@ -716,7 +859,11 @@ watch(
             }}</fluent-button>
           </div>
         </form>
-        <pre v-else class="body-content">{{ "content" in item ? item.content : item.body }}</pre>
+        <MarkdownContent
+          v-else
+          class="body-content"
+          :source="'content' in item ? item.content : item.body"
+        />
         <div v-if="'labels' in item" class="metadata-row">
           <StatusBadge v-for="label in item.labels" :key="label">{{ label }}</StatusBadge
           ><StatusBadge v-for="assignee in item.assignees" :key="assignee"
@@ -737,7 +884,24 @@ watch(
           </fluent-button>
           <form v-if="wikiEditing" class="form-stack inline-form" @submit.prevent="saveWiki">
             <TextField v-model="wikiDraft.title" required>{{ t("issueTitle") }}</TextField>
-            <TextAreaField v-model="wikiDraft.content" rows="8" :label="t('issueBody')" />
+            <div class="composer-tabs">
+              <button type="button" :aria-pressed="!wikiPreview" @click="wikiPreview = false">
+                {{ t("write") }}</button
+              ><button type="button" :aria-pressed="wikiPreview" @click="wikiPreview = true">
+                {{ t("preview") }}
+              </button>
+            </div>
+            <TextAreaField
+              v-if="!wikiPreview"
+              v-model="wikiDraft.content"
+              rows="8"
+              :label="t('issueBody')"
+            />
+            <MarkdownContent
+              v-else
+              class="composer-preview"
+              :source="wikiDraft.content || t('nothingToPreview')"
+            />
             <div class="form-actions">
               <fluent-button type="submit" appearance="primary" :disabled="saving">{{
                 t("save")
@@ -766,7 +930,7 @@ watch(
             </fluent-button>
           </div>
         </div>
-        <div v-if="section === 'pulls' && diff" class="pull-review">
+        <div v-if="section === 'pulls' && detailTab === 'files' && diff" class="pull-review">
           <p class="eyebrow">{{ t("diff") }}</p>
           <p class="muted">
             {{ diff.baseOid.slice(0, 8) }}…{{ diff.headOid.slice(0, 8) }} ·
@@ -789,7 +953,80 @@ watch(
           </div>
         </div>
       </article>
-      <section v-if="section === 'pulls'" class="box box-form review-panel">
+      <aside v-if="section !== 'wiki'" class="detail-sidebar box">
+        <section v-if="'labels' in item" class="sidebar-section">
+          <h3>{{ t("labels") }}</h3>
+          <div v-if="item.labels.length" class="sidebar-tags">
+            <StatusBadge v-for="label in item.labels" :key="label">{{ label }}</StatusBadge>
+          </div>
+          <p v-else class="muted">{{ t("noLabels") }}</p>
+        </section>
+        <section v-if="'assignees' in item" class="sidebar-section">
+          <h3>{{ t("assignees") }}</h3>
+          <p
+            v-if="item.assignees.length"
+            v-for="assignee in item.assignees"
+            :key="assignee"
+            class="sidebar-person"
+          >
+            <span class="avatar">{{ assignee.slice(0, 1).toUpperCase() }}</span
+            >{{ assignee }}
+          </p>
+          <p v-else class="muted">{{ t("noAssignees") }}</p>
+        </section>
+        <section class="sidebar-section">
+          <h3>{{ t("author") }}</h3>
+          <p class="sidebar-person">
+            <span class="avatar">{{ actorName(item).slice(0, 1).toUpperCase() }}</span
+            >{{ actorName(item) }}
+          </p>
+        </section>
+        <section v-if="'headRef' in item" class="sidebar-section">
+          <h3>{{ t("branches") }}</h3>
+          <code>{{ item.headRef }}</code
+          ><span class="muted">→</span><code>{{ item.baseRef }}</code>
+        </section>
+      </aside>
+      <aside v-if="section === 'wiki'" class="detail-sidebar box wiki-sidebar">
+        <h3>{{ t("pages") }}</h3>
+        <RouterLink
+          v-for="page in pages"
+          :key="page.slug"
+          :to="`/${repository.owner}/${repository.name}/wiki/${encodeURIComponent(page.slug)}`"
+          :aria-current="page.slug === wikiSlug ? 'page' : undefined"
+          >{{ page.title }}</RouterLink
+        ><button v-if="repository.canWrite" class="btn btn-sm" type="button" @click="startWikiPage">
+          {{ t("createWiki") }}
+        </button>
+      </aside>
+      <nav v-if="section === 'pulls'" class="pull-tabs" :aria-label="t('pullRequestSections')">
+        <button
+          type="button"
+          :aria-current="detailTab === 'conversation' ? 'page' : undefined"
+          @click="detailTab = 'conversation'"
+        >
+          <AppIcon name="discussion" />{{ t("conversation") }}
+          <span>{{ comments.length + 1 }}</span>
+        </button>
+        <button
+          type="button"
+          :aria-current="detailTab === 'files' ? 'page' : undefined"
+          @click="detailTab = 'files'"
+        >
+          <AppIcon name="diff" />{{ t("filesChanged") }} <span>{{ diff?.files.length ?? 0 }}</span>
+        </button>
+        <button
+          type="button"
+          :aria-current="detailTab === 'checks' ? 'page' : undefined"
+          @click="detailTab = 'checks'"
+        >
+          <AppIcon name="checkCircle" />{{ t("checks") }} <span>{{ checks.length }}</span>
+        </button>
+      </nav>
+      <section
+        v-if="section === 'pulls' && detailTab === 'conversation'"
+        class="box box-form review-panel"
+      >
         <p class="eyebrow">{{ t("reviews") }}</p>
         <div v-for="review in reviews" :key="review.id" class="item-row">
           <strong>{{ t(`review${review.state}`) }}</strong
@@ -829,7 +1066,10 @@ watch(
           </div>
         </form>
       </section>
-      <section v-if="section === 'pulls'" class="box box-form checks-panel">
+      <section
+        v-if="section === 'pulls' && detailTab === 'checks'"
+        class="box box-form checks-panel"
+      >
         <p class="eyebrow">{{ t("checks") }}</p>
         <div v-for="check in checks" :key="check.id" class="item-row">
           <strong>{{ check.name }}</strong
@@ -898,15 +1138,23 @@ watch(
               t("answerMarked")
             }}
           </p>
-          <fluent-button v-if="showEditActions" type="button" @click="markAnswer(null)">
+          <fluent-button
+            v-if="showEditActions && discussionItem.answerCommentId"
+            type="button"
+            @click="markAnswer(null)"
+          >
             {{ t("clearAnswer") }}
           </fluent-button>
         </div>
       </section>
-      <section v-if="section !== 'wiki'" class="box box-form comments-panel">
+      <section
+        v-if="section !== 'wiki' && (section !== 'pulls' || detailTab === 'conversation')"
+        class="box box-form comments-panel"
+      >
         <p class="eyebrow">{{ t("comments") }}</p>
         <article v-for="comment in comments" :key="comment.id" class="comment-row">
           <div class="actor-line">
+            <span class="avatar">{{ comment.actor.name.slice(0, 1).toUpperCase() }}</span>
             <strong>{{ actorName(comment) }}</strong
             ><StatusBadge v-if="comment.actor.kind === 'agent'" tone="brand">{{
               t("agentAuthored")
@@ -933,20 +1181,35 @@ watch(
               type="button"
               appearance="transparent"
               size="small"
-              @click="markAnswer(comment)"
+              @click="toggleAnswer(comment)"
             >
-              {{ t("markAnswer") }}
+              {{
+                discussionItem?.answerCommentId === comment.id ? t("clearAnswer") : t("markAnswer")
+              }}
             </fluent-button>
           </div>
-          <pre class="body-content">{{ comment.body }}</pre>
+          <MarkdownContent class="body-content" :source="comment.body" />
         </article>
         <form v-if="canCreate" class="form-stack inline-form" @submit.prevent="postComment">
+          <div class="composer-tabs">
+            <button type="button" :aria-pressed="!commentPreview" @click="commentPreview = false">
+              {{ t("write") }}</button
+            ><button type="button" :aria-pressed="commentPreview" @click="commentPreview = true">
+              {{ t("preview") }}
+            </button>
+          </div>
           <TextAreaField
+            v-if="!commentPreview"
             v-model="commentBody"
             :placeholder="t('writeComment')"
             rows="4"
             required
             :label="t('writeComment')"
+          />
+          <MarkdownContent
+            v-else
+            class="composer-preview"
+            :source="commentBody || t('nothingToPreview')"
           />
           <div class="form-actions">
             <fluent-button type="submit" appearance="primary" :disabled="saving">
@@ -1093,4 +1356,8 @@ code {
     margin-bottom: var(--spacingVerticalM);
   }
 }
+</style>
+
+<style>
+@import "../styles/collaboration.css";
 </style>
