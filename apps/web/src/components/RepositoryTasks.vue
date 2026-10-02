@@ -244,10 +244,10 @@ watch(
           :label="t('taskStatusLabel')"
           @update:model-value="setFilter"
         >
-          <fluent-option value="all">{{ t("taskStatusAll") }}</fluent-option>
-          <fluent-option v-for="status in taskStatuses" :key="status" :value="status">{{
+          <option value="all">{{ t("taskStatusAll") }}</option>
+          <option v-for="status in taskStatuses" :key="status" :value="status">{{
             t(`taskStatus_${status}`)
-          }}</fluent-option>
+          }}</option>
         </SelectField>
         <fluent-button
           v-if="canWrite"

@@ -81,12 +81,12 @@ function remove(target: Assignee) {
       :disabled="saving"
       @update:model-value="add"
     >
-      <fluent-option value="">{{ t("assigneePick") }}</fluent-option>
-      <fluent-option
+      <option value="">{{ t("assigneePick") }}</option>
+      <option
         v-for="candidate in available"
         :key="assigneeKey(candidate)"
         :value="assigneeKey(candidate)"
-        >{{ candidateLabel(candidate) }}</fluent-option
+        >{{ candidateLabel(candidate) }}</option
       >
     </SelectField>
   </div>

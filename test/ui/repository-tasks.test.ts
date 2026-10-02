@@ -83,14 +83,14 @@ describe("repository task list", () => {
     expect(memoryBox.textContent).toContain("Guideline v0.2.2");
     expect(memoryBox.textContent).toContain("r3");
 
-    fill(control(mounted.root, ".status-filter fluent-dropdown"), "done");
+    fill(control(mounted.root, ".status-filter select"), "done");
     await settle();
     expect(tasksSpy).toHaveBeenLastCalledWith("repo-1", "done");
     const filtered = mounted.root.querySelectorAll(".task-row");
     expect(filtered).toHaveLength(1);
     expect(filtered[0].textContent).toContain("Fix merge");
 
-    fill(control(mounted.root, ".status-filter fluent-dropdown"), "pending");
+    fill(control(mounted.root, ".status-filter select"), "pending");
     await settle();
     expect(mounted.root.querySelectorAll(".task-row")).toHaveLength(0);
     expect(mounted.root.textContent).toContain("No tasks have this status");
@@ -117,6 +117,29 @@ describe("repository task list", () => {
     mounted.unmount();
   });
 
+  it("switches task documents through accessible native tabs", async () => {
+    vi.spyOn(api, "memory").mockResolvedValue(memory);
+    vi.spyOn(api, "tasks").mockResolvedValue([task()]);
+    vi.spyOn(api, "task").mockResolvedValue(detail());
+    vi.spyOn(api, "assigneeCandidates").mockResolvedValue([]);
+    const mounted = await mountTasks("/_verify/tasks/1");
+
+    const tabs = mounted.root.querySelectorAll<HTMLButtonElement>(
+      '.doc-tabs [role="tab"]'
+    );
+    expect(tabs).toHaveLength(3);
+    expect(tabs[0]?.getAttribute("aria-selected")).toBe("true");
+    tabs[1]?.click();
+    await settle();
+    expect(tabs[0]?.getAttribute("aria-selected")).toBe("false");
+    expect(tabs[1]?.getAttribute("aria-selected")).toBe("true");
+    expect(mounted.root.querySelector('[role="tabpanel"]')?.getAttribute("aria-labelledby")).toBe(
+      tabs[1]?.id
+    );
+
+    mounted.unmount();
+  });
+
   it("creates a task after validating its type", async () => {
     vi.spyOn(api, "memory").mockResolvedValue(memory);
     vi.spyOn(api, "tasks").mockResolvedValue([]);
@@ -130,7 +153,7 @@ describe("repository task list", () => {
     findButton(mounted.root, "New task").click();
     await settle();
     const form = control(mounted.root, ".task-form");
-    const inputs = form.querySelectorAll<HTMLElement>("fluent-text-input");
+    const inputs = form.querySelectorAll<HTMLElement>("input");
     fill(inputs[0], "Bad type!");
     fill(inputs[1], "New work");
     submit(form);
@@ -187,7 +210,7 @@ describe("task detail", () => {
     findButton(panel, "Edit").click();
     await settle();
     const editor = control(panel, ".doc-editor");
-    fill(control(editor, "fluent-textarea"), "My local plan");
+    fill(control(editor, "textarea"), "My local plan");
     submit(editor);
     await settle();
 
@@ -202,7 +225,7 @@ describe("task detail", () => {
     expect(reloadSpy).toHaveBeenCalledWith("repo-1", 1, "plan");
     expect(panel.textContent).toContain("Updated to r3");
     expect(panel.querySelector(".doc-latest")?.textContent).toContain("Remote plan");
-    expect(fieldValue(control(panel, "fluent-textarea"))).toBe("My local plan");
+    expect(fieldValue(control(panel, "textarea"))).toBe("My local plan");
 
     submit(control(panel, ".doc-editor"));
     await settle();
@@ -249,7 +272,7 @@ describe("task detail", () => {
 
     findButton(panel, "Edit from this revision").click();
     await settle();
-    expect(fieldValue(control(panel, "fluent-textarea"))).toBe("Old plan");
+    expect(fieldValue(control(panel, "textarea"))).toBe("Old plan");
     mounted.unmount();
   });
 
@@ -327,7 +350,7 @@ describe("task detail", () => {
     findButton(commitCard, "Bind commit").click();
     await settle();
     const form = control(commitCard, ".commit-form");
-    const inputs = form.querySelectorAll<HTMLElement>("fluent-text-input");
+    const inputs = form.querySelectorAll<HTMLElement>("input");
     fill(inputs[0], "not-an-oid");
     submit(form);
     await settle();
@@ -349,7 +372,7 @@ describe("task detail", () => {
     expect(linkCard.textContent).toContain("#8 Memory PR");
     findButton(linkCard, "Link item").click();
     await settle();
-    fill(control(linkCard, "fluent-dropdown"), "issue:3");
+    fill(control(linkCard, "select"), "issue:3");
     submit(control(linkCard, "form"));
     await settle();
     expect(attachSpy).toHaveBeenCalledWith("repo-1", 1, { kind: "issue", number: 3 });
@@ -382,7 +405,7 @@ describe("task detail", () => {
     });
     const mounted = await mountTasks("/_verify/tasks/1");
 
-    const dropdowns = mounted.root.querySelectorAll<HTMLElement>(".task-controls fluent-dropdown");
+    const dropdowns = mounted.root.querySelectorAll<HTMLElement>(".task-controls select");
     fill(dropdowns[0], "done");
     await settle();
     expect(updateSpy).toHaveBeenCalledWith("repo-1", 1, { status: "done" });
@@ -400,7 +423,7 @@ describe("task detail", () => {
     );
 
     expect(mounted.root.querySelector(".doc-panel")?.textContent).not.toContain("Edit");
-    expect(mounted.root.querySelector(".task-controls fluent-dropdown")).toBeNull();
+    expect(mounted.root.querySelector(".task-controls select")).toBeNull();
     expect(mounted.root.querySelector(".commit-form")).toBeNull();
     mounted.unmount();
   });

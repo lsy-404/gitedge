@@ -265,11 +265,10 @@ async function viewRevision(revision: number) {
 .doc-empty {
   padding: var(--spacingVerticalL) 0;
 }
-.doc-editor :deep(fluent-textarea)::part(root) {
+.doc-editor :deep(textarea) {
   height: 320px;
-}
-.doc-editor :deep(fluent-textarea)::part(control) {
   font-family: var(--fontFamilyMonospace);
+  resize: vertical;
 }
 .doc-latest {
   padding: var(--spacingVerticalM);

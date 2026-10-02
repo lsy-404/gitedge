@@ -96,10 +96,10 @@ watch(() => props.repository.id, load, { immediate: true });
           :disabled="!settings.canManage"
           @update:model-value="memoryVisibility = oneOf(visibilities, $event, 'members')"
         >
-          <fluent-option value="members">{{ t("memoryVisibility_members") }}</fluent-option>
-          <fluent-option value="public" :disabled.attr="publicAllowed ? undefined : ''">{{
+          <option value="members">{{ t("memoryVisibility_members") }}</option>
+          <option value="public" :disabled="!publicAllowed">{{
             t("memoryVisibility_public")
-          }}</fluent-option>
+          }}</option>
         </SelectField>
         <p class="muted hint">{{ t("memoryVisibilityHint") }}</p>
         <p v-if="!publicAllowed" class="muted hint">{{ t("memoryVisibilityPrivateNote") }}</p>
@@ -112,8 +112,8 @@ watch(() => props.repository.id, load, { immediate: true });
           :disabled="!settings.canManage"
           @update:model-value="agentPolicy = oneOf(policies, $event, 'owner')"
         >
-          <fluent-option value="owner">{{ t("agentPolicy_owner") }}</fluent-option>
-          <fluent-option value="members">{{ t("agentPolicy_members") }}</fluent-option>
+          <option value="owner">{{ t("agentPolicy_owner") }}</option>
+          <option value="members">{{ t("agentPolicy_members") }}</option>
         </SelectField>
         <p class="muted hint">{{ t("agentPolicyHint") }}</p>
       </div>

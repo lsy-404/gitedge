@@ -160,13 +160,13 @@ watch(() => [props.repository.id, props.item.number, canEdit.value], load);
           :disabled="saving"
           @update:model-value="moveToTask"
         >
-          <fluent-option value="">{{ t("taskSelectNone") }}</fluent-option>
-          <fluent-option
+          <option value="">{{ t("taskSelectNone") }}</option>
+          <option
             v-for="task in taskOptions"
             :key="task.number"
             :value="String(task.number)"
             :title="task.title"
-            >#{{ task.number }} [{{ task.type }}] {{ truncate(task.title) }}</fluent-option
+            >#{{ task.number }} [{{ task.type }}] {{ truncate(task.title) }}</option
           >
         </SelectField>
       </div>

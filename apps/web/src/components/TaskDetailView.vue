@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type {
   AssigneeCandidate,
@@ -27,7 +27,7 @@ import {
   taskTypePattern,
   type DocumentView,
 } from "../lib/tasks";
-import { eventActiveId, oneOf } from "../ui/formEvents";
+import { oneOf } from "../ui/formEvents";
 import AppIcon from "./AppIcon.vue";
 import AppLink from "./AppLink.vue";
 import MarkdownDocument from "./MarkdownDocument.vue";
@@ -51,6 +51,7 @@ const unavailable = ref(false);
 const actionError = ref("");
 const saving = ref(false);
 const activeDocument = ref<TaskDocumentKind>("plan");
+const documentTablist = ref<HTMLElement | null>(null);
 const editing = ref(false);
 const draft = ref({ type: "", title: "", motivation: "", description: "" });
 
@@ -179,9 +180,14 @@ function submitEdit() {
   );
 }
 
-function selectDocument(event: Event) {
-  const id = eventActiveId(event).replace(/^doc-tab-/, "");
-  activeDocument.value = oneOf(taskDocumentKinds, id, activeDocument.value);
+async function moveDocument(offset: number) {
+  const currentIndex = taskDocumentKinds.indexOf(activeDocument.value);
+  const nextIndex = (currentIndex + offset + taskDocumentKinds.length) % taskDocumentKinds.length;
+  const nextDocument = taskDocumentKinds[nextIndex];
+  if (!nextDocument) return;
+  activeDocument.value = nextDocument;
+  await nextTick();
+  documentTablist.value?.querySelector<HTMLButtonElement>(`#doc-tab-${nextDocument}`)?.focus();
 }
 
 function setDocument(kind: TaskDocumentKind, document: DocumentView) {
@@ -351,9 +357,9 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
             :disabled="saving"
             @update:model-value="setStatus"
           >
-            <fluent-option v-for="status in taskStatuses" :key="status" :value="status">{{
+            <option v-for="status in taskStatuses" :key="status" :value="status">{{
               t(`taskStatus_${status}`)
-            }}</fluent-option>
+            }}</option>
           </SelectField>
           <div v-else class="task-readonly">
             <p class="eyebrow">{{ t("taskStatusLabel") }}</p>
@@ -368,20 +374,20 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
             :disabled="saving"
             @update:model-value="setAssignee"
           >
-            <fluent-option value="">{{ t("taskUnassigned") }}</fluent-option>
-            <fluent-option
+            <option value="">{{ t("taskUnassigned") }}</option>
+            <option
               v-if="assigneeOutsideCandidates"
               :value="assigneeOutsideCandidates.key"
-              >{{ assigneeOutsideCandidates.name }}</fluent-option
+              >{{ assigneeOutsideCandidates.name }}</option
             >
-            <fluent-option
+            <option
               v-for="candidate in candidates"
               :key="assigneeKey(candidate)"
               :value="assigneeKey(candidate)"
               >{{ candidate.name
               }}<template v-if="candidate.kind === 'agent'">
                 · {{ t("agent") }}</template
-              ></fluent-option
+              ></option
             >
           </SelectField>
           <div v-else class="task-readonly">
@@ -446,18 +452,31 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
       </article>
 
       <section class="box box-form doc-card" :aria-label="t('taskDocuments')">
-        <fluent-tablist
-          class="doc-tabs"
-          :aria-label="t('taskDocuments')"
-          :activeid="`doc-tab-${activeDocument}`"
-          @change="selectDocument"
-        >
-          <fluent-tab v-for="kind in taskDocumentKinds" :id="`doc-tab-${kind}`" :key="kind">{{
-            t(`docKind_${kind}`)
-          }}</fluent-tab>
-        </fluent-tablist>
         <div
-          :id="`doc-panel-${activeDocument}`"
+          ref="documentTablist"
+          class="doc-tabs"
+          role="tablist"
+          :aria-label="t('taskDocuments')"
+        >
+          <button
+            v-for="kind in taskDocumentKinds"
+            :id="`doc-tab-${kind}`"
+            :key="kind"
+            class="doc-tab"
+            type="button"
+            role="tab"
+            :aria-selected="activeDocument === kind"
+            aria-controls="task-document-panel"
+            :tabindex="activeDocument === kind ? 0 : -1"
+            @click="activeDocument = kind"
+            @keydown.left.prevent="moveDocument(-1)"
+            @keydown.right.prevent="moveDocument(1)"
+          >
+            {{ t(`docKind_${kind}`) }}
+          </button>
+        </div>
+        <div
+          id="task-document-panel"
           class="doc-panel"
           role="tabpanel"
           :aria-labelledby="`doc-tab-${activeDocument}`"
@@ -500,13 +519,13 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
         </div>
         <form v-if="showLinkForm" class="form-stack inline-form" @submit.prevent="attachLink">
           <SelectField v-if="linkOptions.length" v-model="linkChoice" :label="t('taskLinkSelect')">
-            <fluent-option value="">{{ t("taskLinkPick") }}</fluent-option>
-            <fluent-option
+            <option value="">{{ t("taskLinkPick") }}</option>
+            <option
               v-for="option in linkOptions"
               :key="linkOptionKey(option)"
               :value="linkOptionKey(option)"
               >{{ option.kind === "issue" ? "Issue" : "PR" }} #{{ option.number }}
-              {{ option.title }}</fluent-option
+              {{ option.title }}</option
             >
           </SelectField>
           <p v-else class="muted">{{ t("taskLinkNothing") }}</p>
@@ -684,8 +703,24 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
   margin-bottom: var(--spacingVerticalL);
   border-bottom: var(--strokeWidthThin) solid var(--colorNeutralStroke2);
 }
-.doc-tabs > fluent-tab {
+.doc-tab {
   flex: none;
+  padding: 10px 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--muted, var(--colorNeutralForeground3));
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+.doc-tab[aria-selected="true"] {
+  border-bottom-color: var(--accent, var(--colorBrandBackground));
+  color: var(--text, var(--colorNeutralForeground1));
+  font-weight: 600;
+}
+.doc-tab:focus-visible {
+  outline: 2px solid var(--link, var(--colorBrandForegroundLink));
+  outline-offset: -2px;
 }
 .section-head {
   display: flex;

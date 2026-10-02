@@ -105,18 +105,14 @@ export function findByLabel(root: ParentNode, label: string): HTMLElement {
   return found;
 }
 
-/** Sets the control's value and emits the event Fluent would: `change` for dropdowns. */
+/** Sets a native control's value and dispatches its expected event. */
 export function fill(field: HTMLElement, value: string): void {
   Reflect.set(field, "value", value);
   field.dispatchEvent(
-    new Event(field.localName === "fluent-dropdown" ? "change" : "input", { bubbles: true })
+    new Event(field.localName === "select" ? "change" : "input", { bubbles: true })
   );
 }
 
-/**
- * Fluent elements are not registered under jsdom, so Vue binds `:value` and `:disabled` as
- * attributes there (and writes the string "false" for false) instead of as element properties.
- */
 export function fieldValue(field: HTMLElement): string {
   const property = Reflect.get(field, "value");
   return typeof property === "string" ? property : (field.getAttribute("value") ?? "");

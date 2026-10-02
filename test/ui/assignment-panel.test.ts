@@ -101,15 +101,15 @@ describe("AssignmentPanel", () => {
     expect(assignees.textContent).toContain("example-user");
     expect(reviewers.textContent).toContain("No reviewers");
     // The assignee already in the set is not offered again.
-    const assigneeOptions = Array.from(assignees.querySelectorAll("fluent-option")).map((option) =>
+    const assigneeOptions = Array.from(assignees.querySelectorAll("option")).map((option) =>
       option.getAttribute("value")
     );
     expect(assigneeOptions).toEqual(["", "user:user-2", "agent:agent-1"]);
-    expect(assignees.querySelector("fluent-option[value='agent:agent-1']")?.textContent).toContain(
+    expect(assignees.querySelector("option[value='agent:agent-1']")?.textContent).toContain(
       "builder · Agent (owner second-user)"
     );
 
-    fill(control(assignees, "fluent-dropdown"), "user:user-2");
+    fill(control(assignees, "select"), "user:user-2");
     await settle();
     expect(setSpy).toHaveBeenLastCalledWith("repo-1", 7, {
       role: "assignee",
@@ -120,7 +120,7 @@ describe("AssignmentPanel", () => {
     });
     expect(group(mounted.root, "Assignees").textContent).toContain("second-user");
 
-    fill(control(group(mounted.root, "Reviewers"), "fluent-dropdown"), "agent:agent-1");
+    fill(control(group(mounted.root, "Reviewers"), "select"), "agent:agent-1");
     await settle();
     expect(setSpy).toHaveBeenLastCalledWith("repo-1", 7, {
       role: "reviewer",
@@ -165,7 +165,7 @@ describe("AssignmentPanel", () => {
     });
     const mounted = await mountPanel(pull, "pull_request");
 
-    fill(control(group(mounted.root, "Reviewers"), "fluent-dropdown"), "user:user-2");
+    fill(control(group(mounted.root, "Reviewers"), "select"), "user:user-2");
     await settle();
     expect(setSpy).toHaveBeenCalledWith("repo-1", 12, {
       role: "reviewer",
@@ -179,7 +179,7 @@ describe("AssignmentPanel", () => {
     vi.spyOn(api, "setIssueAssignees").mockRejectedValue(new ApiError(403, "forbidden"));
     const mounted = await mountPanel(issue());
 
-    fill(control(group(mounted.root, "Reviewers"), "fluent-dropdown"), "agent:agent-1");
+    fill(control(group(mounted.root, "Reviewers"), "select"), "agent:agent-1");
     await settle();
     expect(mounted.root.querySelector('[role="alert"]')?.textContent).toContain(
       "only an agent's owner can assign that agent"
@@ -213,7 +213,7 @@ describe("AssignmentPanel", () => {
     expect(itemSpy).toHaveBeenCalledWith("repo-1", "issue", 7);
     expect(taskSpy).not.toHaveBeenCalled();
     expect(mounted.root.querySelector(".task-current")?.textContent).toContain("First");
-    fill(control(mounted.root, ".task-select fluent-dropdown"), "2");
+    fill(control(mounted.root, ".task-select select"), "2");
     await settle();
     expect(moveSpy).toHaveBeenCalledWith("repo-1", "issue", 7, 2);
     expect(detachSpy).not.toHaveBeenCalled();
@@ -232,7 +232,7 @@ describe("AssignmentPanel", () => {
     );
 
     expect(mounted.root.textContent).toContain("example-user");
-    expect(mounted.root.querySelector("fluent-dropdown")).toBeNull();
+    expect(mounted.root.querySelector("select")).toBeNull();
     expect(mounted.root.querySelector("[aria-label^='Remove']")).toBeNull();
     expect(api.assigneeCandidates).not.toHaveBeenCalled();
     mounted.unmount();

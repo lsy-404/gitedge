@@ -31,7 +31,7 @@ function mountSettings(repo: Repository) {
 }
 
 function option(root: ParentNode, value: string): HTMLElement {
-  return control(root, `fluent-option[value='${value}']`);
+  return control(root, `option[value='${value}']`);
 }
 
 beforeEach(() => {
@@ -67,7 +67,7 @@ describe("RepositorySettings", () => {
 
     expect(isDisabled(option(mounted.root, "public"))).toBe(false);
     expect(isDisabled(findButton(mounted.root, "Save"))).toBe(true);
-    const dropdowns = mounted.root.querySelectorAll<HTMLElement>("fluent-dropdown");
+    const dropdowns = mounted.root.querySelectorAll<HTMLElement>("select");
     fill(dropdowns[0], "public");
     fill(dropdowns[1], "members");
     await settle();
@@ -87,7 +87,7 @@ describe("RepositorySettings", () => {
     vi.spyOn(api, "updateRepositorySettings").mockRejectedValue(new ApiError(400, "bad_request"));
     const mounted = await mountSettings(repository);
 
-    fill(mounted.root.querySelectorAll<HTMLElement>("fluent-dropdown")[0], "public");
+    fill(mounted.root.querySelectorAll<HTMLElement>("select")[0], "public");
     await settle();
     submit(control(mounted.root, "form"));
     await settle();
@@ -107,7 +107,7 @@ describe("RepositorySettings", () => {
     expect(
       mounted.root.querySelector("button[type='submit'], fluent-button[type='submit']")
     ).toBeNull();
-    for (const dropdown of mounted.root.querySelectorAll("fluent-dropdown"))
+    for (const dropdown of mounted.root.querySelectorAll("select"))
       expect(isDisabled(dropdown)).toBe(true);
     mounted.unmount();
   });
