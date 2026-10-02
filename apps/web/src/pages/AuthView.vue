@@ -20,6 +20,10 @@ const busy = ref(false);
 const providers = ref<SsoProviderSummary[]>([]);
 const providersError = ref(false);
 const returnTo = computed(() => safeReturnTo(route.query.redirect));
+/** The built-in GitHub OAuth button below owns GitHub; never list it a second time as a federation provider. */
+const federationProviders = computed(() =>
+  providers.value.filter((item) => !/github/i.test(`${item.id} ${item.label}`))
+);
 const samlProviders = computed(() =>
   providers.value.filter((item) => item.protocol === "saml" && metadataHref(item.metadataUrl))
 );
@@ -117,7 +121,7 @@ async function submit() {
       <fluent-divider>{{ t("orContinue") }}</fluent-divider>
       <div class="oauth">
         <fluent-anchor-button
-          v-for="provider in providers"
+          v-for="provider in federationProviders"
           :key="provider.id"
           class="federation-provider block"
           :href="providerHref(provider.id)"
@@ -137,6 +141,7 @@ async function submit() {
         </fluent-link>
         <fluent-button type="button" class="block" @click="githubLogin">
           {{ t("githubSignIn") }}
+          <StatusBadge slot="end">OAUTH</StatusBadge>
         </fluent-button>
       </div>
       <NoticeBar v-if="callbackError" intent="error">{{ callbackError }}</NoticeBar>

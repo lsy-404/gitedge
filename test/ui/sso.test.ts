@@ -278,6 +278,33 @@ describe("External sign-in options", () => {
     mounted.unmount();
   });
 
+  it("lists GitHub once even when the provider list also contains a GitHub entry", async () => {
+    vi.stubGlobal("location", { origin: "https://gitedge.test", assign: vi.fn() });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) =>
+        String(input).endsWith("/api/auth/sso/providers")
+          ? new Response(
+              JSON.stringify({
+                data: [
+                  { id: "github", label: "GitHub", protocol: "oidc" },
+                  { id: "acme-oidc", label: "Acme", protocol: "oidc" },
+                ],
+              }),
+              { status: 200 }
+            )
+          : new Response("Not signed in", { status: 401 })
+      )
+    );
+    const mounted = await mountRoute("/login");
+    await settle();
+
+    const text = mounted.root.textContent ?? "";
+    expect(text.match(/GitHub/g)).toHaveLength(1);
+    expect(text).toContain("Acme");
+    mounted.unmount();
+  });
+
   it("maps callback error codes to localized messages and never prints the raw code", async () => {
     vi.stubGlobal(
       "fetch",
