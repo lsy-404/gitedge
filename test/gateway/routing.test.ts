@@ -46,7 +46,7 @@ describe("Gateway routing", () => {
     let receivedUrl = "";
     const response = await handleGatewayRequest(
       new Request(
-        "https://gitedge.example.com/api/auth/github/start?access=read&returnTo=%2Fsettings%2Faccount"
+        "https://gitedge.example.com/api/auth/github/start?returnTo=%2Fsettings%2Faccount"
       ),
       environment({
         auth: service((request) => {
@@ -58,8 +58,24 @@ describe("Gateway routing", () => {
 
     expect(response.status).toBe(302);
     expect(receivedUrl).toBe(
-      "https://gitedge.example.com/github/start?access=read&returnTo=%2Fsettings%2Faccount"
+      "https://gitedge.example.com/github/start?returnTo=%2Fsettings%2Faccount"
     );
+  });
+
+  it("forwards OIDC SSO routes to Auth without the public prefix", async () => {
+    let receivedUrl = "";
+    const response = await handleGatewayRequest(
+      new Request("https://gitedge.example.com/api/auth/sso/voidcarve/callback?code=c&state=s"),
+      environment({
+        auth: service((request) => {
+          receivedUrl = request.url;
+          return new Response(null, { status: 302 });
+        }),
+      })
+    );
+
+    expect(response.status).toBe(302);
+    expect(receivedUrl).toBe("https://gitedge.example.com/sso/voidcarve/callback?code=c&state=s");
   });
 
   it("forwards anonymous Forge GET routes while rejecting writes", async () => {

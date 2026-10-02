@@ -47,7 +47,7 @@ CI runners submit check results through the authenticated Pull Request checks AP
 
 ## Single sign-on
 
-Configure multiple OIDC or SAML 2.0 providers, link identities to existing accounts, and use provider-aware single sign-out from Account settings. Standard code-flow and SAML signature validation use maintained MIT libraries. See [SSO configuration](docs/sso.md) for provider settings, callback URLs, secrets and supported flows.
+Sign in with identity-only GitHub OAuth or configure multiple OIDC or SAML 2.0 providers (including `https://id.voidcarve.com`), link identities to existing accounts, and use provider-aware single sign-out from Account settings. Standard code-flow and SAML signature validation use maintained MIT libraries. See [SSO configuration](docs/sso.md) for provider settings, callback URLs, secrets and supported flows.
 
 ## Architecture
 
