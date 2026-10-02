@@ -124,9 +124,7 @@ describe("repository task list", () => {
     vi.spyOn(api, "assigneeCandidates").mockResolvedValue([]);
     const mounted = await mountTasks("/_verify/tasks/1");
 
-    const tabs = mounted.root.querySelectorAll<HTMLButtonElement>(
-      '.doc-tabs [role="tab"]'
-    );
+    const tabs = mounted.root.querySelectorAll<HTMLButtonElement>('.doc-tabs [role="tab"]');
     expect(tabs).toHaveLength(3);
     expect(tabs[0]?.getAttribute("aria-selected")).toBe("true");
     tabs[1]?.click();
@@ -172,7 +170,9 @@ describe("repository task list", () => {
       motivation: "",
       description: "",
     });
-    expect(mounted.root.querySelector(".task-heading h2")?.textContent).toContain("New work");
+    await vi.waitFor(() =>
+      expect(mounted.root.querySelector(".task-heading h2")?.textContent).toContain("New work")
+    );
     mounted.unmount();
   });
 

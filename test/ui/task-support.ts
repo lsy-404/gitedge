@@ -136,7 +136,15 @@ export async function mountAt(routePath: string, path: string, render: () => VNo
   setSession({ id: "user-1", identifier: "user@example.test" });
   const Host: Component = defineComponent({ setup: () => render });
   const routeName = `task-test-${routeSequence++}`;
-  router.addRoute({ path: routePath, name: routeName, component: Host, meta: { public: true } });
+  router.addRoute({
+    path: routePath,
+    alias: routePath.startsWith("/_verify/tasks")
+      ? `/${repository.owner}/${repository.name}/tasks/:number?`
+      : undefined,
+    name: routeName,
+    component: Host,
+    meta: { public: true },
+  });
   await router.push(path);
   await router.isReady();
   const root = document.createElement("div");
