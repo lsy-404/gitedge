@@ -8,12 +8,14 @@ import {
   CreateTaskInputSchema,
   GitOidSchema,
   MemoryVisibilitySchema,
+  MoveTaskLinkInputSchema,
   PutMemoryIndexInputSchema,
   PutTaskDocumentInputSchema,
   RevisionActorSchema,
   SYSTEM_ACTOR,
   TASK_STATUS_LABELS,
   TaskDocumentKindSchema,
+  TaskLinkKindSchema,
   TaskStatusSchema,
   UpdateRepositorySettingsInputSchema,
   UpdateTaskInputSchema,
@@ -30,6 +32,7 @@ import {
   type TaskDocumentKind,
   type TaskLink,
   type TaskLinkKind,
+  type TaskReference,
   type TaskStatus,
   type TaskTable,
   type TrustedUser,
@@ -282,15 +285,25 @@ export type MergedPullRequest = {
 };
 
 /**
- * Statements appended to the pull request merge batch: bind the merge commit to the task the
- * pull request is linked to, then record a system progress entry. Both are no-ops for pull
- * requests without a task or whose merge record did not land.
+ * Statements appended to the pull request merge batch right after the merge UPDATE: record a
+ * system progress entry (guarded by that UPDATE changing a row), then bind the merge commit to
+ * the task the pull request is linked to. Both are no-ops for pull requests without a task or
+ * whose merge record did not land. The progress entry comes first so an already bound commit
+ * (a fast-forward merge of a head the task tracked) cannot suppress it. The binding stores the
+ * pull request title and merger as summary and author; it does not re-read the Git commit.
  */
 export function mergeBindingStatements(
   env: ForgeEnv,
   merge: MergedPullRequest
 ): D1PreparedStatement[] {
   return [
+    ...targetStateProgressStatements(
+      env,
+      "pull_request",
+      merge.pullRequestId,
+      `Pull request #${merge.number} merged as ${merge.oid.slice(0, 7)} into ${merge.baseRef}`,
+      merge.now
+    ),
     env.DB.prepare(
       "INSERT OR IGNORE INTO forge_task_commits (id, repository_id, task_id, oid, ref, summary, author_name, bound_by_json, source, bound_at) SELECT ?, l.repository_id, l.task_id, p.merged_oid, ?, ?, ?, ?, 'pull_request_merge', ? FROM forge_task_links l JOIN forge_pull_requests p ON p.id = l.target_id WHERE l.target_kind = 'pull_request' AND l.target_id = ? AND p.state = 'merged' AND p.merged_oid = ?"
     ).bind(
@@ -302,13 +315,6 @@ export function mergeBindingStatements(
       merge.now,
       merge.pullRequestId,
       merge.oid
-    ),
-    ...targetStateProgressStatements(
-      env,
-      "pull_request",
-      merge.pullRequestId,
-      `Pull request #${merge.number} merged as ${merge.oid.slice(0, 7)} into ${merge.baseRef}`,
-      merge.now
     ),
   ];
 }
@@ -799,6 +805,73 @@ async function linkRequest(
   return null;
 }
 
+const OWNING_TASK_SELECT =
+  "SELECT t.number, t.type, t.title, t.status FROM forge_task_links l JOIN forge_tasks t ON t.id = l.task_id WHERE l.target_kind = ? AND l.target_id = ?";
+
+/** Reads the task an issue or pull request belongs to, or moves it between tasks in one batch. */
+async function itemTaskRequest(
+  env: ForgeEnv,
+  request: Request,
+  repository: RepositoryRow,
+  user: TrustedUser | null,
+  kindParam: string | undefined,
+  numberParam: string | undefined
+): Promise<Response | null> {
+  const logger = createLogger(env.LOG_LEVEL, { service: "forge" });
+  const kind = TaskLinkKindSchema.safeParse(kindParam);
+  const number = positiveInteger(numberParam);
+  if (!kind.success || !number)
+    return error(404, "not_found", "Issue or pull request was not found.");
+  const target = await env.DB.prepare(
+    `SELECT id FROM ${LINK_TABLES[kind.data]} WHERE repository_id = ? AND number = ?`
+  )
+    .bind(repository.id, number)
+    .first<{ id: string }>();
+  if (!target) return error(404, "not_found", "Issue or pull request was not found.");
+  const owning = () =>
+    env.DB.prepare(OWNING_TASK_SELECT).bind(kind.data, target.id).first<TaskReference>();
+  if (request.method === "GET") return json({ data: (await owning()) ?? null });
+  if (request.method !== "PUT" || !user) return null;
+  const parsed = MoveTaskLinkInputSchema.safeParse(await parseJson(request));
+  if (!parsed.success) return error(400, "bad_request", "Invalid task move payload.");
+  const destination = parsed.data.task;
+  const task =
+    destination === null
+      ? null
+      : await env.DB.prepare("SELECT id FROM forge_tasks WHERE repository_id = ? AND number = ?")
+          .bind(repository.id, destination)
+          .first<{ id: string }>();
+  if (destination !== null && !task) return error(404, "not_found", "Task was not found.");
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM forge_task_links WHERE target_kind = ? AND target_id = ?").bind(
+      kind.data,
+      target.id
+    ),
+    ...(task
+      ? [
+          env.DB.prepare(
+            "INSERT INTO forge_task_links (id, repository_id, task_id, target_kind, target_id, actor_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+          ).bind(
+            crypto.randomUUID(),
+            repository.id,
+            task.id,
+            kind.data,
+            target.id,
+            JSON.stringify(actorForUser(user)),
+            Date.now()
+          ),
+        ]
+      : []),
+  ]);
+  logger.info("forge:task-link-moved", {
+    repositoryId: repository.id,
+    targetKind: kind.data,
+    targetNumber: number,
+    taskNumber: destination,
+  });
+  return json({ data: (await owning()) ?? null });
+}
+
 async function commitRequest(
   env: ForgeEnv,
   request: Request,
@@ -812,16 +885,18 @@ async function commitRequest(
   if (request.method === "POST" && !oidParam) {
     const parsed = BindTaskCommitInputSchema.safeParse(await parseJson(request));
     if (!parsed.success) return error(400, "bad_request", "Invalid commit binding payload.");
-    // One hop to the Git service confirms the commit exists in this repository and snapshots it.
+    // One hop to the Git service confirms the repository itself holds the commit on the given
+    // ref (never an agent session workspace) and snapshots it.
     const gitUrl = new URL(`/repositories/${repository.id}/commit`, request.url);
     gitUrl.searchParams.set("oid", parsed.data.oid);
+    gitUrl.searchParams.set("ref", parsed.data.ref);
     const gitResponse = await env.GIT.fetch(new Request(gitUrl, { headers: trustedHeaders(user) }));
     if (gitResponse.status === 404) {
       logger.warn("forge:task-commit-not-found", {
         repositoryId: repository.id,
         oid: parsed.data.oid,
       });
-      return error(404, "not_found", "Commit was not found in this repository.");
+      return error(404, "not_found", "Commit was not found on this ref of the repository.");
     }
     const commit = GitCommitResponseSchema.safeParse(await gitResponse.json().catch(() => null));
     if (!gitResponse.ok || !commit.success) {
@@ -906,6 +981,8 @@ async function taskRequest(
   }
   if (item === "table" && reading && !action)
     return json({ data: await taskTable(env, repository) });
+  if (item === "link")
+    return itemTaskRequest(env, request, repository, viewer.user, action, rest[3]);
   const number = positiveInteger(item);
   if (!number) return error(404, "not_found", "Task was not found.");
   const task = await env.DB.prepare(

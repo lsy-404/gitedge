@@ -79,6 +79,9 @@ export interface Task {
   updatedAt: number;
 }
 
+/** The task an issue or pull request belongs to. */
+export type TaskReference = Pick<Task, "number" | "type" | "title" | "status">;
+
 export interface TaskDocument {
   kind: TaskDocumentKind;
   content: string;
@@ -162,6 +165,9 @@ export const AttachTaskLinkInputSchema = z.object({
   kind: TaskLinkKindSchema,
   number: z.number().int().positive(),
 });
+
+/** Moves an issue or pull request to another task, or out of its task when null. */
+export const MoveTaskLinkInputSchema = z.object({ task: z.number().int().positive().nullable() });
 
 export const BindTaskCommitInputSchema = z.object({
   oid: GitOidSchema,

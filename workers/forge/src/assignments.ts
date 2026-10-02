@@ -156,8 +156,10 @@ export async function assigneeCandidates(
 }
 
 /**
- * Replaces the whole assignee or reviewer set of one issue or pull request. Validation happens
- * first; the delete and inserts then land in a single D1 batch.
+ * Replaces the whole assignee or reviewer set of one issue or pull request. Only newly added
+ * entries are validated: entries that are already assigned stay, even when the editor could not
+ * add them today (another owner's agent under the "owner" policy, a departed member, a disabled
+ * agent). Removals and additions land in a single D1 batch.
  */
 export async function replaceAssignments(
   env: ForgeEnv,
@@ -167,39 +169,55 @@ export async function replaceAssignments(
   input: SetAssignmentsInput
 ): Promise<Response | null> {
   const logger = createLogger(env.LOG_LEVEL, { service: "forge" });
-  const unique = new Map(input.assignees.map((ref) => [`${ref.kind}:${ref.id}`, ref]));
+  const refKey = (ref: AssigneeRef) => `${ref.kind}:${ref.id}`;
+  const requested = new Map(input.assignees.map((ref) => [refKey(ref), ref]));
+  const currentRows = await env.DB.prepare(
+    "SELECT assignee_kind AS kind, assignee_id AS id FROM forge_assignments WHERE target_kind = ? AND target_id = ? AND role = ?"
+  )
+    .bind(target.kind, target.id, input.role)
+    .all<AssigneeRef>();
+  const current = new Map(currentRows.results.map((ref) => [refKey(ref), ref]));
+  const added = [...requested].filter(([key]) => !current.has(key)).map(([, ref]) => ref);
+  const removed = [...current].filter(([key]) => !requested.has(key)).map(([, ref]) => ref);
   const policy = await agentAssignmentPolicy(env, repository.id);
-  for (const ref of unique.values()) {
+  for (const ref of added) {
     const resolved = await resolveAssignable(env, repository, user, ref, policy);
     if (!resolved.ok) return resolved.response;
   }
-  const now = Date.now();
-  await env.DB.batch([
-    env.DB.prepare(
-      "DELETE FROM forge_assignments WHERE target_kind = ? AND target_id = ? AND role = ?"
-    ).bind(target.kind, target.id, input.role),
-    ...[...unique.values()].map((ref) =>
-      env.DB.prepare(
-        "INSERT INTO forge_assignments (id, repository_id, target_kind, target_id, role, assignee_kind, assignee_id, assigned_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-      ).bind(
-        crypto.randomUUID(),
-        repository.id,
-        target.kind,
-        target.id,
-        input.role,
-        ref.kind,
-        ref.id,
-        user.id,
-        now
-      )
-    ),
-  ]);
+  if (added.length || removed.length) {
+    const now = Date.now();
+    await env.DB.batch([
+      ...removed.map((ref) =>
+        env.DB.prepare(
+          "DELETE FROM forge_assignments WHERE target_kind = ? AND target_id = ? AND role = ? AND assignee_kind = ? AND assignee_id = ?"
+        ).bind(target.kind, target.id, input.role, ref.kind, ref.id)
+      ),
+      // OR IGNORE keeps a concurrent identical addition from failing the whole batch.
+      ...added.map((ref) =>
+        env.DB.prepare(
+          "INSERT OR IGNORE INTO forge_assignments (id, repository_id, target_kind, target_id, role, assignee_kind, assignee_id, assigned_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        ).bind(
+          crypto.randomUUID(),
+          repository.id,
+          target.kind,
+          target.id,
+          input.role,
+          ref.kind,
+          ref.id,
+          user.id,
+          now
+        )
+      ),
+    ]);
+  }
   logger.info("forge:assignments-replaced", {
     repositoryId: repository.id,
     targetKind: target.kind,
     targetId: target.id,
     role: input.role,
-    count: unique.size,
+    count: requested.size,
+    added: added.length,
+    removed: removed.length,
   });
   return null;
 }

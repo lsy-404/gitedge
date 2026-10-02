@@ -7,7 +7,6 @@ import { clearSession } from "../../apps/web/src/lib/session";
 import type { Issue, PullRequest } from "../../packages/contracts/src/forge";
 import {
   control,
-  detail,
   fill,
   findByLabel,
   human,
@@ -60,6 +59,7 @@ beforeEach(() => {
   i18n.global.locale.value = "en";
   vi.spyOn(api, "assigneeCandidates").mockResolvedValue(candidates);
   vi.spyOn(api, "tasks").mockResolvedValue([]);
+  vi.spyOn(api, "itemTask").mockResolvedValue(null);
 });
 
 afterEach(async () => {
@@ -188,7 +188,7 @@ describe("AssignmentPanel", () => {
     mounted.unmount();
   });
 
-  it("moves an item between tasks by unlinking before linking", async () => {
+  it("moves an item between tasks with one server call and a single owner lookup", async () => {
     const first = task({ number: 1, title: "First", progress: { total: 1, done: 0, percent: 0 } });
     const second = task({
       number: 2,
@@ -196,33 +196,29 @@ describe("AssignmentPanel", () => {
       progress: { total: 0, done: 0, percent: null },
     });
     vi.spyOn(api, "tasks").mockResolvedValue([first, second]);
-    vi.spyOn(api, "task").mockResolvedValue(
-      detail({
-        ...first,
-        links: [{ kind: "issue", number: 7, title: "Initial issue", state: "open", createdAt: 1 }],
-      })
-    );
-    const order: string[] = [];
-    vi.spyOn(api, "detachTaskLink").mockImplementation(async (_id, number) => {
-      order.push(`detach:${number}`);
+    const taskSpy = vi.spyOn(api, "task");
+    const itemSpy = vi
+      .spyOn(api, "itemTask")
+      .mockResolvedValue({ number: 1, type: first.type, title: "First", status: first.status });
+    const moveSpy = vi.spyOn(api, "moveItemTask").mockResolvedValue({
+      number: 2,
+      type: second.type,
+      title: "Second",
+      status: second.status,
     });
-    vi.spyOn(api, "attachTaskLink").mockImplementation(async (_id, number, payload) => {
-      order.push(`attach:${number}:${payload.kind}:${payload.number}`);
-      return {
-        kind: payload.kind,
-        number: payload.number,
-        title: "Initial issue",
-        state: "open",
-        createdAt: 2,
-      };
-    });
+    const detachSpy = vi.spyOn(api, "detachTaskLink");
+    const attachSpy = vi.spyOn(api, "attachTaskLink");
     const mounted = await mountPanel(issue());
 
-    const select = control(mounted.root, ".task-select fluent-dropdown");
-    expect(mounted.root.querySelector(".task-select fluent-option[selected]")).toBeNull();
-    fill(select, "2");
+    expect(itemSpy).toHaveBeenCalledWith("repo-1", "issue", 7);
+    expect(taskSpy).not.toHaveBeenCalled();
+    expect(mounted.root.querySelector(".task-current")?.textContent).toContain("First");
+    fill(control(mounted.root, ".task-select fluent-dropdown"), "2");
     await settle();
-    expect(order).toEqual(["detach:1", "attach:2:issue:7"]);
+    expect(moveSpy).toHaveBeenCalledWith("repo-1", "issue", 7, 2);
+    expect(detachSpy).not.toHaveBeenCalled();
+    expect(attachSpy).not.toHaveBeenCalled();
+    expect(mounted.root.querySelector(".task-current")?.textContent).toContain("Second");
     mounted.unmount();
   });
 

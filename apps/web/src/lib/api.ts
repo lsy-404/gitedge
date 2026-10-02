@@ -41,6 +41,7 @@ import type {
   TaskDocumentKind,
   TaskLink,
   TaskLinkKind,
+  TaskReference,
   TaskStatus,
   TaskTable,
 } from "../../../../packages/contracts/src/tasks";
@@ -88,6 +89,7 @@ export type {
   TaskDocumentKind,
   TaskLink,
   TaskLinkKind,
+  TaskReference,
   TaskStatus,
   TaskTable,
 };
@@ -519,6 +521,13 @@ export const api = {
       { method: "DELETE" },
       true
     ),
+  itemTask: (repositoryId: string, kind: TaskLinkKind, number: number) =>
+    request<TaskReference | null>(repositoryPath(repositoryId, `tasks/link/${kind}/${number}`)),
+  moveItemTask: (repositoryId: string, kind: TaskLinkKind, number: number, task: number | null) =>
+    request<TaskReference | null>(repositoryPath(repositoryId, `tasks/link/${kind}/${number}`), {
+      method: "PUT",
+      body: JSON.stringify({ task }),
+    }),
   bindTaskCommit: (repositoryId: string, number: number, payload: { oid: string; ref: string }) =>
     request<TaskCommit>(repositoryPath(repositoryId, `tasks/${number}/commits`), {
       method: "POST",

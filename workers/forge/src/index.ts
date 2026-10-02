@@ -817,6 +817,7 @@ async function featureRequest(
         const now = Date.now();
         const stateChanged = p.state !== undefined && p.state !== current.state;
         // The task progress entry rides in the same batch so it only lands when the update does.
+        // Non-member authors never write into task progress, which is members-only memory.
         const [changed] = await env.DB.batch([
           env.DB.prepare(
             "UPDATE forge_issues SET title = COALESCE(?, title), body = COALESCE(?, body), state = COALESCE(?, state), labels_json = COALESCE(?, labels_json), updated_at = ? WHERE id = ?"
@@ -828,7 +829,7 @@ async function featureRequest(
             now,
             current.id
           ),
-          ...(stateChanged
+          ...(stateChanged && isMember
             ? targetStateProgressStatements(
                 env,
                 "issue",

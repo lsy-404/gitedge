@@ -8,6 +8,7 @@ import {
   readArtifactFile,
   readArtifactTree,
   orderCommits,
+  refContainsCommit,
 } from "./read";
 import { compareArtifacts } from "./compare";
 import { GitMergeInputSchema, mergeArtifacts } from "./merge";
@@ -56,8 +57,10 @@ export async function handleGitApi(request: Request, env: GitEnv): Promise<Respo
   if (sessionId && !session) return fail(404, "not_found", "Session workspace was not found.");
   const resource = parts[2];
   const proposalComparison = resource === "compare" && url.searchParams.has("headSessionId");
+  // Commit lookups answer whether the repository itself holds a commit, never a private fork.
+  const repositoryScoped = proposalComparison || resource === "commit";
   using repo = await env.ARTIFACTS.get(
-    proposalComparison
+    repositoryScoped
       ? access.repository.artifactName
       : (session?.workspaceName ?? access.repository.artifactName)
   );
@@ -97,10 +100,13 @@ export async function handleGitApi(request: Request, env: GitEnv): Promise<Respo
   if (resource === "refs") return json(await listArtifactRefs(repo, env.LOG_LEVEL));
   if (resource === "commit") {
     const oid = url.searchParams.get("oid") ?? "";
-    if (!GitOidSchema.safeParse(oid).success)
-      return fail(400, "bad_request", "Invalid commit oid.");
-    const commit = await repo.readCommit(oid);
-    logger.debug("artifacts:commit-lookup", { oid, found: commit !== null });
+    const commitRef = url.searchParams.get("ref");
+    if (!GitOidSchema.safeParse(oid).success || !commitRef)
+      return fail(400, "bad_request", "Invalid commit oid or ref.");
+    const commit = (await refContainsCommit(repo, commitRef, oid))
+      ? await repo.readCommit(oid)
+      : null;
+    logger.debug("artifacts:commit-lookup", { oid, ref: commitRef, found: commit !== null });
     return commit ? json(commitResponse(commit)) : fail(404, "not_found", "Commit was not found.");
   }
   if (resource === "commits")

@@ -16,6 +16,8 @@ interface FixtureRepository {
   info: ArtifactsRepoInfo;
   readonly tokens: Map<string, FixtureToken>;
   readonly commits: ArtifactsCommitMetadata[];
+  /** Per-ref history for log(); refs without an entry see every commit. */
+  readonly branchCommits: Map<string, ArtifactsCommitMetadata[]>;
 }
 
 const baseCommit: ArtifactsCommitMetadata = {
@@ -81,6 +83,7 @@ function createRepository(
     },
     tokens: new Map(),
     commits: [commit],
+    branchCommits: new Map(),
   };
   const initialToken = createToken(repository, "write", 86_400);
   return {
@@ -195,8 +198,8 @@ export class FixtureArtifacts implements Artifacts {
       async readFile() {
         return null;
       },
-      async log() {
-        return [...repository.commits];
+      async log(options) {
+        return [...(repository.branchCommits.get(options?.ref ?? "") ?? repository.commits)];
       },
       async fork(name, options = {}) {
         if (fixture.repositories.has(name))

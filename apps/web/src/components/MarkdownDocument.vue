@@ -35,6 +35,8 @@ const { t } = useI18n();
 const headingId = useId();
 const editing = ref(false);
 const draft = ref("");
+/** Revision the draft was written against; saving uses it so a changed document yields a conflict. */
+const baseRevision = ref(0);
 const saving = ref(false);
 const error = ref("");
 const conflict = ref(false);
@@ -48,6 +50,7 @@ const shown = computed(() => viewing.value ?? props.document);
 
 function startEdit(content: string = props.document.content) {
   draft.value = content;
+  baseRevision.value = props.document.revision;
   editing.value = true;
   viewing.value = null;
   error.value = "";
@@ -66,7 +69,7 @@ async function submit() {
   saving.value = true;
   error.value = "";
   try {
-    const saved = await props.save(draft.value, props.document.revision);
+    const saved = await props.save(draft.value, baseRevision.value);
     emit("update", saved);
     editing.value = false;
     conflict.value = false;
@@ -86,6 +89,7 @@ async function loadLatest() {
   try {
     const latest = await props.reload();
     emit("update", latest);
+    baseRevision.value = latest.revision;
     conflict.value = false;
     error.value = "";
     reloadedRevision.value = latest.revision;

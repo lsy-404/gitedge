@@ -10,6 +10,7 @@ import type {
   Repository,
   Task,
   TaskLinkKind,
+  TaskReference,
 } from "../lib/api";
 import { api } from "../lib/api";
 import { sessionState } from "../lib/session";
@@ -30,7 +31,7 @@ const emit = defineEmits<{ updated: [item: Issue | PullRequest] }>();
 const { t } = useI18n();
 const candidates = ref<AssigneeCandidate[]>([]);
 const tasks = ref<Task[]>([]);
-const currentTask = ref<Task | null>(null);
+const currentTask = ref<TaskReference | null>(null);
 const saving = ref(false);
 const error = ref("");
 const canEdit = computed(() => Boolean(sessionState.user) && props.repository.canWrite);
@@ -46,23 +47,15 @@ function truncate(title: string): string {
   return title.length > titleLimit ? `${title.slice(0, titleLimit - 1)}…` : title;
 }
 
-/**
- * Issues and pull requests do not carry their task, so the owner is found through the task
- * details that have linked items.
- */
 async function loadTasks(version: number) {
   try {
-    const list = await api.tasks(props.repository.id);
-    const linked = list.filter((task) => task.progress.total > 0);
-    const details = await Promise.all(
-      linked.map((task) => api.task(props.repository.id, task.number))
-    );
+    const [list, owner] = await Promise.all([
+      api.tasks(props.repository.id),
+      api.itemTask(props.repository.id, props.kind, props.item.number),
+    ]);
     if (version !== loadVersion) return;
     tasks.value = list;
-    const owner = details.find((detail) =>
-      detail.links.some((link) => link.kind === props.kind && link.number === props.item.number)
-    );
-    currentTask.value = owner ? (list.find((task) => task.number === owner.number) ?? null) : null;
+    currentTask.value = owner;
   } catch {
     if (version !== loadVersion) return;
     tasks.value = [];
@@ -103,37 +96,21 @@ async function setRole(role: AssignmentRole, assignees: AssigneeRef[]) {
   }
 }
 
-/** Moves the item between tasks. An item belongs to at most one task, so it is unlinked first. */
+/** Moves the item between tasks in one server operation; an item belongs to at most one task. */
 async function moveToTask(value: string) {
   const target = value ? Number(value) : null;
-  const previous = currentTask.value;
-  if ((previous?.number ?? null) === target) return;
+  if ((currentTask.value?.number ?? null) === target) return;
   saving.value = true;
   error.value = "";
   try {
-    if (previous)
-      await api.detachTaskLink(props.repository.id, previous.number, props.kind, props.item.number);
-    currentTask.value = null;
-    if (target !== null) {
-      try {
-        await api.attachTaskLink(props.repository.id, target, {
-          kind: props.kind,
-          number: props.item.number,
-        });
-      } catch (cause) {
-        if (previous)
-          await api
-            .attachTaskLink(props.repository.id, previous.number, {
-              kind: props.kind,
-              number: props.item.number,
-            })
-            .catch(() => undefined);
-        throw cause;
-      }
-    }
-    await loadTasks(loadVersion);
+    currentTask.value = await api.moveItemTask(
+      props.repository.id,
+      props.kind,
+      props.item.number,
+      target
+    );
   } catch (cause) {
-    error.value = errorMessage(cause, t, { 409: "taskLinkConflict" });
+    error.value = errorMessage(cause, t);
     await loadTasks(loadVersion);
   } finally {
     saving.value = false;

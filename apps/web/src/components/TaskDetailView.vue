@@ -109,9 +109,17 @@ async function load() {
   }
 }
 
-/** Reloads everything except the documents, which may be open in an editor. */
+/**
+ * Adopts a task response, documents included: status changes and merges append system entries to
+ * progress. An open editor keeps its draft and saves against the revision it started from.
+ */
+function applyDetail(detail: TaskDetail) {
+  task.value = detail;
+  documents.value = detail.documents;
+}
+
 async function refresh() {
-  task.value = await api.task(props.repository.id, props.number);
+  applyDetail(await api.task(props.repository.id, props.number));
 }
 
 async function run(action: () => Promise<void>, overrides: Partial<Record<number, string>> = {}) {
@@ -132,7 +140,7 @@ function setStatus(value: string) {
   const status = oneOf(taskStatuses, value, current.status);
   if (status === current.status) return;
   void run(async () => {
-    task.value = await api.updateTask(props.repository.id, props.number, { status });
+    applyDetail(await api.updateTask(props.repository.id, props.number, { status }));
   });
 }
 
@@ -144,7 +152,7 @@ function setAssignee(value: string) {
   if (value === currentKey) return;
   void run(
     async () => {
-      task.value = await api.assignTask(props.repository.id, props.number, next);
+      applyDetail(await api.assignTask(props.repository.id, props.number, next));
     },
     { 400: "assignInvalid", 403: "assignPolicyDenied" }
   );
@@ -157,12 +165,14 @@ function submitEdit() {
   }
   void run(
     async () => {
-      task.value = await api.updateTask(props.repository.id, props.number, {
-        type: draft.value.type,
-        title: draft.value.title.trim(),
-        motivation: draft.value.motivation,
-        description: draft.value.description,
-      });
+      applyDetail(
+        await api.updateTask(props.repository.id, props.number, {
+          type: draft.value.type,
+          title: draft.value.title.trim(),
+          motivation: draft.value.motivation,
+          description: draft.value.description,
+        })
+      );
       editing.value = false;
     },
     { 400: "taskInvalid" }

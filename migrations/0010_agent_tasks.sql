@@ -4,7 +4,7 @@ PRAGMA foreign_keys = ON;
 ALTER TABLE repositories ADD COLUMN memory_visibility TEXT NOT NULL DEFAULT 'members' CHECK (memory_visibility IN ('members', 'public'));
 ALTER TABLE repositories ADD COLUMN agent_assignment_policy TEXT NOT NULL DEFAULT 'owner' CHECK (agent_assignment_policy IN ('owner', 'members'));
 
--- Tasks share the per-repository counter with issues and discussions.
+-- Tasks get their own per-repository number sequence in forge_counters.
 ALTER TABLE forge_counters ADD COLUMN task_number INTEGER NOT NULL DEFAULT 0;
 
 -- One Markdown memory index per repository. updated_by is NULL for system revisions.
@@ -131,9 +131,11 @@ CREATE TABLE forge_assignments (
 CREATE INDEX idx_forge_assignments_target ON forge_assignments(target_kind, target_id);
 CREATE INDEX idx_forge_assignments_assignee ON forge_assignments(assignee_kind, assignee_id, created_at DESC);
 
--- Existing string assignees that match a user become user assignments; the rest are dropped.
+-- Existing string assignees that match a member of the repository's namespace become user assignments; the rest are dropped.
 INSERT OR IGNORE INTO forge_assignments (id, repository_id, target_kind, target_id, role, assignee_kind, assignee_id, assigned_by, created_at)
 SELECT lower(hex(randomblob(16))), forge_issues.repository_id, 'issue', forge_issues.id, 'assignee', 'user', users.id, forge_issues.author_id, forge_issues.updated_at
 FROM forge_issues, json_each(forge_issues.assignees_json)
-JOIN users ON users.identifier = json_each.value;
+JOIN users ON users.identifier = json_each.value
+JOIN repositories ON repositories.id = forge_issues.repository_id
+JOIN namespace_memberships ON namespace_memberships.user_id = users.id AND namespace_memberships.namespace_id = repositories.namespace_id;
 ALTER TABLE forge_issues DROP COLUMN assignees_json;

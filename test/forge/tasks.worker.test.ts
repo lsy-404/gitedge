@@ -111,7 +111,7 @@ INSERT INTO namespaces (id, slug, created_by, created_at, kind, display_name, de
 INSERT INTO namespace_memberships (namespace_id,user_id,created_at,role) VALUES ('n1','u1',1,'owner'), ('n1','u2',1,'member');
 INSERT INTO repositories (id,namespace_id,created_by,slug,do_name,visibility,description,created_at,updated_at) VALUES ('r1','n1','u1','demo','repo:r1','public','',1,1), ('r2','n1','u1','secret','repo:r2','private','',1,1);
 INSERT INTO forge_counters (repository_id, conversation_number) VALUES ('r1', 1), ('r2', 0);
-INSERT INTO forge_issues (id,repository_id,number,author_id,title,body,state,created_at,updated_at,assignees_json) VALUES ('legacy-issue','r1',1,'u1','Legacy issue','','open',1,1,'["alice","bob","nobody","alice"]');
+INSERT INTO forge_issues (id,repository_id,number,author_id,title,body,state,created_at,updated_at,assignees_json) VALUES ('legacy-issue','r1',1,'u1','Legacy issue','','open',1,1,'["alice","bob","nobody","carol","alice"]');
 INSERT INTO auth_agents (id,user_id,name,description,created_at,disabled_at) VALUES ('a1','u2','bob-agent','',1,NULL), ('a2','u1','alice-agent','',1,NULL), ('a3','u3','eve-agent','',1,NULL), ('a4','u2','retired-agent','',1,5);
 INSERT INTO auth_git_tokens (id,user_id,repository_id,name,token_hash,permission,expires_at,created_at) VALUES ('gt1','u2','r1','t1','h1','write',9999999999999,1), ('gt2','u2','r1','t2','h2','read',9999999999999,1);
 INSERT INTO auth_agent_sessions (id,agent_id,user_id,repository_id,token_hash,git_token_id,workspace_name,remote,base_ref,base_oid,permission,status,created_at,expires_at) VALUES ('s1','a1','u2','r1','sh1','gt1','workspace-s1','artifact://repo-r1','main',NULL,'write','active',1,9999999999999), ('s2','a1','u2','r1','sh2','gt2','workspace-s2','artifact://repo-r1','main',NULL,'read','active',1,9999999999999);`
@@ -521,6 +521,144 @@ describe("Task links, progress and commits", () => {
   });
 });
 
+describe("Commit verification, merge entries and link moves", () => {
+  const commitFixture = (hash: string, message: string): ArtifactsCommitMetadata => ({
+    hash,
+    treeHash: "b".repeat(40),
+    message,
+    author: { name: "Fixture", email: "fixture@example.test" },
+    committer: { name: "Fixture", email: "fixture@example.test" },
+    parents: ["a".repeat(40)],
+    authoredAt: 1_790_000_100,
+    committedAt: 1_790_000_100,
+  });
+
+  it("verifies commits against the repository and ref, never an agent workspace", async () => {
+    const featureOid = "d".repeat(40);
+    const forkOid = "e".repeat(40);
+    const feature = commitFixture(featureOid, "Feature commit");
+    const repository = artifacts.repositories.get("repo-r1")!;
+    const base = repository.commits[0];
+    await artifacts.create("workspace-s1");
+    artifacts.repositories.get("workspace-s1")!.commits.push(commitFixture(forkOid, "Fork only"));
+    repository.commits.push(feature);
+    repository.branchCommits.set("main", [base]);
+    repository.branchCommits.set("feature", [feature, base]);
+    try {
+      const task = await createTask("Verified commits");
+      const path = `/repositories/r1/tasks/${task.number}/commits`;
+      // A commit that exists only in the agent's fork is not a repository commit.
+      expect(
+        (await call(path, "POST", bob, { oid: forkOid, ref: "main" }, writeSession)).status
+      ).toBe(404);
+      expect((await call(path, "POST", alice, { oid: forkOid, ref: "main" })).status).toBe(404);
+      // The commit must be in the history of the claimed ref.
+      expect((await call(path, "POST", alice, { oid: featureOid, ref: "main" })).status).toBe(404);
+      const bound = await call(
+        path,
+        "POST",
+        bob,
+        { oid: featureOid, ref: "feature" },
+        writeSession
+      );
+      expect(bound.status).toBe(201);
+      expect(await data(bound)).toMatchObject({
+        oid: featureOid,
+        ref: "feature",
+        summary: "Feature commit",
+        boundBy: { kind: "agent", id: "a1" },
+      });
+      expect((await call(path, "POST", alice, { oid: BASE_OID, ref: "main" })).status).toBe(201);
+    } finally {
+      repository.commits.splice(1);
+      repository.branchCommits.clear();
+      artifacts.repositories.delete("workspace-s1");
+    }
+  });
+
+  it("records the merge entry even when the merged commit is already bound", async () => {
+    const task = await createTask("Pre-bound merge");
+    const pull = await createPull("Fast forward");
+    await call(`/repositories/r1/tasks/${task.number}/links`, "POST", alice, {
+      kind: "pull_request",
+      number: pull,
+    });
+    await env.DB.prepare(
+      "INSERT INTO forge_task_commits (id, repository_id, task_id, oid, ref, summary, author_name, bound_by_json, source, bound_at) VALUES ('prebound', 'r1', ?, ?, 'topic', 'Head commit', 'Fixture', '{\"kind\":\"user\",\"id\":\"u1\",\"name\":\"alice\"}', 'manual', 1)"
+    )
+      .bind(task.id, MERGE_OID)
+      .run();
+    const mergeBody = { expectedBaseOid: "1".repeat(40), expectedHeadOid: "2".repeat(40) };
+    expect(
+      (await call(`/repositories/r1/pull-requests/${pull}/merge`, "POST", alice, mergeBody)).status
+    ).toBe(200);
+    const detail = await data(await call(`/repositories/r1/tasks/${task.number}`, "GET", alice));
+    expect(detail.commits).toHaveLength(1);
+    expect(detail.commits[0]).toMatchObject({ source: "manual", summary: "Head commit" });
+    expect(detail.documents.progress.content).toContain(
+      `Pull request #${pull} merged as ccccccc into main`
+    );
+    expect(detail.documents.progress.revision).toBe(1);
+  });
+
+  it("keeps non-member authors out of members-only task progress", async () => {
+    const task = await createTask("Outsider issue");
+    const created = await call("/repositories/r1/issues", "POST", eve, { title: "From outside" });
+    expect(created.status).toBe(201);
+    const issue = (await data(created)).number;
+    await call(`/repositories/r1/tasks/${task.number}/links`, "POST", alice, {
+      kind: "issue",
+      number: issue,
+    });
+    const patch = (who: [string, string], state: string) =>
+      call(`/repositories/r1/issues/${issue}`, "PATCH", who, { state });
+    expect((await patch(eve, "closed")).status).toBe(200);
+    expect((await patch(eve, "open")).status).toBe(200);
+    let detail = await data(await call(`/repositories/r1/tasks/${task.number}`, "GET", alice));
+    expect(detail.documents.progress.revision).toBe(0);
+    expect(detail.progress).toEqual({ total: 1, done: 0, percent: 0 });
+    expect((await patch(alice, "closed")).status).toBe(200);
+    detail = await data(await call(`/repositories/r1/tasks/${task.number}`, "GET", alice));
+    expect(detail.documents.progress.revision).toBe(1);
+    expect(detail.documents.progress.content).toContain(`Issue #${issue} closed by alice`);
+  });
+
+  it("reads and moves the task of an issue in one operation", async () => {
+    const first = await createTask("Move from");
+    const second = await createTask("Move to");
+    const issue = await createIssue("Movable");
+    const path = `/repositories/r1/tasks/link/issue/${issue}`;
+    const move = (who: [string, string] | null, task: number | null) =>
+      call(path, "PUT", who, { task });
+
+    expect(await data(await call(path, "GET", alice))).toBeNull();
+    expect((await data(await move(alice, first.number))).number).toBe(first.number);
+    expect(await data(await call(path, "GET", bob))).toMatchObject({
+      number: first.number,
+      title: "Move from",
+      type: "Feature",
+      status: "pending",
+    });
+    expect((await data(await move(bob, second.number))).number).toBe(second.number);
+    const links = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM forge_task_links WHERE target_id = (SELECT id FROM forge_issues WHERE repository_id = 'r1' AND number = ?)"
+    )
+      .bind(issue)
+      .first<{ count: number }>();
+    expect(links?.count).toBe(1);
+    expect((await move(alice, 9999)).status).toBe(404);
+    expect((await data(await call(path, "GET", alice))).number).toBe(second.number);
+    expect((await move(eve, null)).status).toBe(403);
+    expect((await move(null, null)).status).toBe(401);
+    expect((await call(path, "GET", null)).status).toBe(403);
+    expect(await data(await move(alice, null))).toBeNull();
+    expect(await data(await call(path, "GET", alice))).toBeNull();
+    expect((await call("/repositories/r1/tasks/link/issue/9999", "GET", alice)).status).toBe(404);
+    expect((await call("/repositories/r1/tasks/link/bogus/1", "GET", alice)).status).toBe(404);
+    expect((await call(path, "PUT", alice, { task: 0 })).status).toBe(400);
+  });
+});
+
 describe("Assignments", () => {
   const ref = (kind: "user" | "agent", id: string) => ({ kind, id });
 
@@ -604,7 +742,8 @@ describe("Assignments", () => {
     expect((await set(bob, "reviewer", "a2")).status).toBe(403);
     expect((await set(alice, "reviewer", "a1")).status).toBe(403);
     expect((await set(alice, "assignee", "a2")).status).toBe(200);
-    // An agent whose owner is outside the namespace or that is disabled is never assignable.
+    // Non-members cannot assign at all; an agent whose owner is outside the namespace or that is
+    // disabled is never assignable.
     expect((await set(eve, "assignee", "a3")).status).toBe(403);
     expect((await set(alice, "assignee", "a3")).status).toBe(400);
     expect((await set(bob, "assignee", "a4")).status).toBe(400);
@@ -661,6 +800,44 @@ describe("Assignments", () => {
     ).toEqual(["a2", "a1"]);
     expect((await taskAssign(bob, ref("agent", "a2"))).status).toBe(200);
     await call("/repositories/r1/settings", "PATCH", alice, { agentAssignmentPolicy: "owner" });
+  });
+
+  it("validates only newly added entries when a set is edited", async () => {
+    await call("/repositories/r1/settings", "PATCH", alice, { agentAssignmentPolicy: "owner" });
+    const issue = await createIssue("Shared set");
+    const path = `/repositories/r1/issues/${issue}/assignees`;
+    const put = (who: [string, string], assignees: unknown[]) =>
+      call(path, "PUT", who, { role: "assignee", assignees });
+
+    expect((await put(bob, [ref("agent", "a1")])).status).toBe(200);
+    // Alice cannot add bob's agent but may edit a set that already holds it.
+    expect((await put(alice, [ref("agent", "a2")])).status).toBe(200);
+    expect((await put(alice, [ref("agent", "a2"), ref("agent", "a1")])).status).toBe(403);
+    // Bob keeps alice's agent while adding his own; dropping it is always allowed.
+    expect((await put(bob, [ref("agent", "a2"), ref("agent", "a1")])).status).toBe(200);
+    expect((await put(bob, [ref("agent", "a1")])).status).toBe(200);
+    const edited = await put(alice, [ref("agent", "a1"), ref("user", "u1")]);
+    expect(edited.status).toBe(200);
+    expect((await data(edited)).assignees.map((entry: Json) => entry.name)).toEqual([
+      "alice",
+      "bob-agent",
+    ]);
+    const kept = await env.DB.prepare(
+      "SELECT assigned_by FROM forge_assignments WHERE target_id = (SELECT id FROM forge_issues WHERE repository_id = 'r1' AND number = ?) AND assignee_id = 'a1'"
+    )
+      .bind(issue)
+      .first<{ assigned_by: string }>();
+    expect(kept?.assigned_by).toBe("u2");
+
+    // A stale entry (a disabled agent) does not block unrelated edits and can still be removed.
+    await env.DB.prepare("UPDATE auth_agents SET disabled_at = 9 WHERE id = 'a1'").run();
+    try {
+      expect((await put(alice, [ref("agent", "a1"), ref("user", "u2")])).status).toBe(200);
+      const removed = await data(await put(alice, [ref("user", "u2")]));
+      expect(removed.assignees).toEqual([{ kind: "user", id: "u2", name: "bob" }]);
+    } finally {
+      await env.DB.prepare("UPDATE auth_agents SET disabled_at = NULL WHERE id = 'a1'").run();
+    }
   });
 
   it("never lets an assigned or approving agent merge or satisfy a gate", async () => {
