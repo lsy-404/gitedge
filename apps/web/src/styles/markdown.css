@@ -1,0 +1,130 @@
+.markdown-body {
+  font-size: 16px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+.markdown-body > :first-child {
+  margin-top: 0 !important;
+}
+.markdown-body > :last-child {
+  margin-bottom: 0 !important;
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  margin: 24px 0 16px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.markdown-body h1 {
+  font-size: 2em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+.markdown-body h2 {
+  font-size: 1.5em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+.markdown-body h3 {
+  font-size: 1.25em;
+}
+.markdown-body p,
+.markdown-body ul,
+.markdown-body ol,
+.markdown-body table,
+.markdown-body pre,
+.markdown-body blockquote {
+  margin: 0 0 16px;
+}
+.markdown-body li + li {
+  margin-top: 0.25em;
+}
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 2em;
+}
+.markdown-body blockquote {
+  padding: 0 1em;
+  color: var(--muted);
+  border-left: 0.25em solid var(--border);
+}
+.markdown-body img {
+  max-width: 100%;
+  height: auto;
+}
+.markdown-body pre {
+  padding: 16px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--subtle);
+  font-size: 85%;
+  line-height: 1.45;
+}
+.markdown-body code {
+  padding: 0.2em 0.4em;
+  border-radius: 6px;
+  background: var(--subtle);
+  font-size: 85%;
+}
+.markdown-body pre code {
+  padding: 0;
+  background: transparent;
+  font-size: inherit;
+  white-space: pre;
+}
+.markdown-body table {
+  display: block;
+  max-width: 100%;
+  overflow: auto;
+  border-collapse: collapse;
+}
+.markdown-body th,
+.markdown-body td {
+  padding: 6px 13px;
+  border: 1px solid var(--border);
+}
+.markdown-body tr:nth-child(2n) {
+  background: var(--subtle);
+}
+.markdown-body hr {
+  height: 2px;
+  margin: 24px 0;
+  border: 0;
+  background: var(--border);
+}
+.markdown-body input[type="checkbox"] {
+  width: auto;
+  margin: 0 0.4em 0 0;
+  vertical-align: middle;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal {
+  color: light-dark(#cf222e, #ff7b72);
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-attr {
+  color: light-dark(#0a3069, #a5d6ff);
+}
+.hljs-number,
+.hljs-built_in,
+.hljs-variable {
+  color: light-dark(#0550ae, #79c0ff);
+}
+.hljs-title,
+.hljs-function {
+  color: light-dark(#8250df, #d2a8ff);
+}
+.hljs-comment,
+.hljs-quote {
+  color: var(--muted);
+}
+.hljs-tag,
+.hljs-name,
+.hljs-attribute {
+  color: light-dark(#116329, #7ee787);
+}
