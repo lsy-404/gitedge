@@ -65,7 +65,8 @@ async function persistResult() {
 async function api(endpoint, method = "GET", body, options = {}) {
   const headers = { Accept: "application/json", Origin: origin.origin };
   if (body !== undefined) headers["Content-Type"] = "application/json";
-  if (options.anonymous !== true && cookie) headers.Cookie = cookie;
+  if (options.bearer) headers.Authorization = `Bearer ${options.bearer}`;
+  else if (options.anonymous !== true && cookie) headers.Cookie = cookie;
   const response = await fetch(new URL(endpoint, origin), {
     method,
     headers,
@@ -201,7 +202,27 @@ try {
         mode: 0o600,
       }
     );
-    await git(["add", "README.md"], sourceDirectory);
+    await writeFile(
+      path.join(sourceDirectory, "worker.js"),
+      "export default { fetch() { return new Response('Production acceptance'); } };\n"
+    );
+    await writeFile(
+      path.join(sourceDirectory, "gitedge.deploy.json"),
+      JSON.stringify({
+        schema: 1,
+        name: "Production acceptance",
+        license: { id: "MIT", text: "MIT License" },
+        terms: { required: false, text: "" },
+        worker: {
+          name: `acceptance-${suffix}`,
+          entrypoint: "worker.js",
+          modules: ["worker.js"],
+          compatibilityDate: gatewayConfig.compatibility_date,
+        },
+        resources: { d1: [], r2: [], kv: [] },
+      })
+    );
+    await git(["add", "."], sourceDirectory);
     await git(
       [
         "-c",
@@ -228,6 +249,37 @@ try {
     );
     assert.equal(file.content, cloneContent);
     result.checks.independentCloneAndFileTreeReadback = true;
+    const plan = await api(`/api/deploy/plan?repositoryId=${repository.id}&ref=main`);
+    assert.equal(plan.manifest.name, "Production acceptance");
+    assert.equal(typeof plan.manifestDigest, "string");
+    result.checks.productionDeploymentPlanReadback = true;
+
+    const agent = await api(
+      "/api/auth/agents",
+      "POST",
+      { name: `acceptance-${suffix}` },
+      { status: 201 }
+    );
+    const agentSession = await api(
+      `/api/auth/agents/${agent.id}/sessions`,
+      "POST",
+      { repositoryId: repository.id, baseRef: "main", permission: "read", ttlSeconds: 300 },
+      { status: 201 }
+    );
+    secrets.push(agentSession.token, agentSession.gitToken);
+    credentials.agentSession = agentSession;
+    await persistCredentials();
+    const identity = await api("/api/auth/session", "GET", undefined, {
+      bearer: agentSession.token,
+    });
+    assert.equal(identity.agentSession.id, agentSession.id);
+    assert.match(
+      await git(["ls-remote", repositoryUrl], rootDirectory, agentSession.token),
+      /refs\/heads\/main/
+    );
+    await api(`/api/auth/agents/${agent.id}/sessions/${agentSession.id}`, "DELETE");
+    await api("/api/auth/session", "GET", undefined, { bearer: agentSession.token, status: 401 });
+    result.checks.agentForkAndRevocation = true;
 
     const issue = await api(
       `/api/forge/repositories/${repository.id}/issues`,
