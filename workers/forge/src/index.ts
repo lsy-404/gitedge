@@ -5,6 +5,7 @@ import {
   CreatePullRequestInputSchema,
   CreateRepositoryInputSchema,
   PutWikiPageInputSchema,
+  SetAssignmentsInputSchema,
   UpdateIssueInputSchema,
   UpdatePullRequestInputSchema,
   parseUserGroupLimits,
@@ -16,37 +17,33 @@ import {
   UpdateDiscussionInputSchema,
   MergePullRequestInputSchema,
   type Actor,
-  ActorSchema,
   type Repository,
 } from "../../../packages/contracts/src/index";
 import { createLogger } from "../../../src/worker/common/logger";
+import { assignmentsColumn, parseAssignments, replaceAssignments } from "./assignments";
+import {
+  canWriteSession,
+  error,
+  isMember,
+  json,
+  nextNumber,
+  parseActor,
+  parseJson,
+  type ForgeEnv,
+  type RepositoryRow,
+} from "./common";
+import {
+  mergeBindingStatements,
+  memoryTaskRequest,
+  targetStateProgressStatements,
+  type Viewer,
+} from "./tasks";
 import {
   actorForUser,
   readTrustedUser,
   trustedHeaders,
 } from "../../../packages/contracts/src/trust";
 
-type ForgeEnv = {
-  readonly DB: D1Database;
-  readonly ARTIFACTS: Artifacts;
-  readonly GIT: { fetch(request: Request): Promise<Response> };
-  readonly LOG_LEVEL?: string;
-  readonly USER_GROUP_LIMITS_JSON?: string;
-};
-type RepositoryRow = {
-  id: string;
-  namespace_id: string;
-  owner: string;
-  slug: string;
-  visibility: "public" | "private";
-  description: string;
-  artifact_name?: string | null;
-  remote?: string | null;
-  default_branch?: string;
-  created_at: number;
-  updated_at: number;
-};
-type NumberRow = { number: number | null };
 type NamespaceKind = "personal" | "organization";
 type OrganizationRole = "owner" | "member";
 type NamespaceAccessRow = {
@@ -65,23 +62,20 @@ type OrganizationMemberRow = {
   createdAt: number;
 };
 
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json; charset=utf-8" },
-  });
-}
+const ANONYMOUS_VIEWER: Viewer = {
+  user: null,
+  member: false,
+  writeAllowed: false,
+  isOwner: async () => false,
+};
 
-function error(status: number, code: string, message: string): Response {
-  return json({ error: { code, message } }, status);
-}
+type ForgeTable = "forge_issues" | "forge_pull_requests" | "forge_discussions";
 
-async function parseJson(request: Request): Promise<unknown> {
-  try {
-    return await request.json();
-  } catch {
-    return null;
-  }
+/** Extra select column carrying the assignee and reviewer sets of issues and pull requests. */
+function assignmentsSelect(table: ForgeTable, alias: string): string {
+  if (table === "forge_issues") return `, ${assignmentsColumn("issue", alias)}`;
+  if (table === "forge_pull_requests") return `, ${assignmentsColumn("pull_request", alias)}`;
+  return "";
 }
 
 function trustedUser(request: Request): TrustedUser | null {
@@ -102,22 +96,6 @@ async function repositoryById(env: ForgeEnv, repositoryId: string): Promise<Repo
   )
     .bind(repositoryId)
     .first<RepositoryRow>();
-}
-
-async function isMember(env: ForgeEnv, repositoryId: string, userId: string): Promise<boolean> {
-  const row = await env.DB.prepare(
-    "SELECT 1 AS found FROM repositories JOIN namespace_memberships ON namespace_memberships.namespace_id = repositories.namespace_id WHERE repositories.id = ? AND namespace_memberships.user_id = ?"
-  )
-    .bind(repositoryId, userId)
-    .first<{ found: number }>();
-  return row !== null;
-}
-
-function canWriteSession(user: TrustedUser, repositoryId: string): boolean {
-  return (
-    !user.agentSession ||
-    (user.agentSession.repositoryId === repositoryId && user.agentSession.permission === "write")
-  );
 }
 
 function hasActiveMergeLease(resource: Record<string, unknown>): boolean {
@@ -193,24 +171,6 @@ async function publicRepositoryForOwnerAndSlug(
     .first<RepositoryRow>();
 }
 
-async function nextNumber(
-  env: ForgeEnv,
-  table: "forge_issues" | "forge_pull_requests" | "forge_discussions",
-  repositoryId: string
-): Promise<number> {
-  const column = table === "forge_discussions" ? "discussion_number" : "conversation_number";
-  await env.DB.prepare("INSERT OR IGNORE INTO forge_counters (repository_id) VALUES (?)")
-    .bind(repositoryId)
-    .run();
-  const row = await env.DB.prepare(
-    `UPDATE forge_counters SET ${column} = ${column} + 1 WHERE repository_id = ? RETURNING ${column} AS number`
-  )
-    .bind(repositoryId)
-    .first<NumberRow>();
-  if (!row?.number) throw new Error("Repository counter did not return a number.");
-  return row.number;
-}
-
 function repoResponse(row: RepositoryRow, canWrite = false) {
   return {
     id: row.id,
@@ -256,17 +216,6 @@ function parseJsonArray(value: unknown): string[] {
   }
 }
 
-function parseActor(value: unknown, authorId: unknown): Actor {
-  try {
-    const parsed = ActorSchema.safeParse(JSON.parse(String(value)));
-    if (parsed.success) return parsed.data;
-  } catch {
-    /* malformed legacy actor data falls back to the stored user identity */
-  }
-  const id = typeof authorId === "string" ? authorId : "unknown";
-  return { kind: "user", id, name: id };
-}
-
 function presentForgeRow(resource: string, row: Record<string, unknown>): Record<string, unknown> {
   const actor = "actor_json" in row ? parseActor(row.actor_json, row.author_id) : null;
   const createdAt = row.created_at ?? row.createdAt;
@@ -282,7 +231,7 @@ function presentForgeRow(resource: string, row: Record<string, unknown>): Record
       author,
       actor,
       labels: parseJsonArray(row.labels_json),
-      assignees: parseJsonArray(row.assignees_json),
+      ...parseAssignments(row.assignments_json),
       createdAt,
       updatedAt,
     };
@@ -301,6 +250,7 @@ function presentForgeRow(resource: string, row: Record<string, unknown>): Record
       headSessionId: row.head_session_id ?? row.headSessionId ?? null,
       draft: row.draft === 1 || row.draft === true,
       mergedOid: row.merged_oid ?? row.mergedOid ?? null,
+      ...parseAssignments(row.assignments_json),
       createdAt,
       updatedAt,
     };
@@ -398,7 +348,7 @@ async function publicRepositoryRead(
   const resource = parts[4];
   if (resource === "issues" && parts.length === 5) {
     const rows = await env.DB.prepare(
-      "SELECT forge_issues.*, users.identifier AS author FROM forge_issues JOIN users ON users.id = forge_issues.author_id WHERE forge_issues.repository_id = ? ORDER BY forge_issues.number DESC"
+      `SELECT forge_issues.*, users.identifier AS author${assignmentsSelect("forge_issues", "forge_issues")} FROM forge_issues JOIN users ON users.id = forge_issues.author_id WHERE forge_issues.repository_id = ? ORDER BY forge_issues.number DESC`
     )
       .bind(repository.id)
       .all<Record<string, unknown>>();
@@ -406,7 +356,7 @@ async function publicRepositoryRead(
   }
   if (resource === "pull-requests" && parts.length === 5) {
     const rows = await env.DB.prepare(
-      "SELECT forge_pull_requests.*, users.identifier AS author FROM forge_pull_requests JOIN users ON users.id = forge_pull_requests.author_id WHERE forge_pull_requests.repository_id = ? ORDER BY forge_pull_requests.number DESC"
+      `SELECT forge_pull_requests.*, users.identifier AS author${assignmentsSelect("forge_pull_requests", "forge_pull_requests")} FROM forge_pull_requests JOIN users ON users.id = forge_pull_requests.author_id WHERE forge_pull_requests.repository_id = ? ORDER BY forge_pull_requests.number DESC`
     )
       .bind(repository.id)
       .all<Record<string, unknown>>();
@@ -503,7 +453,7 @@ async function publicRepositoryRead(
           ? "forge_pull_requests"
           : "forge_discussions";
     const row = await env.DB.prepare(
-      `SELECT resource.*, users.identifier AS author FROM ${table} AS resource JOIN users ON users.id = resource.author_id WHERE resource.repository_id = ? AND resource.number = ?`
+      `SELECT resource.*, users.identifier AS author${assignmentsSelect(table, "resource")} FROM ${table} AS resource JOIN users ON users.id = resource.author_id WHERE resource.repository_id = ? AND resource.number = ?`
     )
       .bind(repository.id, number)
       .first<Record<string, unknown>>();
@@ -542,6 +492,8 @@ async function publicRepositoryRead(
       .all<Record<string, unknown>>();
     return json({ data: rows.results.map((row) => presentForgeRow("comments", row)) });
   }
+  const memory = await memoryTaskRequest(env, request, repository, ANONYMOUS_VIEWER, suffix);
+  if (memory) return memory;
   return error(404, "not_found", "Endpoint was not found.");
 }
 
@@ -576,7 +528,7 @@ async function featureRequest(
   if (targetTable && (request.method === "GET" || request.method === "POST") && !item) {
     if (request.method === "GET") {
       const rows = await env.DB.prepare(
-        `SELECT resource.*, users.identifier AS author FROM ${targetTable} AS resource JOIN users ON users.id = resource.author_id WHERE resource.repository_id = ? ORDER BY resource.number DESC`
+        `SELECT resource.*, users.identifier AS author${assignmentsSelect(targetTable, "resource")} FROM ${targetTable} AS resource JOIN users ON users.id = resource.author_id WHERE resource.repository_id = ? ORDER BY resource.number DESC`
       )
         .bind(repository.id)
         .all<Record<string, unknown>>();
@@ -591,7 +543,7 @@ async function featureRequest(
         id = crypto.randomUUID(),
         now = Date.now();
       await env.DB.prepare(
-        "INSERT INTO forge_issues (id, repository_id, number, author_id, actor_json, title, body, state, labels_json, assignees_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)"
+        "INSERT INTO forge_issues (id, repository_id, number, author_id, actor_json, title, body, state, labels_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)"
       )
         .bind(
           id,
@@ -602,7 +554,6 @@ async function featureRequest(
           parsed.data.title,
           parsed.data.body,
           JSON.stringify(parsed.data.labels),
-          JSON.stringify(parsed.data.assignees),
           now,
           now
         )
@@ -621,6 +572,8 @@ async function featureRequest(
             state: "open",
             author: user.identifier,
             actor,
+            assignees: [],
+            reviewers: [],
             createdAt: now,
             updatedAt: now,
           },
@@ -683,6 +636,8 @@ async function featureRequest(
             author: user.identifier,
             actor,
             mergedOid: null,
+            assignees: [],
+            reviewers: [],
             createdAt: now,
             updatedAt: now,
           },
@@ -741,14 +696,14 @@ async function featureRequest(
     if (!Number.isSafeInteger(number) || number < 1)
       return error(404, "not_found", "Resource was not found.");
     const current = await env.DB.prepare(
-      `SELECT resource.*, users.identifier AS author FROM ${targetTable} AS resource JOIN users ON users.id = resource.author_id WHERE resource.repository_id = ? AND resource.number = ?`
+      `SELECT resource.*, users.identifier AS author${assignmentsSelect(targetTable, "resource")} FROM ${targetTable} AS resource JOIN users ON users.id = resource.author_id WHERE resource.repository_id = ? AND resource.number = ?`
     )
       .bind(repository.id, number)
       .first<Record<string, unknown>>();
     if (!current) return error(404, "not_found", "Resource was not found.");
     if (request.method === "GET" && !action) {
       const itemRow = await env.DB.prepare(
-        `SELECT resource.*, users.identifier AS author FROM ${targetTable} AS resource JOIN users ON users.id = resource.author_id WHERE resource.id = ?`
+        `SELECT resource.*, users.identifier AS author${assignmentsSelect(targetTable, "resource")} FROM ${targetTable} AS resource JOIN users ON users.id = resource.author_id WHERE resource.id = ?`
       )
         .bind(current.id)
         .first<Record<string, unknown>>();
@@ -857,25 +812,32 @@ async function featureRequest(
             "forbidden",
             "Only repository members or the issue author may edit this issue."
           );
-        if (!isMember && (p.labels !== undefined || p.assignees !== undefined))
-          return error(
-            403,
-            "forbidden",
-            "Only repository members may change issue labels or assignees."
-          );
-        const changed = await env.DB.prepare(
-          "UPDATE forge_issues SET title = COALESCE(?, title), body = COALESCE(?, body), state = COALESCE(?, state), labels_json = COALESCE(?, labels_json), assignees_json = COALESCE(?, assignees_json), updated_at = ? WHERE id = ?"
-        )
-          .bind(
+        if (!isMember && p.labels !== undefined)
+          return error(403, "forbidden", "Only repository members may change issue labels.");
+        const now = Date.now();
+        const stateChanged = p.state !== undefined && p.state !== current.state;
+        // The task progress entry rides in the same batch so it only lands when the update does.
+        const [changed] = await env.DB.batch([
+          env.DB.prepare(
+            "UPDATE forge_issues SET title = COALESCE(?, title), body = COALESCE(?, body), state = COALESCE(?, state), labels_json = COALESCE(?, labels_json), updated_at = ? WHERE id = ?"
+          ).bind(
             p.title ?? null,
             p.body ?? null,
             p.state ?? null,
             p.labels ? JSON.stringify(p.labels) : null,
-            p.assignees ? JSON.stringify(p.assignees) : null,
-            Date.now(),
+            now,
             current.id
-          )
-          .run();
+          ),
+          ...(stateChanged
+            ? targetStateProgressStatements(
+                env,
+                "issue",
+                String(current.id),
+                `Issue #${number} ${p.state === "closed" ? "closed" : "reopened"} by ${actor.name}`,
+                now
+              )
+            : []),
+        ]);
         if (changed.meta.changes !== 1)
           return error(409, "conflict", "Issue changed while it was being updated.");
       } else if (targetTable === "forge_pull_requests") {
@@ -890,19 +852,30 @@ async function featureRequest(
         const parsed = UpdatePullRequestInputSchema.safeParse(input);
         if (!parsed.success) return error(400, "bad_request", "Invalid pull request update.");
         const p = parsed.data;
-        const changed = await env.DB.prepare(
-          "UPDATE forge_pull_requests SET title = COALESCE(?, title), body = COALESCE(?, body), state = COALESCE(?, state), draft = COALESCE(?, draft), updated_at = ?, merge_started_at = NULL, merge_base_oid = NULL, merge_head_oid = NULL WHERE id = ? AND state != 'merged' AND (merge_started_at IS NULL OR merge_started_at < ?)"
-        )
-          .bind(
+        const now = Date.now();
+        const stateChanged = p.state !== undefined && p.state !== current.state;
+        const [changed] = await env.DB.batch([
+          env.DB.prepare(
+            "UPDATE forge_pull_requests SET title = COALESCE(?, title), body = COALESCE(?, body), state = COALESCE(?, state), draft = COALESCE(?, draft), updated_at = ?, merge_started_at = NULL, merge_base_oid = NULL, merge_head_oid = NULL WHERE id = ? AND state != 'merged' AND (merge_started_at IS NULL OR merge_started_at < ?)"
+          ).bind(
             p.title ?? null,
             p.body ?? null,
             p.state ?? null,
             p.draft === undefined ? null : p.draft ? 1 : 0,
-            Date.now(),
+            now,
             current.id,
             staleMergeCutoff
-          )
-          .run();
+          ),
+          ...(stateChanged
+            ? targetStateProgressStatements(
+                env,
+                "pull_request",
+                String(current.id),
+                `Pull request #${number} ${p.state === "closed" ? "closed" : "reopened"} by ${actor.name}`,
+                now
+              )
+            : []),
+        ]);
         if (changed.meta.changes !== 1)
           return error(
             409,
@@ -941,7 +914,31 @@ async function featureRequest(
           return error(409, "conflict", "Discussion changed while it was being updated.");
       }
       const updated = await env.DB.prepare(
-        `SELECT resource.*, users.identifier AS author FROM ${targetTable} AS resource JOIN users ON users.id = resource.author_id WHERE resource.id = ?`
+        `SELECT resource.*, users.identifier AS author${assignmentsSelect(targetTable, "resource")} FROM ${targetTable} AS resource JOIN users ON users.id = resource.author_id WHERE resource.id = ?`
+      )
+        .bind(current.id)
+        .first<Record<string, unknown>>();
+      return json({ data: updated ? presentForgeRow(resource, updated) : null });
+    }
+    if (
+      (targetTable === "forge_issues" || targetTable === "forge_pull_requests") &&
+      action === "assignees" &&
+      request.method === "PUT"
+    ) {
+      const denied = requireMember();
+      if (denied) return denied;
+      const parsed = SetAssignmentsInputSchema.safeParse(await parseJson(request));
+      if (!parsed.success) return error(400, "bad_request", "Invalid assignment payload.");
+      const failure = await replaceAssignments(
+        env,
+        repository,
+        user,
+        { kind: targetTable === "forge_issues" ? "issue" : "pull_request", id: String(current.id) },
+        parsed.data
+      );
+      if (failure) return failure;
+      const updated = await env.DB.prepare(
+        `SELECT resource.*, users.identifier AS author${assignmentsSelect(targetTable, "resource")} FROM ${targetTable} AS resource JOIN users ON users.id = resource.author_id WHERE resource.id = ?`
       )
         .bind(current.id)
         .first<Record<string, unknown>>();
@@ -1084,7 +1081,7 @@ async function featureRequest(
       if (!parsed.success) return error(400, "bad_request", "Invalid merge payload.");
       if (current.state === "merged" && current.merged_oid) {
         const merged = await env.DB.prepare(
-          "SELECT pull.*, users.identifier AS author FROM forge_pull_requests AS pull JOIN users ON users.id = pull.author_id WHERE pull.id = ?"
+          `SELECT pull.*, users.identifier AS author${assignmentsSelect("forge_pull_requests", "pull")} FROM forge_pull_requests AS pull JOIN users ON users.id = pull.author_id WHERE pull.id = ?`
         )
           .bind(current.id)
           .first<Record<string, unknown>>();
@@ -1206,20 +1203,32 @@ async function featureRequest(
         );
       }
       const now = Date.now();
-      await env.DB.prepare(
-        "UPDATE forge_pull_requests SET state = 'merged', merged_oid = ?, updated_at = ?, merge_started_at = NULL WHERE id = ? AND state = 'open' AND merge_started_at = ? AND merge_base_oid = ? AND merge_head_oid = ?"
-      )
-        .bind(
+      // Task binding and the progress entry share the batch with the merge record.
+      await env.DB.batch([
+        env.DB.prepare(
+          "UPDATE forge_pull_requests SET state = 'merged', merged_oid = ?, updated_at = ?, merge_started_at = NULL WHERE id = ? AND state = 'open' AND merge_started_at = ? AND merge_base_oid = ? AND merge_head_oid = ?"
+        ).bind(
           oid,
           now,
           current.id,
           leaseAt,
           parsed.data.expectedBaseOid,
           parsed.data.expectedHeadOid
-        )
-        .run();
+        ),
+        ...mergeBindingStatements(env, {
+          repositoryId: repository.id,
+          pullRequestId: String(current.id),
+          number,
+          oid,
+          baseRef: String(current.base_ref),
+          summary: String(current.title),
+          author: user.identifier,
+          actor,
+          now,
+        }),
+      ]);
       const merged = await env.DB.prepare(
-        "SELECT pull.*, users.identifier AS author FROM forge_pull_requests AS pull JOIN users ON users.id = pull.author_id WHERE pull.id = ?"
+        `SELECT pull.*, users.identifier AS author${assignmentsSelect("forge_pull_requests", "pull")} FROM forge_pull_requests AS pull JOIN users ON users.id = pull.author_id WHERE pull.id = ?`
       )
         .bind(current.id)
         .first<Record<string, unknown>>();
@@ -1657,6 +1666,20 @@ export default {
         .bind(repositoryId)
         .all();
       return json({ data: rows.results });
+    }
+    if (["memory", "tasks", "settings", "assignee-candidates"].includes(parts[2] ?? "")) {
+      const viewer: Viewer = {
+        user,
+        member: await isMember(env, repositoryId, user.id),
+        writeAllowed: canWriteSession(user, repositoryId),
+        isOwner: async () => {
+          if (user.agentSession) return false;
+          const namespace = await namespaceForUser(env, user.id, repository.owner);
+          return namespace !== null && canCreateRepository(namespace, user.id);
+        },
+      };
+      const memory = await memoryTaskRequest(env, request, repository, viewer, parts.slice(2));
+      if (memory) return memory;
     }
     const feature = await featureRequest(env, user, repository, parts, request);
     if (feature) return feature;

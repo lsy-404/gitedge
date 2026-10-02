@@ -6,7 +6,7 @@ import { resolveGitAccess, resolveWorkspace } from "../../workers/git/src/access
 import forge from "../../workers/forge/src/index";
 import { FixtureArtifacts } from "../support/artifacts";
 
-const migrations = import.meta.glob<string>("../../migrations/000*.sql", {
+const migrations = import.meta.glob<string>("../../migrations/*.sql", {
   query: "?raw",
   import: "default",
   eager: true,

@@ -1,4 +1,5 @@
 import { createLogger } from "../../../src/worker/common/logger";
+import { GitOidSchema } from "../../../packages/contracts/src/index";
 import { listRepositorySessions, resolveGitAccess, resolveWorkspace, type GitEnv } from "./access";
 import {
   artifactGraph,
@@ -94,6 +95,14 @@ export async function handleGitApi(request: Request, env: GitEnv): Promise<Respo
   if (request.method !== "GET" && request.method !== "HEAD")
     return fail(405, "method_not_allowed", "Method is not allowed.");
   if (resource === "refs") return json(await listArtifactRefs(repo, env.LOG_LEVEL));
+  if (resource === "commit") {
+    const oid = url.searchParams.get("oid") ?? "";
+    if (!GitOidSchema.safeParse(oid).success)
+      return fail(400, "bad_request", "Invalid commit oid.");
+    const commit = await repo.readCommit(oid);
+    logger.debug("artifacts:commit-lookup", { oid, found: commit !== null });
+    return commit ? json(commitResponse(commit)) : fail(404, "not_found", "Commit was not found.");
+  }
   if (resource === "commits")
     return json(
       (

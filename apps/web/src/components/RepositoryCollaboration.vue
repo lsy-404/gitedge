@@ -70,7 +70,7 @@ const error = ref("");
 const notFound = ref(false);
 const showForm = ref(false);
 const editMode = ref(false);
-const editDraft = ref({ title: "", body: "", labels: "", assignees: "", draft: false });
+const editDraft = ref({ title: "", body: "", labels: "", draft: false });
 const saving = ref(false);
 const formError = ref("");
 const form = ref<{
@@ -79,7 +79,6 @@ const form = ref<{
   headRef: string;
   baseRef: string;
   labels: string;
-  assignees: string;
   category: Discussion["category"];
   slug: string;
   headSessionId: string;
@@ -89,7 +88,6 @@ const form = ref<{
   headRef: "",
   baseRef: props.repository.defaultBranch,
   labels: "",
-  assignees: "",
   category: "general",
   slug: "",
   headSessionId: "",
@@ -180,7 +178,6 @@ async function load() {
           title: detail.title,
           body: detail.body,
           labels: detail.labels.join(", "),
-          assignees: detail.assignees.join(", "),
           draft: false,
         };
         comments.value = rows;
@@ -200,7 +197,6 @@ async function load() {
           title: detail.title,
           body: detail.body,
           labels: "",
-          assignees: "",
           draft: detail.draft,
         };
         comments.value = rows;
@@ -230,7 +226,6 @@ async function load() {
           title: detail.title,
           body: detail.body,
           labels: "",
-          assignees: "",
           draft: false,
         };
         comments.value = rows;
@@ -265,7 +260,6 @@ function resetForm() {
     headRef: "",
     baseRef: props.repository.defaultBranch,
     labels: "",
-    assignees: "",
     category: "general",
     slug: "",
     headSessionId: "",
@@ -280,10 +274,6 @@ async function submitCreate() {
         title: form.value.title,
         body: form.value.body,
         labels: form.value.labels
-          .split(",")
-          .map((x) => x.trim())
-          .filter(Boolean),
-        assignees: form.value.assignees
           .split(",")
           .map((x) => x.trim())
           .filter(Boolean),
@@ -331,10 +321,6 @@ async function saveItem() {
         title: editDraft.value.title,
         body: editDraft.value.body,
         labels: editDraft.value.labels
-          .split(",")
-          .map((value) => value.trim())
-          .filter(Boolean),
-        assignees: editDraft.value.assignees
           .split(",")
           .map((value) => value.trim())
           .filter(Boolean),
@@ -549,9 +535,6 @@ watch(
           <TextField v-model="form.labels" :placeholder="t('commaSeparated')">{{
             t("labels")
           }}</TextField>
-          <TextField v-model="form.assignees" :placeholder="t('commaSeparated')">{{
-            t("assignees")
-          }}</TextField>
         </template>
         <template v-if="section === 'pulls'">
           <TextField v-model="form.headRef" required>{{ t("headBranch") }}</TextField>
@@ -697,9 +680,6 @@ watch(
             <TextField v-model="editDraft.labels" :placeholder="t('commaSeparated')">{{
               t("labels")
             }}</TextField>
-            <TextField v-model="editDraft.assignees" :placeholder="t('commaSeparated')">{{
-              t("assignees")
-            }}</TextField>
           </template>
           <fluent-field v-if="section === 'pulls'" label-position="after">
             <label slot="label" for="edit-draft">{{ t("draftPull") }}</label>
@@ -719,8 +699,8 @@ watch(
         <pre v-else class="body-content">{{ "content" in item ? item.content : item.body }}</pre>
         <div v-if="'labels' in item" class="metadata-row">
           <StatusBadge v-for="label in item.labels" :key="label">{{ label }}</StatusBadge
-          ><StatusBadge v-for="assignee in item.assignees" :key="assignee"
-            >{{ t("assignee") }}: {{ assignee }}</StatusBadge
+          ><StatusBadge v-for="assignee in item.assignees" :key="`${assignee.kind}:${assignee.id}`"
+            >{{ t("assignee") }}: {{ assignee.name }}</StatusBadge
           >
         </div>
         <div v-if="'headRef' in item" class="pull-meta">

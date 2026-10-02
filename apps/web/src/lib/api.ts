@@ -230,7 +230,7 @@ export const api = {
     request<Issue>(repositoryPath(repositoryId, `issues/${number}`)),
   createIssue: (
     repositoryId: string,
-    payload: { title: string; body: string; labels?: string[]; assignees?: string[] }
+    payload: { title: string; body: string; labels?: string[] }
   ) =>
     request<Issue>(repositoryPath(repositoryId, "issues"), {
       method: "POST",
@@ -239,7 +239,7 @@ export const api = {
   updateIssue: (
     repositoryId: string,
     number: number,
-    payload: Partial<Pick<Issue, "title" | "body" | "state" | "labels" | "assignees">>
+    payload: Partial<Pick<Issue, "title" | "body" | "state" | "labels">>
   ) =>
     request<Issue>(repositoryPath(repositoryId, `issues/${number}`), {
       method: "PATCH",

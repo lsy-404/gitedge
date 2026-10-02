@@ -189,8 +189,8 @@ export class FixtureArtifacts implements Artifacts {
       async readTree() {
         return [];
       },
-      async readCommit() {
-        return null;
+      async readCommit(oid) {
+        return repository.commits.find((commit) => commit.hash === oid) ?? null;
       },
       async readFile() {
         return null;

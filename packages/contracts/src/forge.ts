@@ -7,6 +7,8 @@ export const ActorSchema = z.object({
   sessionId: z.string().optional(),
 });
 export type Actor = z.infer<typeof ActorSchema>;
+/** A human user or an agent assigned to an issue, pull request or task. */
+export type Assignee = Omit<Actor, "sessionId">;
 
 export const AgentSessionIdentitySchema = z.object({
   id: z.string().min(1),
@@ -43,7 +45,8 @@ export interface Issue {
   author: string;
   actor: Actor;
   labels: string[];
-  assignees: string[];
+  assignees: Assignee[];
+  reviewers: Assignee[];
   createdAt: number;
   updatedAt: number;
 }
@@ -61,6 +64,8 @@ export interface PullRequest {
   headSessionId: string | null;
   draft: boolean;
   mergedOid: string | null;
+  assignees: Assignee[];
+  reviewers: Assignee[];
   createdAt: number;
   updatedAt: number;
 }

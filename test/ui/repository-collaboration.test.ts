@@ -48,7 +48,8 @@ function issue(overrides: Partial<Issue> = {}): Issue {
     author: "example-user",
     actor: human,
     labels: ["bug"],
-    assignees: ["example-user"],
+    assignees: [{ kind: "user", id: "u-1", name: "example-user" }],
+    reviewers: [],
     createdAt: 10,
     updatedAt: 11,
     ...overrides,
@@ -69,6 +70,8 @@ function pull(overrides: Partial<PullRequest> = {}): PullRequest {
     headSessionId: null,
     draft: false,
     mergedOid: null,
+    assignees: [],
+    reviewers: [],
     createdAt: 10,
     updatedAt: 11,
     ...overrides,
@@ -214,7 +217,7 @@ afterEach(async () => {
 });
 
 describe("RepositoryCollaboration rendered workflows", () => {
-  it("creates an issue with labels and assignees, edits it, comments, and closes it", async () => {
+  it("creates an issue with labels, edits it, comments, and closes it", async () => {
     const initial = issue();
     let latest = initial;
     let comments: Comment[] = [];
@@ -226,7 +229,6 @@ describe("RepositoryCollaboration rendered workflows", () => {
         title: payload.title,
         body: payload.body,
         labels: payload.labels ?? [],
-        assignees: payload.assignees ?? [],
       });
       return latest;
     });
@@ -255,7 +257,6 @@ describe("RepositoryCollaboration rendered workflows", () => {
     fill(createInputs[0], "Parser regression");
     fill(control(createForm, "fluent-textarea"), "Steps to reproduce");
     fill(createInputs[1], "bug, regression");
-    fill(createInputs[2], "alice, bob");
     submit(createForm);
     await settle();
 
@@ -263,7 +264,6 @@ describe("RepositoryCollaboration rendered workflows", () => {
       title: "Parser regression",
       body: "Steps to reproduce",
       labels: ["bug", "regression"],
-      assignees: ["alice", "bob"],
     });
     expect(mounted.root.querySelector(".detail-card h2")?.textContent).toContain(
       "Parser regression"
@@ -277,14 +277,12 @@ describe("RepositoryCollaboration rendered workflows", () => {
     fill(control(editForm, "fluent-text-input"), "Parser regression fixed");
     fill(control(editForm, "fluent-textarea"), "Updated reproduction details");
     fill(editForm.querySelectorAll<HTMLElement>("fluent-text-input")[1], "bug, fixed");
-    fill(editForm.querySelectorAll<HTMLElement>("fluent-text-input")[2], "alice");
     submit(editForm);
     await settle();
     expect(updateIssueSpy).toHaveBeenCalledWith("repo-1", 7, {
       title: "Parser regression fixed",
       body: "Updated reproduction details",
       labels: ["bug", "fixed"],
-      assignees: ["alice"],
     });
     expect(mounted.root.querySelector(".detail-card h2")?.textContent).toContain(
       "Parser regression fixed"

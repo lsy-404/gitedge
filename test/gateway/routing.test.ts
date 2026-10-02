@@ -92,6 +92,35 @@ describe("Gateway routing", () => {
     expect(writeResponse.status).toBe(401);
   });
 
+  it("forwards task and memory paths to Forge and keeps their writes authenticated", async () => {
+    const paths: string[] = [];
+    const forge = service((request) => {
+      paths.push(new URL(request.url).pathname);
+      return new Response("forge");
+    });
+    for (const path of ["tasks", "tasks/3/documents/plan", "memory", "settings"]) {
+      const response = await handleGatewayRequest(
+        new Request(`https://gitedge.example.com/api/forge/repositories/r1/${path}`),
+        environment({ forge })
+      );
+      expect(response.status).toBe(200);
+    }
+    expect(paths).toEqual([
+      "/repositories/r1/tasks",
+      "/repositories/r1/tasks/3/documents/plan",
+      "/repositories/r1/memory",
+      "/repositories/r1/settings",
+    ]);
+    const write = await handleGatewayRequest(
+      new Request("https://gitedge.example.com/api/forge/repositories/r1/tasks", {
+        method: "POST",
+      }),
+      environment({ forge })
+    );
+    expect(write.status).toBe(401);
+    expect(paths).toHaveLength(4);
+  });
+
   it("strips spoofed identity headers and injects Auth identity", async () => {
     let received: Request | undefined;
     const response = await handleGatewayRequest(
