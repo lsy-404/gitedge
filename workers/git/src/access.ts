@@ -19,6 +19,7 @@ export interface GitRepositoryRow {
   owner: string;
   slug: string;
   canWrite: number;
+  archived: number;
 }
 export interface GitRepositoryAccess {
   repository: GitRepositoryRow;
@@ -33,7 +34,7 @@ export async function resolveGitAccess(
   const user = readTrustedUser(request);
   if (user?.agentSession && user.agentSession.repositoryId !== repositoryId) return null;
   const repository = await env.DB.prepare(
-    "SELECT r.id, r.namespace_id AS namespaceId, r.artifact_name AS artifactName, r.remote, r.default_branch AS defaultBranch, r.visibility, n.slug AS owner, r.slug, EXISTS (SELECT 1 FROM namespace_memberships m WHERE m.namespace_id = r.namespace_id AND m.user_id = ?) AS canWrite FROM repositories r JOIN namespaces n ON n.id = r.namespace_id WHERE r.id = ?"
+    "SELECT r.id, r.namespace_id AS namespaceId, r.artifact_name AS artifactName, r.remote, r.default_branch AS defaultBranch, r.visibility, n.slug AS owner, r.slug, r.archived, EXISTS (SELECT 1 FROM namespace_memberships m WHERE m.namespace_id = r.namespace_id AND m.user_id = ?) AS canWrite FROM repositories r JOIN namespaces n ON n.id = r.namespace_id WHERE r.id = ?"
   )
     .bind(user?.id ?? "", repositoryId)
     .first<GitRepositoryRow>();

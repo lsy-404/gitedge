@@ -11,7 +11,7 @@ const migrations = import.meta.glob<string>("../../migrations/*.sql", {
   eager: true,
 });
 
-const MIGRATION_UNDER_TEST = "0010_agent_tasks.sql";
+const MIGRATIONS_UNDER_TEST = ["0010_agent_tasks.sql", "0012_repository_settings.sql"];
 const MERGE_OID = "c".repeat(40);
 const BASE_OID = "a".repeat(40);
 
@@ -23,6 +23,8 @@ const forgeEnv: Parameters<typeof forge.fetch>[1] = {
   ARTIFACTS: artifacts,
   GIT: {
     async fetch(request: Request) {
+      if (request.method === "GET" && new URL(request.url).pathname.endsWith("/refs"))
+        return Response.json({ data: [{ name: "refs/heads/main", oid: BASE_OID }] });
       if (request.method === "GET") return git.fetch(request, forgeEnv);
       return Response.json({ data: { oid: MERGE_OID } });
     },
@@ -102,7 +104,9 @@ async function createPull(title: string): Promise<number> {
 
 beforeAll(async () => {
   const names = Object.keys(migrations).sort();
-  const base = names.filter((path) => !path.endsWith(MIGRATION_UNDER_TEST));
+  const base = names.filter(
+    (path) => !MIGRATIONS_UNDER_TEST.some((migration) => path.endsWith(migration))
+  );
   for (const path of base) await runSqlScript(env.DB, migrations[path]);
   await runSqlScript(
     env.DB,
@@ -116,10 +120,9 @@ INSERT INTO auth_agents (id,user_id,name,description,created_at,disabled_at) VAL
 INSERT INTO auth_git_tokens (id,user_id,repository_id,name,token_hash,permission,expires_at,created_at) VALUES ('gt1','u2','r1','t1','h1','write',9999999999999,1), ('gt2','u2','r1','t2','h2','read',9999999999999,1);
 INSERT INTO auth_agent_sessions (id,agent_id,user_id,repository_id,token_hash,git_token_id,workspace_name,remote,base_ref,base_oid,permission,status,created_at,expires_at) VALUES ('s1','a1','u2','r1','sh1','gt1','workspace-s1','artifact://repo-r1','main',NULL,'write','active',1,9999999999999), ('s2','a1','u2','r1','sh2','gt2','workspace-s2','artifact://repo-r1','main',NULL,'read','active',1,9999999999999);`
   );
-  await runSqlScript(
-    env.DB,
-    migrations[names.find((path) => path.endsWith(MIGRATION_UNDER_TEST))!]
-  );
+  for (const migration of MIGRATIONS_UNDER_TEST) {
+    await runSqlScript(env.DB, migrations[names.find((path) => path.endsWith(migration))!]);
+  }
   for (const [id, repositoryId] of [
     ["repo-r1", "r1"],
     ["repo-r2", "r2"],
@@ -201,6 +204,18 @@ describe("Memory visibility and repository settings", () => {
       (await call("/repositories/r1/settings", "PATCH", bob, { memoryVisibility: "public" })).status
     ).toBe(403);
     expect(await data(await call("/repositories/r1/settings", "GET", bob))).toEqual({
+      name: "demo",
+      slug: "demo",
+      description: "",
+      visibility: "public",
+      defaultBranch: "main",
+      archived: false,
+      issuesEnabled: true,
+      pullsEnabled: true,
+      discussionsEnabled: true,
+      wikiEnabled: true,
+      requiredApprovals: 0,
+      requirePassingChecks: false,
       memoryVisibility: "members",
       agentAssignmentPolicy: "owner",
       canManage: false,
@@ -253,6 +268,105 @@ describe("Memory visibility and repository settings", () => {
         .status
     ).toBe(400);
     expect((await call("/repositories/r1/settings", "PATCH", alice, {})).status).toBe(400);
+  });
+
+  it("updates canonical identity and settings, verifies branches, and atomically restricts private memory", async () => {
+    expect(
+      (await call("/repositories/r1/settings", "PATCH", alice, { defaultBranch: "missing" })).status
+    ).toBe(400);
+    expect(
+      (await call("/repositories/r1/settings", "PATCH", alice, { slug: "secret" })).status
+    ).toBe(409);
+    const updated = await call("/repositories/r1/settings", "PATCH", alice, {
+      name: "renamed",
+      description: "Repository settings",
+      visibility: "private",
+      memoryVisibility: "public",
+      defaultBranch: "main",
+      requiredApprovals: 3,
+      requirePassingChecks: true,
+    });
+    expect(updated.status).toBe(200);
+    expect(await data(updated)).toMatchObject({
+      name: "renamed",
+      slug: "renamed",
+      description: "Repository settings",
+      visibility: "private",
+      defaultBranch: "main",
+      memoryVisibility: "members",
+      requiredApprovals: 3,
+      requirePassingChecks: true,
+    });
+    expect((await call("/repositories/by-name/alice/renamed", "GET", alice)).status).toBe(200);
+    expect((await call("/repositories/by-name/alice/demo", "GET", alice)).status).toBe(404);
+    expect((await call("/repositories/r1/tasks", "GET", null)).status).toBe(404);
+    await call("/repositories/r1/settings", "PATCH", alice, {
+      name: "demo",
+      visibility: "public",
+      requiredApprovals: 0,
+      requirePassingChecks: false,
+    });
+  });
+
+  it("disables collaboration routes without deleting their stored records and archives writes", async () => {
+    const existingIssue = await createIssue("Keep while disabled");
+    const existingPull = await createPull("Keep merge read-only");
+    try {
+      const disabled = await call("/repositories/r1/settings", "PATCH", alice, {
+        issuesEnabled: false,
+        wikiEnabled: false,
+      });
+      expect(disabled.status).toBe(200);
+      const issueRoute = await call("/repositories/r1/issues", "GET", alice);
+      expect(issueRoute.status).toBe(404);
+      expect(((await issueRoute.json()) as { error: { code: string } }).error.code).toBe(
+        "feature_disabled"
+      );
+      expect((await call("/repositories/r1/wiki", "GET", alice)).status).toBe(404);
+      await call("/repositories/r1/settings", "PATCH", alice, {
+        issuesEnabled: true,
+        wikiEnabled: true,
+        archived: true,
+      });
+      expect(
+        (await call("/repositories/r1/issues", "POST", alice, { title: "Blocked" })).status
+      ).toBe(409);
+      expect(
+        (
+          await call(`/repositories/r1/pull-requests/${existingPull}/merge`, "POST", alice, {
+            expectedBaseOid: BASE_OID,
+            expectedHeadOid: MERGE_OID,
+          })
+        ).status
+      ).toBe(409);
+      const pushHeaders = headers("u1", "alice");
+      pushHeaders.set(
+        "X-GitEdge-Git-Grant",
+        JSON.stringify({ repositoryId: "r1", permission: "write" })
+      );
+      const push = await git.fetch(
+        new Request("https://git.test/alice/demo.git/git-receive-pack", {
+          method: "POST",
+          headers: pushHeaders,
+        }),
+        forgeEnv
+      );
+      expect(push.status).toBe(409);
+      expect((await call(`/repositories/r1/issues/${existingIssue}`, "GET", alice)).status).toBe(
+        200
+      );
+      expect((await call("/repositories/r1/settings", "GET", alice)).status).toBe(200);
+      await call("/repositories/r1/settings", "PATCH", alice, { archived: false });
+      expect((await call(`/repositories/r1/issues/${existingIssue}`, "GET", alice)).status).toBe(
+        200
+      );
+    } finally {
+      await call("/repositories/r1/settings", "PATCH", alice, {
+        issuesEnabled: true,
+        wikiEnabled: true,
+        archived: false,
+      });
+    }
   });
 });
 
@@ -883,6 +997,58 @@ describe("Assignments", () => {
     expect(
       (await call(`/repositories/r1/pull-requests/${pull}/merge`, "POST", alice, mergeBody)).status
     ).toBe(409);
+  });
+
+  it("requires current-OID human approvals and a passing current-OID check when configured", async () => {
+    const pull = await createPull("Configured merge gates");
+    const head = "6".repeat(40);
+    const otherHead = "7".repeat(40);
+    const merge = () =>
+      call(`/repositories/r1/pull-requests/${pull}/merge`, "POST", alice, {
+        expectedBaseOid: "4".repeat(40),
+        expectedHeadOid: head,
+      });
+    await call("/repositories/r1/settings", "PATCH", alice, {
+      requiredApprovals: 1,
+      requirePassingChecks: true,
+    });
+    try {
+      await call(`/repositories/r1/pull-requests/${pull}/reviews`, "POST", bob, {
+        state: "approved",
+        commitOid: otherHead,
+      });
+      expect((await merge()).status).toBe(409);
+      await call(`/repositories/r1/pull-requests/${pull}/reviews`, "POST", bob, {
+        state: "approved",
+        commitOid: head,
+      });
+      await call(`/repositories/r1/pull-requests/${pull}/checks`, "POST", bob, {
+        name: "old commit success",
+        commitOid: otherHead,
+        status: "completed",
+        conclusion: "success",
+      });
+      expect((await merge()).status).toBe(409);
+      await call(`/repositories/r1/pull-requests/${pull}/checks`, "POST", bob, {
+        name: "current commit",
+        commitOid: head,
+        status: "completed",
+        conclusion: "failure",
+      });
+      expect((await merge()).status).toBe(409);
+      await call(`/repositories/r1/pull-requests/${pull}/checks`, "POST", bob, {
+        name: "current commit",
+        commitOid: head,
+        status: "completed",
+        conclusion: "success",
+      });
+      expect((await merge()).status).toBe(200);
+    } finally {
+      await call("/repositories/r1/settings", "PATCH", alice, {
+        requiredApprovals: 0,
+        requirePassingChecks: false,
+      });
+    }
   });
 
   it("serves tasks anonymously only when memory visibility is public", async () => {

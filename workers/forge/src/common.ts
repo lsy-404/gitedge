@@ -17,6 +17,13 @@ export type RepositoryRow = {
   artifact_name?: string | null;
   remote?: string | null;
   default_branch?: string;
+  archived?: number;
+  issues_enabled?: number;
+  pulls_enabled?: number;
+  discussions_enabled?: number;
+  wiki_enabled?: number;
+  required_approvals?: number;
+  require_passing_checks?: number;
   created_at: number;
   updated_at: number;
 };

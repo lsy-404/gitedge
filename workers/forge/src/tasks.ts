@@ -217,11 +217,37 @@ async function repositorySettings(
   repositoryId: string
 ): Promise<Omit<RepositorySettings, "canManage">> {
   const row = await env.DB.prepare(
-    "SELECT memory_visibility, agent_assignment_policy FROM repositories WHERE id = ?"
+    "SELECT slug, description, visibility, default_branch, archived, issues_enabled, pulls_enabled, discussions_enabled, wiki_enabled, required_approvals, require_passing_checks, memory_visibility, agent_assignment_policy FROM repositories WHERE id = ?"
   )
     .bind(repositoryId)
-    .first<{ memory_visibility: string; agent_assignment_policy: string }>();
+    .first<{
+      slug: string;
+      description: string;
+      visibility: "public" | "private";
+      default_branch: string;
+      archived: number;
+      issues_enabled: number;
+      pulls_enabled: number;
+      discussions_enabled: number;
+      wiki_enabled: number;
+      required_approvals: number;
+      require_passing_checks: number;
+      memory_visibility: string;
+      agent_assignment_policy: string;
+    }>();
   return {
+    name: row?.slug ?? "",
+    slug: row?.slug ?? "",
+    description: row?.description ?? "",
+    visibility: row?.visibility ?? "private",
+    defaultBranch: row?.default_branch ?? "main",
+    archived: row?.archived === 1,
+    issuesEnabled: row?.issues_enabled !== 0,
+    pullsEnabled: row?.pulls_enabled !== 0,
+    discussionsEnabled: row?.discussions_enabled !== 0,
+    wikiEnabled: row?.wiki_enabled !== 0,
+    requiredApprovals: row?.required_approvals ?? 0,
+    requirePassingChecks: row?.require_passing_checks === 1,
     memoryVisibility: MemoryVisibilitySchema.catch("members").parse(row?.memory_visibility),
     agentAssignmentPolicy: AgentAssignmentPolicySchema.catch("owner").parse(
       row?.agent_assignment_policy
@@ -1021,34 +1047,129 @@ async function settingsRequest(
     return error(403, "forbidden", "Repository owner access is required to change settings.");
   const parsed = UpdateRepositorySettingsInputSchema.safeParse(await parseJson(request));
   if (!parsed.success) return error(400, "bad_request", "Invalid repository settings.");
-  const visibility = parsed.data.memoryVisibility ?? null;
-  const changed = await env.DB.prepare(
-    "UPDATE repositories SET memory_visibility = COALESCE(?, memory_visibility), agent_assignment_policy = COALESCE(?, agent_assignment_policy) WHERE id = ? AND (? IS NULL OR ? = 'members' OR visibility = 'public')"
-  )
-    .bind(
-      visibility,
-      parsed.data.agentAssignmentPolicy ?? null,
-      repository.id,
-      visibility,
-      visibility
+  const input = parsed.data;
+  const slug = input.name ?? input.slug;
+  if (slug && slug !== repository.slug) {
+    const collision = await env.DB.prepare(
+      "SELECT 1 AS found FROM repositories WHERE namespace_id = ? AND slug = ? AND id != ?"
     )
-    .run();
-  if (changed.meta.changes !== 1) {
-    logger.warn("forge:settings-rejected", { repositoryId: repository.id });
-    return error(
-      400,
-      "bad_request",
-      "Only public repositories can expose tasks and memory publicly."
+      .bind(repository.namespace_id, slug, repository.id)
+      .first<{ found: number }>();
+    if (collision) return error(409, "conflict", "Repository slug already exists.");
+  }
+  if (input.defaultBranch) {
+    const gitUrl = new URL(`/repositories/${repository.id}/refs`, request.url);
+    const response = await env.GIT.fetch(
+      new Request(gitUrl, { headers: trustedHeaders(viewer.user) })
     );
+    const branchFound = await repositoryBranchExists(response, input.defaultBranch);
+    if (branchFound === null)
+      return error(
+        503,
+        "internal_error",
+        "Repository refs are unavailable or exceed the response limit."
+      );
+    if (!branchFound)
+      return error(400, "bad_request", "Default branch must name an existing repository branch.");
+  }
+  const visibility = input.visibility ?? null;
+  const memoryVisibility = visibility === "private" ? "members" : (input.memoryVisibility ?? null);
+  try {
+    const changed = await env.DB.prepare(
+      "UPDATE repositories SET slug = COALESCE(?, slug), description = COALESCE(?, description), visibility = COALESCE(?, visibility), default_branch = COALESCE(?, default_branch), archived = COALESCE(?, archived), issues_enabled = COALESCE(?, issues_enabled), pulls_enabled = COALESCE(?, pulls_enabled), discussions_enabled = COALESCE(?, discussions_enabled), wiki_enabled = COALESCE(?, wiki_enabled), required_approvals = COALESCE(?, required_approvals), require_passing_checks = COALESCE(?, require_passing_checks), memory_visibility = COALESCE(?, memory_visibility), agent_assignment_policy = COALESCE(?, agent_assignment_policy), updated_at = ? WHERE id = ? AND (? IS NULL OR ? = 'members' OR COALESCE(?, visibility) = 'public')"
+    )
+      .bind(
+        slug ?? null,
+        input.description ?? null,
+        visibility,
+        input.defaultBranch ?? null,
+        input.archived === undefined ? null : input.archived ? 1 : 0,
+        input.issuesEnabled === undefined ? null : input.issuesEnabled ? 1 : 0,
+        input.pullsEnabled === undefined ? null : input.pullsEnabled ? 1 : 0,
+        input.discussionsEnabled === undefined ? null : input.discussionsEnabled ? 1 : 0,
+        input.wikiEnabled === undefined ? null : input.wikiEnabled ? 1 : 0,
+        input.requiredApprovals ?? null,
+        input.requirePassingChecks === undefined ? null : input.requirePassingChecks ? 1 : 0,
+        memoryVisibility,
+        input.agentAssignmentPolicy ?? null,
+        Date.now(),
+        repository.id,
+        memoryVisibility,
+        memoryVisibility,
+        visibility
+      )
+      .run();
+    if (changed.meta.changes !== 1)
+      return error(
+        400,
+        "bad_request",
+        "Only public repositories can expose tasks and memory publicly."
+      );
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : "unknown";
+    if (
+      !detail.includes("UNIQUE constraint failed: repositories.namespace_id, repositories.slug")
+    ) {
+      logger.error("forge:settings-update-failed", { repositoryId: repository.id, error: detail });
+      return error(500, "internal_error", "Repository settings could not be updated.");
+    }
+    logger.warn("forge:settings-conflict", { repositoryId: repository.id });
+    return error(409, "conflict", "Repository slug already exists.");
   }
   logger.info("forge:settings-updated", {
     repositoryId: repository.id,
-    memoryVisibility: parsed.data.memoryVisibility,
-    agentAssignmentPolicy: parsed.data.agentAssignmentPolicy,
+    slug,
+    visibility,
+    archived: input.archived,
   });
   return json({
     data: { ...(await repositorySettings(env, repository.id)), canManage: true },
   });
+}
+
+async function repositoryBranchExists(response: Response, branch: string): Promise<boolean | null> {
+  if (!response.ok || !response.body) return null;
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > 1_000_000) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return null;
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return null;
+  }
+  if (
+    !payload ||
+    typeof payload !== "object" ||
+    !("data" in payload) ||
+    !Array.isArray(payload.data)
+  )
+    return null;
+  return payload.data.some(
+    (ref) => ref && typeof ref === "object" && "name" in ref && ref.name === `refs/heads/${branch}`
+  );
 }
 
 /**
@@ -1065,6 +1186,8 @@ export async function memoryTaskRequest(
   const resource = rest[0];
   if (resource === "settings" && rest.length === 1)
     return settingsRequest(env, request, repository, viewer);
+  if (resource && request.method !== "GET" && repository.archived === 1)
+    return error(409, "repository_archived", "Archived repositories are read-only.");
   if (resource === "assignee-candidates" && rest.length === 1 && request.method === "GET") {
     if (!viewer.user || !viewer.member)
       return error(403, "forbidden", "Repository membership is required.");

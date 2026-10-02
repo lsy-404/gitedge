@@ -31,6 +31,13 @@ export interface Repository {
   description: string;
   visibility: "public" | "private";
   defaultBranch: string;
+  archived: boolean;
+  issuesEnabled: boolean;
+  pullsEnabled: boolean;
+  discussionsEnabled: boolean;
+  wikiEnabled: boolean;
+  requiredApprovals: number;
+  requirePassingChecks: boolean;
   createdAt: number;
   updatedAt: number;
   canWrite: boolean;

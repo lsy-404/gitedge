@@ -23,6 +23,8 @@ export async function proxyGitTransport(request: Request, env: GitEnv): Promise<
   if (!access) return fail(404, "not_found", "Repository was not found.");
   const write =
     match[3] === "git-receive-pack" || url.searchParams.get("service") === "git-receive-pack";
+  if (write && access.repository.archived === 1)
+    return fail(409, "repository_archived", "Archived repositories are read-only.");
   if (match[3] === "info/refs" ? request.method !== "GET" : request.method !== "POST")
     return fail(405, "method_not_allowed", "Invalid Git method.");
   if (

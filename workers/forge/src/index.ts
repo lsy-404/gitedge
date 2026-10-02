@@ -92,7 +92,7 @@ function actorKey(actor: Actor): string {
 
 async function repositoryById(env: ForgeEnv, repositoryId: string): Promise<RepositoryRow | null> {
   return env.DB.prepare(
-    "SELECT repositories.id, repositories.namespace_id, namespaces.slug AS owner, repositories.slug, repositories.visibility, repositories.description, repositories.created_at, repositories.updated_at, repositories.artifact_name, repositories.remote, repositories.default_branch FROM repositories JOIN namespaces ON namespaces.id = repositories.namespace_id WHERE repositories.id = ?"
+    "SELECT repositories.id, repositories.namespace_id, namespaces.slug AS owner, repositories.slug, repositories.visibility, repositories.description, repositories.created_at, repositories.updated_at, repositories.artifact_name, repositories.remote, repositories.default_branch, repositories.archived, repositories.issues_enabled, repositories.pulls_enabled, repositories.discussions_enabled, repositories.wiki_enabled, repositories.required_approvals, repositories.require_passing_checks FROM repositories JOIN namespaces ON namespaces.id = repositories.namespace_id WHERE repositories.id = ?"
   )
     .bind(repositoryId)
     .first<RepositoryRow>();
@@ -165,7 +165,7 @@ async function publicRepositoryForOwnerAndSlug(
   slug: string
 ): Promise<RepositoryRow | null> {
   return env.DB.prepare(
-    "SELECT repositories.id, repositories.namespace_id, namespaces.slug AS owner, repositories.slug, repositories.visibility, repositories.description, repositories.created_at, repositories.updated_at, repositories.artifact_name, repositories.remote, repositories.default_branch FROM repositories JOIN namespaces ON namespaces.id = repositories.namespace_id WHERE namespaces.slug = ? AND repositories.slug = ? AND repositories.visibility = 'public'"
+    "SELECT repositories.id, repositories.namespace_id, namespaces.slug AS owner, repositories.slug, repositories.visibility, repositories.description, repositories.created_at, repositories.updated_at, repositories.artifact_name, repositories.remote, repositories.default_branch, repositories.archived, repositories.issues_enabled, repositories.pulls_enabled, repositories.discussions_enabled, repositories.wiki_enabled, repositories.required_approvals, repositories.require_passing_checks FROM repositories JOIN namespaces ON namespaces.id = repositories.namespace_id WHERE namespaces.slug = ? AND repositories.slug = ? AND repositories.visibility = 'public'"
   )
     .bind(owner, slug)
     .first<RepositoryRow>();
@@ -183,6 +183,13 @@ function repoResponse(row: RepositoryRow, canWrite = false) {
     defaultBranch: row.default_branch ?? "main",
     visibility: row.visibility,
     description: row.description,
+    archived: row.archived === 1,
+    issuesEnabled: row.issues_enabled !== 0,
+    pullsEnabled: row.pulls_enabled !== 0,
+    discussionsEnabled: row.discussions_enabled !== 0,
+    wikiEnabled: row.wiki_enabled !== 0,
+    requiredApprovals: row.required_approvals ?? 0,
+    requirePassingChecks: row.require_passing_checks === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     canWrite,
@@ -346,6 +353,19 @@ async function publicRepositoryRead(
   if (parts.length === 4) return json({ data: repoResponse(repository) });
 
   const resource = parts[4];
+  const disabled =
+    resource === "issues" && repository.issues_enabled === 0
+      ? "issues"
+      : resource === "pull-requests" && repository.pulls_enabled === 0
+        ? "pull requests"
+        : resource === "discussions" && repository.discussions_enabled === 0
+          ? "discussions"
+          : resource === "wiki" && repository.wiki_enabled === 0
+            ? "wiki"
+            : null;
+  if (disabled) return error(404, "feature_disabled", `Repository ${disabled} are disabled.`);
+  if (repository.archived === 1 && request.method !== "GET")
+    return error(409, "repository_archived", "Archived repositories are read-only.");
   if (resource === "issues" && parts.length === 5) {
     const rows = await env.DB.prepare(
       `SELECT forge_issues.*, users.identifier AS author${assignmentsSelect("forge_issues", "forge_issues")} FROM forge_issues JOIN users ON users.id = forge_issues.author_id WHERE forge_issues.repository_id = ? ORDER BY forge_issues.number DESC`
@@ -506,6 +526,19 @@ async function featureRequest(
 ): Promise<Response | null> {
   const logger = createLogger(env.LOG_LEVEL, { service: "forge" });
   const [resource, item, action, subitem] = parts.slice(2);
+  const disabled =
+    resource === "issues" && repository.issues_enabled === 0
+      ? "issues"
+      : resource === "pull-requests" && repository.pulls_enabled === 0
+        ? "pull requests"
+        : resource === "discussions" && repository.discussions_enabled === 0
+          ? "discussions"
+          : resource === "wiki" && repository.wiki_enabled === 0
+            ? "wiki"
+            : null;
+  if (disabled) return error(404, "feature_disabled", `Repository ${disabled} are disabled.`);
+  if (repository.archived === 1 && request.method !== "GET")
+    return error(409, "repository_archived", "Archived repositories are read-only.");
   const actor = actorFor(user);
   const member = await isMember(env, repository.id, user.id);
   const writeAllowed = canWriteSession(user, repository.id);
@@ -1147,6 +1180,24 @@ async function featureRequest(
         });
         return error(409, "conflict", "The latest review for the current commit requests changes.");
       }
+      const approvals = latestReviews.filter(
+        (review) =>
+          review.state === "approved" &&
+          review.reviewer_is_member === 1 &&
+          parseActor(review.actor_json, review.author_id).kind === "user"
+      ).length;
+      const requiredApprovals = repository.required_approvals ?? 0;
+      if (approvals < requiredApprovals) {
+        await releaseLease();
+        logger.warn("forge:pull-request-merge-blocked-approvals", {
+          repositoryId: repository.id,
+          pullRequestNumber: number,
+          commitOid: parsed.data.expectedHeadOid,
+          approvals,
+          requiredApprovals,
+        });
+        return error(409, "conflict", "The current commit does not have enough human approvals.");
+      }
       const checks = await env.DB.prepare(
         "SELECT status, conclusion FROM forge_check_runs WHERE pull_request_id = ? AND commit_oid = ?"
       )
@@ -1166,6 +1217,24 @@ async function featureRequest(
           commitOid: parsed.data.expectedHeadOid,
         });
         return error(409, "conflict", "Checks for the current commit are incomplete or failed.");
+      }
+      if (
+        repository.require_passing_checks === 1 &&
+        !checks.results.some(
+          (check) => check.status === "completed" && check.conclusion === "success"
+        )
+      ) {
+        await releaseLease();
+        logger.warn("forge:pull-request-merge-blocked-no-passing-check", {
+          repositoryId: repository.id,
+          pullRequestNumber: number,
+          commitOid: parsed.data.expectedHeadOid,
+        });
+        return error(
+          409,
+          "conflict",
+          "At least one passing check is required for the current commit."
+        );
       }
 
       const gitUrl = new URL(`/repositories/${repository.id}/merge`, request.url);
@@ -1534,7 +1603,7 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/repositories") {
       const rows = await env.DB.prepare(
-        "SELECT repositories.id, repositories.namespace_id, namespaces.slug AS owner, repositories.slug, repositories.visibility, repositories.description, repositories.created_at, repositories.updated_at, repositories.artifact_name, repositories.remote, repositories.default_branch FROM repositories JOIN namespaces ON namespaces.id = repositories.namespace_id JOIN namespace_memberships ON namespace_memberships.namespace_id = repositories.namespace_id WHERE namespace_memberships.user_id = ? ORDER BY repositories.updated_at DESC"
+        "SELECT repositories.id, repositories.namespace_id, namespaces.slug AS owner, repositories.slug, repositories.visibility, repositories.description, repositories.created_at, repositories.updated_at, repositories.artifact_name, repositories.remote, repositories.default_branch, repositories.archived, repositories.issues_enabled, repositories.pulls_enabled, repositories.discussions_enabled, repositories.wiki_enabled, repositories.required_approvals, repositories.require_passing_checks FROM repositories JOIN namespaces ON namespaces.id = repositories.namespace_id JOIN namespace_memberships ON namespace_memberships.namespace_id = repositories.namespace_id WHERE namespace_memberships.user_id = ? ORDER BY repositories.updated_at DESC"
       )
         .bind(user.id)
         .all<RepositoryRow>();
@@ -1630,7 +1699,7 @@ export default {
       return error(404, "not_found", "Endpoint was not found.");
     if (request.method === "GET" && repositoryId === "by-name" && parts[2] && parts[3]) {
       const named = await env.DB.prepare(
-        "SELECT repositories.id, repositories.namespace_id, namespaces.slug AS owner, repositories.slug, repositories.visibility, repositories.description, repositories.created_at, repositories.updated_at, repositories.artifact_name, repositories.remote, repositories.default_branch FROM repositories JOIN namespaces ON namespaces.id = repositories.namespace_id WHERE namespaces.slug = ? AND repositories.slug = ?"
+        "SELECT repositories.id, repositories.namespace_id, namespaces.slug AS owner, repositories.slug, repositories.visibility, repositories.description, repositories.created_at, repositories.updated_at, repositories.artifact_name, repositories.remote, repositories.default_branch, repositories.archived, repositories.issues_enabled, repositories.pulls_enabled, repositories.discussions_enabled, repositories.wiki_enabled, repositories.required_approvals, repositories.require_passing_checks FROM repositories JOIN namespaces ON namespaces.id = repositories.namespace_id WHERE namespaces.slug = ? AND repositories.slug = ?"
       )
         .bind(parts[2], parts[3])
         .first<RepositoryRow>();
@@ -1661,6 +1730,8 @@ export default {
       });
     }
     if (parts[2] === "wiki" && !parts[3] && request.method === "GET") {
+      if (repository.wiki_enabled === 0)
+        return error(404, "feature_disabled", "Repository wiki is disabled.");
       const rows = await env.DB.prepare(
         "SELECT slug, title, content, revision, updated_by AS updatedBy, updated_at AS updatedAt FROM forge_wiki_pages WHERE repository_id = ? ORDER BY slug ASC"
       )

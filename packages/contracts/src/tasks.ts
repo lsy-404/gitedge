@@ -122,6 +122,19 @@ export interface TaskTable {
 }
 
 export interface RepositorySettings {
+  /** Repository display name and URL slug share one canonical value. */
+  name: string;
+  slug: string;
+  description: string;
+  visibility: "public" | "private";
+  defaultBranch: string;
+  archived: boolean;
+  issuesEnabled: boolean;
+  pullsEnabled: boolean;
+  discussionsEnabled: boolean;
+  wikiEnabled: boolean;
+  requiredApprovals: number;
+  requirePassingChecks: boolean;
   memoryVisibility: MemoryVisibility;
   agentAssignmentPolicy: AgentAssignmentPolicy;
   /** True when the caller may change the settings. */
@@ -181,9 +194,34 @@ export const SetAssignmentsInputSchema = z.object({
 
 export const UpdateRepositorySettingsInputSchema = z
   .object({
+    name: z
+      .string()
+      .trim()
+      .toLowerCase()
+      .regex(/^[a-z0-9][a-z0-9-]{0,62}$/)
+      .optional(),
+    slug: z
+      .string()
+      .trim()
+      .toLowerCase()
+      .regex(/^[a-z0-9][a-z0-9-]{0,62}$/)
+      .optional(),
+    description: z.string().max(500).optional(),
+    visibility: z.enum(["public", "private"]).optional(),
+    defaultBranch: GitBranchSchema.optional(),
+    archived: z.boolean().optional(),
+    issuesEnabled: z.boolean().optional(),
+    pullsEnabled: z.boolean().optional(),
+    discussionsEnabled: z.boolean().optional(),
+    wikiEnabled: z.boolean().optional(),
+    requiredApprovals: z.number().int().min(0).max(5).optional(),
+    requirePassingChecks: z.boolean().optional(),
     memoryVisibility: MemoryVisibilitySchema.optional(),
     agentAssignmentPolicy: AgentAssignmentPolicySchema.optional(),
   })
+  .refine(
+    (value) => value.name === undefined || value.slug === undefined || value.name === value.slug
+  )
   .refine((value) => Object.keys(value).length > 0);
 
 export const TASK_STATUS_LABELS: Readonly<Record<TaskStatus, string>> = {
