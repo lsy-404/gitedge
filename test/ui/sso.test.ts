@@ -122,7 +122,6 @@ describe("OIDC and SAML account flows", () => {
       externalIdentity: {
         provider: "github",
         login: "person",
-        accessLevel: "identity",
       },
     });
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -133,7 +132,7 @@ describe("OIDC and SAML account flows", () => {
             data: {
               id: "user-1",
               identifier: "person@example.test",
-              externalIdentity: { provider: "github", login: "person", accessLevel: "identity" },
+              externalIdentity: { provider: "github", login: "person" },
             },
           }),
           { status: 200 }

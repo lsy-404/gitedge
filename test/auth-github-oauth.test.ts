@@ -4,7 +4,6 @@ import { completeGithubOAuth, login, session, startGithubOAuth } from "../worker
 
 type OAuthState = {
   code_verifier: string;
-  access_level: "identity" | "read";
   return_to: string;
   expires_at: number;
   browser_hash: string;
@@ -49,7 +48,6 @@ class TestStatement implements D1PreparedStatement {
       this.database.states.delete(String(this.values[0]));
       return {
         code_verifier: state.code_verifier,
-        access_level: state.access_level,
         return_to: state.return_to,
       } as T;
     }
@@ -67,13 +65,11 @@ class TestStatement implements D1PreparedStatement {
       this.database.expiredStateCleanupCount += 1;
     }
     if (this.query.startsWith("INSERT INTO github_oauth_states")) {
-      const access = this.values[2] === "read" ? "read" : "identity";
       this.database.states.set(String(this.values[0]), {
         code_verifier: String(this.values[1]),
-        access_level: access,
-        return_to: String(this.values[3]),
-        expires_at: Number(this.values[4]),
-        browser_hash: String(this.values[6]),
+        return_to: String(this.values[2]),
+        expires_at: Number(this.values[3]),
+        browser_hash: String(this.values[5]),
       });
     }
     if (this.query.startsWith("INSERT INTO auth_sessions"))
@@ -101,7 +97,7 @@ describe("GitHub OAuth", () => {
   it("starts identity OAuth with state and S256 PKCE but no requested scope", async () => {
     const database = new TestDatabase();
     const response = await startGithubOAuth(
-      new Request("https://forge.example/github/start?access=identity&returnTo=%2Faccount"),
+      new Request("https://forge.example/github/start?returnTo=%2Faccount"),
       testEnv(database)
     );
     expect(response.status).toBe(302);
@@ -122,9 +118,7 @@ describe("GitHub OAuth", () => {
   it("rejects an external return target before persisting OAuth state", async () => {
     const database = new TestDatabase();
     const response = await startGithubOAuth(
-      new Request(
-        "https://forge.example/github/start?access=read&returnTo=https%3A%2F%2Fevil.example"
-      ),
+      new Request("https://forge.example/github/start?returnTo=https%3A%2F%2Fevil.example"),
       testEnv(database)
     );
     expect(response.status).toBe(400);
@@ -135,7 +129,7 @@ describe("GitHub OAuth", () => {
     const database = new TestDatabase();
     const environment = testEnv(database);
     const started = await startGithubOAuth(
-      new Request("https://forge.example/github/start?access=identity&returnTo=%2Faccount"),
+      new Request("https://forge.example/github/start?returnTo=%2Faccount"),
       environment
     );
     const state = new URL(started.headers.get("Location") ?? "").searchParams.get("state");
@@ -191,22 +185,18 @@ describe("GitHub OAuth", () => {
     expect(replay.status).toBe(400);
   });
 
-  it("rejects a read grant that includes a broader scope", async () => {
+  it("rejects a token grant that includes any scope", async () => {
     const database = new TestDatabase();
     const environment = testEnv(database);
     const started = await startGithubOAuth(
-      new Request("https://forge.example/github/start?access=read&returnTo=%2Faccount"),
+      new Request("https://forge.example/github/start?returnTo=%2Faccount"),
       environment
     );
     const state = new URL(started.headers.get("Location") ?? "").searchParams.get("state");
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
-        Response.json({
-          access_token: "transient-token",
-          token_type: "bearer",
-          scope: "read:user,user:email,read:org,repo",
-        })
+        Response.json({ access_token: "transient-token", token_type: "bearer", scope: "read:user" })
       )
     );
     const completed = await completeGithubOAuth(
@@ -221,32 +211,25 @@ describe("GitHub OAuth", () => {
     expect(database.sessions.size).toBe(0);
   });
 
-  it("stores the verified read snapshot without retaining the OAuth token", async () => {
+  it("stores only the identity profile and never requests emails or organizations", async () => {
     const database = new TestDatabase();
     const environment = testEnv(database);
     const started = await startGithubOAuth(
-      new Request("https://forge.example/github/start?access=read&returnTo=%2Faccount"),
+      new Request("https://forge.example/github/start?returnTo=%2Faccount"),
       environment
     );
     const state = new URL(started.headers.get("Location") ?? "").searchParams.get("state");
+    const requested: string[] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: string) => {
+        requested.push(input);
         if (input.endsWith("/access_token"))
           return Response.json({
             access_token: "transient-token",
             token_type: "bearer",
-            scope: "read:user,user:email,read:org",
+            scope: "",
           });
-        if (input.endsWith("/user/emails"))
-          return Response.json([{ email: "verified@example.com", verified: true }], {
-            headers: { "X-OAuth-Scopes": "read:user,user:email,read:org" },
-          });
-        if (input.endsWith("/user/orgs"))
-          return Response.json(
-            [{ id: 9, login: "octo-org", avatar_url: "https://avatars.example/org" }],
-            { headers: { "X-OAuth-Scopes": "read:user,user:email,read:org" } }
-          );
         return Response.json(
           {
             id: 42,
@@ -254,7 +237,7 @@ describe("GitHub OAuth", () => {
             avatar_url: "https://avatars.example/octocat",
             html_url: "https://github.example/octocat",
           },
-          { headers: { "X-OAuth-Scopes": "read:user,user:email,read:org" } }
+          { headers: { "X-OAuth-Scopes": "" } }
         );
       })
     );
@@ -266,14 +249,13 @@ describe("GitHub OAuth", () => {
       environment
     );
     expect(database.externalIdentityValues).toContain("octocat");
-    expect(database.externalIdentityValues).toContain(JSON.stringify(["verified@example.com"]));
-    expect(database.externalIdentityValues).toContain(
-      JSON.stringify([{ id: 9, login: "octo-org", avatarUrl: "https://avatars.example/org" }])
-    );
     expect(database.externalIdentityValues).not.toContain("transient-token");
+    expect(
+      requested.some((url) => url.includes("/user/emails") || url.includes("/user/orgs"))
+    ).toBe(false);
   });
 
-  it("returns a defensive external identity summary from session data", async () => {
+  it("returns an identity-only external identity summary from session data", async () => {
     const database = new TestDatabase();
     database.sessionRow = {
       id: "user-1",
@@ -283,9 +265,6 @@ describe("GitHub OAuth", () => {
       provider_login: "octocat",
       avatar_url: "https://avatars.example/octocat",
       profile_url: "https://github.example/octocat",
-      access_level: "read",
-      emails_json: '["octocat@example.com"]',
-      organizations_json: '[{"id":7,"login":"octo-org","avatarUrl":"https://avatars.example/org"}]',
     };
     const active = await session(testEnv(database), "session-token");
     expect(active).toMatchObject({
@@ -294,12 +273,18 @@ describe("GitHub OAuth", () => {
         externalIdentity: {
           provider: "github",
           login: "octocat",
-          accessLevel: "read",
-          emails: ["octocat@example.com"],
-          organizations: [{ id: 7, login: "octo-org" }],
+          avatarUrl: "https://avatars.example/octocat",
+          profileUrl: "https://github.example/octocat",
         },
       },
     });
+    if (active.ok)
+      expect(Object.keys(active.data.externalIdentity ?? {}).sort()).toEqual([
+        "avatarUrl",
+        "login",
+        "profileUrl",
+        "provider",
+      ]);
   });
 
   it("rejects password login before deriving a disabled external credential", async () => {

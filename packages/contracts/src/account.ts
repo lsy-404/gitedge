@@ -5,13 +5,10 @@ export interface User {
 }
 
 export interface ExternalIdentity {
-  provider: "github";
+  provider: "github" | "oidc";
   login: string;
   avatarUrl?: string;
   profileUrl?: string;
-  accessLevel: "identity" | "read";
-  emails?: string[];
-  organizations?: { login: string; avatarUrl?: string }[];
 }
 
 export interface Organization {
