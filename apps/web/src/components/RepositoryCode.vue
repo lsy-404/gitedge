@@ -51,6 +51,7 @@ const comparison = ref<GitComparison | null>(null);
 const loading = ref(false);
 const error = ref("");
 const emptyReason = ref("");
+const emptyRepository = ref(false);
 const offset = ref(0);
 const hasMoreCommits = ref(false);
 const limit = 50;
@@ -103,8 +104,14 @@ const readmeEntry = computed(
   () => tree.value?.entries.find((entry) => entry.name.toLocaleLowerCase() === "readme.md") ?? null
 );
 const breadcrumbs = computed(() => filePath.value.split("/").filter(Boolean));
-const highlightedLines = computed(() =>
-  (file.value?.content ?? "").split("\n").map((line) => highlightedCode(line, file.value?.path))
+const highlightedContent = computed(() =>
+  highlightedCode(file.value?.content ?? "", file.value?.path)
+);
+const fileLineNumbers = computed(() =>
+  Array.from(
+    { length: (file.value?.content?.match(/\n/g)?.length ?? 0) + 1 },
+    (_, index) => index + 1
+  )
 );
 const compareBase = computed({
   get: () => String(route.query.base || props.repository.defaultBranch),
@@ -138,6 +145,7 @@ async function load() {
   loading.value = true;
   error.value = "";
   emptyReason.value = "";
+  emptyRepository.value = false;
   tree.value = null;
   file.value = null;
   graph.value = null;
@@ -146,6 +154,10 @@ async function load() {
     const refData = await api.refs(props.repository.id);
     if (version !== requestVersion) return;
     refs.value = refData;
+    if (refData.length === 0 && (props.section === "code" || props.section === "commits")) {
+      emptyRepository.value = true;
+      return;
+    }
     if (props.section === "commits") {
       const [items, graphData] = await Promise.all([
         api.commits(props.repository.id, refName.value, offset.value, limit),
@@ -292,7 +304,7 @@ function sessionMarkerLabel(marker: GraphSessionMarker): string {
   return `${marker.session.agentName} / ${marker.session.workspaceName} · ${t(marker.kind === "base" ? "sessionBase" : "sessionForkTip")}`;
 }
 function downloadText() {
-  if (!file.value?.content) return;
+  if (!file.value || file.value.content === null) return;
   const link = document.createElement("a");
   link.href = URL.createObjectURL(
     new Blob([file.value.content], { type: "text/plain;charset=utf-8" })
@@ -302,7 +314,7 @@ function downloadText() {
   URL.revokeObjectURL(link.href);
 }
 function rawFile() {
-  if (!file.value?.content) return;
+  if (!file.value || file.value.content === null) return;
   const url = URL.createObjectURL(new Blob([file.value.content], { type: "text/plain" }));
   window.open(url, "_blank", "noopener");
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
@@ -462,6 +474,15 @@ onUnmounted(() => {
     <div v-if="loading || error" class="box">
       <StatusState :loading="loading" :error="error" :empty="false" @retry="load" />
     </div>
+    <div v-else-if="emptyRepository" class="empty-repository box">
+      <h2>{{ t("emptyRepositoryTitle") }}</h2>
+      <p>{{ t("emptyRepositoryText") }}</p>
+      <code>echo "# {{ repository.name }}" &gt; README.md</code
+      ><code>git add README.md &amp;&amp; git commit -m "first commit"</code
+      ><code>git branch -M {{ repository.defaultBranch }}</code
+      ><code>git remote add origin {{ cloneUrl }}</code
+      ><code>git push -u origin {{ repository.defaultBranch }}</code>
+    </div>
     <template v-else-if="section === 'code'">
       <div v-if="latestCommit && !isBlob" class="latest-commit box">
         <AppIcon name="commit" />
@@ -510,15 +531,6 @@ onUnmounted(() => {
         </RouterLink>
         <div v-if="emptyReason === 'tree'" class="state">{{ t("emptyTree") }}</div>
       </div>
-      <div v-if="tree?.entries.length === 0 && !loading" class="empty-repository box">
-        <h2>{{ t("emptyRepositoryTitle") }}</h2>
-        <p>{{ t("emptyRepositoryText") }}</p>
-        <code>echo "# {{ repository.name }}" &gt; README.md</code
-        ><code>git add README.md &amp;&amp; git commit -m "first commit"</code
-        ><code>git branch -M {{ repository.defaultBranch }}</code
-        ><code>git remote add origin {{ cloneUrl }}</code
-        ><code>git push -u origin {{ repository.defaultBranch }}</code>
-      </div>
       <div v-if="isBlob && file" class="file-view box">
         <div class="file-breadcrumb">
           <RouterLink
@@ -544,10 +556,9 @@ onUnmounted(() => {
         <p v-if="file.binary || file.content === null" class="muted box-form">
           {{ t("binaryPreviewUnavailable") }}
         </p>
-        <pre
-          v-else
-          class="code-source"
-        ><span v-for="(line,index) in highlightedLines" :key="index" class="code-line"><span class="line-number">{{ index+1 }}</span><code v-html="line"></code></span></pre>
+        <pre v-else class="code-source"><code class="line-gutter" aria-hidden="true">{{
+          fileLineNumbers.join("\n")
+        }}</code><code class="highlighted-file" v-html="highlightedContent"></code></pre>
       </div>
       <aside class="about-panel box">
         <div class="box-header">
@@ -582,7 +593,7 @@ onUnmounted(() => {
       </section>
     </template>
     <template v-else-if="section === 'commits'">
-      <section class="box box-form graph-panel">
+      <section v-if="!emptyRepository" class="box box-form graph-panel">
         <div class="panel-heading">
           <div>
             <p class="eyebrow">{{ t("commitGraph") }}</p>
@@ -716,7 +727,7 @@ onUnmounted(() => {
           {{ t("loadMore") }}
         </fluent-button>
       </section>
-      <section v-if="route.query.oid" class="box box-form commit-detail">
+      <section v-if="route.query.oid && !emptyRepository" class="box box-form commit-detail">
         <p class="eyebrow">{{ t("commitDetails") }}</p>
         <code>{{ route.query.oid }}</code>
         <p v-if="selectedCommit">{{ selectedCommit.message }}</p>
