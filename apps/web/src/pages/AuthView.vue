@@ -5,10 +5,12 @@ import { useRoute, useRouter } from "vue-router";
 import AppLink from "../components/AppLink.vue";
 import NoticeBar from "../components/NoticeBar.vue";
 import StatusBadge from "../components/StatusBadge.vue";
+import AppIcon from "../components/AppIcon.vue";
 import { api } from "../lib/api";
 import type { SsoProviderSummary } from "../lib/api";
 import { setSession } from "../lib/session";
 import TextField from "../components/TextField.vue";
+import "../styles/workspace.css";
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
@@ -72,9 +74,6 @@ onMounted(async () => {
   }
 });
 
-function githubLogin() {
-  window.location.assign(`/api/auth/github/start?returnTo=${encodeURIComponent(returnTo.value)}`);
-}
 async function submit() {
   busy.value = true;
   error.value = "";
@@ -90,12 +89,50 @@ async function submit() {
     busy.value = false;
   }
 }
+function githubLogin() {
+  window.location.assign(`/api/auth/github/start?returnTo=${encodeURIComponent(returnTo.value)}`);
+}
 </script>
 <template>
-  <section class="auth">
-    <img class="auth-logo" src="/logo.svg" alt="" width="48" height="48" />
-    <h1>{{ register ? t("registerTitle") : t("loginTitle") }}</h1>
-    <div class="box auth-card form-stack">
+  <section class="workspace-page auth-page">
+    <div class="auth-brand">
+      <img src="/logo.svg" alt="" width="48" height="48" />
+      <h1>{{ register ? t("registerTitle") : t("loginTitle") }}</h1>
+    </div>
+    <div class="auth-card">
+      <div class="auth-provider-list">
+        <fluent-button
+          type="button"
+          class="btn auth-provider-choice github-auth-choice"
+          @click="githubLogin"
+        >
+          <span class="provider-mark github-mark"><AppIcon name="github" /></span>
+          <strong>{{ t("githubSignIn") }}</strong
+          ><StatusBadge>OAuth</StatusBadge>
+        </fluent-button>
+        <a
+          v-for="provider in federationProviders"
+          :key="provider.id"
+          class="btn auth-provider-choice federation-provider"
+          :href="providerHref(provider.id)"
+        >
+          <span class="provider-mark oidc-mark"><AppIcon name="lock" /></span
+          ><strong>{{ t("continueWith", { provider: provider.label }) }}</strong
+          ><StatusBadge>{{ provider.protocol.toUpperCase() }}</StatusBadge>
+        </a>
+        <NoticeBar v-if="providersError" intent="warning">{{ t("ssoProvidersError") }}</NoticeBar>
+        <fluent-link
+          v-for="provider in samlProviders"
+          :key="`${provider.id}-metadata`"
+          :href="metadataHref(provider.metadataUrl) || undefined"
+          target="_blank"
+          rel="noreferrer"
+          >{{ provider.label }} · {{ t("ssoMetadata") }}</fluent-link
+        >
+      </div>
+      <div class="auth-divider">
+        <span>{{ t("orContinueWithPassword") }}</span>
+      </div>
       <form class="form-stack" @submit.prevent="submit">
         <TextField
           v-model="identifier"
@@ -114,39 +151,13 @@ async function submit() {
           >{{ t("password") }}</TextField
         >
         <NoticeBar v-if="error" intent="error">{{ error }}</NoticeBar>
-        <fluent-button type="submit" appearance="primary" class="block" :disabled="busy">
+        <button type="submit" class="btn btn-primary block" :disabled="busy">
           {{ busy ? t("loading") : register ? t("signUp") : t("signIn") }}
-        </fluent-button>
+        </button>
       </form>
-      <fluent-divider>{{ t("orContinue") }}</fluent-divider>
-      <div class="oauth">
-        <fluent-anchor-button
-          v-for="provider in federationProviders"
-          :key="provider.id"
-          class="federation-provider block"
-          :href="providerHref(provider.id)"
-        >
-          {{ t("continueWith", { provider: provider.label }) }}
-          <StatusBadge slot="end">{{ provider.protocol.toUpperCase() }}</StatusBadge>
-        </fluent-anchor-button>
-        <NoticeBar v-if="providersError" intent="warning">{{ t("ssoProvidersError") }}</NoticeBar>
-        <fluent-link
-          v-for="provider in samlProviders"
-          :key="`${provider.id}-metadata`"
-          :href="metadataHref(provider.metadataUrl) || undefined"
-          target="_blank"
-          rel="noreferrer"
-        >
-          {{ provider.label }} · {{ t("ssoMetadata") }}
-        </fluent-link>
-        <fluent-button type="button" class="block" @click="githubLogin">
-          {{ t("githubSignIn") }}
-          <StatusBadge slot="end">OAUTH</StatusBadge>
-        </fluent-button>
-      </div>
       <NoticeBar v-if="callbackError" intent="error">{{ callbackError }}</NoticeBar>
     </div>
-    <p class="auth-switch">
+    <p class="auth-page-footer">
       {{ register ? t("hasAccount") : t("needsAccount") }}
       <AppLink :to="register ? '/login' : '/register'">{{
         register ? t("signIn") : t("signUp")

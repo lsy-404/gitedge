@@ -17,9 +17,14 @@ import { agentSessionDisplayStatus } from "../lib/gitGraphView";
 import { clearAgentSessionSecrets, isCredentialExpired } from "../lib/credentialSecurity";
 import { oneOf } from "../ui/formEvents";
 import TextField from "../components/TextField.vue";
+import AppIcon from "../components/AppIcon.vue";
+import { useRoute, useRouter } from "vue-router";
+import "../styles/workspace.css";
 
 const permissions = ["read", "write"] as const;
 const { t } = useI18n();
+const route = useRoute();
+const router = useRouter();
 const credentialDialog = ref<HTMLElement | null>(null);
 const agents = ref<Agent[]>([]);
 const repositories = ref<Repository[]>([]);
@@ -38,6 +43,8 @@ const saving = ref(false);
 const error = ref("");
 const createdSession = ref<CreatedAgentSession | null>(null);
 const agentForm = ref({ name: "", description: "" });
+const showAgentForm = ref(false);
+const showSessionForm = ref(false);
 const sessionForm = ref<{
   repositoryId: string;
   baseRef: string;
@@ -121,6 +128,9 @@ async function createAgent() {
     agents.value = [agent, ...agents.value];
     selectedAgent.value = agent.id;
     agentForm.value = { name: "", description: "" };
+    showAgentForm.value = false;
+    if (route.query.new)
+      await router.replace({ path: route.path, query: { ...route.query, new: undefined } });
   } catch {
     error.value = t("apiError");
   } finally {
@@ -151,6 +161,7 @@ async function createSession() {
     }
     showCreatedCredentials(session);
     sessions.value = [session, ...sessions.value];
+    showSessionForm.value = false;
   } catch {
     error.value = t("apiError");
   } finally {
@@ -174,6 +185,11 @@ function clearCredentials() {
   createdSession.value = null;
   credentialsExpired.value = false;
 }
+function closeAgentForm() {
+  showAgentForm.value = false;
+  if (route.query.new)
+    void router.replace({ path: route.path, query: { ...route.query, new: undefined } });
+}
 /** The credentials dialog is modal: Fluent supplies the focus trap and Escape handling. */
 watch(createdSession, async (session) => {
   if (!session) return;
@@ -193,6 +209,13 @@ watch(selectedAgent, () => {
   clearCredentials();
   void loadSessions();
 });
+watch(
+  () => route.query.new,
+  (value) => {
+    if (value === "1") showAgentForm.value = true;
+  },
+  { immediate: true }
+);
 void load();
 onUnmounted(() => {
   clearTimeout(credentialExpiryTimer);
@@ -207,190 +230,295 @@ sessionClockTimer = setInterval(() => {
 </script>
 
 <template>
-  <section class="page agent-settings">
-    <p class="eyebrow">{{ t("settings") }} / {{ t("agents") }}</p>
-    <h1>{{ t("agents") }}</h1>
-    <div v-if="loading || error" class="box">
-      <StatusState :loading="loading" :error="error" :empty="false" @retry="load" />
-    </div>
-    <template v-else>
-      <form class="box box-form form-stack agent-form" @submit.prevent="createAgent">
-        <div>
-          <p class="eyebrow">{{ t("createAgent") }}</p>
-          <h2>{{ t("multipleAgents") }}</h2>
+  <section class="workspace-page settings-page agent-settings-page">
+    <aside class="settings-sidebar">
+      <h1>{{ t("settings") }}</h1>
+      <p class="settings-sidebar-label">{{ t("personalSettings") }}</p>
+      <nav :aria-label="t('settingsNavigation')">
+        <RouterLink class="workspace-nav-item" to="/settings/account"
+          ><AppIcon name="person" />{{ t("account") }}</RouterLink
+        >
+        <RouterLink class="workspace-nav-item is-selected" to="/settings/agents"
+          ><AppIcon name="agent" />{{ t("agents") }}</RouterLink
+        >
+      </nav>
+    </aside>
+    <div class="settings-content">
+      <h2 class="settings-page-title">{{ t("agents") }}</h2>
+      <div v-if="loading || error" class="box">
+        <StatusState :loading="loading" :error="error" :empty="false" @retry="load" />
+      </div>
+      <template v-else>
+        <div class="agents-page-heading">
+          <div>
+            <p class="muted">{{ t("multipleAgents") }}</p>
+          </div>
+          <button class="btn btn-primary" type="button" @click="showAgentForm = true">
+            <AppIcon name="plus" />{{ t("createAgent") }}
+          </button>
         </div>
-        <TextField v-model="agentForm.name" required maxlength="80">{{ t("agentName") }}</TextField>
-        <TextField v-model="agentForm.description" maxlength="500">{{
-          t("description")
-        }}</TextField>
-        <div class="form-actions">
-          <fluent-button type="submit" appearance="primary" :disabled="saving">{{
-            t("createAgent")
-          }}</fluent-button>
-        </div>
-      </form>
-      <div class="agent-layout">
-        <nav class="box agent-list" :aria-label="t('yourAgents')">
-          <div class="box-header">{{ t("yourAgents") }}</div>
-          <fluent-button
-            v-for="agent in agents"
-            :key="agent.id"
-            type="button"
-            class="agent-choice"
-            :appearance="selectedAgent === agent.id ? 'secondary' : 'transparent'"
-            :aria-pressed="selectedAgent === agent.id"
-            @click="selectedAgent = agent.id"
-          >
-            <span class="agent-choice-text">
-              <strong>{{ agent.name }}</strong>
-              <small>{{
-                agent.disabledAt ? t("disabled") : agent.description || t("noDescription")
-              }}</small>
-            </span>
-          </fluent-button>
-          <p v-if="!agents.length" class="muted box-form">{{ t("noAgents") }}</p>
-        </nav>
-        <div v-if="currentAgent" class="agent-detail">
-          <section class="box box-form">
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">{{ t("agent") }}</p>
-                <h2>{{ currentAgent.name }}</h2>
-              </div>
-              <fluent-button
-                v-if="!currentAgent.disabledAt"
-                type="button"
-                @click="disableAgent(currentAgent)"
-              >
-                {{ t("disableAgent") }}
-              </fluent-button>
+        <div class="agent-layout">
+          <nav class="box agent-list" :aria-label="t('yourAgents')">
+            <div class="box-header agent-list-header">
+              <span>{{ t("yourAgents") }}</span
+              ><StatusBadge>{{ agents.length }}</StatusBadge>
             </div>
-            <p class="muted">{{ currentAgent.description }}</p>
-            <small class="muted"
-              >{{ t("createdAt") }} {{ new Date(currentAgent.createdAt).toLocaleString() }}</small
+            <fluent-button
+              v-for="agent in agents"
+              :key="agent.id"
+              type="button"
+              class="agent-choice"
+              :appearance="selectedAgent === agent.id ? 'secondary' : 'transparent'"
+              :aria-pressed="selectedAgent === agent.id"
+              @click="selectedAgent = agent.id"
             >
-          </section>
-          <form
-            v-if="!currentAgent.disabledAt"
-            class="box box-form form-stack session-form"
-            @submit.prevent="createSession"
-          >
-            <p class="eyebrow">{{ t("createAgentSession") }}</p>
-            <SelectField v-model="sessionForm.repositoryId" :label="t('repository')" required>
-              <fluent-option value="" disabled>{{ t("selectRepository") }}</fluent-option>
-              <fluent-option v-for="repo in repositories" :key="repo.id" :value="repo.id">
-                {{ repo.owner }}/{{ repo.name }}
-              </fluent-option>
-            </SelectField>
-            <TextField v-model="sessionForm.baseRef" required>{{ t("baseBranch") }}</TextField>
-            <SelectField
-              :model-value="sessionForm.permission"
-              :label="t('permission')"
-              @update:model-value="sessionForm.permission = oneOf(permissions, $event, 'write')"
-            >
-              <fluent-option value="read">{{ t("readOnly") }}</fluent-option>
-              <fluent-option value="write">{{ t("writeAccess") }}</fluent-option>
-            </SelectField>
-            <SelectField
-              :model-value="String(sessionForm.ttlSeconds)"
-              :label="t('sessionLifetime')"
-              @update:model-value="sessionForm.ttlSeconds = Number($event)"
-            >
-              <fluent-option value="3600">1 {{ t("hour") }}</fluent-option>
-              <fluent-option value="86400">1 {{ t("day") }}</fluent-option>
-              <fluent-option value="604800">7 {{ t("days") }}</fluent-option>
-            </SelectField>
-            <div class="form-actions">
-              <fluent-button
-                type="submit"
-                appearance="primary"
-                :disabled="saving || !repositories.length"
-              >
-                {{ t("createAgentSession") }}
-              </fluent-button>
+              <span class="agent-choice-text">
+                <strong>{{ agent.name }}</strong>
+                <small>{{
+                  agent.disabledAt ? t("disabled") : agent.description || t("noDescription")
+                }}</small>
+              </span>
+            </fluent-button>
+            <div v-if="!agents.length" class="agent-empty">
+              <AppIcon name="agent" :size="22" /><strong>{{ t("noAgents") }}</strong
+              ><span class="muted">{{ t("agentEmptyHint") }}</span
+              ><button class="btn btn-sm" type="button" @click="showAgentForm = true">
+                {{ t("createAgent") }}
+              </button>
             </div>
-          </form>
-          <section class="box">
-            <div class="box-header">{{ t("sessions") }}</div>
-            <StatusState
-              v-if="sessionsError"
-              :error="sessionsError"
-              :empty="false"
-              @retry="loadSessions"
-            />
-            <StatusState v-else-if="sessionsLoading" :loading="true" :empty="false" />
-            <template v-else>
-              <div v-for="session in sessions" :key="session.id" class="box-row session-row">
-                <div class="grow">
-                  <div class="row-title">{{ session.workspaceName }}</div>
-                  <div class="row-meta">
-                    <span
-                      >{{
-                        repositories.find((repo) => repo.id === session.repositoryId)?.slug ||
-                        session.repositoryId
-                      }}
-                      · {{ session.baseRef }} ·
-                      {{ t(session.permission === "read" ? "readOnly" : "writeAccess") }}</span
-                    >
-                    <span
-                      >{{ t("expiresAt") }} {{ new Date(session.expiresAt).toLocaleString() }}</span
-                    >
-                  </div>
+          </nav>
+          <div v-if="currentAgent" class="agent-detail">
+            <section class="settings-card agent-summary">
+              <div class="panel-heading">
+                <div>
+                  <h2>{{ currentAgent.name }}</h2>
+                  <p class="muted">{{ currentAgent.description || t("noDescription") }}</p>
                 </div>
-                <StatusBadge :tone="sessionExpired(session) ? 'warning' : 'neutral'">{{
-                  sessionStatus(session)
-                }}</StatusBadge>
                 <fluent-button
-                  v-if="session.status === 'active' && !sessionExpired(session)"
+                  v-if="!currentAgent.disabledAt"
+                  class="btn btn-danger btn-sm"
                   type="button"
-                  @click="revoke(session)"
+                  @click="disableAgent(currentAgent)"
                 >
-                  {{ t("revokeSession") }}
+                  {{ t("disableAgent") }}
                 </fluent-button>
               </div>
-              <p v-if="!sessions.length" class="muted box-form">{{ t("noSessions") }}</p>
-            </template>
+              <small class="muted"
+                >{{ t("createdAt") }} {{ new Date(currentAgent.createdAt).toLocaleString() }}</small
+              >
+            </section>
+            <section class="settings-section agent-sessions-section">
+              <div class="agent-section-heading">
+                <div>
+                  <h3>{{ t("sessions") }}</h3>
+                  <p class="muted">{{ t("agentSessionsHint") }}</p>
+                </div>
+                <button
+                  v-if="!currentAgent.disabledAt"
+                  class="btn btn-primary btn-sm"
+                  type="button"
+                  :disabled="!repositories.length"
+                  @click="showSessionForm = true"
+                >
+                  <AppIcon name="plus" />{{ t("createAgentSession") }}
+                </button>
+              </div>
+              <section class="settings-card">
+                <StatusState
+                  v-if="sessionsError"
+                  :error="sessionsError"
+                  :empty="false"
+                  @retry="loadSessions"
+                />
+                <StatusState v-else-if="sessionsLoading" :loading="true" :empty="false" />
+                <template v-else>
+                  <div
+                    v-for="session in sessions"
+                    :key="session.id"
+                    class="settings-card-row session-row"
+                  >
+                    <div class="session-workspace-icon"><AppIcon name="repo" /></div>
+                    <div class="grow">
+                      <div class="row-title">{{ session.workspaceName }}</div>
+                      <div class="row-meta">
+                        <span
+                          >{{
+                            repositories.find((repo) => repo.id === session.repositoryId)?.slug ||
+                            session.repositoryId
+                          }}
+                          · {{ session.baseRef }} ·
+                          {{ t(session.permission === "read" ? "readOnly" : "writeAccess") }}</span
+                        >
+                        <span
+                          >{{ t("expiresAt") }}
+                          {{ new Date(session.expiresAt).toLocaleString() }}</span
+                        >
+                      </div>
+                    </div>
+                    <StatusBadge :tone="sessionExpired(session) ? 'warning' : 'neutral'">{{
+                      sessionStatus(session)
+                    }}</StatusBadge>
+                    <button
+                      v-if="session.status === 'active' && !sessionExpired(session)"
+                      class="btn btn-sm"
+                      type="button"
+                      @click="revoke(session)"
+                    >
+                      {{ t("revokeSession") }}
+                    </button>
+                  </div>
+                  <div v-if="!sessions.length" class="settings-empty-state">
+                    <strong>{{ t("noSessions") }}</strong
+                    ><span>{{ t("noSessionsHint") }}</span>
+                  </div>
+                </template>
+              </section>
+            </section>
+          </div>
+          <div v-else class="box state">{{ t("selectAgent") }}</div>
+        </div>
+        <fluent-dialog
+          v-if="createdSession"
+          ref="credentialDialog"
+          type="modal"
+          aria-labelledby="credential-title"
+          @toggle="onDialogToggle"
+        >
+          <fluent-dialog-body>
+            <span id="credential-title" slot="title">{{
+              t(credentialsExpired ? "tokenExpired" : "copyBeforeClose")
+            }}</span>
+            <div class="credential-card">
+              <p class="eyebrow">{{ t("oneTimeCredentials") }}</p>
+              <div v-if="!credentialsExpired" class="credential-field">
+                <span class="field-label">{{ t("apiBearerToken") }}</span>
+                <code>Bearer {{ createdSession.token }}</code>
+              </div>
+              <div v-if="!credentialsExpired" class="credential-field">
+                <span class="field-label">{{ t("gitToken") }}</span>
+                <code>{{ createdSession.gitToken }}</code>
+              </div>
+              <div class="credential-field">
+                <span class="field-label">{{ t("gitRemote") }}</span>
+                <code>{{ createdSession.remote }}</code>
+              </div>
+              <div class="credential-field">
+                <span class="field-label">{{ t("agentInstructions") }}</span>
+                <pre>{{ createdSession.instructions || t("noInstructions") }}</pre>
+              </div>
+              <p class="muted">{{ t("credentialsNotSaved") }}</p>
+            </div>
+            <fluent-button
+              slot="action"
+              type="button"
+              appearance="primary"
+              @click="clearCredentials"
+            >
+              {{ t("close") }}
+            </fluent-button>
+          </fluent-dialog-body>
+        </fluent-dialog>
+        <div v-if="showAgentForm" class="workspace-modal-backdrop" @click.self="closeAgentForm">
+          <section
+            class="workspace-modal"
+            role="dialog"
+            aria-modal="true"
+            :aria-labelledby="'create-agent-title'"
+          >
+            <header class="workspace-modal-heading">
+              <h2 id="create-agent-title">{{ t("createAgent") }}</h2>
+              <button
+                class="icon-button"
+                type="button"
+                :aria-label="t('close')"
+                @click="closeAgentForm"
+              >
+                <AppIcon name="close" />
+              </button>
+            </header>
+            <p class="muted">{{ t("agentCreateHint") }}</p>
+            <form class="form-stack" @submit.prevent="createAgent">
+              <TextField v-model="agentForm.name" required maxlength="80">{{
+                t("agentName")
+              }}</TextField>
+              <TextField v-model="agentForm.description" maxlength="500">{{
+                t("description")
+              }}</TextField>
+              <div class="form-actions">
+                <button class="btn" type="button" @click="closeAgentForm">{{ t("cancel") }}</button
+                ><button class="btn btn-primary" type="submit" :disabled="saving">
+                  {{ saving ? t("loading") : t("createAgent") }}
+                </button>
+              </div>
+              <p v-if="error" class="workspace-form-error">{{ error }}</p>
+            </form>
           </section>
         </div>
-        <div v-else class="box state">{{ t("selectAgent") }}</div>
-      </div>
-      <fluent-dialog
-        v-if="createdSession"
-        ref="credentialDialog"
-        type="modal"
-        aria-labelledby="credential-title"
-        @toggle="onDialogToggle"
-      >
-        <fluent-dialog-body>
-          <span id="credential-title" slot="title">{{
-            t(credentialsExpired ? "tokenExpired" : "copyBeforeClose")
-          }}</span>
-          <div class="credential-card">
-            <p class="eyebrow">{{ t("oneTimeCredentials") }}</p>
-            <div v-if="!credentialsExpired" class="credential-field">
-              <span class="field-label">{{ t("apiBearerToken") }}</span>
-              <code>Bearer {{ createdSession.token }}</code>
-            </div>
-            <div v-if="!credentialsExpired" class="credential-field">
-              <span class="field-label">{{ t("gitToken") }}</span>
-              <code>{{ createdSession.gitToken }}</code>
-            </div>
-            <div class="credential-field">
-              <span class="field-label">{{ t("gitRemote") }}</span>
-              <code>{{ createdSession.remote }}</code>
-            </div>
-            <div class="credential-field">
-              <span class="field-label">{{ t("agentInstructions") }}</span>
-              <pre>{{ createdSession.instructions || t("noInstructions") }}</pre>
-            </div>
-            <p class="muted">{{ t("credentialsNotSaved") }}</p>
-          </div>
-          <fluent-button slot="action" type="button" appearance="primary" @click="clearCredentials">
-            {{ t("close") }}
-          </fluent-button>
-        </fluent-dialog-body>
-      </fluent-dialog>
-    </template>
+        <div
+          v-if="showSessionForm"
+          class="workspace-modal-backdrop"
+          @click.self="showSessionForm = false"
+        >
+          <section
+            class="workspace-modal"
+            role="dialog"
+            aria-modal="true"
+            :aria-labelledby="'create-session-title'"
+          >
+            <header class="workspace-modal-heading">
+              <h2 id="create-session-title">{{ t("createAgentSession") }}</h2>
+              <button
+                class="icon-button"
+                type="button"
+                :aria-label="t('close')"
+                @click="showSessionForm = false"
+              >
+                <AppIcon name="close" />
+              </button>
+            </header>
+            <p class="muted">{{ t("sessionScopeHint") }}</p>
+            <form class="form-stack" @submit.prevent="createSession">
+              <SelectField v-model="sessionForm.repositoryId" :label="t('repository')" required>
+                <fluent-option value="" disabled>{{ t("selectRepository") }}</fluent-option>
+                <fluent-option v-for="repo in repositories" :key="repo.id" :value="repo.id"
+                  >{{ repo.owner }}/{{ repo.name }}</fluent-option
+                >
+              </SelectField>
+              <TextField v-model="sessionForm.baseRef" required>{{ t("baseBranch") }}</TextField>
+              <SelectField
+                :model-value="sessionForm.permission"
+                :label="t('permission')"
+                @update:model-value="sessionForm.permission = oneOf(permissions, $event, 'write')"
+              >
+                <fluent-option value="read">{{ t("readOnly") }}</fluent-option
+                ><fluent-option value="write">{{ t("writeAccess") }}</fluent-option>
+              </SelectField>
+              <SelectField
+                :model-value="String(sessionForm.ttlSeconds)"
+                :label="t('sessionLifetime')"
+                @update:model-value="sessionForm.ttlSeconds = Number($event)"
+              >
+                <fluent-option value="3600">1 {{ t("hour") }}</fluent-option
+                ><fluent-option value="86400">1 {{ t("day") }}</fluent-option
+                ><fluent-option value="604800">7 {{ t("days") }}</fluent-option>
+              </SelectField>
+              <p v-if="error" class="workspace-form-error">{{ error }}</p>
+              <div class="form-actions">
+                <button class="btn" type="button" @click="showSessionForm = false">
+                  {{ t("cancel") }}</button
+                ><button
+                  class="btn btn-primary"
+                  type="submit"
+                  :disabled="saving || !repositories.length"
+                >
+                  {{ saving ? t("loading") : t("createAgentSession") }}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      </template>
+    </div>
   </section>
 </template>
 
