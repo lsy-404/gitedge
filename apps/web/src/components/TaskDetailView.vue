@@ -340,12 +340,12 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
               <StatusBadge tone="brand">{{ task.type }}</StatusBadge> {{ task.title }}
             </h2>
           </div>
-          <fluent-button
+          <FluentButton
             v-if="canEdit"
             type="button"
             :aria-expanded="editing"
             @click="editing = !editing"
-            >{{ editing ? t("cancel") : t("edit") }}</fluent-button
+            >{{ editing ? t("cancel") : t("edit") }}</FluentButton
           >
         </div>
 
@@ -412,9 +412,9 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
           <TextAreaField v-model="draft.motivation" rows="3" :label="t('taskMotivation')" />
           <TextAreaField v-model="draft.description" rows="5" :label="t('description')" />
           <div class="form-actions">
-            <fluent-button type="submit" appearance="primary" :disabled="saving">{{
+            <FluentButton type="submit" tone="primary" :disabled="saving">{{
               t("save")
-            }}</fluent-button>
+            }}</FluentButton>
           </div>
         </form>
         <div v-else class="task-overview">
@@ -500,13 +500,13 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
       <section class="box box-form links-card" :aria-label="t('taskLinks')">
         <div class="section-head">
           <h3>{{ t("taskLinks") }}</h3>
-          <fluent-button
+          <FluentButton
             v-if="canEdit"
             type="button"
             size="small"
             :aria-expanded="showLinkForm"
             @click="openLinkForm"
-            ><AppIcon slot="start" name="plus" />{{ t("taskLinkAttach") }}</fluent-button
+            ><AppIcon name="plus" />{{ t("taskLinkAttach") }}</FluentButton
           >
         </div>
         <form v-if="showLinkForm" class="form-stack inline-form" @submit.prevent="attachLink">
@@ -523,9 +523,9 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
           <p v-else class="muted">{{ t("taskLinkNothing") }}</p>
           <NoticeBar v-if="linkError" intent="error">{{ linkError }}</NoticeBar>
           <div v-if="linkOptions.length" class="form-actions">
-            <fluent-button type="submit" appearance="primary" :disabled="saving || !linkChoice">{{
+            <FluentButton type="submit" tone="primary" :disabled="saving || !linkChoice">{{
               t("taskLinkAttach")
-            }}</fluent-button>
+            }}</FluentButton>
           </div>
         </form>
         <ul v-if="task.links.length" class="plain-list">
@@ -533,15 +533,15 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
             <AppIcon :name="link.kind === 'issue' ? 'issue' : 'pr'" />
             <AppLink :to="linkPath(link)">#{{ link.number }} {{ link.title }}</AppLink>
             <StatusBadge :tone="linkTone(link.state)">{{ t(link.state) }}</StatusBadge>
-            <fluent-button
+            <FluentButton
               v-if="canEdit"
               type="button"
               size="small"
-              appearance="transparent"
+              tone="subtle"
               :disabled="saving"
               :aria-label="t('taskLinkDetachLabel', { number: link.number })"
               @click="detach(link)"
-              >{{ t("taskLinkDetach") }}</fluent-button
+              >{{ t("taskLinkDetach") }}</FluentButton
             >
           </li>
         </ul>
@@ -551,13 +551,13 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
       <section class="box box-form commits-card" :aria-label="t('taskCommits')">
         <div class="section-head">
           <h3>{{ t("taskCommits") }}</h3>
-          <fluent-button
+          <FluentButton
             v-if="canEdit"
             type="button"
             size="small"
             :aria-expanded="showCommitForm"
             @click="showCommitForm = !showCommitForm"
-            ><AppIcon slot="start" name="plus" />{{ t("taskCommitBind") }}</fluent-button
+            ><AppIcon name="plus" />{{ t("taskCommitBind") }}</FluentButton
           >
         </div>
         <form
@@ -569,9 +569,9 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
           <TextField v-model="commitForm.ref" required>{{ t("taskCommitRef") }}</TextField>
           <NoticeBar v-if="commitError" intent="error">{{ commitError }}</NoticeBar>
           <div class="form-actions">
-            <fluent-button type="submit" appearance="primary" :disabled="saving">{{
+            <FluentButton type="submit" tone="primary" :disabled="saving">{{
               t("taskCommitBind")
-            }}</fluent-button>
+            }}</FluentButton>
           </div>
         </form>
         <ul v-if="task.commits.length" class="plain-list commit-list">
@@ -593,15 +593,15 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
               {{ t("taskCommitBoundBy", { name: revisionActorLabel(commit.boundBy, t) }) }} ·
               {{ new Date(commit.boundAt).toLocaleString() }}</small
             >
-            <fluent-button
+            <FluentButton
               v-if="canEdit"
               type="button"
               size="small"
-              appearance="transparent"
+              tone="subtle"
               :disabled="saving"
               :aria-label="t('taskCommitUnbindLabel', { oid: commit.oid.slice(0, 8) })"
               @click="unbind(commit.oid)"
-              >{{ t("taskCommitUnbind") }}</fluent-button
+              >{{ t("taskCommitUnbind") }}</FluentButton
             >
           </li>
         </ul>
@@ -742,7 +742,7 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
 .plain-list li:last-child {
   border-bottom: 0;
 }
-.plain-list li fluent-button {
+.plain-list li .fluent-button {
   margin-left: auto;
 }
 .commit-oid code {

@@ -7,14 +7,16 @@ defineEmits<{ retry: [] }>();
 
 <template>
   <div v-if="loading" class="state" role="status">
-    <fluent-spinner size="small" />{{ $t("loading") }}
+    <FluentProgressRing :size="16" :aria-label="$t('loading')" />{{ $t("loading") }}
   </div>
   <div v-else-if="error" class="state-error">
     <NoticeBar intent="error">
       {{ error }}
-      <fluent-button slot="actions" size="small" type="button" @click="$emit('retry')">{{
-        $t("retry")
-      }}</fluent-button>
+      <template #actions>
+        <FluentButton size="small" type="button" @click="$emit('retry')">{{
+          $t("retry")
+        }}</FluentButton>
+      </template>
     </NoticeBar>
   </div>
   <div v-else-if="empty" class="state">

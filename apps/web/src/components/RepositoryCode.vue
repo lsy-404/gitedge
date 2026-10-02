@@ -435,12 +435,8 @@ onUnmounted(() => {
             @keydown.esc="showFileSearch = false"
           />
         </label>
-        <fluent-button
-          v-else
-          class="search-trigger"
-          appearance="outline"
-          @click="showFileSearch = true"
-          ><AppIcon slot="start" name="search" />{{ t("goToFile") }}</fluent-button
+        <FluentButton v-else class="search-trigger" tone="secondary" @click="showFileSearch = true"
+          ><AppIcon name="search" />{{ t("goToFile") }}</FluentButton
         >
         <div class="clone-menu-wrap">
           <button
@@ -449,20 +445,16 @@ onUnmounted(() => {
             :aria-expanded="showCloneMenu"
             @click="showCloneMenu = !showCloneMenu"
           >
-            <AppIcon slot="start" name="code" />{{ t("codeMenu") }}
+            <AppIcon name="code" />{{ t("codeMenu") }}
             <AppIcon slot="end" name="chevron" />
           </button>
           <div v-if="showCloneMenu" class="clone-menu box">
             <strong>{{ t("cloneWithHttps") }}</strong>
             <div class="clone-url">
               <code>{{ cloneUrl }}</code
-              ><fluent-button
-                appearance="subtle"
-                icon-only
-                :aria-label="t('copy')"
-                @click="copyCloneUrl"
+              ><FluentButton tone="subtle" icon-only :aria-label="t('copy')" @click="copyCloneUrl"
                 ><AppIcon name="copy"
-              /></fluent-button>
+              /></FluentButton>
             </div>
             <p class="muted">{{ t("cloneHelp") }}</p>
             <template v-if="canCreateCloneToken">
@@ -477,11 +469,11 @@ onUnmounted(() => {
                 <option value="read">{{ t("readToken") }}</option>
                 <option value="write">{{ t("writeToken") }}</option>
               </SelectField>
-              <fluent-button
+              <FluentButton
                 type="button"
                 :disabled="tokenBusy || !tokenName.trim()"
                 @click="issueToken"
-                >{{ t("createCloneToken") }}</fluent-button
+                >{{ t("createCloneToken") }}</FluentButton
               >
             </template>
           </div>
@@ -497,10 +489,10 @@ onUnmounted(() => {
       <code>{{ cloneUrl }}</code>
       <code v-if="!tokenExpired">{{ cloneCommand }}</code>
       <div class="form-actions">
-        <fluent-button v-if="!tokenExpired" type="button" @click="copyCloneCommand">
+        <FluentButton v-if="!tokenExpired" type="button" @click="copyCloneCommand">
           {{ t("copyCloneCommand") }}
-        </fluent-button>
-        <fluent-button type="button" @click="clearToken">{{ t("close") }}</fluent-button>
+        </FluentButton>
+        <FluentButton type="button" @click="clearToken">{{ t("close") }}</FluentButton>
       </div>
     </div>
     <div v-if="loading || error" class="box">
@@ -537,10 +529,10 @@ onUnmounted(() => {
           <strong>{{ filePath || refName }}</strong
           ><span>{{ filteredEntries.length }} {{ t("items") }}</span>
         </div>
-        <fluent-button
+        <FluentButton
           v-if="filePath"
           type="button"
-          appearance="transparent"
+          tone="subtle"
           class="file-entry"
           @click="
             router.push(
@@ -549,7 +541,7 @@ onUnmounted(() => {
           "
         >
           ↑ {{ t("repositoryRoot") }}
-        </fluent-button>
+        </FluentButton>
         <RouterLink
           v-for="entry in filteredEntries"
           :key="entry.path"
@@ -625,16 +617,16 @@ onUnmounted(() => {
             </button></span
           ><span>{{ file.size }} {{ t("bytes") }} · {{ file.oid.slice(0, 7) }}</span>
           <div>
-            <fluent-button
-              appearance="outline"
+            <FluentButton
+              tone="secondary"
               :disabled="file.binary || file.content === null"
               @click="rawFile"
-              >{{ t("raw") }}</fluent-button
-            ><fluent-button
-              appearance="outline"
+              >{{ t("raw") }}</FluentButton
+            ><FluentButton
+              tone="secondary"
               :disabled="file.binary || file.content === null"
               @click="downloadText"
-              ><AppIcon slot="start" name="download" />{{ t("download") }}</fluent-button
+              ><AppIcon name="download" />{{ t("download") }}</FluentButton
             >
           </div>
         </div>
@@ -816,9 +808,9 @@ onUnmounted(() => {
             >
           </div>
         </div>
-        <fluent-button v-if="hasMoreCommits" type="button" @click="loadMore">
+        <FluentButton v-if="hasMoreCommits" type="button" @click="loadMore">
           {{ t("loadMore") }}
-        </fluent-button>
+        </FluentButton>
       </section>
       <section v-if="route.query.oid && !emptyRepository" class="box box-form commit-detail">
         <p class="eyebrow">{{ t("commitDetails") }}</p>
@@ -850,9 +842,7 @@ onUnmounted(() => {
             {{ item.shortName }}
           </option>
         </SelectField>
-        <fluent-button type="button" appearance="primary" @click="load">{{
-          t("compare")
-        }}</fluent-button>
+        <FluentButton type="button" tone="primary" @click="load">{{ t("compare") }}</FluentButton>
       </div>
       <p v-if="comparison" class="muted">
         {{ comparison.commits.length }} {{ t("commits") }} · {{ comparison.files.length }}
@@ -880,8 +870,7 @@ onUnmounted(() => {
   gap: var(--spacingHorizontalM);
   flex-wrap: wrap;
 }
-.toolbar-row > fluent-field,
-.toolbar-row > fluent-text-input {
+.toolbar-row > .text-field {
   width: auto;
   min-width: 0;
   flex: 1 1 200px;

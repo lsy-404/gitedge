@@ -16,7 +16,7 @@ import type {
 } from "../lib/api";
 import { ApiError, api } from "../lib/api";
 import { sessionState } from "../lib/session";
-import { eventChecked, oneOf } from "../ui/formEvents";
+import { oneOf } from "../ui/formEvents";
 import AppIcon from "./AppIcon.vue";
 import AppLink from "./AppLink.vue";
 import AssignmentPanel from "./AssignmentPanel.vue";
@@ -613,13 +613,13 @@ watch(
                   : t("wiki")
           }}
         </h1>
-        <fluent-button
+        <FluentButton
           v-if="canCreate && (section !== 'wiki' || repository.canWrite)"
           type="button"
-          appearance="primary"
+          tone="primary"
           @click="showForm = !showForm"
         >
-          <AppIcon slot="start" name="plus" />
+          <AppIcon name="plus" />
           {{
             section === "issues"
               ? t("createIssue")
@@ -629,7 +629,7 @@ watch(
                   ? t("createDiscussion")
                   : t("createWiki")
           }}
-        </fluent-button>
+        </FluentButton>
       </div>
       <form
         v-if="showForm"
@@ -858,23 +858,23 @@ watch(
           v-if="showEditActions && 'state' in item && item.state !== 'merged'"
           class="detail-actions"
         >
-          <fluent-button type="button" @click="editMode = !editMode">
-            {{ editMode ? t("cancel") : t("edit") }}</fluent-button
-          ><fluent-button
+          <FluentButton type="button" @click="editMode = !editMode">
+            {{ editMode ? t("cancel") : t("edit") }}</FluentButton
+          ><FluentButton
             v-if="item.state === 'closed'"
             type="button"
             :disabled="saving"
             @click="updateState('open')"
           >
-            {{ t("reopen") }}</fluent-button
-          ><fluent-button
+            {{ t("reopen") }}</FluentButton
+          ><FluentButton
             v-if="item.state === 'open'"
             type="button"
             :disabled="saving"
             @click="updateState('closed')"
           >
             {{ t("closeIssue") }}
-          </fluent-button>
+          </FluentButton>
         </div>
       </header>
       <article
@@ -900,19 +900,13 @@ watch(
               t("labels")
             }}</TextField>
           </template>
-          <fluent-field v-if="section === 'pulls'" label-position="after">
-            <label slot="label" for="edit-draft">{{ t("draftPull") }}</label>
-            <fluent-checkbox
-              id="edit-draft"
-              slot="input"
-              :checked="editDraft.draft"
-              @change="editDraft.draft = eventChecked($event)"
-            />
-          </fluent-field>
+          <FluentCheckbox v-if="section === 'pulls'" id="edit-draft" v-model="editDraft.draft">
+            {{ t("draftPull") }}
+          </FluentCheckbox>
           <div class="form-actions">
-            <fluent-button type="submit" appearance="primary" :disabled="saving">{{
+            <FluentButton type="submit" tone="primary" :disabled="saving">{{
               t("save")
-            }}</fluent-button>
+            }}</FluentButton>
           </div>
         </form>
         <MarkdownContent
@@ -929,9 +923,9 @@ watch(
         </div>
 
         <div v-if="section === 'wiki' && showEditActions" class="wiki-edit-actions">
-          <fluent-button type="button" @click="wikiEditing = !wikiEditing">
+          <FluentButton type="button" @click="wikiEditing = !wikiEditing">
             {{ wikiEditing ? t("cancel") : t("edit") }}
-          </fluent-button>
+          </FluentButton>
           <form v-if="wikiEditing" class="form-stack inline-form" @submit.prevent="saveWiki">
             <TextField v-model="wikiDraft.title" required>{{ t("issueTitle") }}</TextField>
             <div class="composer-tabs">
@@ -953,9 +947,9 @@ watch(
               :source="wikiDraft.content || t('nothingToPreview')"
             />
             <div class="form-actions">
-              <fluent-button type="submit" appearance="primary" :disabled="saving">{{
+              <FluentButton type="submit" tone="primary" :disabled="saving">{{
                 t("save")
-              }}</fluent-button>
+              }}</FluentButton>
             </div>
           </form>
         </div>
@@ -969,7 +963,7 @@ watch(
             <strong>r{{ revision.revision }} · {{ revision.title }}</strong
             ><small
               >{{ revision.updatedBy }} · {{ new Date(revision.updatedAt).toLocaleString() }}</small
-            ><fluent-button
+            ><FluentButton
               v-if="showEditActions"
               type="button"
               size="small"
@@ -977,7 +971,7 @@ watch(
               @click="restoreWiki(revision)"
             >
               {{ t("restoreRevision") }}
-            </fluent-button>
+            </FluentButton>
           </div>
         </div>
       </article>
@@ -1063,13 +1057,13 @@ watch(
           <span v-else class="muted">{{ t("binaryPreviewUnavailable") }}</span>
         </div>
         <div v-if="showEditActions && pullIsOpen" class="merge-actions">
-          <fluent-button
+          <FluentButton
             type="button"
-            appearance="primary"
+            tone="primary"
             :disabled="saving || !diff.headOid"
             @click="mergePull"
           >
-            {{ t("mergePull") }}</fluent-button
+            {{ t("mergePull") }}</FluentButton
           ><span class="muted">{{ t("mergeUsesCurrentHeads") }}</span>
         </div>
       </section>
@@ -1110,7 +1104,7 @@ watch(
             :label="t('reviewBody')"
           />
           <div class="form-actions">
-            <fluent-button type="submit">{{ t("submitReview") }}</fluent-button>
+            <FluentButton type="submit">{{ t("submitReview") }}</FluentButton>
           </div>
         </form>
       </section>
@@ -1131,13 +1125,9 @@ watch(
             t("outdatedCheck")
           }}</StatusBadge>
           <p>{{ check.summary }}</p>
-          <fluent-link
-            v-if="check.detailsUrl"
-            :href="check.detailsUrl"
-            target="_blank"
-            rel="noreferrer"
-            >{{ t("details") }}</fluent-link
-          >
+          <a v-if="check.detailsUrl" :href="check.detailsUrl" target="_blank" rel="noreferrer">{{
+            t("details")
+          }}</a>
         </div>
         <form
           v-if="repository.canWrite && pullIsOpen"
@@ -1173,7 +1163,7 @@ watch(
             :label="t('summary')"
           />
           <div class="form-actions">
-            <fluent-button type="submit">{{ t("addCheck") }}</fluent-button>
+            <FluentButton type="submit">{{ t("addCheck") }}</FluentButton>
           </div>
         </form>
       </section>
@@ -1189,13 +1179,13 @@ watch(
               t("answerMarked")
             }}
           </p>
-          <fluent-button
+          <FluentButton
             v-if="showEditActions && discussionItem.answerCommentId"
             type="button"
             @click="markAnswer(null)"
           >
             {{ t("clearAnswer") }}
-          </fluent-button>
+          </FluentButton>
         </div>
       </section>
       <section
@@ -1211,33 +1201,33 @@ watch(
               t("agentAuthored")
             }}</StatusBadge
             ><small>{{ new Date(comment.createdAt).toLocaleString() }}</small
-            ><fluent-button
+            ><FluentButton
               v-if="showEditActions"
               type="button"
-              appearance="transparent"
+              tone="subtle"
               size="small"
               @click="startEditComment(comment)"
             >
-              {{ t("edit") }}</fluent-button
-            ><fluent-button
+              {{ t("edit") }}</FluentButton
+            ><FluentButton
               v-if="showEditActions"
               type="button"
-              appearance="transparent"
+              tone="subtle"
               size="small"
               @click="removeComment(comment)"
             >
-              {{ t("delete") }}</fluent-button
-            ><fluent-button
+              {{ t("delete") }}</FluentButton
+            ><FluentButton
               v-if="section === 'discussions' && showEditActions"
               type="button"
-              appearance="transparent"
+              tone="subtle"
               size="small"
               @click="toggleAnswer(comment)"
             >
               {{
                 discussionItem?.answerCommentId === comment.id ? t("clearAnswer") : t("markAnswer")
               }}
-            </fluent-button>
+            </FluentButton>
           </div>
           <MarkdownContent class="body-content" :source="comment.body" />
         </article>
@@ -1263,9 +1253,9 @@ watch(
             :source="commentBody || t('nothingToPreview')"
           />
           <div class="form-actions">
-            <fluent-button type="submit" appearance="primary" :disabled="saving">
+            <FluentButton type="submit" tone="primary" :disabled="saving">
               {{ editCommentId ? t("save") : t("comment") }}
-            </fluent-button>
+            </FluentButton>
           </div>
         </form>
         <p v-else class="muted">{{ t("signInToComment") }}</p>

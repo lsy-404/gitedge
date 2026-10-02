@@ -60,15 +60,15 @@ function remove(target: Assignee) {
         <StatusBadge :tone="entry.kind === 'agent' ? 'brand' : 'neutral'">{{
           entry.kind === "agent" ? t("agent") : t("assigneeHuman")
         }}</StatusBadge>
-        <fluent-button
+        <FluentButton
           v-if="canEdit"
           type="button"
-          appearance="transparent"
+          tone="subtle"
           size="small"
           :disabled="saving"
           :aria-label="t('assigneeRemove', { name: entry.name })"
           @click="remove(entry)"
-          >×</fluent-button
+          >×</FluentButton
         >
       </li>
     </ul>
@@ -121,7 +121,7 @@ function remove(target: Assignee) {
   overflow-wrap: anywhere;
   font-weight: var(--fontWeightSemibold);
 }
-.assignee-list fluent-button {
+.assignee-list FluentButton {
   margin-left: auto;
 }
 .assignee-empty {

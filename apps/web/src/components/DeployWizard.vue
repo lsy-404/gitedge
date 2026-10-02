@@ -3,10 +3,10 @@ import { computed, onBeforeUnmount, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type { DeployPlan, DeployResult } from "../../../../packages/contracts/src/deploy";
 import type { Repository } from "../lib/api";
-import { eventChecked } from "../ui/formEvents";
 import NoticeBar from "./NoticeBar.vue";
 import SelectField from "./SelectField.vue";
 import TextField from "./TextField.vue";
+import StatusBadge from "./StatusBadge.vue";
 
 type Account = { id: string; name: string };
 type ResourceAvailability = { id: string; exists: boolean };
@@ -246,9 +246,9 @@ const migrationPaths = computed(
         :placeholder="t('deployWizard.chooseRef')"
         >{{ t("deployWizard.ref") }}</TextField
       >
-      <fluent-button type="submit" appearance="primary" :disabled="loading">
+      <FluentButton type="submit" tone="primary" :disabled="loading">
         {{ loading ? "…" : t("deployWizard.load") }}
-      </fluent-button>
+      </FluentButton>
     </form>
     <div v-else-if="plan && (step === 'authorize' || step === 'review')" class="deploy-review">
       <h3>{{ t("deployWizard.review") }} · {{ plan.manifest.name }}</h3>
@@ -290,31 +290,25 @@ const migrationPaths = computed(
           {{ key }} = {{ value }}
         </li>
       </ul>
-      <fluent-accordion>
-        <fluent-accordion-item>
-          <span slot="heading"
-            >{{ t("deployWizard.license") }} · {{ plan.manifest.license.id }}</span
-          >
-          <pre class="deploy-disclosure-text">{{ plan.manifest.license.text }}</pre>
-        </fluent-accordion-item>
-        <fluent-accordion-item v-if="plan.manifest.terms.text">
-          <span slot="heading"
-            >{{ t("deployWizard.terms")
-            }}<span v-if="plan.manifest.terms.required">
-              · {{ t("deployWizard.required") }}</span
-            ></span
-          >
-          <pre class="deploy-disclosure-text">{{ plan.manifest.terms.text }}</pre>
-        </fluent-accordion-item>
-      </fluent-accordion>
+      <details class="deploy-disclosure">
+        <summary>{{ t("deployWizard.license") }} · {{ plan.manifest.license.id }}</summary>
+        <pre class="deploy-disclosure-text">{{ plan.manifest.license.text }}</pre>
+      </details>
+      <details v-if="plan.manifest.terms.text" class="deploy-disclosure">
+        <summary>
+          {{ t("deployWizard.terms")
+          }}<span v-if="plan.manifest.terms.required"> · {{ t("deployWizard.required") }}</span>
+        </summary>
+        <pre class="deploy-disclosure-text">{{ plan.manifest.terms.text }}</pre>
+      </details>
       <form v-if="step === 'authorize'" class="deploy-token-form" @submit.prevent="startSession">
         <TextField id="deploy-token" v-model="token" type="password" autocomplete="off" required>{{
           t("deployWizard.token")
         }}</TextField>
         <p class="muted">{{ t("deployWizard.tokenHint") }}</p>
-        <fluent-button type="submit" appearance="primary" :disabled="loading">
+        <FluentButton type="submit" tone="primary" :disabled="loading">
           {{ t("deployWizard.createSession") }}
-        </fluent-button>
+        </FluentButton>
       </form>
       <template v-else>
         <div v-if="accounts.length > 1" class="deploy-field">
@@ -328,9 +322,9 @@ const migrationPaths = computed(
               {{ account.name }}
             </option>
           </SelectField>
-          <fluent-button type="button" :disabled="loading" @click="chooseAccount">
+          <FluentButton type="button" :disabled="loading" @click="chooseAccount">
             {{ t("deployWizard.chooseAccount") }}
-          </fluent-button>
+          </FluentButton>
         </div>
         <p v-else-if="accounts.length === 1" class="deploy-account">
           <strong>{{ t("deployWizard.account") }}:</strong> {{ accounts[0].name }}
@@ -347,37 +341,27 @@ const migrationPaths = computed(
               @change="loadResources"
               >{{ resource.kind }} · {{ resource.binding }}</TextField
             >
-            <fluent-badge
-              appearance="outline"
-              :color="resourceAvailability[resource.id] ? 'warning' : 'success'"
-              >{{
-                resourceAvailability[resource.id]
-                  ? t("deployWizard.existing")
-                  : t("deployWizard.createNew")
-              }}</fluent-badge
-            >
+            <StatusBadge :tone="resourceAvailability[resource.id] ? 'warning' : 'success'">{{
+              resourceAvailability[resource.id]
+                ? t("deployWizard.existing")
+                : t("deployWizard.createNew")
+            }}</StatusBadge>
           </div>
           <TextField id="deploy-worker-name" v-model="workerName" required maxlength="58">{{
             t("deployWizard.workerName")
           }}</TextField>
         </div>
         <form class="deploy-confirm-form" @submit.prevent="deploy">
-          <fluent-field label-position="after">
-            <label slot="label" for="deploy-confirm">{{ t("deployWizard.confirm") }}</label>
-            <fluent-checkbox
-              id="deploy-confirm"
-              slot="input"
-              :checked="accepted"
-              @change="accepted = eventChecked($event)"
-            />
-          </fluent-field>
-          <fluent-button
+          <FluentCheckbox id="deploy-confirm" v-model="accepted">
+            {{ t("deployWizard.confirm") }}
+          </FluentCheckbox>
+          <FluentButton
             type="submit"
-            appearance="primary"
+            tone="primary"
             :disabled="loading || !accepted || (accounts.length > 1 && !accountConfirmed)"
           >
             {{ t("deployWizard.deploy") }}
-          </fluent-button>
+          </FluentButton>
         </form>
       </template>
     </div>
@@ -394,21 +378,16 @@ const migrationPaths = computed(
     </div>
     <NoticeBar v-if="error" intent="error">
       {{ error }}
-      <fluent-button
-        v-if="progress.some((item) => item.state === 'failed')"
-        slot="actions"
-        type="button"
-        size="small"
-        :disabled="loading"
-        @click="retry"
-      >
-        {{ t("deployWizard.retry") }}
-      </fluent-button>
+      <template v-if="progress.some((item) => item.state === 'failed')" #actions>
+        <FluentButton type="button" size="small" :disabled="loading" @click="retry">
+          {{ t("deployWizard.retry") }}
+        </FluentButton>
+      </template>
     </NoticeBar>
     <NoticeBar v-if="result" intent="success" class="deploy-result">
       <strong>{{ t("deployWizard.result") }}</strong>
-      <fluent-link v-if="result.url" :href="result.url" target="_blank" rel="noreferrer"
-        >{{ t("deployWizard.open") }} ↗</fluent-link
+      <a v-if="result.url" :href="result.url" target="_blank" rel="noreferrer"
+        >{{ t("deployWizard.open") }} ↗</a
       >
       <span v-else>{{ t("deployWizard.noUrl") }}</span>
     </NoticeBar>

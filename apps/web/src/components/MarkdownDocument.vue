@@ -142,19 +142,19 @@ async function viewRevision(revision: number) {
         >
       </span>
       <div class="doc-actions">
-        <fluent-button
+        <FluentButton
           v-if="canEdit && !editing && !viewing"
           type="button"
           size="small"
           @click="startEdit()"
-          >{{ t("edit") }}</fluent-button
+          >{{ t("edit") }}</FluentButton
         >
-        <fluent-button
+        <FluentButton
           type="button"
           size="small"
           :aria-expanded="showHistory"
           @click="toggleHistory"
-          >{{ t("history") }}</fluent-button
+          >{{ t("history") }}</FluentButton
         >
       </div>
     </div>
@@ -163,15 +163,11 @@ async function viewRevision(revision: number) {
       <TextAreaField v-model="draft" rows="14" :label="t('docContent')" />
       <NoticeBar v-if="error" intent="error">
         {{ error }}
-        <fluent-button
-          v-if="conflict"
-          slot="actions"
-          size="small"
-          type="button"
-          :disabled="saving"
-          @click="loadLatest"
-          >{{ t("docLoadLatest") }}</fluent-button
-        >
+        <template v-if="conflict" #actions>
+          <FluentButton size="small" type="button" :disabled="saving" @click="loadLatest">{{
+            t("docLoadLatest")
+          }}</FluentButton>
+        </template>
       </NoticeBar>
       <NoticeBar v-if="reloadedRevision !== null" intent="info">{{
         t("docLatestLoaded", { revision: reloadedRevision })
@@ -181,26 +177,27 @@ async function viewRevision(revision: number) {
         <MarkdownContent :source="document.content" />
       </details>
       <div class="form-actions">
-        <fluent-button type="button" @click="cancelEdit">{{ t("cancel") }}</fluent-button>
-        <fluent-button type="submit" appearance="primary" :disabled="saving">{{
+        <FluentButton type="button" @click="cancelEdit">{{ t("cancel") }}</FluentButton>
+        <FluentButton type="submit" tone="primary" :disabled="saving">{{
           saving ? t("loading") : t("save")
-        }}</fluent-button>
+        }}</FluentButton>
       </div>
     </form>
     <template v-else>
       <NoticeBar v-if="viewing" intent="info">
         {{ t("docViewing", { revision: viewing.revision }) }}
-        <fluent-button slot="actions" size="small" type="button" @click="viewing = null">{{
-          t("docBackToCurrent")
-        }}</fluent-button>
-        <fluent-button
-          v-if="canEdit"
-          slot="actions"
-          size="small"
-          type="button"
-          @click="startEdit(viewing.content)"
-          >{{ t("docRestoreDraft") }}</fluent-button
-        >
+        <template #actions>
+          <FluentButton size="small" type="button" @click="viewing = null">{{
+            t("docBackToCurrent")
+          }}</FluentButton>
+          <FluentButton
+            v-if="canEdit"
+            size="small"
+            type="button"
+            @click="startEdit(viewing.content)"
+            >{{ t("docRestoreDraft") }}</FluentButton
+          >
+        </template>
       </NoticeBar>
       <NoticeBar v-if="error" intent="error">{{ error }}</NoticeBar>
       <MarkdownContent v-if="shown.content.trim()" class="doc-body" :source="shown.content" />
@@ -222,13 +219,13 @@ async function viewRevision(revision: number) {
             >{{ t("docSize", { size: revision.size }) }} ·
             {{ new Date(revision.updatedAt).toLocaleString() }}</small
           >
-          <fluent-button
+          <FluentButton
             type="button"
             size="small"
             :aria-label="`${t('docViewRevision')} r${revision.revision}`"
             :disabled="shown.revision === revision.revision"
             @click="viewRevision(revision.revision)"
-            >{{ t("docViewRevision") }}</fluent-button
+            >{{ t("docViewRevision") }}</FluentButton
           >
         </li>
       </ol>
@@ -299,7 +296,7 @@ async function viewRevision(revision: number) {
   min-height: 44px;
   border-bottom: var(--strokeWidthThin) solid var(--colorNeutralStroke2);
 }
-.doc-revisions li fluent-button {
+.doc-revisions li .fluent-button {
   margin-left: auto;
 }
 </style>

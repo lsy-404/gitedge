@@ -222,19 +222,19 @@ watch(
 
       <div class="tasks-toolbar">
         <div class="view-switch" role="group" :aria-label="t('taskViews')">
-          <fluent-button
+          <FluentButton
             type="button"
-            :appearance="view === 'list' ? 'primary' : 'secondary'"
+            :tone="view === 'list' ? 'primary' : 'secondary'"
             :aria-pressed="view === 'list'"
             @click="setView('list')"
-            >{{ t("taskViewList") }}</fluent-button
+            >{{ t("taskViewList") }}</FluentButton
           >
-          <fluent-button
+          <FluentButton
             type="button"
-            :appearance="view === 'table' ? 'primary' : 'secondary'"
+            :tone="view === 'table' ? 'primary' : 'secondary'"
             :aria-pressed="view === 'table'"
             @click="setView('table')"
-            >{{ t("taskViewTable") }}</fluent-button
+            >{{ t("taskViewTable") }}</FluentButton
           >
         </div>
         <SelectField
@@ -249,16 +249,16 @@ watch(
             {{ t(`taskStatus_${status}`) }}
           </option>
         </SelectField>
-        <fluent-button
+        <FluentButton
           v-if="canWrite"
           class="new-task"
           type="button"
-          appearance="primary"
+          tone="primary"
           :aria-expanded="showForm"
           @click="showForm = !showForm"
         >
-          <AppIcon slot="start" name="plus" />{{ t("newTask") }}
-        </fluent-button>
+          <AppIcon name="plus" />{{ t("newTask") }}
+        </FluentButton>
       </div>
 
       <form v-if="showForm" class="box box-form form-stack task-form" @submit.prevent="createTask">
@@ -269,10 +269,10 @@ watch(
         <TextAreaField v-model="form.description" rows="4" :label="t('description')" />
         <NoticeBar v-if="formError" intent="error">{{ formError }}</NoticeBar>
         <div class="form-actions">
-          <fluent-button type="button" @click="showForm = false">{{ t("cancel") }}</fluent-button>
-          <fluent-button type="submit" appearance="primary" :disabled="saving">{{
+          <FluentButton type="button" @click="showForm = false">{{ t("cancel") }}</FluentButton>
+          <FluentButton type="submit" tone="primary" :disabled="saving">{{
             saving ? t("loading") : t("create")
-          }}</fluent-button>
+          }}</FluentButton>
         </div>
       </form>
 
@@ -282,9 +282,9 @@ watch(
             <p class="eyebrow">{{ t("taskViewTable") }}</p>
             <p class="muted">{{ t("taskTableHint") }}</p>
           </div>
-          <fluent-button v-if="table" type="button" size="small" @click="copyTable">
-            <AppIcon slot="start" name="copy" />{{ copied ? t("copied") : t("copyMarkdown") }}
-          </fluent-button>
+          <FluentButton v-if="table" type="button" size="small" @click="copyTable">
+            <AppIcon name="copy" />{{ copied ? t("copied") : t("copyMarkdown") }}
+          </FluentButton>
         </div>
         <p v-if="!table" class="state" role="status">{{ t("loading") }}</p>
         <MarkdownContent v-else :source="table.markdown" />

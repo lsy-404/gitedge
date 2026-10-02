@@ -101,7 +101,7 @@ function githubLogin() {
     </div>
     <div class="auth-card">
       <div class="auth-provider-list">
-        <fluent-button
+        <FluentButton
           type="button"
           class="btn auth-provider-choice github-auth-choice"
           @click="githubLogin"
@@ -109,7 +109,7 @@ function githubLogin() {
           <span class="provider-mark github-mark"><AppIcon name="github" /></span>
           <strong>{{ t("githubSignIn") }}</strong
           ><StatusBadge>OAuth</StatusBadge>
-        </fluent-button>
+        </FluentButton>
         <a
           v-for="provider in federationProviders"
           :key="provider.id"
@@ -121,13 +121,13 @@ function githubLogin() {
           ><StatusBadge>{{ provider.protocol.toUpperCase() }}</StatusBadge>
         </a>
         <NoticeBar v-if="providersError" intent="warning">{{ t("ssoProvidersError") }}</NoticeBar>
-        <fluent-link
+        <a
           v-for="provider in samlProviders"
           :key="`${provider.id}-metadata`"
           :href="metadataHref(provider.metadataUrl) || undefined"
           target="_blank"
           rel="noreferrer"
-          >{{ provider.label }} · {{ t("ssoMetadata") }}</fluent-link
+          >{{ provider.label }} · {{ t("ssoMetadata") }}</a
         >
       </div>
       <div class="auth-divider">

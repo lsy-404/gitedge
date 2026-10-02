@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, ref, watch } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   ApiError,
@@ -9,7 +9,6 @@ import {
   type CreatedAgentSession,
   type Repository,
 } from "../lib/api";
-import { Dialog } from "@fluentui/web-components/dialog/class.js";
 import SelectField from "../components/SelectField.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import StatusState from "../components/StatusState.vue";
@@ -25,7 +24,6 @@ const permissions = ["read", "write"] as const;
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
-const credentialDialog = ref<HTMLElement | null>(null);
 const agents = ref<Agent[]>([]);
 const repositories = ref<Repository[]>([]);
 const sessions = ref<AgentSession[]>([]);
@@ -42,6 +40,12 @@ let sessionClockTimer: number | undefined;
 const saving = ref(false);
 const error = ref("");
 const createdSession = ref<CreatedAgentSession | null>(null);
+const credentialDialogOpen = computed({
+  get: () => createdSession.value !== null,
+  set: (open: boolean) => {
+    if (!open) clearCredentials();
+  },
+});
 const agentForm = ref({ name: "", description: "" });
 const showAgentForm = ref(false);
 const showSessionForm = ref(false);
@@ -190,20 +194,6 @@ function closeAgentForm() {
   if (route.query.new)
     void router.replace({ path: route.path, query: { ...route.query, new: undefined } });
 }
-/** The credentials dialog is modal: Fluent supplies the focus trap and Escape handling. */
-watch(createdSession, async (session) => {
-  if (!session) return;
-  await nextTick();
-  if (credentialDialog.value instanceof Dialog) credentialDialog.value.show();
-});
-/** Fluent reports open state changes as a CustomEvent whose detail carries `newState`. */
-function onDialogToggle(event: Event) {
-  if (!(event instanceof CustomEvent)) return;
-  const detail: unknown = event.detail;
-  if (typeof detail === "object" && detail !== null && "newState" in detail) {
-    if (detail.newState === "closed") clearCredentials();
-  }
-}
 watch(selectedAgent, () => {
   createSessionVersion += 1;
   clearCredentials();
@@ -263,12 +253,12 @@ sessionClockTimer = window.setInterval(() => {
               <span>{{ t("yourAgents") }}</span
               ><StatusBadge>{{ agents.length }}</StatusBadge>
             </div>
-            <fluent-button
+            <FluentButton
               v-for="agent in agents"
               :key="agent.id"
               type="button"
               class="agent-choice"
-              :appearance="selectedAgent === agent.id ? 'secondary' : 'transparent'"
+              :tone="selectedAgent === agent.id ? 'secondary' : 'subtle'"
               :aria-pressed="selectedAgent === agent.id"
               @click="selectedAgent = agent.id"
             >
@@ -278,7 +268,7 @@ sessionClockTimer = window.setInterval(() => {
                   agent.disabledAt ? t("disabled") : agent.description || t("noDescription")
                 }}</small>
               </span>
-            </fluent-button>
+            </FluentButton>
             <div v-if="!agents.length" class="agent-empty">
               <AppIcon name="agent" :size="22" /><strong>{{ t("noAgents") }}</strong
               ><span class="muted">{{ t("agentEmptyHint") }}</span
@@ -294,14 +284,14 @@ sessionClockTimer = window.setInterval(() => {
                   <h2>{{ currentAgent.name }}</h2>
                   <p class="muted">{{ currentAgent.description || t("noDescription") }}</p>
                 </div>
-                <fluent-button
+                <FluentButton
                   v-if="!currentAgent.disabledAt"
                   class="btn btn-danger btn-sm"
                   type="button"
                   @click="disableAgent(currentAgent)"
                 >
                   {{ t("disableAgent") }}
-                </fluent-button>
+                </FluentButton>
               </div>
               <small class="muted"
                 >{{ t("createdAt") }} {{ new Date(currentAgent.createdAt).toLocaleString() }}</small
@@ -377,17 +367,15 @@ sessionClockTimer = window.setInterval(() => {
           </div>
           <div v-else class="box state">{{ t("selectAgent") }}</div>
         </div>
-        <fluent-dialog
-          v-if="createdSession"
-          ref="credentialDialog"
-          type="modal"
-          aria-labelledby="credential-title"
-          @toggle="onDialogToggle"
+        <FluentDialog
+          v-model:open="credentialDialogOpen"
+          :label="t(credentialsExpired ? 'tokenExpired' : 'copyBeforeClose')"
+          close-on-outside
         >
-          <fluent-dialog-body>
-            <span id="credential-title" slot="title">{{
-              t(credentialsExpired ? "tokenExpired" : "copyBeforeClose")
-            }}</span>
+          <template #title>
+            <span>{{ t(credentialsExpired ? "tokenExpired" : "copyBeforeClose") }}</span>
+          </template>
+          <div v-if="createdSession">
             <div class="credential-card">
               <p class="eyebrow">{{ t("oneTimeCredentials") }}</p>
               <div v-if="!credentialsExpired" class="credential-field">
@@ -408,16 +396,13 @@ sessionClockTimer = window.setInterval(() => {
               </div>
               <p class="muted">{{ t("credentialsNotSaved") }}</p>
             </div>
-            <fluent-button
-              slot="action"
-              type="button"
-              appearance="primary"
-              @click="clearCredentials"
-            >
+          </div>
+          <template #footer>
+            <FluentButton type="button" tone="primary" @click="clearCredentials">
               {{ t("close") }}
-            </fluent-button>
-          </fluent-dialog-body>
-        </fluent-dialog>
+            </FluentButton>
+          </template>
+        </FluentDialog>
         <div v-if="showAgentForm" class="workspace-modal-backdrop" @click.self="closeAgentForm">
           <section
             class="workspace-modal"

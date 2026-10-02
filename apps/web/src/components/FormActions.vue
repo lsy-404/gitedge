@@ -8,9 +8,9 @@ defineEmits<{ cancel: [] }>();
 <template>
   <NoticeBar v-if="error" intent="error">{{ error }}</NoticeBar>
   <div class="form-actions">
-    <fluent-button type="button" @click="$emit('cancel')">{{ $t("cancel") }}</fluent-button>
-    <fluent-button type="submit" appearance="primary" :disabled="saving">
+    <FluentButton type="button" @click="$emit('cancel')">{{ $t("cancel") }}</FluentButton>
+    <FluentButton type="submit" tone="primary" :disabled="saving">
       {{ saving ? $t("loading") : $t("create") }}
-    </fluent-button>
+    </FluentButton>
   </div>
 </template>

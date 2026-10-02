@@ -6,11 +6,8 @@ withDefaults(defineProps<{ intent?: "error" | "success" | "info" | "warning" }>(
 </script>
 
 <template>
-  <fluent-message-bar
-    :intent="intent"
-    shape="square"
-    :role="intent === 'error' ? 'alert' : 'status'"
-  >
+  <FluentNotice :tone="intent === 'error' ? 'danger' : intent">
     <slot />
-  </fluent-message-bar>
+    <span v-if="$slots.actions" class="notice-actions"><slot name="actions" /></span>
+  </FluentNotice>
 </template>

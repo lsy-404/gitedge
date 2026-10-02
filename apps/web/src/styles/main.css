@@ -1,15 +1,82 @@
+@import "@platform-kit/fluent/style.css";
 @import "./shell.css";
 
-:root {
-  --bg: var(--colorNeutralBackground1, #ffffff);
-  --subtle: var(--colorNeutralBackground2, #f6f8fa);
-  --text: var(--colorNeutralForeground1, #1f2328);
-  --muted: var(--colorNeutralForeground3, #59636e);
-  --border: var(--colorNeutralStroke2, #d1d9e0);
+.fluent-theme {
+  min-height: 100vh;
+  background: var(--fluent-bg);
+  --colorNeutralBackground1: var(--fluent-bg);
+  --colorNeutralBackground2: var(--fluent-surface);
+  --colorNeutralBackground3: var(--fluent-control);
+  --colorNeutralForeground1: var(--fluent-text);
+  --colorNeutralForeground2: var(--fluent-muted);
+  --colorNeutralForeground3: var(--fluent-muted);
+  --colorNeutralStroke1: var(--fluent-border);
+  --colorNeutralStroke2: var(--fluent-border);
+  --colorBrandForegroundLink: var(--accent);
+  --colorBrandForegroundLinkHover: var(--accent);
+  --strokeWidthThin: 1px;
+  --bg: var(--fluent-bg);
+  --subtle: var(--fluent-surface);
+  --text: var(--fluent-text);
+  --muted: var(--fluent-muted);
+  --border: var(--fluent-border);
+  --link: var(--accent);
+  --success: var(--fluent-success);
+  --danger: var(--fluent-danger);
   --accent: #f6821f;
-  --link: var(--colorBrandForegroundLink, #0969da);
-  --success: light-dark(#1a7f37, #3fb950);
-  --danger: light-dark(#d1242f, #f85149);
+  --colorBrandBackground: var(--accent);
+  --colorCompoundBrandForeground1: var(--accent);
+  --colorCompoundBrandStroke: var(--accent);
+  --colorPaletteGreenForeground1: var(--fluent-success);
+  --colorPaletteMarigoldForeground2: var(--fluent-warning);
+  --colorPaletteRedForeground1: var(--fluent-danger);
+  --borderRadiusCircular: 999px;
+  --borderRadiusMedium: var(--fluent-radius);
+  --fontFamilyBase: var(--fluent-font);
+  --fontFamilyMonospace: var(--font-mono);
+  --fontSizeBase200: 12px;
+  --fontSizeBase300: 14px;
+  --fontSizeBase600: 20px;
+  --fontSizeHero700: 24px;
+  --fontWeightRegular: 400;
+  --fontWeightSemibold: 600;
+  --lineHeightBase600: 28px;
+  --lineHeightHero700: 32px;
+  --spacingHorizontalXS: 4px;
+  --spacingHorizontalS: 8px;
+  --spacingHorizontalM: 12px;
+  --spacingHorizontalL: 16px;
+  --spacingHorizontalXL: 20px;
+  --spacingHorizontalXXL: 32px;
+  --spacingVerticalXXS: 2px;
+  --spacingVerticalXS: 4px;
+  --spacingVerticalS: 8px;
+  --spacingVerticalM: 12px;
+  --spacingVerticalL: 16px;
+  --spacingVerticalXL: 20px;
+  --spacingVerticalXXL: 32px;
+}
+.fluent-theme[data-density="compact"] {
+  --spacingHorizontalS: 6px;
+  --spacingHorizontalM: 8px;
+  --spacingHorizontalL: 12px;
+  --spacingHorizontalXL: 16px;
+  --spacingVerticalS: 6px;
+  --spacingVerticalM: 8px;
+  --spacingVerticalL: 12px;
+  --spacingVerticalXL: 16px;
+}
+
+:root {
+  --bg: #202020;
+  --subtle: #292929;
+  --text: #f4f4f4;
+  --muted: #c4c4c4;
+  --border: rgba(255, 255, 255, 0.16);
+  --accent: #f6821f;
+  --link: #f6821f;
+  --success: #6ccb5f;
+  --danger: #ff99a4;
   --radius: 6px;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
@@ -17,7 +84,7 @@
   box-sizing: border-box;
 }
 html {
-  color-scheme: dark light;
+  color-scheme: dark;
 }
 body {
   margin: 0;
@@ -112,19 +179,22 @@ textarea {
 input[type="checkbox"] {
   accent-color: var(--accent);
 }
-fluent-text-input,
-fluent-textarea,
-fluent-field,
-fluent-dropdown {
+.fluent-link {
+  color: var(--link);
+}
+.fluent-field {
   width: 100%;
   max-width: none;
 }
-fluent-button,
-fluent-anchor-button {
-  min-height: 32px;
+.notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacingHorizontalS);
+  margin-top: var(--spacingVerticalS);
 }
-fluent-button[size="small"] {
+.fluent-button[size="small"] {
   min-height: 28px;
+  padding: 2px 8px;
 }
 .btn {
   display: inline-flex;
@@ -521,6 +591,26 @@ details > summary::-webkit-details-marker {
   overflow-wrap: anywhere;
   color: var(--colorNeutralForeground2);
   font: var(--fontSizeBase200) / 1.6 var(--fontFamilyMonospace);
+}
+.deploy-disclosure {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.deploy-disclosure + .deploy-disclosure {
+  margin-top: var(--spacingVerticalS);
+}
+.deploy-disclosure > summary {
+  padding: var(--spacingVerticalS) var(--spacingHorizontalM);
+  cursor: pointer;
+}
+.deploy-disclosure[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+.deploy-disclosure > .deploy-disclosure-text {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
 }
 .deploy-token-form,
 .deploy-resource-controls,
