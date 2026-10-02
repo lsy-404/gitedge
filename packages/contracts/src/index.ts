@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { GitBranchSchema, type AgentSessionIdentity } from "./forge";
 export * from "./forge";
+export * from "./tasks";
 export * from "./trust";
 export * from "./account";
 
@@ -181,7 +182,6 @@ export const CreateIssueInputSchema = z.object({
   title: z.string().trim().min(1).max(200),
   body: z.string().max(50_000).default(""),
   labels: z.array(z.string().trim().min(1).max(50)).max(20).default([]),
-  assignees: z.array(z.string().trim().min(1).max(64)).max(20).default([]),
 });
 
 export const UpdateIssueInputSchema = z
@@ -190,7 +190,6 @@ export const UpdateIssueInputSchema = z
     body: z.string().max(50_000).optional(),
     state: z.enum(["open", "closed"]).optional(),
     labels: z.array(z.string().trim().min(1).max(50)).max(20).optional(),
-    assignees: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
   })
   .refine((value) => Object.keys(value).length > 0);
 

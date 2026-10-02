@@ -19,6 +19,7 @@ import { sessionState } from "../lib/session";
 import { eventChecked, oneOf } from "../ui/formEvents";
 import AppIcon from "./AppIcon.vue";
 import AppLink from "./AppLink.vue";
+import AssignmentPanel from "./AssignmentPanel.vue";
 import FormActions from "./FormActions.vue";
 import SelectField from "./SelectField.vue";
 import StatusBadge from "./StatusBadge.vue";
@@ -72,7 +73,7 @@ const error = ref("");
 const notFound = ref(false);
 const showForm = ref(false);
 const editMode = ref(false);
-const editDraft = ref({ title: "", body: "", labels: "", assignees: "", draft: false });
+const editDraft = ref({ title: "", body: "", labels: "", draft: false });
 const saving = ref(false);
 const formError = ref("");
 const form = ref<{
@@ -81,7 +82,6 @@ const form = ref<{
   headRef: string;
   baseRef: string;
   labels: string;
-  assignees: string;
   category: Discussion["category"];
   slug: string;
   headSessionId: string;
@@ -91,7 +91,6 @@ const form = ref<{
   headRef: "",
   baseRef: props.repository.defaultBranch,
   labels: "",
-  assignees: "",
   category: "general",
   slug: "",
   headSessionId: "",
@@ -136,12 +135,8 @@ function matchesFilters(row: Issue | PullRequest | Discussion): boolean {
   return matchesState && matchesCategory && matchesText;
 }
 function isAssignedToMe(issue: Issue): boolean {
-  const identifier = sessionState.user?.identifier;
-  return Boolean(
-    identifier &&
-    issue.assignees.some(
-      (assignee) => assignee.toLocaleLowerCase() === identifier.toLocaleLowerCase()
-    )
+  return issue.assignees.some(
+    (assignee) => assignee.kind === "user" && assignee.id === sessionState.user?.id
   );
 }
 const baseIssues = computed(() => issues.value.filter(matchesFilters));
@@ -253,7 +248,6 @@ async function load() {
           title: detail.title,
           body: detail.body,
           labels: detail.labels.join(", "),
-          assignees: detail.assignees.join(", "),
           draft: false,
         };
         comments.value = rows;
@@ -273,7 +267,6 @@ async function load() {
           title: detail.title,
           body: detail.body,
           labels: "",
-          assignees: "",
           draft: detail.draft,
         };
         comments.value = rows;
@@ -303,7 +296,6 @@ async function load() {
           title: detail.title,
           body: detail.body,
           labels: "",
-          assignees: "",
           draft: false,
         };
         comments.value = rows;
@@ -340,7 +332,6 @@ function resetForm() {
     headRef: "",
     baseRef: props.repository.defaultBranch,
     labels: "",
-    assignees: "",
     category: "general",
     slug: "",
     headSessionId: "",
@@ -355,10 +346,6 @@ async function submitCreate() {
         title: form.value.title,
         body: form.value.body,
         labels: form.value.labels
-          .split(",")
-          .map((x) => x.trim())
-          .filter(Boolean),
-        assignees: form.value.assignees
           .split(",")
           .map((x) => x.trim())
           .filter(Boolean),
@@ -406,10 +393,6 @@ async function saveItem() {
         title: editDraft.value.title,
         body: editDraft.value.body,
         labels: editDraft.value.labels
-          .split(",")
-          .map((value) => value.trim())
-          .filter(Boolean),
-        assignees: editDraft.value.assignees
           .split(",")
           .map((value) => value.trim())
           .filter(Boolean),
@@ -661,9 +644,6 @@ watch(
         <template v-if="section === 'issues'">
           <TextField v-model="form.labels" :placeholder="t('commaSeparated')">{{
             t("labels")
-          }}</TextField>
-          <TextField v-model="form.assignees" :placeholder="t('commaSeparated')">{{
-            t("assignees")
           }}</TextField>
         </template>
         <template v-if="section === 'pulls'">
@@ -919,9 +899,6 @@ watch(
             <TextField v-model="editDraft.labels" :placeholder="t('commaSeparated')">{{
               t("labels")
             }}</TextField>
-            <TextField v-model="editDraft.assignees" :placeholder="t('commaSeparated')">{{
-              t("assignees")
-            }}</TextField>
           </template>
           <fluent-field v-if="section === 'pulls'" label-position="after">
             <label slot="label" for="edit-draft">{{ t("draftPull") }}</label>
@@ -950,6 +927,7 @@ watch(
             >{{ t("mergedCommit") }} {{ item.mergedOid.slice(0, 8) }}</StatusBadge
           >
         </div>
+
         <div v-if="section === 'wiki' && showEditActions" class="wiki-edit-actions">
           <fluent-button type="button" @click="wikiEditing = !wikiEditing">
             {{ wikiEditing ? t("cancel") : t("edit") }}
@@ -1014,19 +992,13 @@ watch(
           </div>
           <p v-else class="muted">{{ t("noLabels") }}</p>
         </section>
-        <section v-if="'assignees' in item" class="sidebar-section">
-          <h3>{{ t("assignees") }}</h3>
-          <p
-            v-if="item.assignees.length"
-            v-for="assignee in item.assignees"
-            :key="assignee"
-            class="sidebar-person"
-          >
-            <span class="avatar">{{ assignee.slice(0, 1).toUpperCase() }}</span
-            >{{ assignee }}
-          </p>
-          <p v-else class="muted">{{ t("noAssignees") }}</p>
-        </section>
+        <AssignmentPanel
+          v-if="(section === 'issues' || section === 'pulls') && 'assignees' in item"
+          :repository="repository"
+          :kind="section === 'issues' ? 'issue' : 'pull_request'"
+          :item="item"
+          @updated="item = $event"
+        />
         <section class="sidebar-section">
           <h3>{{ t("author") }}</h3>
           <p class="sidebar-person">

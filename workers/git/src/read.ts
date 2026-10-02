@@ -49,6 +49,30 @@ export async function resolveCommit(
   const commits = await repo.log({ ref, limit: 1 });
   return commits[0] ?? null;
 }
+const CONTAINMENT_PAGE_SIZE = 100;
+const CONTAINMENT_MAX_PAGES = 10;
+
+/**
+ * Whether a commit appears in the history of a ref. Scans at most
+ * CONTAINMENT_PAGE_SIZE * CONTAINMENT_MAX_PAGES commits from the tip, so very old commits on a
+ * long branch are reported as not contained.
+ */
+export async function refContainsCommit(
+  repo: ArtifactsRepo,
+  ref: string,
+  oid: string
+): Promise<boolean> {
+  for (let page = 0; page < CONTAINMENT_MAX_PAGES; page++) {
+    const commits = await repo.log({
+      ref,
+      limit: CONTAINMENT_PAGE_SIZE,
+      offset: page * CONTAINMENT_PAGE_SIZE,
+    });
+    if (commits.some((commit) => commit.hash === oid)) return true;
+    if (commits.length < CONTAINMENT_PAGE_SIZE) return false;
+  }
+  return false;
+}
 export async function readArtifactTree(
   repo: ArtifactsRepo,
   ref: string,

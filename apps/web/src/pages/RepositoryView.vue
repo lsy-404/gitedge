@@ -11,6 +11,8 @@ import StatusState from "../components/StatusState.vue";
 import DeployWizard from "../components/DeployWizard.vue";
 import RepositoryCode from "../components/RepositoryCode.vue";
 import RepositoryCollaboration from "../components/RepositoryCollaboration.vue";
+import RepositorySettings from "../components/RepositorySettings.vue";
+import RepositoryTasks from "../components/RepositoryTasks.vue";
 const route = useRoute();
 const { t, locale } = useI18n();
 const owner = computed(() => String(route.params.owner));
@@ -26,6 +28,7 @@ const tabs: { key: string; label: string; icon: IconName; write?: boolean }[] = 
   { key: "code", label: "code", icon: "code" },
   { key: "issues", label: "issues", icon: "issue" },
   { key: "pulls", label: "pulls", icon: "pr" },
+  { key: "tasks", label: "tasks", icon: "task" },
   { key: "agents", label: "agents", icon: "agent", write: true },
   { key: "discussions", label: "discussions", icon: "discussion" },
   { key: "wiki", label: "wiki", icon: "wiki" },
@@ -240,49 +243,11 @@ watch(
             </table>
           </div></template
         >
-        <template v-else-if="section === 'settings' && repository.canWrite"
-          ><div class="repository-panel-head">
-            <h2>{{ t("ghRepoSettings") }}</h2>
-          </div>
-          <div class="repo-settings-grid">
-            <section class="box">
-              <h3>{{ t("ghGeneral") }}</h3>
-              <label class="muted">{{ t("repositoryName") }}</label>
-              <p>
-                <strong>{{ repoName }}</strong>
-              </p>
-              <label class="muted">{{ t("ghDefaultBranch") }}</label>
-              <p><AppIcon name="branch" /> {{ repository.defaultBranch }}</p>
-            </section>
-            <section class="box">
-              <h3>{{ t("ghRepoAccess") }}</h3>
-              <StatusBadge>{{ t(repository.visibility) }}</StatusBadge>
-              <p>
-                {{ t(repository.visibility === "private" ? "ghPrivateAccess" : "ghPublicAccess") }}
-              </p>
-              <RouterLink
-                class="btn"
-                :to="
-                  owner === sessionState.user?.identifier
-                    ? '/settings/account'
-                    : `/organizations/${owner}`
-                "
-                >{{ t("ghManageAccess") }}</RouterLink
-              >
-            </section>
-            <section class="box">
-              <h3>{{ t("ghRepoTools") }}</h3>
-              <p>{{ t("ghRepoToolsText") }}</p>
-              <div class="toolbar">
-                <RouterLink class="btn" :to="base"
-                  ><AppIcon name="code" />{{ t("ghViewCode") }}</RouterLink
-                ><RouterLink class="btn" :to="`${base}/agents`"
-                  ><AppIcon name="agent" />{{ t("agents") }}</RouterLink
-                >
-              </div>
-            </section>
-          </div></template
-        >
+        <RepositoryTasks v-else-if="section === 'tasks'" :repository="repository" />
+        <RepositorySettings
+          v-else-if="section === 'settings' && repository.canWrite"
+          :repository="repository"
+        />
         <RepositoryCollaboration
           v-else-if="['issues', 'pulls', 'discussions', 'wiki'].includes(section)"
           :repository="repository"

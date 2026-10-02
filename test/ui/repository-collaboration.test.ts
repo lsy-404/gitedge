@@ -49,7 +49,8 @@ function issue(overrides: Partial<Issue> = {}): Issue {
     author: "example-user",
     actor: human,
     labels: ["bug"],
-    assignees: ["example-user"],
+    assignees: [{ kind: "user", id: "u-1", name: "example-user" }],
+    reviewers: [],
     createdAt: 10,
     updatedAt: 11,
     ...overrides,
@@ -70,6 +71,8 @@ function pull(overrides: Partial<PullRequest> = {}): PullRequest {
     headSessionId: null,
     draft: false,
     mergedOid: null,
+    assignees: [],
+    reviewers: [],
     createdAt: 10,
     updatedAt: 11,
     ...overrides,
@@ -179,6 +182,13 @@ async function mountSection(path: string, section: string) {
     component: Host,
     meta: { public: true },
   });
+  const detailRouteName = `${routeName}-detail`;
+  router.addRoute({
+    path: `/${repository.owner}/${repository.name}/${section}/${section === "wiki" ? ":slug?" : ":number?"}`,
+    name: detailRouteName,
+    component: Host,
+    meta: { public: true },
+  });
   await router.push(path);
   await router.isReady();
   const root = document.createElement("div");
@@ -195,6 +205,7 @@ async function mountSection(path: string, section: string) {
     app.unmount();
     root.remove();
     router.removeRoute(routeName);
+    router.removeRoute(detailRouteName);
   };
   pendingUnmounts.push(unmount);
   return {
@@ -252,10 +263,15 @@ describe("RepositoryCollaboration rendered workflows", () => {
         number: 7,
         title: "Assigned to me",
         actor: { kind: "agent", id: "agent-1", name: "Build agent" },
-        assignees: ["user@example.test"],
+        assignees: [{ kind: "user", id: "user-1", name: "user@example.test" }],
         updatedAt: 20,
       }),
-      issue({ number: 8, title: "Created by me", assignees: ["another-user"], updatedAt: 100 }),
+      issue({
+        number: 8,
+        title: "Created by me",
+        assignees: [{ kind: "user", id: "user-2", name: "another-user" }],
+        updatedAt: 100,
+      }),
       issue({
         id: "issue-3",
         number: 9,
@@ -284,7 +300,7 @@ describe("RepositoryCollaboration rendered workflows", () => {
     mounted.unmount();
   });
 
-  it("creates an issue with labels and assignees, edits it, comments, and closes it", async () => {
+  it("creates an issue with labels, edits it, comments, and closes it", async () => {
     const initial = issue();
     let latest = initial;
     let comments: Comment[] = [];
@@ -296,7 +312,6 @@ describe("RepositoryCollaboration rendered workflows", () => {
         title: payload.title,
         body: payload.body,
         labels: payload.labels ?? [],
-        assignees: payload.assignees ?? [],
       });
       return latest;
     });
@@ -325,7 +340,6 @@ describe("RepositoryCollaboration rendered workflows", () => {
     fill(createInputs[0], "Parser regression");
     fill(control(createForm, "textarea"), "Steps to reproduce");
     fill(createInputs[1], "bug, regression");
-    fill(createInputs[2], "alice, bob");
     submit(createForm);
     await settle();
 
@@ -333,11 +347,10 @@ describe("RepositoryCollaboration rendered workflows", () => {
       title: "Parser regression",
       body: "Steps to reproduce",
       labels: ["bug", "regression"],
-      assignees: ["alice", "bob"],
     });
     await vi.waitFor(
       () =>
-        expect(mounted.root.querySelector(".detail-heading h2")?.textContent).toContain(
+        expect(mounted.root.querySelector(".detail-titlebar h2")?.textContent).toContain(
           "Parser regression"
         ),
       { timeout: 10000 }
@@ -351,14 +364,12 @@ describe("RepositoryCollaboration rendered workflows", () => {
     fill(control(editForm, "input"), "Parser regression fixed");
     fill(control(editForm, "textarea"), "Updated reproduction details");
     fill(editForm.querySelectorAll<HTMLElement>("input")[1], "bug, fixed");
-    fill(editForm.querySelectorAll<HTMLElement>("input")[2], "alice");
     submit(editForm);
     await settle();
     expect(updateIssueSpy).toHaveBeenCalledWith("repo-1", 7, {
       title: "Parser regression fixed",
       body: "Updated reproduction details",
       labels: ["bug", "fixed"],
-      assignees: ["alice"],
     });
     expect(mounted.root.querySelector(".detail-titlebar h2")?.textContent).toContain(
       "Parser regression fixed"

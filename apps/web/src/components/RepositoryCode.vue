@@ -642,6 +642,7 @@ onUnmounted(() => {
           {{ t("binaryPreviewUnavailable") }}
         </p>
         <MarkdownContent
+          allow-images
           v-else-if="markdownFile && fileMode === 'preview'"
           class="file-markdown"
           :source="file.content"
@@ -678,6 +679,7 @@ onUnmounted(() => {
       <section v-if="readmeEntry && !filePath && !loading" class="readme-panel box">
         <div class="box-header"><AppIcon name="markdown" />{{ t("readme") }}</div>
         <MarkdownContent
+          allow-images
           :source="file?.content ?? ''"
           :base-url="`/${repository.owner}/${repository.name}/blob/README.md?ref=${encodeURIComponent(refName)}`"
         />

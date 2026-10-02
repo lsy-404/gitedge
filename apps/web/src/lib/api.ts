@@ -6,6 +6,7 @@ import type {
 import type {
   Agent,
   AgentSession,
+  Assignee,
   CheckRun,
   Comment,
   Discussion,
@@ -23,6 +24,27 @@ import type {
   CreatedAgentSession,
 } from "../../../../packages/contracts/src/forge";
 import type { SsoIdentity, SsoProviderSummary } from "../../../../packages/contracts/src/sso";
+import type {
+  AgentAssignmentPolicy,
+  AssigneeCandidate,
+  AssigneeRef,
+  AssignmentRole,
+  DocumentRevisionSummary,
+  MemoryIndex,
+  MemoryVisibility,
+  RepositorySettings,
+  RevisionActor,
+  Task,
+  TaskCommit,
+  TaskDetail,
+  TaskDocument,
+  TaskDocumentKind,
+  TaskLink,
+  TaskLinkKind,
+  TaskReference,
+  TaskStatus,
+  TaskTable,
+} from "../../../../packages/contracts/src/tasks";
 
 export type {
   Organization,
@@ -32,6 +54,7 @@ export type {
 export type {
   Agent,
   AgentSession,
+  Assignee,
   CheckRun,
   Comment,
   Discussion,
@@ -49,6 +72,27 @@ export type {
   CreatedAgentSession,
 };
 export type { SsoIdentity, SsoProviderSummary };
+export type {
+  AgentAssignmentPolicy,
+  AssigneeCandidate,
+  AssigneeRef,
+  AssignmentRole,
+  DocumentRevisionSummary,
+  MemoryIndex,
+  MemoryVisibility,
+  RepositorySettings,
+  RevisionActor,
+  Task,
+  TaskCommit,
+  TaskDetail,
+  TaskDocument,
+  TaskDocumentKind,
+  TaskLink,
+  TaskLinkKind,
+  TaskReference,
+  TaskStatus,
+  TaskTable,
+};
 
 export class ApiError extends Error {
   constructor(
@@ -230,7 +274,7 @@ export const api = {
     request<Issue>(repositoryPath(repositoryId, `issues/${number}`)),
   createIssue: (
     repositoryId: string,
-    payload: { title: string; body: string; labels?: string[]; assignees?: string[] }
+    payload: { title: string; body: string; labels?: string[] }
   ) =>
     request<Issue>(repositoryPath(repositoryId, "issues"), {
       method: "POST",
@@ -239,7 +283,7 @@ export const api = {
   updateIssue: (
     repositoryId: string,
     number: number,
-    payload: Partial<Pick<Issue, "title" | "body" | "state" | "labels" | "assignees">>
+    payload: Partial<Pick<Issue, "title" | "body" | "state" | "labels">>
   ) =>
     request<Issue>(repositoryPath(repositoryId, `issues/${number}`), {
       method: "PATCH",
@@ -392,6 +436,137 @@ export const api = {
   ) =>
     request<CheckRun>(repositoryPath(repositoryId, `pull-requests/${number}/checks`), {
       method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  memory: (repositoryId: string) => request<MemoryIndex>(repositoryPath(repositoryId, "memory")),
+  memoryHistory: (repositoryId: string) =>
+    request<DocumentRevisionSummary[]>(repositoryPath(repositoryId, "memory/history")),
+  memoryRevision: (repositoryId: string, revision: number) =>
+    request<MemoryIndex>(repositoryPath(repositoryId, `memory/revisions/${revision}`)),
+  putMemory: (repositoryId: string, payload: { content: string; expectedRevision: number }) =>
+    request<MemoryIndex>(repositoryPath(repositoryId, "memory"), {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  tasks: (repositoryId: string, status?: TaskStatus) =>
+    request<Task[]>(repositoryPath(repositoryId, `tasks${query({ status })}`)),
+  taskTable: (repositoryId: string) =>
+    request<TaskTable>(repositoryPath(repositoryId, "tasks/table")),
+  task: (repositoryId: string, number: number) =>
+    request<TaskDetail>(repositoryPath(repositoryId, `tasks/${number}`)),
+  createTask: (
+    repositoryId: string,
+    payload: { type: string; title: string; motivation: string; description: string }
+  ) =>
+    request<TaskDetail>(repositoryPath(repositoryId, "tasks"), {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateTask: (
+    repositoryId: string,
+    number: number,
+    payload: Partial<Pick<Task, "type" | "title" | "motivation" | "description" | "status">>
+  ) =>
+    request<TaskDetail>(repositoryPath(repositoryId, `tasks/${number}`), {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  assignTask: (repositoryId: string, number: number, assignee: AssigneeRef | null) =>
+    request<TaskDetail>(repositoryPath(repositoryId, `tasks/${number}/assignee`), {
+      method: "PUT",
+      body: JSON.stringify({ assignee }),
+    }),
+  taskDocument: (repositoryId: string, number: number, kind: TaskDocumentKind) =>
+    request<TaskDocument>(repositoryPath(repositoryId, `tasks/${number}/documents/${kind}`)),
+  taskDocumentHistory: (repositoryId: string, number: number, kind: TaskDocumentKind) =>
+    request<DocumentRevisionSummary[]>(
+      repositoryPath(repositoryId, `tasks/${number}/documents/${kind}/history`)
+    ),
+  taskDocumentRevision: (
+    repositoryId: string,
+    number: number,
+    kind: TaskDocumentKind,
+    revision: number
+  ) =>
+    request<TaskDocument>(
+      repositoryPath(repositoryId, `tasks/${number}/documents/${kind}/revisions/${revision}`)
+    ),
+  putTaskDocument: (
+    repositoryId: string,
+    number: number,
+    kind: TaskDocumentKind,
+    payload: { content: string; expectedRevision: number }
+  ) =>
+    request<TaskDocument>(repositoryPath(repositoryId, `tasks/${number}/documents/${kind}`), {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  attachTaskLink: (
+    repositoryId: string,
+    number: number,
+    payload: { kind: TaskLinkKind; number: number }
+  ) =>
+    request<TaskLink>(repositoryPath(repositoryId, `tasks/${number}/links`), {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  detachTaskLink: (
+    repositoryId: string,
+    number: number,
+    kind: TaskLinkKind,
+    targetNumber: number
+  ) =>
+    request(
+      repositoryPath(repositoryId, `tasks/${number}/links/${kind}/${targetNumber}`),
+      { method: "DELETE" },
+      true
+    ),
+  itemTask: (repositoryId: string, kind: TaskLinkKind, number: number) =>
+    request<TaskReference | null>(repositoryPath(repositoryId, `tasks/link/${kind}/${number}`)),
+  moveItemTask: (repositoryId: string, kind: TaskLinkKind, number: number, task: number | null) =>
+    request<TaskReference | null>(repositoryPath(repositoryId, `tasks/link/${kind}/${number}`), {
+      method: "PUT",
+      body: JSON.stringify({ task }),
+    }),
+  bindTaskCommit: (repositoryId: string, number: number, payload: { oid: string; ref: string }) =>
+    request<TaskCommit>(repositoryPath(repositoryId, `tasks/${number}/commits`), {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  unbindTaskCommit: (repositoryId: string, number: number, oid: string) =>
+    request(
+      repositoryPath(repositoryId, `tasks/${number}/commits/${encodeURIComponent(oid)}`),
+      { method: "DELETE" },
+      true
+    ),
+  assigneeCandidates: (repositoryId: string) =>
+    request<AssigneeCandidate[]>(repositoryPath(repositoryId, "assignee-candidates")),
+  setIssueAssignees: (
+    repositoryId: string,
+    number: number,
+    payload: { role: AssignmentRole; assignees: AssigneeRef[] }
+  ) =>
+    request<Issue>(repositoryPath(repositoryId, `issues/${number}/assignees`), {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  setPullAssignees: (
+    repositoryId: string,
+    number: number,
+    payload: { role: AssignmentRole; assignees: AssigneeRef[] }
+  ) =>
+    request<PullRequest>(repositoryPath(repositoryId, `pull-requests/${number}/assignees`), {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  repositorySettings: (repositoryId: string) =>
+    request<RepositorySettings>(repositoryPath(repositoryId, "settings")),
+  updateRepositorySettings: (
+    repositoryId: string,
+    payload: { memoryVisibility?: MemoryVisibility; agentAssignmentPolicy?: AgentAssignmentPolicy }
+  ) =>
+    request<RepositorySettings>(repositoryPath(repositoryId, "settings"), {
+      method: "PATCH",
       body: JSON.stringify(payload),
     }),
   agents: () => request<Agent[]>("/api/auth/agents"),

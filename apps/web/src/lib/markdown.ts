@@ -1,4 +1,4 @@
-import { marked } from "marked";
+import { marked, Renderer } from "marked";
 import DOMPurify from "dompurify";
 import hljs from "highlight.js/lib/core";
 import javascript from "highlight.js/lib/languages/javascript";
@@ -57,8 +57,18 @@ export function highlightedCode(source: string, filename: string = ""): string {
     ? hljs.highlight(source, { language, ignoreIllegals: true }).value
     : escapeHtml(source);
 }
-export function renderMarkdown(source: string, baseUrl?: string): string {
-  const html = marked.parse(source, { async: false, gfm: true, breaks: false });
+export function renderMarkdown(source: string, baseUrl?: string, allowImages = false): string {
+  const renderer = new Renderer();
+  if (!allowImages) {
+    renderer.html = ({ text }) => escapeHtml(text);
+    renderer.image = ({ href, text }) => `<a href="${escapeHtml(href)}">${escapeHtml(text)}</a>`;
+  }
+  const html = marked.parse(source, {
+    async: false,
+    gfm: true,
+    breaks: false,
+    renderer,
+  });
   const fragment = DOMPurify.sanitize(html, {
     USE_PROFILES: { html: true },
     RETURN_DOM_FRAGMENT: true,
@@ -72,6 +82,8 @@ export function renderMarkdown(source: string, baseUrl?: string): string {
       input.closest("li")?.classList.add("task-list-item");
     }
   }
+  for (const link of fragment.querySelectorAll("a:not([href])"))
+    link.replaceWith(...link.childNodes);
   for (const element of fragment.querySelectorAll("a[href], img[src]")) {
     const attribute = element.tagName === "A" ? "href" : "src";
     const value = element.getAttribute(attribute) ?? "";
@@ -86,8 +98,18 @@ export function renderMarkdown(source: string, baseUrl?: string): string {
         element.removeAttribute(attribute);
       }
     }
-    if (element.tagName === "A") element.setAttribute("rel", "noreferrer noopener");
-    else {
+    if (element.tagName === "A") {
+      element.setAttribute("rel", "noreferrer noopener");
+      const href = element.getAttribute("href") ?? "";
+      if (/^https?:/i.test(href)) {
+        try {
+          if (new URL(href).origin !== window.location.origin)
+            element.setAttribute("target", "_blank");
+        } catch {
+          element.removeAttribute("href");
+        }
+      }
+    } else {
       element.setAttribute("loading", "lazy");
       element.setAttribute("referrerpolicy", "no-referrer");
     }

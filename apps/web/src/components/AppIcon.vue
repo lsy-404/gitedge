@@ -43,6 +43,9 @@ import home from "@primer/octicons/build/svg/home-16.svg?raw";
 import book from "@primer/octicons/build/svg/book-16.svg?raw";
 import github from "@primer/octicons/build/svg/mark-github-16.svg?raw";
 
+import task from "@primer/octicons/build/svg/tasklist-16.svg?raw";
+import target from "@primer/octicons/build/svg/goal-16.svg?raw";
+
 const sources = {
   plus,
   branch,
@@ -53,6 +56,9 @@ const sources = {
   pr,
   repo,
   search,
+  settings: gear,
+  target,
+  task,
   wiki,
   menu,
   chevron,

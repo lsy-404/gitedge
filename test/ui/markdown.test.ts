@@ -14,7 +14,9 @@ describe("repository Markdown", () => {
   });
   it("removes executable markup and unsafe URLs", () => {
     const html = renderMarkdown(
-      '<script>alert(1)</script><img src="x" onerror="alert(1)"><a href="javascript:alert(1)">open</a><form><input name="token"></form>'
+      '<script>alert(1)</script><img src="x" onerror="alert(1)"><a href="javascript:alert(1)">open</a><form><input name="token"></form>',
+      undefined,
+      true
     );
     expect(html).not.toMatch(/script|onerror|javascript:|<form|name="token"/);
     expect(html).toContain("open");

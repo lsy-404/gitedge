@@ -71,7 +71,7 @@ async function commit(cwd, message, token) {
   return git(["rev-parse", "HEAD"], cwd, token);
 }
 try {
-  await api("/api/auth/register", "POST", { identifier, password });
+  const user = await api("/api/auth/register", "POST", { identifier, password });
   const repository = await api("/api/forge/repositories", "POST", {
     owner: identifier,
     slug: "workspace",
@@ -262,7 +262,10 @@ try {
   const issue = await api(`/api/forge/repositories/${repository.id}/issues`, "POST", {
     title: "Track verified work",
     labels: ["verification"],
-    assignees: [identifier],
+  });
+  await api(`/api/forge/repositories/${repository.id}/issues/${issue.number}/assignees`, "PUT", {
+    role: "assignee",
+    assignees: [{ kind: "user", id: user.id }],
   });
   await api(`/api/forge/repositories/${repository.id}/issues/${issue.number}/comments`, "POST", {
     body: "Both session contributions are merged.",
