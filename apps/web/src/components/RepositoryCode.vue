@@ -30,6 +30,8 @@ import {
   type GraphSessionMarker,
 } from "../lib/gitGraphView";
 import TextField from "./TextField.vue";
+import { highlightedCode } from "../lib/markdown";
+import MarkdownContent from "./MarkdownContent.vue";
 
 const props = defineProps<{ repository: Repository; section: string }>();
 const { t } = useI18n();
@@ -88,6 +90,22 @@ const sessionMarkers = computed(
   () => graphView.value?.sessionsByOid ?? new Map<string, GraphSessionMarker[]>()
 );
 const title = computed(() => filePath.value.split("/").at(-1) || props.repository.name);
+const queryText = ref("");
+const showFileSearch = ref(false);
+const showCloneMenu = ref(false);
+const filteredEntries = computed(() =>
+  (tree.value?.entries ?? []).filter((entry) =>
+    entry.name.toLocaleLowerCase().includes(queryText.value.trim().toLocaleLowerCase())
+  )
+);
+const latestCommit = computed(() => graph.value?.commits[0] ?? commits.value[0] ?? null);
+const readmeEntry = computed(
+  () => tree.value?.entries.find((entry) => entry.name.toLocaleLowerCase() === "readme.md") ?? null
+);
+const breadcrumbs = computed(() => filePath.value.split("/").filter(Boolean));
+const highlightedLines = computed(() =>
+  (file.value?.content ?? "").split("\n").map((line) => highlightedCode(line, file.value?.path))
+);
 const compareBase = computed({
   get: () => String(route.query.base || props.repository.defaultBranch),
   set: (value: string) => {
@@ -152,6 +170,10 @@ async function load() {
       if (version !== requestVersion) return;
       comparison.value = result;
       return;
+    }
+    if (props.section === "code" && !filePath.value) {
+      commits.value = await api.commits(props.repository.id, refName.value, 0, 1);
+      if (version !== requestVersion) return;
     }
     if (isBlob.value && filePath.value) {
       const fileData = await api.file(props.repository.id, refName.value, filePath.value);
@@ -279,6 +301,21 @@ function downloadText() {
   link.click();
   URL.revokeObjectURL(link.href);
 }
+function rawFile() {
+  if (!file.value?.content) return;
+  const url = URL.createObjectURL(new Blob([file.value.content], { type: "text/plain" }));
+  window.open(url, "_blank", "noopener");
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+function fileHref(path: string, view: "tree" | "blob" = "blob") {
+  return repositoryCodeLocation(
+    props.repository.owner,
+    props.repository.name,
+    view,
+    path,
+    refName.value
+  );
+}
 let previousRepositoryId = props.repository.id;
 let previousSection = props.section;
 let previousRef = refName.value;
@@ -324,8 +361,8 @@ onUnmounted(() => {
 
 <template>
   <section class="code-section">
-    <div v-if="section === 'code'" class="box box-form code-toolbar">
-      <div class="toolbar-row">
+    <div v-if="section === 'code'" class="code-toolbar">
+      <div class="toolbar-row code-controls">
         <SelectField
           class="ref-picker"
           :model-value="refName"
@@ -347,43 +384,64 @@ onUnmounted(() => {
             {{ item.shortName }} · {{ t("tags") }}
           </fluent-option>
         </SelectField>
-        <AppLink
-          button="outline"
-          :to="`/${repository.owner}/${repository.name}/commits?ref=${encodeURIComponent(refName)}`"
-          >{{ t("commitGraph") }}</AppLink
+        <span class="repo-count"
+          >{{ branchRefs.length }} {{ t("branches") }} · {{ tagRefs.length }} {{ t("tags") }}</span
         >
-        <AppLink button="outline" :to="`/${repository.owner}/${repository.name}/compare`">{{
-          t("compare")
-        }}</AppLink>
-        <div class="clone-control">
-          <span>{{ t("cloneUrl") }}</span
-          ><code>{{ cloneUrl }}</code>
-          <fluent-button
-            id="copy-clone-url"
-            type="button"
-            appearance="subtle"
-            icon-only
-            :aria-label="t('copy')"
-            @click="copyCloneUrl"
-          >
-            <AppIcon name="copy" />
-          </fluent-button>
-          <fluent-tooltip anchor="copy-clone-url">{{ t("copy") }}</fluent-tooltip>
+        <label v-if="showFileSearch" class="file-search">
+          <AppIcon name="search" />
+          <input
+            v-model="queryText"
+            autofocus
+            :placeholder="t('codeSearchPlaceholder')"
+            @keydown.esc="showFileSearch = false"
+          />
+        </label>
+        <fluent-button
+          v-else
+          class="search-trigger"
+          appearance="outline"
+          @click="showFileSearch = true"
+          ><AppIcon slot="start" name="search" />{{ t("goToFile") }}</fluent-button
+        >
+        <div class="clone-menu-wrap">
+          <fluent-button appearance="primary" @click="showCloneMenu = !showCloneMenu"
+            ><AppIcon slot="start" name="code" />{{ t("codeMenu") }}
+            <AppIcon slot="end" name="chevron"
+          /></fluent-button>
+          <div v-if="showCloneMenu" class="clone-menu box">
+            <strong>{{ t("cloneWithHttps") }}</strong>
+            <div class="clone-url">
+              <code>{{ cloneUrl }}</code
+              ><fluent-button
+                appearance="subtle"
+                icon-only
+                :aria-label="t('copy')"
+                @click="copyCloneUrl"
+                ><AppIcon name="copy"
+              /></fluent-button>
+            </div>
+            <p class="muted">{{ t("cloneHelp") }}</p>
+            <template v-if="canCreateCloneToken">
+              <TextField v-model="tokenName" maxlength="80" required>{{
+                t("cloneTokenName")
+              }}</TextField>
+              <SelectField
+                :model-value="tokenScope"
+                :label="t('permission')"
+                @update:model-value="tokenScope = oneOf(tokenScopes, $event, 'read')"
+              >
+                <fluent-option value="read">{{ t("readToken") }}</fluent-option
+                ><fluent-option value="write">{{ t("writeToken") }}</fluent-option>
+              </SelectField>
+              <fluent-button
+                type="button"
+                :disabled="tokenBusy || !tokenName.trim()"
+                @click="issueToken"
+                >{{ t("createCloneToken") }}</fluent-button
+              >
+            </template>
+          </div>
         </div>
-      </div>
-      <div v-if="canCreateCloneToken" class="toolbar-row">
-        <TextField v-model="tokenName" maxlength="80" required>{{ t("cloneTokenName") }}</TextField>
-        <SelectField
-          :model-value="tokenScope"
-          :label="t('permission')"
-          @update:model-value="tokenScope = oneOf(tokenScopes, $event, 'read')"
-        >
-          <fluent-option value="read">{{ t("readToken") }}</fluent-option>
-          <fluent-option value="write">{{ t("writeToken") }}</fluent-option>
-        </SelectField>
-        <fluent-button type="button" :disabled="tokenBusy || !tokenName.trim()" @click="issueToken">
-          {{ t("createCloneToken") }}
-        </fluent-button>
       </div>
     </div>
     <div v-if="token" class="token-once box box-form">
@@ -405,65 +463,122 @@ onUnmounted(() => {
       <StatusState :loading="loading" :error="error" :empty="false" @retry="load" />
     </div>
     <template v-else-if="section === 'code'">
-      <div class="browser-grid">
-        <section class="box file-panel">
-          <div class="box-header panel-heading">
-            <strong>{{ filePath || refName }}</strong
-            ><span class="muted">{{ tree?.entries.length ?? 0 }} {{ t("items") }}</span>
-          </div>
-          <fluent-button
-            v-if="filePath"
-            type="button"
-            appearance="transparent"
-            class="file-entry"
-            @click="
-              router.push(
-                `/${repository.owner}/${repository.name}?ref=${encodeURIComponent(refName)}`
-              )
-            "
-          >
-            ↑ {{ t("repositoryRoot") }}
-          </fluent-button>
-          <fluent-button
-            v-for="entry in tree?.entries"
-            :key="entry.path"
-            type="button"
-            appearance="transparent"
-            class="file-entry"
-            @click="openTree(entry.path, entry.type === 'tree' ? 'tree' : 'blob')"
-          >
-            <span class="file-type">{{ entry.type === "tree" ? "▸" : "·" }}</span
-            ><span>{{ entry.name }}</span
-            ><small>{{ entry.type === "tree" ? t("directory") : entry.oid.slice(0, 8) }}</small>
-          </fluent-button>
-          <div v-if="emptyReason === 'tree'" class="state">{{ t("emptyTree") }}</div>
-        </section>
-        <section v-if="file || emptyReason === 'tree'" class="box preview-panel">
-          <template v-if="file"
-            ><div class="box-header panel-heading">
-              <strong>{{ title }}</strong
-              ><fluent-button
-                type="button"
-                appearance="subtle"
-                size="small"
-                @click="downloadText"
-                >{{ t("download") }}</fluent-button
-              >
-            </div>
-            <p v-if="file.binary || file.content === null" class="muted box-form">
-              {{ t("binaryPreviewUnavailable") }}
-            </p>
-            <pre v-else class="text-preview">{{ file.content }}</pre>
-          </template>
-        </section>
+      <div v-if="latestCommit && !isBlob" class="latest-commit box">
+        <AppIcon name="commit" />
+        <RouterLink
+          :to="`/${repository.owner}/${repository.name}/commits?ref=${encodeURIComponent(refName)}`"
+          ><strong>{{ latestCommit.author.name }}</strong></RouterLink
+        >
+        <span class="commit-message">{{ latestCommit.message.split("\n")[0] }}</span
+        ><code>{{ latestCommit.oid.slice(0, 7) }}</code
+        ><time>{{ new Date(latestCommit.author.timestamp * 1000).toLocaleDateString() }}</time>
       </div>
-      <section
-        v-if="file?.path.toLowerCase().endsWith('.md') && file.content !== null"
-        class="box readme-panel"
-      >
-        <div class="box-header">{{ t("readme") }}</div>
-        <h2 class="readme-title">{{ title }}</h2>
-        <pre class="text-preview">{{ file.content }}</pre>
+      <div v-if="!isBlob" class="box file-panel">
+        <div class="file-table-head">
+          <strong>{{ filePath || refName }}</strong
+          ><span>{{ filteredEntries.length }} {{ t("items") }}</span>
+        </div>
+        <fluent-button
+          v-if="filePath"
+          type="button"
+          appearance="transparent"
+          class="file-entry"
+          @click="
+            router.push(
+              `/${repository.owner}/${repository.name}?ref=${encodeURIComponent(refName)}`
+            )
+          "
+        >
+          ↑ {{ t("repositoryRoot") }}
+        </fluent-button>
+        <RouterLink
+          v-for="entry in filteredEntries"
+          :key="entry.path"
+          class="file-entry"
+          :to="
+            repositoryCodeLocation(
+              repository.owner,
+              repository.name,
+              entry.type === 'tree' ? 'tree' : 'blob',
+              entry.path,
+              refName
+            )
+          "
+        >
+          <AppIcon :name="entry.type === 'tree' ? 'folder' : 'file'" /><span>{{ entry.name }}</span
+          ><small>{{ entry.type === "tree" ? t("directory") : entry.oid.slice(0, 8) }}</small>
+        </RouterLink>
+        <div v-if="emptyReason === 'tree'" class="state">{{ t("emptyTree") }}</div>
+      </div>
+      <div v-if="tree?.entries.length === 0 && !loading" class="empty-repository box">
+        <h2>{{ t("emptyRepositoryTitle") }}</h2>
+        <p>{{ t("emptyRepositoryText") }}</p>
+        <code>echo "# {{ repository.name }}" &gt; README.md</code
+        ><code>git add README.md &amp;&amp; git commit -m "first commit"</code
+        ><code>git branch -M {{ repository.defaultBranch }}</code
+        ><code>git remote add origin {{ cloneUrl }}</code
+        ><code>git push -u origin {{ repository.defaultBranch }}</code>
+      </div>
+      <div v-if="isBlob && file" class="file-view box">
+        <div class="file-breadcrumb">
+          <RouterLink
+            :to="`/${repository.owner}/${repository.name}?ref=${encodeURIComponent(refName)}`"
+            >{{ repository.name }}</RouterLink
+          ><template v-for="(part, index) in breadcrumbs" :key="part"
+            ><AppIcon name="chevronRight" /><RouterLink
+              v-if="index < breadcrumbs.length - 1"
+              :to="fileHref(breadcrumbs.slice(0, index + 1).join('/'), 'tree')"
+              >{{ part }}</RouterLink
+            ><strong v-else>{{ part }}</strong></template
+          >
+        </div>
+        <div class="file-actions">
+          <span>{{ file.size }} {{ t("bytes") }} · {{ file.oid.slice(0, 7) }}</span>
+          <div>
+            <fluent-button appearance="outline" @click="rawFile">{{ t("raw") }}</fluent-button
+            ><fluent-button appearance="outline" @click="downloadText"
+              ><AppIcon slot="start" name="download" />{{ t("download") }}</fluent-button
+            >
+          </div>
+        </div>
+        <p v-if="file.binary || file.content === null" class="muted box-form">
+          {{ t("binaryPreviewUnavailable") }}
+        </p>
+        <pre
+          v-else
+          class="code-source"
+        ><span v-for="(line,index) in highlightedLines" :key="index" class="code-line"><span class="line-number">{{ index+1 }}</span><code v-html="line"></code></span></pre>
+      </div>
+      <aside class="about-panel box">
+        <div class="box-header">
+          <strong>{{ t("about") }}</strong
+          ><RouterLink
+            v-if="repository.canWrite"
+            :to="`/${repository.owner}/${repository.name}/settings`"
+            :aria-label="t('editAbout')"
+            ><AppIcon name="gear"
+          /></RouterLink>
+        </div>
+        <p>{{ repository.description || t("noDescription") }}</p>
+        <dl>
+          <dt>{{ t("defaultBranch") }}</dt>
+          <dd><AppIcon name="branch" />{{ repository.defaultBranch }}</dd>
+          <dt>{{ t("branches") }}</dt>
+          <dd>{{ branchRefs.length }}</dd>
+          <dt>{{ t("tags") }}</dt>
+          <dd>{{ tagRefs.length }}</dd>
+        </dl>
+        <RouterLink
+          :to="`/${repository.owner}/${repository.name}/commits?ref=${encodeURIComponent(refName)}`"
+          >{{ t("commitHistory") }}</RouterLink
+        >
+      </aside>
+      <section v-if="readmeEntry && !filePath && !loading" class="readme-panel box">
+        <div class="box-header"><AppIcon name="markdown" />{{ t("readme") }}</div>
+        <MarkdownContent
+          :source="file?.content ?? ''"
+          :base-url="`/${repository.owner}/${repository.name}/blob/README.md?ref=${encodeURIComponent(refName)}`"
+        />
       </section>
     </template>
     <template v-else-if="section === 'commits'">
@@ -656,12 +771,8 @@ onUnmounted(() => {
   </section>
 </template>
 
+<style src="../styles/code.css"></style>
 <style scoped>
-.code-section {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: var(--spacingVerticalL);
-}
 .code-toolbar {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

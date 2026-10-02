@@ -1,0 +1,263 @@
+.code-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 296px;
+  gap: 16px 24px;
+  align-items: start;
+}
+.code-toolbar,
+.latest-commit,
+.file-panel,
+.empty-repository,
+.file-view,
+.readme-panel {
+  grid-column: 1;
+}
+.about-panel {
+  grid-column: 2;
+  grid-row: 2 / span 3;
+  position: sticky;
+  top: 16px;
+}
+.code-toolbar {
+  min-width: 0;
+}
+.code-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.code-controls > .ref-picker {
+  width: 190px;
+}
+.repo-count {
+  color: var(--muted, #656d76);
+  font-size: 13px;
+  margin-right: auto;
+}
+.file-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border, #d1d9e0);
+  border-radius: 6px;
+  padding: 6px 9px;
+  min-width: 210px;
+}
+.file-search input {
+  background: transparent;
+  color: var(--text, #1f2328);
+  border: 0;
+  outline: 0;
+  width: 100%;
+}
+.clone-menu-wrap {
+  position: relative;
+}
+.clone-menu {
+  position: absolute;
+  z-index: 10;
+  right: 0;
+  top: calc(100% + 8px);
+  width: 340px;
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+  box-shadow: 0 8px 24px #0003;
+}
+.clone-url {
+  display: flex;
+  border: 1px solid var(--border, #d1d9e0);
+  border-radius: 6px;
+  align-items: center;
+  padding: 4px 6px;
+  gap: 8px;
+}
+.clone-url code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.clone-menu p {
+  margin: 0;
+  font-size: 13px;
+}
+.latest-commit {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  min-width: 0;
+  font-size: 13px;
+}
+.latest-commit .commit-message {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.latest-commit code {
+  color: var(--link, #0969da);
+}
+.latest-commit time {
+  color: var(--muted, #656d76);
+}
+.file-panel {
+  overflow: hidden;
+  padding: 0;
+}
+.file-table-head {
+  display: flex;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--subtle, #f6f8fa);
+  border-bottom: 1px solid var(--border, #d1d9e0);
+  font-size: 13px;
+}
+.file-table-head span {
+  color: var(--muted, #656d76);
+}
+.file-entry {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-decoration: none;
+  padding: 9px 16px;
+  border-bottom: 1px solid var(--border, #d1d9e0);
+  color: var(--text, #1f2328);
+  font-size: 14px;
+}
+.file-entry:hover {
+  color: var(--link, #0969da);
+  background: var(--subtle, #f6f8fa);
+}
+.file-entry small {
+  margin-left: auto;
+  color: var(--muted, #656d76);
+  font-family: ui-monospace, monospace;
+}
+.about-panel {
+  padding: 16px;
+  font-size: 14px;
+}
+.about-panel .box-header {
+  display: flex;
+  justify-content: space-between;
+}
+.about-panel p {
+  line-height: 1.5;
+  color: var(--muted, #656d76);
+}
+.about-panel dl {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  border-block: 1px solid var(--border, #d1d9e0);
+  padding: 12px 0;
+}
+.about-panel dt {
+  color: var(--muted, #656d76);
+}
+.about-panel dd {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.empty-repository {
+  padding: 24px;
+  display: grid;
+  gap: 10px;
+}
+.empty-repository h2,
+.empty-repository p {
+  margin: 0;
+}
+.empty-repository code {
+  display: block;
+  overflow-wrap: anywhere;
+  padding: 8px 10px;
+  background: var(--subtle, #f6f8fa);
+  border-radius: 5px;
+}
+.file-view {
+  padding: 0;
+  overflow: hidden;
+}
+.file-breadcrumb,
+.file-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border, #d1d9e0);
+}
+.file-actions {
+  justify-content: space-between;
+  color: var(--muted, #656d76);
+  font-size: 13px;
+}
+.file-actions > div {
+  display: flex;
+  gap: 8px;
+}
+.code-source {
+  margin: 0;
+  padding: 12px 0;
+  overflow: auto;
+  max-height: 75vh;
+  font:
+    13px/21px ui-monospace,
+    SFMono-Regular,
+    monospace;
+}
+.code-line {
+  display: flex;
+  min-width: max-content;
+  white-space: pre;
+}
+.line-number {
+  width: 52px;
+  padding-right: 16px;
+  text-align: right;
+  color: var(--muted, #656d76);
+  user-select: none;
+}
+.code-line code {
+  padding-right: 20px;
+}
+.readme-panel {
+  padding: 0;
+  overflow: hidden;
+}
+.readme-panel > .markdown-body {
+  padding: 20px 28px;
+}
+.readme-panel .box-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border, #d1d9e0);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+@media (max-width: 850px) {
+  .code-section {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .code-toolbar,
+  .latest-commit,
+  .file-panel,
+  .empty-repository,
+  .file-view,
+  .readme-panel,
+  .about-panel {
+    grid-column: 1;
+    grid-row: auto;
+  }
+  .about-panel {
+    position: static;
+  }
+}
