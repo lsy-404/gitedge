@@ -35,6 +35,13 @@ const repository: Repository = {
   createdAt: 1,
   updatedAt: 2,
   canWrite: true,
+  archived: false,
+  issuesEnabled: true,
+  pullsEnabled: true,
+  discussionsEnabled: true,
+  wikiEnabled: true,
+  requiredApprovals: 0,
+  requirePassingChecks: false,
 };
 const pendingUnmounts: Array<() => void> = [];
 let sectionUnderTest = "issues";

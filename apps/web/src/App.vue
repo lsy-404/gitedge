@@ -5,12 +5,16 @@ import { useRoute, useRouter } from "vue-router";
 import AppIcon from "./components/AppIcon.vue";
 import { api } from "./lib/api";
 import { clearSession, refreshSession, sessionState } from "./lib/session";
-import { preferencesState, loadAccountPreferences } from "./lib/preferences";
+import { preferencesState, loadAccountPreferences, accountProfileState } from "./lib/preferences";
 const { t, locale } = useI18n();
 const router = useRouter();
 const route = useRoute();
 const accountName = computed(
-  () => sessionState.user?.externalIdentity?.login || sessionState.user?.identifier || ""
+  () =>
+    accountProfileState.value?.displayName ||
+    sessionState.user?.externalIdentity?.login ||
+    sessionState.user?.identifier ||
+    ""
 );
 const initials = computed(() => accountName.value.slice(0, 2).toUpperCase());
 const authPage = computed(() => route.path === "/login" || route.path === "/register");
@@ -75,8 +79,8 @@ watch(locale, (value) => {
 });
 watch(
   () => sessionState.user?.id,
-  (userId) => {
-    if (userId) void loadAccountPreferences();
+  () => {
+    void loadAccountPreferences();
   },
   { immediate: true }
 );
@@ -161,20 +165,6 @@ if (!sessionState.checked) void refreshSession();
                   >
                 </div>
               </details>
-              <RouterLink
-                v-if="repositoryPath"
-                class="btn icon-button quick-action"
-                :to="`${repositoryPath}/issues`"
-                :aria-label="t('issues')"
-                ><AppIcon name="issue"
-              /></RouterLink>
-              <RouterLink
-                v-if="repositoryPath"
-                class="btn icon-button quick-action"
-                :to="`${repositoryPath}/pulls`"
-                :aria-label="t('pulls')"
-                ><AppIcon name="pr"
-              /></RouterLink>
               <details ref="userMenu" class="dropdown user-menu">
                 <summary :aria-label="t('ghUserMenu')" class="account-trigger">
                   <span class="avatar"

@@ -1057,7 +1057,7 @@ async function settingsRequest(
       .first<{ found: number }>();
     if (collision) return error(409, "conflict", "Repository slug already exists.");
   }
-  if (input.defaultBranch) {
+  if (input.defaultBranch && input.defaultBranch !== repository.default_branch) {
     const gitUrl = new URL(`/repositories/${repository.id}/refs`, request.url);
     const response = await env.GIT.fetch(
       new Request(gitUrl, { headers: trustedHeaders(viewer.user) })

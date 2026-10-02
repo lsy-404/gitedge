@@ -5,6 +5,13 @@ export function gatewayCloneUrl(origin: string, owner: string, repository: strin
   ).toString();
 }
 
-export function authenticatedCloneCommand(remote: string, token: string): string {
-  return `git -c http.extraHeader="Authorization: Bearer ${token}" clone ${remote}`;
+function shellArgument(value: string): string {
+  return /^[a-zA-Z0-9_./:@-]+$/.test(value) ? value : "'" + value.replaceAll("'", "'\"'\"'") + "'";
+}
+
+export function cloneCommand(remote: string, branch: string, token?: string): string {
+  const authorization = token
+    ? ` -c ${shellArgument(`http.extraHeader=Authorization: Bearer ${token}`)}`
+    : "";
+  return `git${authorization} clone --branch ${shellArgument(branch)} -- ${shellArgument(remote)}`;
 }

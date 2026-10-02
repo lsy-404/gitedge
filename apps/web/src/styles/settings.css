@@ -1,0 +1,80 @@
+.preference-panel {
+  display: grid;
+  gap: 16px;
+  max-width: 960px;
+}
+.preference-panel h2,
+.preference-panel > p {
+  margin: 0;
+}
+.settings-form-grid {
+  display: grid;
+  gap: 16px;
+}
+.settings-surface {
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.preference-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 4px 0;
+}
+.preference-row p {
+  margin: 4px 0 0;
+}
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.credential-list {
+  display: grid;
+  gap: 12px;
+}
+.credential-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+}
+.credential-row h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+.credential-row p {
+  margin: 5px 0;
+  overflow-wrap: anywhere;
+}
+.settings-code {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--subtle);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 12px/1.6 var(--font-mono);
+}
+.settings-surface .fluent-field {
+  width: 100%;
+}
+.settings-surface .fluent-field__input {
+  width: 100%;
+  box-sizing: border-box;
+}
+@media (max-width: 640px) {
+  .settings-surface {
+    padding: 16px;
+  }
+  .credential-row {
+    flex-wrap: wrap;
+  }
+  .preference-row {
+    gap: 12px;
+  }
+}

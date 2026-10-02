@@ -1,3 +1,5 @@
+import { ReservedAccountIdentifiers } from "../../../packages/contracts/src/account";
+import { handleSigningKeys } from "./signing-keys";
 import { timingSafeEqual } from "node:crypto";
 import { handleSso } from "./sso/routes";
 import {
@@ -20,7 +22,7 @@ import { PBKDF2_ITERATIONS } from "./password";
 import { authenticateAgentSession, authenticateGitToken, handleAgentManagement } from "./agents";
 import { handleAccountProfile, handleWebSessions } from "./profile";
 
-type AuthEnv = {
+export type AuthEnv = {
   readonly DB: D1Database;
   readonly ARTIFACTS: Artifacts;
   readonly LOG_LEVEL?: string;
@@ -200,6 +202,12 @@ export async function register(
       error: { code: "bad_request", message: "Invalid registration payload." },
     };
   const identifier = parsed.data.identifier.toLowerCase();
+  if (ReservedAccountIdentifiers.has(identifier))
+    return {
+      ok: false,
+      status: 400,
+      error: { code: "bad_request", message: "This identifier is reserved." },
+    };
   const existing = await env.DB.prepare("SELECT id FROM users WHERE identifier = ?")
     .bind(identifier)
     .first<{ id: string }>();
@@ -582,6 +590,11 @@ export default {
         ? null
         : await session(env, readCookie(request));
       return handleSso(request, env, active?.ok ? active.data : null);
+    }
+    if (path === "/signing-keys" || path.startsWith("/signing-keys/")) {
+      const active = await session(env, readCookie(request));
+      if (!active.ok) return json({ error: active.error }, active.status);
+      return handleSigningKeys(request, env, active.data);
     }
     if (request.method === "GET" && path === "/git-session") {
       const authenticated = await authenticateGitToken(request, env);

@@ -1,4 +1,14 @@
 import type {
+  AccountProfile,
+  AccountPreferences,
+} from "../../../../packages/contracts/src/account";
+import type { GitCredential, BrowserSession } from "../../../../packages/contracts/src/credentials";
+import type {
+  SigningKey,
+  SigningKeyChallenge,
+  CommitSignature,
+} from "../../../../packages/contracts/src/signatures";
+import type {
   Organization,
   OrganizationMember,
   User,
@@ -183,6 +193,44 @@ function gitPath(repositoryId: string, resource: string): string {
 }
 
 export const api = {
+  accountProfile: () => request<AccountProfile>("/api/auth/profile"),
+  updateAccountProfile: (
+    payload: Partial<Omit<AccountProfile, "preferences">> & {
+      preferences?: Partial<AccountPreferences>;
+    }
+  ) =>
+    request<AccountProfile>("/api/auth/profile", {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  gitCredentials: () => request<GitCredential[]>("/api/auth/tokens"),
+  revokeGitCredential: (id: string) =>
+    request<{ revoked: boolean }>(`/api/auth/tokens/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  browserSessions: () => request<BrowserSession[]>("/api/auth/web-sessions"),
+  revokeBrowserSession: (id: string) =>
+    request<{ revoked: boolean; isCurrent: boolean }>(
+      `/api/auth/web-sessions/${encodeURIComponent(id)}`,
+      { method: "DELETE" }
+    ),
+  signingKeys: () => request<SigningKey[]>("/api/auth/signing-keys"),
+  createSigningChallenge: (payload: { title: string; publicKey: string }) =>
+    request<SigningKeyChallenge>("/api/auth/signing-keys/challenges", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  addSigningKey: (payload: { challengeId: string; signature: string }) =>
+    request<SigningKey>("/api/auth/signing-keys", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  revokeSigningKey: (id: string) =>
+    request<{ revoked: boolean }>(`/api/auth/signing-keys/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  commitSignature: (repositoryId: string, ref: string, oid: string) =>
+    request<CommitSignature>(gitPath(repositoryId, `signature${query({ ref, oid })}`)),
   login: (payload: { identifier: string; password: string }) =>
     request<User>("/api/auth/login", { method: "POST", body: JSON.stringify(payload) }),
   register: (payload: { identifier: string; password: string }) =>
@@ -563,7 +611,7 @@ export const api = {
     request<RepositorySettings>(repositoryPath(repositoryId, "settings")),
   updateRepositorySettings: (
     repositoryId: string,
-    payload: { memoryVisibility?: MemoryVisibility; agentAssignmentPolicy?: AgentAssignmentPolicy }
+    payload: Partial<Omit<RepositorySettings, "canManage">>
   ) =>
     request<RepositorySettings>(repositoryPath(repositoryId, "settings"), {
       method: "PATCH",

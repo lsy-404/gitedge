@@ -1180,10 +1180,12 @@ async function featureRequest(
         });
         return error(409, "conflict", "The latest review for the current commit requests changes.");
       }
+      const pullActor = parseActor(String(current.actor_json), String(current.author_id));
       const approvals = latestReviews.filter(
         (review) =>
           review.state === "approved" &&
           review.reviewer_is_member === 1 &&
+          !(pullActor.kind === "user" && review.author_id === current.author_id) &&
           parseActor(review.actor_json, review.author_id).kind === "user"
       ).length;
       const requiredApprovals = repository.required_approvals ?? 0;

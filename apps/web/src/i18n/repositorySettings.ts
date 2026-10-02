@@ -12,7 +12,9 @@ export default {
     repoSettingsVisibility: "可见性",
     repoSettingsPublic: "公开",
     repoSettingsPrivate: "私有",
-    repoSettingsDefaultBranch: "默认分支",
+    repoSettingsDefaultBranch: "网页与 PR 默认分支",
+    repoSettingsDefaultBranchHint:
+      "用于文件浏览和新建 PR。克隆命令会显式指定此分支；原生远端 HEAD 保持不变。",
     repoSettingsBranchesLoading: "正在读取仓库分支…",
     repoSettingsNoBranches: "仓库当前没有可用分支。",
     repoSettingsBranchUnavailable: "无法读取分支列表，请重试后再设置默认分支。",
@@ -27,7 +29,8 @@ export default {
     repoSettingsWikiHint: "启用后，成员可以编辑 Wiki。关闭后已有页面会保留。",
     repoSettingsEnabled: "已启用",
     repoSettingsRequiredApprovals: "所需审核数",
-    repoSettingsRequiredApprovalsHint: "合并前需要当前提交上的人工批准，范围为 0 到 5。",
+    repoSettingsRequiredApprovalsHint:
+      "合并前需要当前提交上的人工批准，范围为 0 到 5；PR 作者不能计入批准人数。",
     repoSettingsPassingChecks: "要求通过检查",
     repoSettingsPassingChecksHint:
       "合并前至少需要一个当前提交的成功检查；未完成或失败的检查仍会阻止合并。",
@@ -60,7 +63,9 @@ export default {
     repoSettingsVisibility: "Visibility",
     repoSettingsPublic: "Public",
     repoSettingsPrivate: "Private",
-    repoSettingsDefaultBranch: "Default branch",
+    repoSettingsDefaultBranch: "Default branch for browsing and PRs",
+    repoSettingsDefaultBranchHint:
+      "Used for browsing and new PRs. Clone commands select this branch explicitly; the native remote HEAD is unchanged.",
     repoSettingsBranchesLoading: "Loading repository branches…",
     repoSettingsNoBranches: "This repository has no available branches.",
     repoSettingsBranchUnavailable:
@@ -82,7 +87,7 @@ export default {
     repoSettingsEnabled: "Enabled",
     repoSettingsRequiredApprovals: "Required approvals",
     repoSettingsRequiredApprovalsHint:
-      "Require 0 to 5 human approvals on the current commit before merging.",
+      "Require 0 to 5 human approvals on the current commit, excluding the pull request author.",
     repoSettingsPassingChecks: "Require passing checks",
     repoSettingsPassingChecksHint:
       "At least one successful check on the current commit is required. Pending and failed checks continue to block merging.",

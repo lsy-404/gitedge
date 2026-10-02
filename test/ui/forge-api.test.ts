@@ -22,6 +22,13 @@ describe("GitEdge forge API client", () => {
             createdAt: 1,
             updatedAt: 2,
             canWrite: false,
+            archived: false,
+            issuesEnabled: true,
+            pullsEnabled: true,
+            discussionsEnabled: true,
+            wikiEnabled: true,
+            requiredApprovals: 0,
+            requirePassingChecks: false,
           },
         }),
         { status: 200, headers: { "Content-Type": "application/json" } }

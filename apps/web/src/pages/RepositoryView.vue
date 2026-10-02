@@ -2,16 +2,17 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute } from "vue-router";
-import type { AgentSession, Repository } from "../lib/api";
+import type { AgentSession, Repository, RepositorySettings } from "../lib/api";
 import { ApiError, api } from "../lib/api";
 import { sessionState } from "../lib/session";
 import AppIcon, { type IconName } from "../components/AppIcon.vue";
 import StatusBadge from "../components/StatusBadge.vue";
+import NoticeBar from "../components/NoticeBar.vue";
 import StatusState from "../components/StatusState.vue";
 import DeployWizard from "../components/DeployWizard.vue";
 import RepositoryCode from "../components/RepositoryCode.vue";
 import RepositoryCollaboration from "../components/RepositoryCollaboration.vue";
-import RepositorySettings from "../components/RepositorySettings.vue";
+import RepositorySettingsPanel from "../components/RepositorySettings.vue";
 import RepositoryTasks from "../components/RepositoryTasks.vue";
 const route = useRoute();
 const { t, locale } = useI18n();
@@ -36,6 +37,39 @@ const tabs: { key: string; label: string; icon: IconName; write?: boolean }[] = 
   { key: "settings", label: "ghSettings", icon: "gear", write: true },
 ];
 const repository = ref<Repository | null>(null);
+function sectionEnabled(key: string): boolean {
+  const current = repository.value;
+  if (!current) return true;
+  if (key === "issues") return current.issuesEnabled;
+  if (key === "pulls") return current.pullsEnabled;
+  if (key === "discussions") return current.discussionsEnabled;
+  if (key === "wiki") return current.wikiEnabled;
+  if (key === "deploy") return !current.archived;
+  return true;
+}
+const collaborationRepository = computed(() =>
+  repository.value
+    ? { ...repository.value, canWrite: repository.value.canWrite && !repository.value.archived }
+    : null
+);
+function settingsUpdated(settings: RepositorySettings): void {
+  if (!repository.value) return;
+  repository.value = {
+    ...repository.value,
+    name: settings.name,
+    slug: settings.slug,
+    description: settings.description,
+    visibility: settings.visibility,
+    defaultBranch: settings.defaultBranch,
+    archived: settings.archived,
+    issuesEnabled: settings.issuesEnabled,
+    pullsEnabled: settings.pullsEnabled,
+    discussionsEnabled: settings.discussionsEnabled,
+    wikiEnabled: settings.wikiEnabled,
+    requiredApprovals: settings.requiredApprovals,
+    requirePassingChecks: settings.requirePassingChecks,
+  };
+}
 const loading = ref(true);
 const error = ref("");
 const notFound = ref(false);
@@ -129,7 +163,9 @@ watch(
     <template v-else-if="repository">
       <nav class="repository-nav" :aria-label="t('repositoryNav')">
         <RouterLink
-          v-for="tab in tabs.filter((tab) => !tab.write || repository?.canWrite)"
+          v-for="tab in tabs.filter(
+            (tab) => (!tab.write || repository?.canWrite) && sectionEnabled(tab.key)
+          )"
           :key="tab.key"
           :to="tab.key === 'code' ? base : `${base}/${tab.key}`"
           :class="{ selected: activeTab === tab.key }"
@@ -157,19 +193,26 @@ watch(
           <div class="repository-heading-actions">
             <RouterLink class="btn btn-sm secondary-repo-action" :to="`${base}/commits`"
               ><AppIcon name="clock" />{{ t("commits") }}</RouterLink
-            ><RouterLink v-if="repository.canWrite" class="btn btn-sm" :to="`${base}/deploy`"
+            ><RouterLink
+              v-if="repository.canWrite && !repository.archived"
+              class="btn btn-sm"
+              :to="`${base}/deploy`"
               ><AppIcon name="cloud" />{{ t("deploy") }}</RouterLink
             >
           </div>
         </div>
       </div>
       <div class="repository-content">
+        <NoticeBar v-if="repository.archived" intent="info">{{
+          t("settingsRepositoryArchived")
+        }}</NoticeBar>
+        <div v-if="!sectionEnabled(section)" class="state">{{ t("settingsFeatureDisabled") }}</div>
         <RepositoryCode
-          v-if="['code', 'commits', 'compare'].includes(section)"
+          v-else-if="['code', 'commits', 'compare'].includes(section)"
           :repository="repository"
           :section="section"
         />
-        <template v-else-if="section === 'deploy' && repository.canWrite"
+        <template v-else-if="section === 'deploy' && repository.canWrite && !repository.archived"
           ><div class="repository-panel-head">
             <h2>{{ t("ghDeployTab") }}</h2>
             <p>{{ t("ghDeployDescription") }}</p>
@@ -243,14 +286,20 @@ watch(
             </table>
           </div></template
         >
-        <RepositoryTasks v-else-if="section === 'tasks'" :repository="repository" />
-        <RepositorySettings
+        <RepositoryTasks
+          v-else-if="section === 'tasks' && collaborationRepository"
+          :repository="collaborationRepository"
+        />
+        <RepositorySettingsPanel
           v-else-if="section === 'settings' && repository.canWrite"
           :repository="repository"
+          @updated="settingsUpdated"
         />
         <RepositoryCollaboration
-          v-else-if="['issues', 'pulls', 'discussions', 'wiki'].includes(section)"
-          :repository="repository"
+          v-else-if="
+            ['issues', 'pulls', 'discussions', 'wiki'].includes(section) && collaborationRepository
+          "
+          :repository="collaborationRepository"
           :section="section"
         />
         <div v-else class="state">

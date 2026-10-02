@@ -413,3 +413,19 @@
     display: none;
   }
 }
+
+.code-source.code-wrapped .line-gutter {
+  display: none;
+}
+.code-source.code-wrapped .highlighted-file {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.fluent-theme[data-density="compact"] .tree-row {
+  min-height: 32px;
+  padding-block: 6px;
+}
+.fluent-theme[data-density="compact"] .collab-section .item-link {
+  padding-block: 8px;
+}

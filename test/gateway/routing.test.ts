@@ -33,6 +33,26 @@ function environment(
 }
 
 describe("Gateway routing", () => {
+  it("keeps direct Git merges private even for authenticated callers", async () => {
+    let forwarded = false;
+    const response = await handleGatewayRequest(
+      new Request("https://gitedge.example.com/api/git/repositories/r1/merge", {
+        method: "POST",
+        headers: { Origin: "https://gitedge.example.com", Cookie: "session=valid" },
+      }),
+      environment({
+        auth: service(() =>
+          Response.json({ data: { id: "user-1", identifier: "owner", groupKey: "free" } })
+        ),
+        git: service(() => {
+          forwarded = true;
+          return new Response("merged");
+        }),
+      })
+    );
+    expect(response.status).toBe(405);
+    expect(forwarded).toBe(false);
+  });
   it("forwards auth routes directly to the Auth binding", async () => {
     const response = await handleGatewayRequest(
       new Request("https://gitedge.example.com/api/auth/session"),

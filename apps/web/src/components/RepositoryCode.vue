@@ -19,7 +19,7 @@ import StatusBadge from "./StatusBadge.vue";
 import StatusState from "./StatusState.vue";
 import { oneOf } from "../ui/formEvents";
 import { clearOneTimeToken, isCredentialExpired } from "../lib/credentialSecurity";
-import { authenticatedCloneCommand, gatewayCloneUrl } from "../lib/gitClone";
+import { cloneCommand as gitCloneCommand, gatewayCloneUrl } from "../lib/gitClone";
 import { sessionState } from "../lib/session";
 import {
   agentSessionDisplayStatus,
@@ -33,6 +33,8 @@ import TextField from "./TextField.vue";
 import { highlightedCode } from "../lib/markdown";
 import MarkdownContent from "./MarkdownContent.vue";
 import DiffViewer from "./DiffViewer.vue";
+import CommitSignatureStatus from "./CommitSignatureStatus.vue";
+import { preferencesState } from "../lib/preferences";
 
 const props = defineProps<{ repository: Repository; section: string }>();
 const { t } = useI18n();
@@ -62,9 +64,7 @@ const cloneUrl = computed(() =>
   gatewayCloneUrl(window.location.origin, props.repository.owner, props.repository.name)
 );
 const cloneCommand = computed(() =>
-  token.value?.token
-    ? authenticatedCloneCommand(cloneUrl.value, token.value.token)
-    : `git clone ${cloneUrl.value}`
+  gitCloneCommand(cloneUrl.value, props.repository.defaultBranch, token.value?.token)
 );
 const canCreateCloneToken = computed(() => props.repository.canWrite && sessionState.user !== null);
 const tokenScopes = ["read", "write"] as const;
@@ -456,6 +456,7 @@ onUnmounted(() => {
                 ><AppIcon name="copy"
               /></FluentButton>
             </div>
+            <code>{{ gitCloneCommand(cloneUrl, repository.defaultBranch) }}</code>
             <p class="muted">{{ t("cloneHelp") }}</p>
             <template v-if="canCreateCloneToken">
               <TextField v-model="tokenName" maxlength="80" required>{{
@@ -467,7 +468,7 @@ onUnmounted(() => {
                 @update:model-value="tokenScope = oneOf(tokenScopes, $event, 'read')"
               >
                 <option value="read">{{ t("readToken") }}</option>
-                <option value="write">{{ t("writeToken") }}</option>
+                <option value="write" :disabled="repository.archived">{{ t("writeToken") }}</option>
               </SelectField>
               <FluentButton
                 type="button"
@@ -640,7 +641,12 @@ onUnmounted(() => {
           :source="file.content"
           :base-url="markdownBase"
         />
-        <pre v-else class="code-source"><code class="line-gutter" aria-hidden="true">{{
+        <pre
+          v-else
+          class="code-source"
+          :class="{ 'code-wrapped': preferencesState.lineWrap }"
+          :style="{ tabSize: preferencesState.tabSize }"
+        ><code class="line-gutter" aria-hidden="true">{{
           fileLineNumbers.join("\n")
         }}</code><code class="highlighted-file" v-html="highlightedContent"></code></pre>
       </div>
@@ -815,6 +821,12 @@ onUnmounted(() => {
       <section v-if="route.query.oid && !emptyRepository" class="box box-form commit-detail">
         <p class="eyebrow">{{ t("commitDetails") }}</p>
         <code>{{ route.query.oid }}</code>
+        <CommitSignatureStatus
+          v-if="selectedCommit"
+          :repository-id="repository.id"
+          :ref-name="refName"
+          :oid="selectedCommit.oid"
+        />
         <p v-if="selectedCommit">{{ selectedCommit.message }}</p>
         <p v-else class="muted">{{ t("commitNotInGraph") }}</p>
         <strong>{{ t("parents") }}</strong>

@@ -106,7 +106,9 @@ describe("RepositorySettings", () => {
     vi.spyOn(api, "repositorySettings").mockResolvedValue({ ...settings, visibility: "private" });
     const mounted = await mountSettings({ ...repository, visibility: "private" });
 
-    expect(combo(mounted.root, "Default branch").textContent).toContain("main");
+    expect(combo(mounted.root, "Default branch for browsing and PRs").textContent).toContain(
+      "main"
+    );
     navigation(mounted.root, "Agents & memory").click();
     await settle();
     combo(mounted.root, "Task and project memory visibility").click();
@@ -143,7 +145,7 @@ describe("RepositorySettings", () => {
     const name = control(mounted.root, "#repository-name");
     fill(name, "renamed");
     fill(control(mounted.root, "textarea"), "Updated project description");
-    await choose(mounted.root, "Default branch", "topic");
+    await choose(mounted.root, "Default branch for browsing and PRs", "topic");
     await choose(mounted.root, "Visibility", "Private");
 
     navigation(mounted.root, "Features").click();

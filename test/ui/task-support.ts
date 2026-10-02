@@ -28,6 +28,13 @@ export const repository: Repository = {
   createdAt: 1,
   updatedAt: 2,
   canWrite: true,
+  archived: false,
+  issuesEnabled: true,
+  pullsEnabled: true,
+  discussionsEnabled: true,
+  wikiEnabled: true,
+  requiredApprovals: 0,
+  requirePassingChecks: false,
 };
 
 export function task(overrides: Partial<Task> = {}): Task {

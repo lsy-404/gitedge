@@ -176,8 +176,8 @@ const pullIsOpen = computed(() => {
   const current = item.value;
   return current !== null && "headRef" in current && current.state === "open";
 });
-const canCreate = computed(() => Boolean(sessionState.user));
-const showEditActions = computed(() => props.repository.canWrite);
+const canCreate = computed(() => Boolean(sessionState.user) && !props.repository.archived);
+const showEditActions = computed(() => props.repository.canWrite && !props.repository.archived);
 const resource = computed<"issues" | "pull-requests" | "discussions">(() =>
   props.section === "issues"
     ? "issues"

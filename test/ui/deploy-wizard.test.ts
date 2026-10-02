@@ -18,6 +18,13 @@ const repository = {
   createdAt: 1,
   updatedAt: 1,
   canWrite: true,
+  archived: false,
+  issuesEnabled: true,
+  pullsEnabled: true,
+  discussionsEnabled: true,
+  wikiEnabled: true,
+  requiredApprovals: 0,
+  requirePassingChecks: false,
 };
 
 const plan = {

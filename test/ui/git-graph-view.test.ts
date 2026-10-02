@@ -12,7 +12,7 @@ import {
   clearOneTimeToken,
   isCredentialExpired,
 } from "../../apps/web/src/lib/credentialSecurity";
-import { authenticatedCloneCommand, gatewayCloneUrl } from "../../apps/web/src/lib/gitClone";
+import { cloneCommand, gatewayCloneUrl } from "../../apps/web/src/lib/gitClone";
 
 function session(
   id: string,
@@ -110,11 +110,13 @@ describe("Git graph view projection", () => {
 
   it("builds the gateway clone URL and keeps its Auth credential in the header command", () => {
     const remote = gatewayCloneUrl("https://forge.example", "team", "repo name");
-    const command = authenticatedCloneCommand(remote, "ge_token_secret");
+    const command = cloneCommand(remote, "release/next", "ge_token_secret");
+    expect(command).toContain("clone --branch release/next -- ");
 
     expect(remote).toBe("https://forge.example/team/repo%20name.git");
-    expect(command).toBe(
-      'git -c http.extraHeader="Authorization: Bearer ge_token_secret" clone https://forge.example/team/repo%20name.git'
+    expect(command).toContain("http.extraHeader=Authorization: Bearer ge_token_secret");
+    expect(cloneCommand("https://forge.example/team/repo.git", "topic/$(touch-pwned)")).toContain(
+      "--branch 'topic/$(touch-pwned)' --"
     );
     expect(remote).not.toContain("ge_token_secret");
   });

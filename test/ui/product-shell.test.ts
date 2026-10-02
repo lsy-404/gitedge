@@ -54,6 +54,13 @@ describe("GitEdge API client", () => {
       createdAt: 1,
       updatedAt: 1,
       canWrite: false,
+      archived: false,
+      issuesEnabled: true,
+      pullsEnabled: true,
+      discussionsEnabled: true,
+      wikiEnabled: true,
+      requiredApprovals: 0,
+      requirePassingChecks: false,
     };
     const fetchMock = vi
       .spyOn(globalThis, "fetch")

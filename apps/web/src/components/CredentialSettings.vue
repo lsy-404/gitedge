@@ -140,7 +140,7 @@ async function createCredential(): Promise<void> {
     oneTimeCredential.value = { token: created.token, expiresAt: created.expiresAt };
     secretExpiryTimer = window.setTimeout(
       clearOneTimeCredential,
-      Math.max(0, created.expiresAt - Date.now())
+      Math.min(2_147_483_647, Math.max(0, created.expiresAt - Date.now()))
     );
     credentialName.value = "";
     await load();

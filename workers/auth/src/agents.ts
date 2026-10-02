@@ -33,6 +33,7 @@ interface RepositoryRow {
   artifactName: string | null;
   owner: string;
   slug: string;
+  archived: number;
 }
 export interface GitAuthentication {
   user: TrustedUser;
@@ -90,7 +91,7 @@ async function repositoryForOwner(
   repositoryId: string
 ): Promise<RepositoryRow | null> {
   return env.DB.prepare(
-    "SELECT r.id, r.artifact_name AS artifactName, n.slug AS owner, r.slug FROM repositories r JOIN namespaces n ON n.id = r.namespace_id JOIN namespace_memberships m ON m.namespace_id = n.id WHERE r.id = ? AND m.user_id = ?"
+    "SELECT r.id, r.artifact_name AS artifactName, n.slug AS owner, r.slug, r.archived FROM repositories r JOIN namespaces n ON n.id = r.namespace_id JOIN namespace_memberships m ON m.namespace_id = n.id WHERE r.id = ? AND m.user_id = ?"
   )
     .bind(repositoryId, userId)
     .first<RepositoryRow>();
@@ -275,6 +276,8 @@ export async function handleAgentManagement(
     if (!parsed.success) return fail(400, "bad_request", "Invalid session payload.");
     const repository = await repositoryForOwner(env, user.id, parsed.data.repositoryId);
     if (!repository) return fail(404, "not_found", "Repository was not found.");
+    if (repository.archived === 1 && parsed.data.permission === "write")
+      return fail(409, "repository_archived", "Archived repositories cannot issue write sessions.");
     if (!repository.artifactName)
       return fail(
         409,
@@ -406,6 +409,12 @@ async function handleGitTokenManagement(
   if (!parsed.success) return fail(400, "bad_request", "Invalid Git token payload.");
   const repository = await repositoryForOwner(env, user.id, parsed.data.repositoryId);
   if (!repository) return fail(404, "not_found", "Repository was not found.");
+  if (repository.archived === 1 && parsed.data.permission === "write")
+    return fail(
+      409,
+      "repository_archived",
+      "Archived repositories cannot issue write credentials."
+    );
   const token = newToken("ge_token_");
   const id = crypto.randomUUID();
   const createdAt = Date.now();

@@ -10,6 +10,7 @@ import {
   orderCommits,
   refContainsCommit,
 } from "./read";
+import { readCommitSignature } from "./signatures";
 import { compareArtifacts } from "./compare";
 import { GitMergeInputSchema, mergeArtifacts } from "./merge";
 
@@ -58,7 +59,7 @@ export async function handleGitApi(request: Request, env: GitEnv): Promise<Respo
   const resource = parts[2];
   const proposalComparison = resource === "compare" && url.searchParams.has("headSessionId");
   // Commit lookups answer whether the repository itself holds a commit, never a private fork.
-  const repositoryScoped = proposalComparison || resource === "commit";
+  const repositoryScoped = proposalComparison || resource === "commit" || resource === "signature";
   using repo = await env.ARTIFACTS.get(
     repositoryScoped
       ? access.repository.artifactName
@@ -71,6 +72,8 @@ export async function handleGitApi(request: Request, env: GitEnv): Promise<Respo
     return fail(400, "bad_request", "Invalid ref or path.");
   logger.debug("artifacts:request", { resource, sessionId: session?.id });
   if (resource === "merge" && request.method === "POST") {
+    if (access.repository.archived)
+      return fail(409, "repository_archived", "Archived repositories are read-only.");
     if (!access.user || !access.repository.canWrite || userSession)
       return fail(403, "forbidden", "A repository member must merge proposals.");
     const input = GitMergeInputSchema.safeParse(await request.json().catch(() => null));
@@ -98,6 +101,15 @@ export async function handleGitApi(request: Request, env: GitEnv): Promise<Respo
   if (request.method !== "GET" && request.method !== "HEAD")
     return fail(405, "method_not_allowed", "Method is not allowed.");
   if (resource === "refs") return json(await listArtifactRefs(repo, env.LOG_LEVEL));
+  if (resource === "signature") {
+    const oid = url.searchParams.get("oid") ?? "";
+    const commitRef = url.searchParams.get("ref");
+    if (!GitOidSchema.safeParse(oid).success || !commitRef)
+      return fail(400, "bad_request", "Invalid commit oid or ref.");
+    if (!(await refContainsCommit(repo, commitRef, oid)))
+      return fail(404, "not_found", "Commit was not found in this repository ref.");
+    return json(await readCommitSignature(repo, env.DB, oid, env.LOG_LEVEL));
+  }
   if (resource === "commit") {
     const oid = url.searchParams.get("oid") ?? "";
     const commitRef = url.searchParams.get("ref");

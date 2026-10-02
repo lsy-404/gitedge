@@ -112,7 +112,10 @@ const policyChoices = computed(() =>
   }))
 );
 const branchChoices = computed<readonly FluentSelectOption[]>(() => {
-  const options = branches.value.map((branch) => ({ value: branch, label: branch }));
+  const options: FluentSelectOption[] = branches.value.map((branch) => ({
+    value: branch,
+    label: branch,
+  }));
   const current = draft.value?.defaultBranch;
   if (current && !branches.value.includes(current))
     options.unshift({
@@ -293,6 +296,7 @@ watch(() => props.repository.id, load, { immediate: true });
             <div class="settings-row">
               <div class="row-copy">
                 <span>{{ t("repoSettingsDefaultBranch") }}</span>
+                <p>{{ t("repoSettingsDefaultBranchHint") }}</p>
                 <div v-if="branchesError" class="branch-error">
                   <p role="alert">{{ t("repoSettingsBranchUnavailable") }}</p>
                   <FluentButton type="button" @click="load">{{ t("retry") }}</FluentButton>
@@ -325,7 +329,7 @@ watch(() => props.repository.id, load, { immediate: true });
               </div>
               <FluentSwitch
                 v-model="draft.issuesEnabled"
-                :label="t('repoSettingsEnabled')"
+                :label="t('repoSettingsIssues')"
                 :disabled="!canManage"
               />
             </div>
@@ -336,7 +340,7 @@ watch(() => props.repository.id, load, { immediate: true });
               </div>
               <FluentSwitch
                 v-model="draft.pullsEnabled"
-                :label="t('repoSettingsEnabled')"
+                :label="t('repoSettingsPulls')"
                 :disabled="!canManage"
               />
             </div>
@@ -347,7 +351,7 @@ watch(() => props.repository.id, load, { immediate: true });
               </div>
               <FluentSwitch
                 v-model="draft.discussionsEnabled"
-                :label="t('repoSettingsEnabled')"
+                :label="t('repoSettingsDiscussions')"
                 :disabled="!canManage"
               />
             </div>
@@ -358,7 +362,7 @@ watch(() => props.repository.id, load, { immediate: true });
               </div>
               <FluentSwitch
                 v-model="draft.wikiEnabled"
-                :label="t('repoSettingsEnabled')"
+                :label="t('repoSettingsWiki')"
                 :disabled="!canManage"
               />
             </div>
@@ -486,6 +490,19 @@ watch(() => props.repository.id, load, { immediate: true });
 </template>
 
 <style scoped>
+.settings-row :deep(.fluent-field__label),
+.settings-row :deep(.fluent-select__label),
+.settings-row :deep(.fluent-switch__label) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .repository-settings {
   min-width: 0;
 }

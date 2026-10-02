@@ -220,7 +220,7 @@ async function repositoryForUser(
   repositoryId: string
 ): Promise<boolean> {
   const row = await env.DB.prepare(
-    "SELECT repositories.id FROM repositories JOIN namespace_memberships ON namespace_memberships.namespace_id = repositories.namespace_id WHERE repositories.id = ? AND namespace_memberships.user_id = ? AND namespace_memberships.role = 'owner'"
+    "SELECT repositories.id FROM repositories JOIN namespace_memberships ON namespace_memberships.namespace_id = repositories.namespace_id WHERE repositories.id = ? AND namespace_memberships.user_id = ? AND namespace_memberships.role = 'owner' AND repositories.archived = 0"
   )
     .bind(repositoryId, userId)
     .first<{ id: string }>();

@@ -1,4 +1,4 @@
-<script setup lang="ts">
+<script lang="ts">
 import { computed } from "vue";
 import {
   Activity,
@@ -49,7 +49,6 @@ import {
   X,
 } from "@lucide/vue";
 
-const props = defineProps<{ name: string; size?: number }>();
 const icons = {
   activity: Activity,
   agent: Bot,
@@ -76,7 +75,9 @@ const icons = {
   filter: Filter,
   folder: Folder,
   gear: Settings,
+  settings: Settings,
   github: GitBranch,
+  gitMerge: GitMerge,
   home: House,
   issue: CircleDot,
   link: Link,
@@ -100,59 +101,11 @@ const icons = {
   external: ExternalLink,
   help: CircleHelp,
 } as const;
-const icon = computed(() => icons[props.name as keyof typeof icons] ?? CircleHelp);
+export type IconName = keyof typeof icons;
 </script>
-
-<script lang="ts">
-export type IconName =
-  | "activity"
-  | "agent"
-  | "alert"
-  | "arrowDown"
-  | "arrowLeft"
-  | "arrowUpRight"
-  | "book"
-  | "branch"
-  | "check"
-  | "checkCircle"
-  | "chevron"
-  | "chevronRight"
-  | "circle"
-  | "cloud"
-  | "code"
-  | "commit"
-  | "copy"
-  | "diff"
-  | "discussion"
-  | "download"
-  | "eye"
-  | "external"
-  | "file"
-  | "filter"
-  | "folder"
-  | "gear"
-  | "github"
-  | "home"
-  | "issue"
-  | "link"
-  | "lock"
-  | "markdown"
-  | "menu"
-  | "organization"
-  | "person"
-  | "plus"
-  | "pr"
-  | "repo"
-  | "search"
-  | "signOut"
-  | "tag"
-  | "target"
-  | "task"
-  | "terminal"
-  | "wiki"
-  | "clock"
-  | "close"
-  | "help";
+<script setup lang="ts">
+const props = defineProps<{ name: IconName; size?: number }>();
+const icon = computed(() => icons[props.name]);
 </script>
 
 <template>

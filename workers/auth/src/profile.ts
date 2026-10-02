@@ -1,3 +1,4 @@
+import { dataResponse as json, errorResponse as fail, readJsonLimited as readJson } from "./http";
 import {
   AccountProfileSchema,
   DefaultAccountPreferences,
@@ -16,25 +17,6 @@ interface ProfileRow {
   location: string | null;
   website: string | null;
   preferencesJson: string | null;
-}
-
-function json(data: unknown, status = 200): Response {
-  return Response.json({ data }, { status, headers: { "Cache-Control": "no-store" } });
-}
-
-function fail(status: number, code: string, message: string): Response {
-  return Response.json(
-    { error: { code, message } },
-    { status, headers: { "Cache-Control": "no-store" } }
-  );
-}
-
-async function readJson(request: Request): Promise<unknown> {
-  try {
-    return await request.json();
-  } catch {
-    return null;
-  }
 }
 
 function preferencesFromJson(value: string | null): AccountProfile["preferences"] {
@@ -66,7 +48,7 @@ async function readProfile(
   userId: string
 ): Promise<AccountProfile | null> {
   const row = await env.DB.prepare(
-    "SELECT users.identifier, profile.display_name AS displayName, profile.bio, profile.location, profile.website, profile.preferences_json AS preferencesJson FROM users LEFT JOIN auth_account_profiles profile ON profile.user_id = users.id WHERE users.id = ?"
+    "SELECT users.identifier, COALESCE(profile.display_name, (SELECT CASE WHEN display_name = email OR instr(display_name, '@') > 0 THEN NULL ELSE display_name END FROM auth_sso_identities WHERE user_id = users.id ORDER BY last_login_at DESC LIMIT 1)) AS displayName, profile.bio, profile.location, profile.website, profile.preferences_json AS preferencesJson FROM users LEFT JOIN auth_account_profiles profile ON profile.user_id = users.id WHERE users.id = ?"
   )
     .bind(userId)
     .first<ProfileRow>();
@@ -158,9 +140,15 @@ export async function handleAccountProfile(
       )
     );
     await env.DB.batch(statements);
-  } catch {
+  } catch (cause) {
+    if (cause instanceof Error && cause.message.includes("UNIQUE constraint"))
+      return fail(
+        409,
+        "conflict",
+        "Account settings could not be saved because the name is in use."
+      );
     logger.error("account:profile-update-failed", { userId: user.id });
-    return fail(409, "conflict", "Account settings could not be saved because the name is in use.");
+    return fail(500, "internal_error", "Account settings could not be saved.");
   }
   logger.info("account:profile-updated", {
     userId: user.id,

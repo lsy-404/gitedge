@@ -41,6 +41,7 @@
     "isomorphic-git": "^1.42.6",
     "memfs": "^4.80.0",
     "openid-client": "^6.8.4",
+    "openpgp": "^6.3.2",
     "zod": "^4.4.3"
   },
   "license": "MIT",

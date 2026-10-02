@@ -999,6 +999,34 @@ describe("Assignments", () => {
     ).toBe(409);
   });
 
+  it("does not count a pull request author's own approval", async () => {
+    const pull = await createPull("Independent review");
+    const head = "6".repeat(40);
+    await call("/repositories/r1/settings", "PATCH", alice, {
+      requiredApprovals: 1,
+      requirePassingChecks: false,
+    });
+    try {
+      await call(`/repositories/r1/pull-requests/${pull}/reviews`, "POST", alice, {
+        state: "approved",
+        commitOid: head,
+      });
+      const input = { expectedBaseOid: "4".repeat(40), expectedHeadOid: head };
+      expect(
+        (await call(`/repositories/r1/pull-requests/${pull}/merge`, "POST", alice, input)).status
+      ).toBe(409);
+      await call(`/repositories/r1/pull-requests/${pull}/reviews`, "POST", bob, {
+        state: "approved",
+        commitOid: head,
+      });
+      expect(
+        (await call(`/repositories/r1/pull-requests/${pull}/merge`, "POST", alice, input)).status
+      ).toBe(200);
+    } finally {
+      await call("/repositories/r1/settings", "PATCH", alice, { requiredApprovals: 0 });
+    }
+  });
+
   it("requires current-OID human approvals and a passing current-OID check when configured", async () => {
     const pull = await createPull("Configured merge gates");
     const head = "6".repeat(40);

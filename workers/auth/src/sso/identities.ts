@@ -161,14 +161,19 @@ export async function resolveSsoIdentity(
       try {
         await env.DB.batch([
           env.DB.prepare(
-            "UPDATE namespaces SET slug = ? WHERE kind = 'personal' AND created_by = ?"
-          ).bind(identifier, existing.userId),
-          env.DB.prepare("UPDATE users SET identifier = ? WHERE id = ?").bind(
+            "UPDATE namespaces SET slug = ? WHERE kind = 'personal' AND created_by = ? AND slug = ? AND EXISTS (SELECT 1 FROM users WHERE id = ? AND identifier = ?)"
+          ).bind(
             identifier,
-            existing.userId
+            existing.userId,
+            existing.identifier,
+            existing.userId,
+            existing.identifier
           ),
+          env.DB.prepare(
+            "UPDATE users SET identifier = ? WHERE id = ? AND identifier = ? AND EXISTS (SELECT 1 FROM namespaces WHERE kind = 'personal' AND created_by = ? AND slug = ?)"
+          ).bind(identifier, existing.userId, existing.identifier, existing.userId, identifier),
         ]);
-        existing = { ...existing, identifier };
+        existing = (await findIdentity(env, provider, claims.subject)) ?? existing;
       } catch {
         logger.warn("sso:legacy-handle-rename-conflict", { userId: existing.userId });
       }

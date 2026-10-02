@@ -216,6 +216,13 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
       : isApiPath(url.pathname, "/api/git")
         ? "/api/git"
         : "/api/deploy";
+    if (prefix === "/api/git" && request.method !== "GET" && request.method !== "HEAD")
+      return Response.json(
+        {
+          error: { code: "method_not_allowed", message: "Use the pull request workflow to merge." },
+        },
+        { status: 405, headers: { Allow: "GET, HEAD" } }
+      );
     const service =
       prefix === "/api/forge" ? env.FORGE : prefix === "/api/git" ? env.GIT : env.DEPLOY;
     if (!service)
