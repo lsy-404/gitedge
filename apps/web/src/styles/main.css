@@ -12,15 +12,16 @@
   --colorNeutralForeground3: var(--fluent-muted);
   --colorNeutralStroke1: var(--fluent-border);
   --colorNeutralStroke2: var(--fluent-border);
-  --colorBrandForegroundLink: var(--accent);
-  --colorBrandForegroundLinkHover: var(--accent);
+  --colorBrandForegroundLink: var(--link);
+  --colorBrandForegroundLinkHover: var(--link-hover);
   --strokeWidthThin: 1px;
   --bg: var(--fluent-bg);
   --subtle: var(--fluent-surface);
   --text: var(--fluent-text);
   --muted: var(--fluent-muted);
   --border: var(--fluent-border);
-  --link: var(--accent);
+  --link: #a94700;
+  --link-hover: #873900;
   --success: var(--fluent-success);
   --danger: var(--fluent-danger);
   --accent: #f6821f;
@@ -55,6 +56,10 @@
   --spacingVerticalL: 16px;
   --spacingVerticalXL: 20px;
   --spacingVerticalXXL: 32px;
+}
+.fluent-theme[data-fluent-theme="dark"] {
+  --link: #ffad75;
+  --link-hover: #ffc49c;
 }
 .fluent-theme[data-density="compact"] {
   --spacingHorizontalS: 6px;
@@ -127,6 +132,7 @@ a {
   text-decoration: none;
 }
 a:hover {
+  color: var(--link-hover, var(--link));
   text-decoration: underline;
 }
 button,
