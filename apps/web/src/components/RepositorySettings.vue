@@ -97,9 +97,9 @@ watch(() => props.repository.id, load, { immediate: true });
           @update:model-value="memoryVisibility = oneOf(visibilities, $event, 'members')"
         >
           <option value="members">{{ t("memoryVisibility_members") }}</option>
-          <option value="public" :disabled="!publicAllowed">{{
-            t("memoryVisibility_public")
-          }}</option>
+          <option value="public" :disabled="!publicAllowed">
+            {{ t("memoryVisibility_public") }}
+          </option>
         </SelectField>
         <p class="muted hint">{{ t("memoryVisibilityHint") }}</p>
         <p v-if="!publicAllowed" class="muted hint">{{ t("memoryVisibilityPrivateNote") }}</p>

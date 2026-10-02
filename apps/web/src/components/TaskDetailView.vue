@@ -357,9 +357,9 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
             :disabled="saving"
             @update:model-value="setStatus"
           >
-            <option v-for="status in taskStatuses" :key="status" :value="status">{{
-              t(`taskStatus_${status}`)
-            }}</option>
+            <option v-for="status in taskStatuses" :key="status" :value="status">
+              {{ t(`taskStatus_${status}`) }}
+            </option>
           </SelectField>
           <div v-else class="task-readonly">
             <p class="eyebrow">{{ t("taskStatusLabel") }}</p>
@@ -375,20 +375,17 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
             @update:model-value="setAssignee"
           >
             <option value="">{{ t("taskUnassigned") }}</option>
-            <option
-              v-if="assigneeOutsideCandidates"
-              :value="assigneeOutsideCandidates.key"
-              >{{ assigneeOutsideCandidates.name }}</option
-            >
+            <option v-if="assigneeOutsideCandidates" :value="assigneeOutsideCandidates.key">
+              {{ assigneeOutsideCandidates.name }}
+            </option>
             <option
               v-for="candidate in candidates"
               :key="assigneeKey(candidate)"
               :value="assigneeKey(candidate)"
-              >{{ candidate.name
-              }}<template v-if="candidate.kind === 'agent'">
-                · {{ t("agent") }}</template
-              ></option
             >
+              {{ candidate.name
+              }}<template v-if="candidate.kind === 'agent'"> · {{ t("agent") }}</template>
+            </option>
           </SelectField>
           <div v-else class="task-readonly">
             <p class="eyebrow">{{ t("taskAssignee") }}</p>
@@ -452,12 +449,7 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
       </article>
 
       <section class="box box-form doc-card" :aria-label="t('taskDocuments')">
-        <div
-          ref="documentTablist"
-          class="doc-tabs"
-          role="tablist"
-          :aria-label="t('taskDocuments')"
-        >
+        <div ref="documentTablist" class="doc-tabs" role="tablist" :aria-label="t('taskDocuments')">
           <button
             v-for="kind in taskDocumentKinds"
             :id="`doc-tab-${kind}`"
@@ -524,9 +516,9 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
               v-for="option in linkOptions"
               :key="linkOptionKey(option)"
               :value="linkOptionKey(option)"
-              >{{ option.kind === "issue" ? "Issue" : "PR" }} #{{ option.number }}
-              {{ option.title }}</option
             >
+              {{ option.kind === "issue" ? "Issue" : "PR" }} #{{ option.number }} {{ option.title }}
+            </option>
           </SelectField>
           <p v-else class="muted">{{ t("taskLinkNothing") }}</p>
           <NoticeBar v-if="linkError" intent="error">{{ linkError }}</NoticeBar>

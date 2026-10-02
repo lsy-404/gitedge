@@ -533,7 +533,7 @@ section.collab-section:has(> .detail-titlebar) > .detail-card {
   grid-column: 1;
 }
 section.collab-section:has(> .detail-titlebar) > .detail-sidebar {
-  grid-row: 3;
+  grid-row: 3 / span 6;
   grid-column: 2;
   border: 0;
   background: transparent;
@@ -552,7 +552,7 @@ section.collab-section:has(> .pull-tabs) > .detail-card {
   grid-row: 4;
 }
 section.collab-section:has(> .pull-tabs) > .detail-sidebar {
-  grid-row: 4;
+  grid-row: 4 / span 6;
 }
 section.collab-section:has(> .pull-tabs) > .pull-review,
 section.collab-section:has(> .pull-tabs) > .checks-panel {
@@ -582,4 +582,9 @@ section.collab-section:has(> .pull-tabs) > .checks-panel {
 
 .collab-section .body-content.markdown-body {
   white-space: normal;
+}
+.detail-sidebar .assignment-panel {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
 }

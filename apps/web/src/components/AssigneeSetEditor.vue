@@ -86,8 +86,9 @@ function remove(target: Assignee) {
         v-for="candidate in available"
         :key="assigneeKey(candidate)"
         :value="assigneeKey(candidate)"
-        >{{ candidateLabel(candidate) }}</option
       >
+        {{ candidateLabel(candidate) }}
+      </option>
     </SelectField>
   </div>
 </template>

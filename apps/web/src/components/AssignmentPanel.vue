@@ -166,8 +166,9 @@ watch(() => [props.repository.id, props.item.number, canEdit.value], load);
             :key="task.number"
             :value="String(task.number)"
             :title="task.title"
-            >#{{ task.number }} [{{ task.type }}] {{ truncate(task.title) }}</option
           >
+            #{{ task.number }} [{{ task.type }}] {{ truncate(task.title) }}
+          </option>
         </SelectField>
       </div>
     </div>
