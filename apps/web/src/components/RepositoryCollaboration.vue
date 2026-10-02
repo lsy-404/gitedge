@@ -109,59 +109,66 @@ const checkForm = ref<{
 const queryText = ref("");
 const stateFilter = ref<"open" | "closed" | "all">("open");
 const categoryFilter = ref<"all" | Discussion["category"]>("all");
+const issueView = ref<"all" | "assigned" | "created" | "recent">("all");
 const detailTab = ref<"conversation" | "files" | "checks">("conversation");
 const commentPreview = ref(false);
 const wikiPreview = ref(false);
-const filteredRows = computed(() => {
-  const rows =
-    props.section === "issues"
-      ? issues.value
-      : props.section === "pulls"
-        ? pulls.value
-        : discussions.value;
-  return rows.filter((row) => {
-    const matchesState =
-      stateFilter.value === "all" ||
-      row.state === stateFilter.value ||
-      (stateFilter.value === "closed" && "mergedOid" in row && row.state === "merged");
-    const matchesCategory =
-      !("category" in row) ||
-      categoryFilter.value === "all" ||
-      row.category === categoryFilter.value;
-    const matchesText =
-      `${row.title} ${row.number} ${"author" in row ? row.author : row.actor.name} ${"labels" in row ? row.labels.join(" ") : ""}`
-        .toLocaleLowerCase()
-        .includes(queryText.value.trim().toLocaleLowerCase());
-    return matchesState && matchesCategory && matchesText;
-  });
-});
-const openCount = computed(
-  () =>
-    (props.section === "issues"
-      ? issues.value
-      : props.section === "pulls"
-        ? pulls.value
-        : discussions.value
-    ).filter((row) => row.state === "open").length
+const collectionRows = computed<(Issue | PullRequest | Discussion)[]>(() =>
+  props.section === "issues"
+    ? issues.value
+    : props.section === "pulls"
+      ? pulls.value
+      : discussions.value
 );
-const closedCount = computed(
+function matchesFilters(row: Issue | PullRequest | Discussion): boolean {
+  const matchesState =
+    stateFilter.value === "all" ||
+    row.state === stateFilter.value ||
+    (stateFilter.value === "closed" && "mergedOid" in row && row.state === "merged");
+  const matchesCategory =
+    !("category" in row) || categoryFilter.value === "all" || row.category === categoryFilter.value;
+  const author = row.actor.name;
+  const labels = "labels" in row ? row.labels.join(" ") : "";
+  const matchesText = `${row.title} ${row.number} ${author} ${labels}`
+    .toLocaleLowerCase()
+    .includes(queryText.value.trim().toLocaleLowerCase());
+  return matchesState && matchesCategory && matchesText;
+}
+function isAssignedToMe(issue: Issue): boolean {
+  const identifier = sessionState.user?.identifier;
+  return Boolean(
+    identifier &&
+    issue.assignees.some(
+      (assignee) => assignee.toLocaleLowerCase() === identifier.toLocaleLowerCase()
+    )
+  );
+}
+const baseIssues = computed(() => issues.value.filter(matchesFilters));
+const assignedIssueCount = computed(() => baseIssues.value.filter(isAssignedToMe).length);
+const createdIssueCount = computed(
   () =>
-    (props.section === "issues"
-      ? issues.value
-      : props.section === "pulls"
-        ? pulls.value
-        : discussions.value
-    ).filter((row) => row.state !== "open").length
-);
-const totalCount = computed(
-  () =>
-    (props.section === "issues"
-      ? issues.value
-      : props.section === "pulls"
-        ? pulls.value
-        : discussions.value
+    baseIssues.value.filter(
+      (issue) => issue.actor.kind === "user" && issue.actor.id === sessionState.user?.id
     ).length
 );
+const filteredIssues = computed(() => {
+  const rows = baseIssues.value.filter((issue) => {
+    if (issueView.value === "assigned") return isAssignedToMe(issue);
+    if (issueView.value === "created")
+      return issue.actor.kind === "user" && issue.actor.id === sessionState.user?.id;
+    return true;
+  });
+  return issueView.value === "recent"
+    ? [...rows].sort((left, right) => right.updatedAt - left.updatedAt)
+    : rows;
+});
+const filteredPulls = computed(() => pulls.value.filter(matchesFilters));
+const filteredDiscussions = computed(() => discussions.value.filter(matchesFilters));
+const openCount = computed(() => collectionRows.value.filter((row) => row.state === "open").length);
+const closedCount = computed(
+  () => collectionRows.value.filter((row) => row.state !== "open").length
+);
+const totalCount = computed(() => collectionRows.value.length);
 const detailNumber = computed(() => Number(route.params.number) || 0);
 const wikiSlug = computed(() => String(route.params.slug || ""));
 const isDetail = computed(() => detailNumber.value > 0 || Boolean(wikiSlug.value));
@@ -586,7 +593,42 @@ watch(
       >
     </div>
     <template v-else-if="!isDetail">
+      <aside v-if="section === 'issues'" class="issue-rail" :aria-label="t('issues')">
+        <button type="button" :aria-pressed="issueView === 'all'" @click="issueView = 'all'">
+          <AppIcon name="issue" />{{ t("issues") }}<span>{{ baseIssues.length }}</span>
+        </button>
+        <button
+          v-if="sessionState.user"
+          type="button"
+          :aria-pressed="issueView === 'assigned'"
+          @click="issueView = 'assigned'"
+        >
+          <AppIcon name="person" />{{ t("assignedToMe") }}<span>{{ assignedIssueCount }}</span>
+        </button>
+        <button
+          v-if="sessionState.user"
+          type="button"
+          :aria-pressed="issueView === 'created'"
+          @click="issueView = 'created'"
+        >
+          <AppIcon name="issue" />{{ t("createdByMe") }}<span>{{ createdIssueCount }}</span>
+        </button>
+        <button type="button" :aria-pressed="issueView === 'recent'" @click="issueView = 'recent'">
+          <AppIcon name="clock" />{{ t("recentActivity") }}<span>{{ baseIssues.length }}</span>
+        </button>
+      </aside>
       <div class="section-actions">
+        <h1>
+          {{
+            section === "issues"
+              ? t("issues")
+              : section === "pulls"
+                ? t("pulls")
+                : section === "discussions"
+                  ? t("discussions")
+                  : t("wiki")
+          }}
+        </h1>
         <fluent-button
           v-if="canCreate && (section !== 'wiki' || repository.canWrite)"
           type="button"
@@ -687,7 +729,7 @@ watch(
       </div>
       <div v-if="section === 'issues'" class="box">
         <RouterLink
-          v-for="row in filteredRows as Issue[]"
+          v-for="row in filteredIssues"
           :key="row.number"
           class="box-row item-link"
           :to="`/${repository.owner}/${repository.name}/issues/${row.number}`"
@@ -708,12 +750,12 @@ watch(
             {{ t("createIssue") }}
           </button>
         </div>
-        <p v-else-if="!filteredRows.length" class="state">{{ t("noMatchingItems") }}</p>
+        <p v-else-if="!filteredIssues.length" class="state">{{ t("noMatchingItems") }}</p>
         <p v-if="issues.length >= 100" class="list-limit-note">{{ t("listLimited") }}</p>
       </div>
       <div v-else-if="section === 'pulls'" class="box">
         <RouterLink
-          v-for="row in filteredRows as PullRequest[]"
+          v-for="row in filteredPulls"
           :key="row.number"
           class="box-row item-link"
           :to="`/${repository.owner}/${repository.name}/pulls/${row.number}`"
@@ -734,12 +776,12 @@ watch(
             {{ t("createPull") }}
           </button>
         </div>
-        <p v-else-if="!filteredRows.length" class="state">{{ t("noMatchingItems") }}</p>
+        <p v-else-if="!filteredPulls.length" class="state">{{ t("noMatchingItems") }}</p>
         <p v-if="pulls.length >= 100" class="list-limit-note">{{ t("listLimited") }}</p>
       </div>
       <div v-else-if="section === 'discussions'" class="box">
         <RouterLink
-          v-for="row in filteredRows as Discussion[]"
+          v-for="row in filteredDiscussions"
           :key="row.number"
           class="box-row item-link"
           :to="`/${repository.owner}/${repository.name}/discussions/${row.number}`"
@@ -760,7 +802,7 @@ watch(
             {{ t("createDiscussion") }}
           </button>
         </div>
-        <p v-else-if="!filteredRows.length" class="state">{{ t("noMatchingItems") }}</p>
+        <p v-else-if="!filteredDiscussions.length" class="state">{{ t("noMatchingItems") }}</p>
         <p v-if="discussions.length >= 100" class="list-limit-note">{{ t("listLimited") }}</p>
       </div>
       <div v-else-if="section === 'wiki'" class="box">
@@ -793,8 +835,36 @@ watch(
       <AppLink class="back-link" :to="`/${repository.owner}/${repository.name}/${section}`"
         >← {{ t(section === "wiki" ? "wiki" : section) }}</AppLink
       >
+      <header v-if="section === 'pulls'" class="detail-titlebar box">
+        <div>
+          <p class="eyebrow">#{{ detailNumber }} · {{ itemStatus(item) }}</p>
+          <h2>{{ "title" in item ? item.title : "" }}</h2>
+        </div>
+        <div
+          v-if="showEditActions && 'state' in item && item.state !== 'merged'"
+          class="detail-actions"
+        >
+          <fluent-button type="button" @click="editMode = !editMode">
+            {{ editMode ? t("cancel") : t("edit") }}</fluent-button
+          ><fluent-button
+            v-if="item.state === 'closed'"
+            type="button"
+            :disabled="saving"
+            @click="updateState('open')"
+          >
+            {{ t("reopen") }}</fluent-button
+          ><fluent-button
+            v-if="item.state === 'open'"
+            type="button"
+            :disabled="saving"
+            @click="updateState('closed')"
+          >
+            {{ t("closeIssue") }}
+          </fluent-button>
+        </div>
+      </header>
       <article class="box box-form detail-card">
-        <div class="detail-heading">
+        <div v-if="section !== 'pulls'" class="detail-heading">
           <div>
             <p class="eyebrow">
               {{ section === "wiki" ? t("wiki") : `#${detailNumber}` }} · {{ itemStatus(item) }}
@@ -864,17 +934,10 @@ watch(
           class="body-content"
           :source="'content' in item ? item.content : item.body"
         />
-        <div v-if="'labels' in item" class="metadata-row">
-          <StatusBadge v-for="label in item.labels" :key="label">{{ label }}</StatusBadge
-          ><StatusBadge v-for="assignee in item.assignees" :key="assignee"
-            >{{ t("assignee") }}: {{ assignee }}</StatusBadge
-          >
-        </div>
-        <div v-if="'headRef' in item" class="pull-meta">
-          <span>{{ item.headRef }} → {{ item.baseRef }}</span
-          ><StatusBadge v-if="item.headSessionId" tone="brand"
+        <div v-if="'headRef' in item && (item.headSessionId || item.mergedOid)" class="pull-meta">
+          <StatusBadge v-if="item.headSessionId" tone="brand"
             >{{ t("sessionFork") }} · {{ item.headSessionId }}</StatusBadge
-          ><StatusBadge v-if="'mergedOid' in item && item.mergedOid" tone="success"
+          ><StatusBadge v-if="item.mergedOid" tone="success"
             >{{ t("mergedCommit") }} {{ item.mergedOid.slice(0, 8) }}</StatusBadge
           >
         </div>
@@ -928,28 +991,6 @@ watch(
             >
               {{ t("restoreRevision") }}
             </fluent-button>
-          </div>
-        </div>
-        <div v-if="section === 'pulls' && detailTab === 'files' && diff" class="pull-review">
-          <p class="eyebrow">{{ t("diff") }}</p>
-          <p class="muted">
-            {{ diff.baseOid.slice(0, 8) }}…{{ diff.headOid.slice(0, 8) }} ·
-            {{ diff.commits.length }} {{ t("commits") }}
-          </p>
-          <div v-for="change in diff.files" :key="change.path" class="changed-file">
-            <strong>{{ change.type }} · {{ change.path }}</strong>
-            <pre v-if="change.patch" class="diff-preview">{{ change.patch }}</pre>
-            <span v-else class="muted">{{ t("binaryPreviewUnavailable") }}</span>
-          </div>
-          <div v-if="showEditActions && pullIsOpen" class="merge-actions">
-            <fluent-button
-              type="button"
-              appearance="primary"
-              :disabled="saving || !diff.headOid"
-              @click="mergePull"
-            >
-              {{ t("mergePull") }}</fluent-button
-            ><span class="muted">{{ t("mergeUsesCurrentHeads") }}</span>
           </div>
         </div>
       </article>
@@ -1023,6 +1064,31 @@ watch(
           <AppIcon name="checkCircle" />{{ t("checks") }} <span>{{ checks.length }}</span>
         </button>
       </nav>
+      <section
+        v-if="section === 'pulls' && detailTab === 'files' && diff"
+        class="box box-form pull-review"
+      >
+        <p class="eyebrow">{{ t("diff") }}</p>
+        <p class="muted">
+          {{ diff.baseOid.slice(0, 8) }}…{{ diff.headOid.slice(0, 8) }} · {{ diff.commits.length }}
+          {{ t("commits") }}
+        </p>
+        <div v-for="change in diff.files" :key="change.path" class="changed-file">
+          <strong>{{ change.type }} · {{ change.path }}</strong>
+          <pre v-if="change.patch" class="diff-preview">{{ change.patch }}</pre>
+          <span v-else class="muted">{{ t("binaryPreviewUnavailable") }}</span>
+        </div>
+        <div v-if="showEditActions && pullIsOpen" class="merge-actions">
+          <fluent-button
+            type="button"
+            appearance="primary"
+            :disabled="saving || !diff.headOid"
+            @click="mergePull"
+          >
+            {{ t("mergePull") }}</fluent-button
+          ><span class="muted">{{ t("mergeUsesCurrentHeads") }}</span>
+        </div>
+      </section>
       <section
         v-if="section === 'pulls' && detailTab === 'conversation'"
         class="box box-form review-panel"

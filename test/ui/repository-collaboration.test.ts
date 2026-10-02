@@ -246,6 +246,44 @@ describe("RepositoryCollaboration rendered workflows", () => {
     mounted.unmount();
   });
 
+  it("filters issues by the signed-in assignee and author, and sorts recent activity", async () => {
+    vi.spyOn(api, "issues").mockResolvedValue([
+      issue({
+        number: 7,
+        title: "Assigned to me",
+        actor: { kind: "agent", id: "agent-1", name: "Build agent" },
+        assignees: ["user@example.test"],
+        updatedAt: 20,
+      }),
+      issue({ number: 8, title: "Created by me", assignees: ["another-user"], updatedAt: 100 }),
+      issue({
+        id: "issue-3",
+        number: 9,
+        title: "Another issue",
+        actor: { kind: "agent", id: "agent-2", name: "Review agent" },
+        assignees: [],
+        updatedAt: 40,
+      }),
+    ]);
+    const mounted = await mountSection("/_verify/issues", "issues");
+    const railButtons = mounted.root.querySelectorAll<HTMLElement>(".issue-rail button");
+
+    railButtons[1]?.click();
+    await settle();
+    expect(mounted.root.querySelectorAll(".item-link")).toHaveLength(1);
+    expect(mounted.root.textContent).toContain("Assigned to me");
+
+    railButtons[2]?.click();
+    await settle();
+    expect(mounted.root.querySelectorAll(".item-link")).toHaveLength(1);
+    expect(mounted.root.textContent).toContain("Created by me");
+
+    railButtons[3]?.click();
+    await settle();
+    expect(mounted.root.querySelector(".item-link strong")?.textContent).toBe("Created by me");
+    mounted.unmount();
+  });
+
   it("creates an issue with labels and assignees, edits it, comments, and closes it", async () => {
     const initial = issue();
     let latest = initial;
@@ -422,9 +460,13 @@ describe("RepositoryCollaboration rendered workflows", () => {
     const mergePullSpy = vi.spyOn(api, "mergePull").mockResolvedValue(mergedPull);
     const mounted = await mountSection("/_verify/pulls/12", "pulls");
 
+    expect(mounted.root.querySelector(".detail-titlebar h2")?.textContent).toBe(openPull.title);
+    expect(mounted.root.querySelector(".detail-card h2")).toBeNull();
     expect(mounted.root.textContent).toContain("Review is for an older head");
     mounted.root.querySelectorAll<HTMLElement>(".pull-tabs button")[2]?.click();
     await settle();
+    expect(mounted.root.querySelector(".pull-review")).toBeNull();
+    expect(mounted.root.querySelector(".checks-panel")).not.toBeNull();
     expect(mounted.root.textContent).toContain("Check is for an older commit");
     mounted.root.querySelectorAll<HTMLElement>(".pull-tabs button")[0]?.click();
     await settle();
@@ -463,6 +505,8 @@ describe("RepositoryCollaboration rendered workflows", () => {
 
     mounted.root.querySelectorAll<HTMLElement>(".pull-tabs button")[1]?.click();
     await settle();
+    expect(mounted.root.querySelector(".pull-review")).not.toBeNull();
+    expect(mounted.root.querySelector(".checks-panel")).toBeNull();
     findButton(mounted.root, "Merge pull request").click();
     await settle();
     expect(mergePullSpy).toHaveBeenCalledWith("repo-1", 12, {

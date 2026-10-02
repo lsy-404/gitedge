@@ -8,6 +8,105 @@
   grid-column: 1 / -1;
 }
 
+.collab-section:has(.detail-titlebar) > .detail-titlebar {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+.collab-section:has(.detail-titlebar) > .detail-card {
+  grid-row: 3;
+  margin-top: 0;
+}
+
+.collab-section:has(.detail-titlebar) > .detail-sidebar {
+  grid-row: 3;
+}
+
+.detail-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin: 0;
+}
+
+.detail-titlebar h2 {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.3;
+}
+
+.detail-titlebar .eyebrow {
+  margin: 0 0 5px;
+}
+
+.collab-section:has(.issue-rail) {
+  grid-template-columns: minmax(190px, 220px) minmax(0, 1fr);
+  align-items: start;
+}
+
+.issue-rail {
+  position: sticky;
+  top: 16px;
+  grid-column: 1;
+  grid-row: 1 / span 5;
+  display: grid;
+  gap: 3px;
+  padding: 5px;
+}
+
+.issue-rail button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text, var(--colorNeutralForeground1));
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.issue-rail button span {
+  margin-left: auto;
+  color: var(--muted, var(--colorNeutralForeground3));
+  font-size: 12px;
+}
+
+.issue-rail button[aria-pressed="true"] {
+  border-color: var(--border, var(--colorNeutralStroke2));
+  background: var(--subtle, var(--colorNeutralBackground3));
+  font-weight: 600;
+}
+
+.collab-section:has(.issue-rail) > .section-actions,
+.collab-section:has(.issue-rail) > .create-form,
+.collab-section:has(.issue-rail) > .list-toolbar,
+.collab-section:has(.issue-rail) > .box:not(.detail-card) {
+  grid-column: 2;
+}
+
+.collab-section:has(.issue-rail) > .section-actions {
+  justify-content: space-between;
+}
+
+.collab-section:has(.issue-rail) > .section-actions h1 {
+  margin: 0;
+  font-size: 26px;
+  line-height: 1.3;
+}
+
+.collab-section:has(.issue-rail) > .list-toolbar {
+  margin-top: 4px;
+}
+
+.collab-section:has(.issue-rail) > .box:not(.detail-card) {
+  margin-top: -12px;
+}
+
 .collab-section:has(.detail-card) > .detail-card {
   grid-column: 1;
   margin: 0;
@@ -100,6 +199,7 @@
 
 .collab-section:has(.detail-card) > .review-panel,
 .collab-section:has(.detail-card) > .checks-panel,
+.collab-section:has(.detail-card) > .pull-review,
 .collab-section:has(.detail-card) > .answer-panel,
 .collab-section:has(.detail-card) > .comments-panel {
   grid-column: 1;
@@ -252,6 +352,7 @@
   .collab-section:has(.detail-card) > .detail-card,
   .collab-section:has(.detail-card) > .review-panel,
   .collab-section:has(.detail-card) > .checks-panel,
+  .collab-section:has(.detail-card) > .pull-review,
   .collab-section:has(.detail-card) > .answer-panel,
   .collab-section:has(.detail-card) > .comments-panel {
     grid-column: 1;
@@ -265,5 +366,25 @@
 
   .search-field {
     min-width: unset;
+  }
+
+  .issue-rail {
+    position: static;
+    grid-row: auto;
+    display: flex;
+    overflow-x: auto;
+    padding: 0;
+  }
+
+  .issue-rail button {
+    width: auto;
+    flex: 0 0 auto;
+  }
+
+  .collab-section:has(.issue-rail) > .section-actions,
+  .collab-section:has(.issue-rail) > .create-form,
+  .collab-section:has(.issue-rail) > .list-toolbar,
+  .collab-section:has(.issue-rail) > .box:not(.detail-card) {
+    grid-column: 1;
   }
 }
