@@ -38,7 +38,7 @@ const environment: Parameters<typeof auth.fetch>[1] = {
   SSO_PROVIDERS_JSON: JSON.stringify([provider]),
   SSO_SECRETS_JSON: JSON.stringify({ enterprise: secrets }),
 };
-const migrations = import.meta.glob<string>("../../migrations/000*.sql", {
+const migrations = import.meta.glob<string>("../../migrations/*.sql", {
   query: "?raw",
   import: "default",
   eager: true,

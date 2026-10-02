@@ -209,14 +209,19 @@ export async function completeOidc(
   }
   const email =
     typeof claims.email === "string" && claims.email.length > 0 ? claims.email : undefined;
+  const preferredUsername =
+    typeof claims.preferred_username === "string" && claims.preferred_username.trim()
+      ? claims.preferred_username.trim()
+      : undefined;
   const displayName =
     (typeof claims.name === "string" && claims.name.trim()) ||
-    (typeof claims.preferred_username === "string" && claims.preferred_username.trim()) ||
+    preferredUsername ||
     email ||
     claims.sub;
   return {
     subject: claims.sub,
     displayName,
+    ...(preferredUsername === undefined ? {} : { preferredUsername }),
     ...(email === undefined ? {} : { email }),
     emailVerified: claims.email_verified === true,
   };

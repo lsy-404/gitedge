@@ -6,7 +6,7 @@ import { sha256Hex, type Agent } from "../../packages/contracts/src/index";
 import auth from "../../workers/auth/src/index";
 import { FixtureArtifacts } from "../support/artifacts";
 
-const migrations = import.meta.glob<string>("../../migrations/000*.sql", {
+const migrations = import.meta.glob<string>("../../migrations/*.sql", {
   query: "?raw",
   import: "default",
   eager: true,

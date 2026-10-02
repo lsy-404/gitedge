@@ -30,6 +30,7 @@ export interface SsoProviderSecrets {
 export interface SsoIdentityClaims {
   subject: string;
   displayName: string;
+  preferredUsername?: string;
   email?: string;
   emailVerified: boolean;
   sessionIndex?: string;

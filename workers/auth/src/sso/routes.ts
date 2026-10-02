@@ -108,6 +108,7 @@ function validClaims(claims: SsoIdentityClaims): boolean {
     claims.subject &&
     claims.subject.length <= 1024 &&
     claims.displayName.length <= 512 &&
+    (!claims.preferredUsername || claims.preferredUsername.length <= 256) &&
     (!claims.email || claims.email.length <= 320) &&
     (!claims.sessionIndex || claims.sessionIndex.length <= 1024) &&
     (!claims.nameIdFormat || claims.nameIdFormat.length <= 1024)

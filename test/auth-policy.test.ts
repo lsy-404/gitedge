@@ -39,7 +39,7 @@ function createDatabase() {
                   password_hash: String(values[4]),
                 };
               }
-              if (sql.startsWith("INSERT INTO auth_sessions")) sessionTokenHash = String(values[0]);
+              if (sql.startsWith("INSERT INTO auth_sessions")) sessionTokenHash = String(values[1]);
               return {};
             },
           };

@@ -18,6 +18,7 @@ import {
 } from "./session";
 import { PBKDF2_ITERATIONS } from "./password";
 import { authenticateAgentSession, authenticateGitToken, handleAgentManagement } from "./agents";
+import { handleAccountProfile, handleWebSessions } from "./profile";
 
 type AuthEnv = {
   readonly DB: D1Database;
@@ -644,13 +645,35 @@ export default {
       const result = await session(env, readCookie(request));
       return result.ok ? json({ data: result.data }) : json({ error: result.error }, result.status);
     }
-    if (/^\/(agents|sessions|tokens)(\/|$)/.test(path)) {
+    if (/^\/(agents|sessions|tokens|web-sessions)(\/|$)/.test(path)) {
+      const authorization = request.headers.get("Authorization");
+      const agent = authorization?.startsWith("Bearer ")
+        ? await authenticateAgentSession(env, authorization.slice(7))
+        : null;
+      if (agent) return fail(403, "forbidden", "Agent sessions cannot manage human accounts.");
       const active = await session(env, readCookie(request));
       if (!active.ok) return json({ error: active.error }, active.status);
       if (request.method !== "GET" && request.headers.get("Origin") !== new URL(request.url).origin)
         return fail(403, "forbidden", "Same-origin account management is required.");
+      const webSessions = await handleWebSessions(
+        request,
+        env,
+        active.data,
+        await hashToken(readCookie(request) ?? "")
+      );
+      if (webSessions) return webSessions;
       const result = await handleAgentManagement(request, env, active.data);
       if (result) return result;
+    }
+    if (path === "/profile") {
+      const authorization = request.headers.get("Authorization");
+      const agent = authorization?.startsWith("Bearer ")
+        ? await authenticateAgentSession(env, authorization.slice(7))
+        : null;
+      if (agent) return fail(403, "forbidden", "Agent sessions cannot manage human accounts.");
+      const active = await session(env, readCookie(request));
+      if (!active.ok) return json({ error: active.error }, active.status);
+      return handleAccountProfile(request, env, active.data);
     }
     return request.method === "GET" || request.method === "POST"
       ? fail(404, "bad_request", "Unknown auth endpoint.")

@@ -6,7 +6,7 @@ import { FixtureArtifacts } from "../support/artifacts";
 import { runSqlScript } from "../support/database";
 import { FixtureOidc } from "../support/oidc";
 
-const migrations = import.meta.glob<string>("../../migrations/000*.sql", {
+const migrations = import.meta.glob<string>("../../migrations/*.sql", {
   query: "?raw",
   import: "default",
   eager: true,
@@ -166,6 +166,60 @@ describe("SSO account and callback boundaries", () => {
     expect((await user(await again.callback())).id).toBe(account.id);
     const sameEmail = await flow("another-subject");
     expect((await user(await sameEmail.callback())).id).not.toBe(account.id);
+  });
+  it("uses readable provider names, avoids opaque public handles, and renames generated handles", async () => {
+    const preferred = await flow("readable-subject", {
+      claims: { preferred_username: "Rosmontis", name: "Visible Name" },
+    });
+    const account = await user(await preferred.callback());
+    expect(account.identifier).toBe("rosmontis");
+    expect(
+      (await (await call("/profile", "GET", account.sessionCookie)).json()).data.displayName
+    ).toBe("Visible Name");
+
+    const collision = await flow("readable-collision", {
+      claims: { preferred_username: "Rosmontis", name: "Another Name" },
+    });
+    expect((await user(await collision.callback())).identifier).toBe("rosmontis-2");
+
+    const custom = await flow("custom-handle-subject", {
+      claims: { preferred_username: "custom-handle" },
+    });
+    const customAccount = await user(await custom.callback());
+    const returningCustom = await flow("custom-handle-subject", {
+      claims: { preferred_username: "changed-provider-name" },
+    });
+    expect((await user(await returningCustom.callback())).identifier).toBe(
+      customAccount.identifier
+    );
+
+    const noPublicEmail = await flow("email-only-subject", {
+      claims: { preferred_username: "shared@example.test", name: "张伟" },
+    });
+    expect((await user(await noPublicEmail.callback())).identifier).toBe("member");
+
+    await env.DB.batch([
+      env.DB.prepare(
+        "UPDATE users SET identifier = 'sso-enterprise-012345abcdef' WHERE id = ?"
+      ).bind(account.id),
+      env.DB.prepare(
+        "UPDATE namespaces SET slug = 'sso-enterprise-012345abcdef' WHERE created_by = ? AND kind = 'personal'"
+      ).bind(account.id),
+      env.DB.prepare(
+        "UPDATE auth_sso_identities SET preferred_username = NULL WHERE user_id = ?"
+      ).bind(account.id),
+    ]);
+    const returning = await flow("readable-subject", {
+      claims: { preferred_username: "migrated-person", name: "Visible Name" },
+    });
+    const migrated = await user(await returning.callback());
+    expect(migrated.id).toBe(account.id);
+    expect(migrated.identifier).toBe("migrated-person");
+    expect(
+      await env.DB.prepare("SELECT slug FROM namespaces WHERE created_by = ? AND kind = 'personal'")
+        .bind(account.id)
+        .first()
+    ).toEqual({ slug: "migrated-person" });
   });
   it.each([
     { name: "issuer", claim: { iss: "https://wrong.example.test" } },

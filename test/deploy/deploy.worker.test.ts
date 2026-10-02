@@ -5,7 +5,7 @@ import { DeployManifestSchema } from "../../packages/contracts/src/deploy";
 import type { DeployEnv } from "../../workers/deploy/src/deploy";
 import { handleDeploy } from "../../workers/deploy/src/deploy";
 
-const migrations = import.meta.glob<string>("../../migrations/000*.sql", {
+const migrations = import.meta.glob<string>("../../migrations/*.sql", {
   query: "?raw",
   import: "default",
   eager: true,
