@@ -1,0 +1,21 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "gitedge-d1-performance-benchmark",
+  "main": "worker.ts",
+  "compatibility_date": "2026-10-03",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "secrets": {
+    "required": ["BENCH_TOKEN"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "gitedge-d1-performance-benchmark-temp",
+      "database_id": "00000000-0000-0000-0000-000000000002",
+      "preview_database_id": "00000000-0000-0000-0000-000000000002",
+      "migrations_dir": "migrations"
+    }
+  ]
+}
