@@ -158,7 +158,7 @@ if (!sessionState.checked) void refreshSession();
           <div class="global-actions">
             <template v-if="sessionState.user && !authPage">
               <details ref="createMenu" class="dropdown create-menu">
-                <summary class="btn" :aria-label="t('ghCreate')">
+                <summary role="button" class="btn" :aria-label="t('ghCreate')">
                   <AppIcon name="plus" /><AppIcon name="chevron" :size="12" />
                 </summary>
                 <div class="dropdown-panel">
@@ -173,7 +173,7 @@ if (!sessionState.checked) void refreshSession();
               </details>
             </template>
             <details ref="userMenu" class="dropdown user-menu">
-              <summary :aria-label="t('ghUserMenu')" class="account-trigger">
+              <summary role="button" :aria-label="t('ghUserMenu')" class="account-trigger">
                 <span v-if="sessionState.user" class="avatar"
                   ><img
                     v-if="sessionState.user.externalIdentity?.avatarUrl"

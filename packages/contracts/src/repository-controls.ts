@@ -91,7 +91,6 @@ export interface RepositoryCommunityFile {
   inherited: boolean;
   truncated: boolean;
   content: string;
-  ref: string;
 }
 export interface RepositoryCommunity {
   truncated: boolean;

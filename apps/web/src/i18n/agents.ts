@@ -1,7 +1,7 @@
 const agentsMessages = {
   "zh-CN": {
     agentHandle: "智能体地址",
-    agentHandleHint: "用于 /用户名/@handle，创建后可以更改。",
+    agentHandleHint: "用于 /用户名/{'@'}handle，创建后可以更改。",
     agentProfile: "智能体资料",
     agentProfilePublic: "公开智能体资料",
     agentProfilePrivate: "仅自己可见",
@@ -28,7 +28,7 @@ const agentsMessages = {
   },
   en: {
     agentHandle: "Agent handle",
-    agentHandleHint: "Used in /username/@handle. You can change it later.",
+    agentHandleHint: "Used in /username/{'@'}handle. You can change it later.",
     agentProfile: "Agent profile",
     agentProfilePublic: "Make this agent profile public",
     agentProfilePrivate: "Only you can view this profile",

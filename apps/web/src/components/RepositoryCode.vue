@@ -523,6 +523,14 @@ onUnmounted(() => {
         <FluentButton v-else class="search-trigger" tone="secondary" @click="showFileSearch = true"
           ><AppIcon name="search" />{{ t("goToFile") }}</FluentButton
         >
+        <FluentButton
+          v-if="canManageCode && canEditCurrentRef"
+          type="button"
+          tone="secondary"
+          @click="openNewFile"
+          ><AppIcon name="plus" />{{ t("codeNewFile") }}</FluentButton
+        >
+
         <div class="clone-menu-wrap">
           <button
             type="button"
@@ -633,13 +641,6 @@ onUnmounted(() => {
           <strong>{{ filePath || refName }}</strong>
           <div class="file-table-actions">
             <span>{{ filteredEntries.length }} {{ t("items") }}</span>
-            <FluentButton
-              v-if="canManageCode && canEditCurrentRef"
-              type="button"
-              tone="secondary"
-              @click="openNewFile"
-              ><AppIcon name="plus" />{{ t("codeNewFile") }}</FluentButton
-            >
           </div>
         </div>
         <FluentButton
