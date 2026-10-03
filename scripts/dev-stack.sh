@@ -4,10 +4,10 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root_dir"
 export CLOUDFLARE_ACCOUNT_ID="$(node -p "JSON.parse(require('fs').readFileSync('workers/gateway/wrangler.jsonc', 'utf8')).account_id")"
-npm --prefix apps/web run build
-npm run db:migrate:local
+pnpm --dir apps/web run build
+pnpm run db:migrate:local
 
-exec npx wrangler dev \
+exec pnpm exec wrangler dev \
   --config workers/gateway/wrangler.jsonc \
   --config workers/auth/wrangler.jsonc \
   --config workers/git/wrangler.jsonc \

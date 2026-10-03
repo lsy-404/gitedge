@@ -42,11 +42,11 @@ GitEdge is an MIT Git forge built with Cloudflare Workers, Artifacts, D1 and Vue
 Use the smallest relevant checks while editing, then verify affected integration paths before delivery:
 
 ```sh
-npm run typecheck
-npm test
-npm run test:workers
-npm run build
-npm run format:check
+pnpm run typecheck
+pnpm run test
+pnpm run test:workers
+pnpm run build
+pnpm run format:check
 ```
 
 `build` compiles Vue and dry-runs all Workers. `test:auth` targets the Auth D1 lifecycle tests. `test:web` runs browser-oriented Vue tests. With the local stack running, `node test/e2e/api-git.mjs` exercises real Artifacts push/clone, isolated agents and collaboration. It creates verification repositories in the configured namespace.

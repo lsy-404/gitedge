@@ -66,13 +66,14 @@ function run(command, args, { cloudflare = false } = {}) {
 
 export function deployStack({ dryRun = false } = {}) {
   if (!assertProductionResourceIds()) return false;
-  if (!run("npm", ["--prefix", "apps/web", "run", "build"])) return false;
+  if (!run("pnpm", ["--dir", "apps/web", "run", "build"])) return false;
 
   if (!dryRun) {
     if (
       !run(
-        "npx",
+        "pnpm",
         [
+          "exec",
           "wrangler",
           "d1",
           "migrations",
@@ -90,9 +91,9 @@ export function deployStack({ dryRun = false } = {}) {
   }
 
   for (const service of ["limits", "auth", "git", "forge", "deploy", "gateway"]) {
-    const args = ["wrangler", "deploy", "--config", `workers/${service}/wrangler.jsonc`];
+    const args = ["exec", "wrangler", "deploy", "--config", `workers/${service}/wrangler.jsonc`];
     if (dryRun) args.push("--dry-run");
-    if (!run("npx", args, { cloudflare: true })) return false;
+    if (!run("pnpm", args, { cloudflare: true })) return false;
   }
 
   return true;

@@ -7,7 +7,7 @@ GitEdge supports multiple OIDC and SAML 2.0 identity providers alongside passwor
 Set `SSO_PROVIDERS_JSON` to a JSON array in the Auth Worker's variables. Put credentials in a separate `SSO_SECRETS_JSON` Worker secret keyed by provider ID:
 
 ```sh
-npx wrangler secret put SSO_SECRETS_JSON --config workers/auth/wrangler.jsonc
+pnpm exec wrangler secret put SSO_SECRETS_JSON --config workers/auth/wrangler.jsonc
 ```
 
 For local development, put these values in ignored `workers/auth/.dev.vars`. Keep secrets out of `wrangler.jsonc`, Git remotes, source and logs. Use the canonical public Gateway origin when registering callback URLs at the provider. Issuers and provider endpoints require HTTPS; OIDC callback URLs also allow HTTP loopback for local development.
@@ -109,4 +109,4 @@ Use an isolated Keycloak distribution and the official `cloudflared` binary to e
 KEYCLOAK_DIR=/absolute/path/to/keycloak CLOUDFLARED_PATH=/absolute/path/to/cloudflared node test/e2e/keycloak-fixture.mjs
 ```
 
-After the fixture reports that provider configuration was written, start or restart `npm run dev` in a second terminal. Wait for fixture readiness, then use the generated private `credentials.json` under ignored `work/full-verification/` to test account linking, both login methods and both single sign-out methods. Test an OIDC logout after using the SAML client in the same IdP session to exercise the signed logout notification. Stop the fixture with Ctrl+C after acceptance; this removes its temporary Auth variables and stops its IdP and tunnel. The fixture creates only synthetic accounts; never reuse production passwords or realm data.
+After the fixture reports that provider configuration was written, start or restart `pnpm run dev` in a second terminal. Wait for fixture readiness, then use the generated private `credentials.json` under ignored `work/full-verification/` to test account linking, both login methods and both single sign-out methods. Test an OIDC logout after using the SAML client in the same IdP session to exercise the signed logout notification. Stop the fixture with Ctrl+C after acceptance; this removes its temporary Auth variables and stops its IdP and tunnel. The fixture creates only synthetic accounts; never reuse production passwords or realm data.

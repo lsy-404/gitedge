@@ -44,7 +44,7 @@ for (const folder of ["docs", "src", "test", ".github"])
   await mkdir(path.join(source, folder), { recursive: true });
 await writeFile(
   path.join(source, "README.md"),
-  `# Edge Workspace\n\nA small Cloudflare Worker used to verify GitEdge's repository and collaboration interface.\n\n## Getting started\n\nClone this repository, install dependencies, and start the development server.\n\n\`\`\`sh\nnpm install\nnpm run dev\n\`\`\`\n\n## Project structure\n\n| Directory | Contents |\n| --- | --- |\n| src | Worker entrypoint and routing |\n| docs | Setup and deployment guides |\n| test | Request and response checks |\n\n### Collaboration checklist\n\n- [x] Isolated agent workspaces\n- [x] Commit-bound reviews and checks\n- [ ] Review the next release\n\nRead the [getting started guide](docs/getting-started.md) or open an issue to discuss a change.\n\n## Deployment\n\nThe repository includes a declarative deployment manifest. Open **Deployments** to review permissions and publish to your Cloudflare account.\n`
+  `# Edge Workspace\n\nA small Cloudflare Worker used to verify GitEdge's repository and collaboration interface.\n\n## Getting started\n\nClone this repository, install dependencies, and start the development server.\n\n\`\`\`sh\npnpm install\npnpm run dev\n\`\`\`\n\n## Project structure\n\n| Directory | Contents |\n| --- | --- |\n| src | Worker entrypoint and routing |\n| docs | Setup and deployment guides |\n| test | Request and response checks |\n\n### Collaboration checklist\n\n- [x] Isolated agent workspaces\n- [x] Commit-bound reviews and checks\n- [ ] Review the next release\n\nRead the [getting started guide](docs/getting-started.md) or open an issue to discuss a change.\n\n## Deployment\n\nThe repository includes a declarative deployment manifest. Open **Deployments** to review permissions and publish to your Cloudflare account.\n`
 );
 await writeFile(
   path.join(source, "src", "index.ts"),
@@ -52,7 +52,7 @@ await writeFile(
 );
 await writeFile(
   path.join(source, "docs", "getting-started.md"),
-  "# Getting started\n\n## Local development\n\n```sh\nnpm install\nnpm run dev\n```\n\n> Keep deployment credentials out of repository files.\n"
+  "# Getting started\n\n## Local development\n\n```sh\npnpm install\npnpm run dev\n```\n\n> Keep deployment credentials out of repository files.\n"
 );
 await writeFile(
   path.join(source, "package.json"),
@@ -151,7 +151,7 @@ await api(`${pathPrefix}/pull-requests/${pull.number}/comments`, "POST", {
 await api(`${pathPrefix}/wiki/getting-started`, "PUT", {
   title: "Getting started",
   content:
-    "# Getting started\n\n## Clone and run\n\n```sh\nnpm install\nnpm run dev\n```\n\n## Working together\n\nUse Issues for tasks and Pull Requests for reviewed changes.",
+    "# Getting started\n\n## Clone and run\n\n```sh\npnpm install\npnpm run dev\n```\n\n## Working together\n\nUse Issues for tasks and Pull Requests for reviewed changes.",
 });
 await api(`${pathPrefix}/discussions`, "POST", {
   title: "How should we organize preview environments?",

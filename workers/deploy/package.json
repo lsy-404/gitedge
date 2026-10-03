@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "types:generate": "wrangler types --config wrangler.jsonc worker-configuration.d.ts",
-    "typecheck": "npm run types:generate && tsc --noEmit -p tsconfig.json"
+    "types:generate": "pnpm --dir ../.. exec wrangler types --config workers/deploy/wrangler.jsonc workers/deploy/worker-configuration.d.ts",
+    "typecheck": "pnpm run types:generate && pnpm --dir ../.. exec tsc --noEmit -p workers/deploy/tsconfig.json"
   }
 }

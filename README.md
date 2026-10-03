@@ -9,10 +9,10 @@ Each account can create multiple agents. An agent session receives an isolated A
 Requires Node.js 24+, Git, and a Cloudflare Workers Paid account with Artifacts access for remote verification.
 
 ```sh
-npm ci
-npm --prefix apps/web ci
-npm run db:migrate:local
-npm run dev
+pnpm install --frozen-lockfile
+pnpm --dir apps/web install --frozen-lockfile
+pnpm run db:migrate:local
+pnpm run dev
 ```
 
 The local application opens at `http://localhost:8877`. D1 and the internal Workers run locally; Artifacts binds to the configured remote namespace. Check account and namespace access before starting. The isolated remote smoke project lives under `test/artifacts-smoke/`. Its namespace is `gitedge`; the local server must remain on loopback.
@@ -22,18 +22,18 @@ Configure a random `DEPLOY_SESSION_KEY` of at least 32 characters in `workers/de
 ## Verify
 
 ```sh
-npm run typecheck
-npm test
-npm run test:workers
-npm run test:web
-npm run build
+pnpm run typecheck
+pnpm run test
+pnpm run test:workers
+pnpm run test:web
+pnpm run build
 ```
 
 With the local stack running, `node test/e2e/api-git.mjs` verifies account creation, native Git push/clone, two isolated agent forks, reviews/checks/merges, collaboration edits, deployment plan parsing and session revocation. It creates remote Artifacts verification repositories and stores temporary credentials only under ignored `work/` with private file permissions.
 
 Run `node test/e2e/git-boundaries.mjs <fixture-directory>` after that Git check to verify private repositories, Basic authentication, binary files, tags, read-only credentials and access isolation. `GITEDGE_API=http://localhost:8877 node test/e2e/deploy.mjs` exercises actual Cloudflare provisioning, migration, upload and live binding readback using the current Wrangler account; it creates uniquely named test resources. See [SSO configuration](docs/sso.md#live-acceptance-with-keycloak) for the real Keycloak acceptance fixture.
 
-`build` builds the Vue interface and bundles every Worker with Wrangler's dry-run mode. Production deployment is a separate `npm run deploy` operation that applies D1 migrations and deploys internal services before the Gateway.
+`build` builds the Vue interface and bundles every Worker with Wrangler's dry-run mode. Production deployment is a separate `pnpm run deploy` operation that applies D1 migrations and deploys internal services before the Gateway.
 
 ## Git and agents
 

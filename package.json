@@ -6,17 +6,17 @@
   "scripts": {
     "dev": "bash scripts/dev-stack.sh",
     "build": "node scripts/deploy-stack.mjs --dry-run",
-    "build:web": "npm --prefix apps/web run build",
-    "preview": "npm --prefix apps/web run dev -- --host 127.0.0.1",
+    "build:web": "pnpm --dir apps/web run build",
+    "preview": "pnpm --dir apps/web run dev --host 127.0.0.1",
     "deploy": "node scripts/deploy-stack.mjs",
     "deploy:dry-run": "node scripts/deploy-stack.mjs --dry-run",
     "test": "vitest run --config vitest.unit.config.ts",
     "test:workers": "vitest run --config vitest.config.ts",
     "test:auth": "vitest run --config vitest.config.ts test/agents/agents.worker.test.ts",
-    "test:web": "npm --prefix apps/web test",
+    "test:web": "pnpm --dir apps/web run test",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "typecheck": "tsc --noEmit -p workers/auth/tsconfig.json && tsc --noEmit -p workers/forge/tsconfig.json && tsc --noEmit -p workers/git/tsconfig.json && tsc --noEmit -p workers/gateway/tsconfig.json && tsc --noEmit -p workers/limits/tsconfig.json && npm --prefix workers/deploy run typecheck",
+    "typecheck": "tsc --noEmit -p workers/auth/tsconfig.json && tsc --noEmit -p workers/forge/tsconfig.json && tsc --noEmit -p workers/git/tsconfig.json && tsc --noEmit -p workers/gateway/tsconfig.json && tsc --noEmit -p workers/limits/tsconfig.json && pnpm --dir workers/deploy run typecheck",
     "cf-typegen": "wrangler types --config workers/git/wrangler.jsonc worker-configuration.d.ts",
     "db:migrate": "wrangler d1 migrations apply gitedge --remote --config workers/auth/wrangler.jsonc",
     "db:migrate:local": "wrangler d1 migrations apply gitedge --local --persist-to .wrangler/state --config workers/auth/wrangler.jsonc"
@@ -45,10 +45,15 @@
     "zod": "^4.4.3"
   },
   "license": "MIT",
-  "overrides": {
-    "@cloudflare/vitest-pool-workers": {
-      "miniflare": "5.20261001.0-alpha",
-      "wrangler": "$wrangler"
-    }
+  "packageManager": "pnpm@10.34.6",
+  "pnpm": {
+    "overrides": {
+      "@cloudflare/vitest-pool-workers>miniflare": "5.20261001.0-alpha",
+      "@cloudflare/vitest-pool-workers>wrangler": "$wrangler"
+    },
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "workerd"
+    ]
   }
 }
