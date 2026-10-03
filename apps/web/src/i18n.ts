@@ -8,6 +8,7 @@ import collaborationMessages from "./i18n/collaboration";
 import avatarMessages from "./i18n/avatar";
 import agentsMessages from "./i18n/agents";
 import repositoryControlsMessages from "./i18n/repositoryControls";
+import communityMessages from "./i18n/community";
 
 const messages = {
   "zh-CN": {
@@ -847,6 +848,7 @@ export const i18n = createI18n({
       ...avatarMessages["zh-CN"],
       ...agentsMessages["zh-CN"],
       ...repositoryControlsMessages["zh-CN"],
+      ...communityMessages["zh-CN"],
     },
     en: {
       ...messages.en,
@@ -859,6 +861,7 @@ export const i18n = createI18n({
       ...avatarMessages.en,
       ...agentsMessages.en,
       ...repositoryControlsMessages.en,
+      ...communityMessages.en,
     },
   },
 });

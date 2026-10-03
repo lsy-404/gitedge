@@ -65,6 +65,8 @@ import type {
   BranchProtectionInput,
   BranchProtectionRule,
   RepositoryCollaborator,
+  RepositoryCommunity,
+  RepositoryCommunityFile,
   RepositoryRole,
 } from "../../../../packages/contracts/src/repository-controls";
 
@@ -97,6 +99,8 @@ export type {
   BranchProtectionInput,
   BranchProtectionRule,
   RepositoryCollaborator,
+  RepositoryCommunity,
+  RepositoryCommunityFile,
   RepositoryRole,
 } from "../../../../packages/contracts/src/repository-controls";
 export type { SsoIdentity, SsoProviderSummary };
@@ -129,6 +133,17 @@ export class ApiError extends Error {
   ) {
     super(message);
   }
+}
+
+export interface PublicProfile {
+  owner: string;
+  displayName: string;
+  bio: string;
+  location: string;
+  website: string;
+  readme: { content: string; repositoryId: string; path: string } | null;
+  repositories: Repository[];
+  truncated: boolean;
 }
 
 export function ssoAuthorizationUrl(value: string): URL | null {
@@ -272,6 +287,8 @@ export const api = {
       method: "DELETE",
     }),
   repositories: () => request<Repository[]>("/api/forge/repositories"),
+  publicProfile: (owner: string) =>
+    request<PublicProfile>(`/api/forge/profiles/${encodeURIComponent(owner)}`),
   repository: (owner: string, repo: string) =>
     request<Repository>(
       `/api/forge/repositories/by-name/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`
@@ -637,6 +654,8 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+  repositoryCommunity: (repositoryId: string, refName: string) =>
+    request<RepositoryCommunity>(`${gitPath(repositoryId, "community")}${query({ ref: refName })}`),
   branchRules: (repositoryId: string) =>
     request<BranchProtectionRule[]>(repositoryPath(repositoryId, "branch-rules")),
   createBranchRule: (repositoryId: string, payload: BranchProtectionInput) =>

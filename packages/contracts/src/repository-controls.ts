@@ -91,10 +91,12 @@ export interface RepositoryCommunityFile {
   inherited: boolean;
   truncated: boolean;
   content: string;
+  truncated: boolean;
 }
 export interface RepositoryCommunity {
   truncated: boolean;
   files: RepositoryCommunityFile[];
   issueTemplates: RepositoryCommunityFile[];
   pullRequestTemplate: RepositoryCommunityFile | null;
+  truncated: boolean;
 }

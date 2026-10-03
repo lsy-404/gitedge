@@ -143,6 +143,20 @@ describe("GitEdge API client", () => {
     );
   });
 
+  it("loads public profiles and repository community files from their public endpoints", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response(JSON.stringify({ data: {} }), { status: 200 }));
+
+    await api.publicProfile("org / person");
+    await api.repositoryCommunity("repo / 1", "feature/topic");
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/api/forge/profiles/org%20%2F%20person",
+      "/api/git/repositories/repo%20%2F%201/community?ref=feature%2Ftopic",
+    ]);
+  });
+
   it("exposes organization endpoints and preserves the owner namespace", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
