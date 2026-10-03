@@ -1,9 +1,10 @@
 import { runSqlScript } from "../support/database";
 import { env } from "cloudflare:workers";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { sha256Hex, type Agent } from "../../packages/contracts/src/index";
+import { AgentSchema, sha256Hex, type Agent } from "../../packages/contracts/src/index";
 import auth from "../../workers/auth/src/index";
+import { drainAgentEventOutbox } from "../../workers/auth/src/agent-webhooks";
 import { FixtureArtifacts } from "../support/artifacts";
 
 const migrations = import.meta.glob<string>("../../migrations/*.sql", {
@@ -13,7 +14,42 @@ const migrations = import.meta.glob<string>("../../migrations/*.sql", {
 });
 
 async function applyMigrations(): Promise<void> {
-  for (const path of Object.keys(migrations).sort()) await runSqlScript(env.DB, migrations[path]);
+  for (const path of Object.keys(migrations).sort()) {
+    await runSqlScript(env.DB, migrations[path]);
+    if (path.endsWith("0006_agents.sql")) {
+      await env.DB.prepare(
+        "INSERT INTO users (id, identifier, password_salt, password_hash, created_at) VALUES (?, ?, ?, ?, ?)"
+      )
+        .bind("legacy-agent-user", "legacy-agent-user", "salt", "hash", 1)
+        .run();
+      await env.DB.prepare(
+        "INSERT INTO auth_agents (id, user_id, name, description, created_at) VALUES (?, ?, ?, ?, ?)"
+      )
+        .bind("legacy-agent", "legacy-agent-user", "Legacy Review Agent", "", 2)
+        .run();
+      await env.DB.prepare(
+        "INSERT INTO auth_agents (id, user_id, name, description, created_at) VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)"
+      )
+        .bind(
+          "legacy-agent-collision-a",
+          "legacy-agent-user",
+          "a-b",
+          "",
+          3,
+          "legacy-agent-collision-b",
+          "legacy-agent-user",
+          "A B",
+          "",
+          4,
+          "legacy-agent-empty",
+          "legacy-agent-user",
+          "!!!",
+          "",
+          5
+        )
+        .run();
+    }
+  }
 }
 
 const artifacts = new FixtureArtifacts();
@@ -22,6 +58,7 @@ const authEnv: Parameters<typeof auth.fetch>[1] = {
   ARTIFACTS: artifacts,
   ALLOW_PUBLIC_SIGNUP: "true",
   DEFAULT_USER_GROUP: "free",
+  WEBHOOK_ENCRYPTION_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 };
 
 const CreatedSessionSchema = z.object({
@@ -82,6 +119,19 @@ async function accountApi(
 
 beforeAll(async () => {
   await applyMigrations();
+  const legacyAgent = await env.DB.prepare(
+    "SELECT handle, profile_public AS profilePublic, updated_at AS updatedAt FROM auth_agents WHERE id = 'legacy-agent'"
+  ).first<{ handle: string; profilePublic: number; updatedAt: number }>();
+  expect(legacyAgent).toEqual({ handle: "legacy-review-agent-1", profilePublic: 0, updatedAt: 2 });
+  const migratedHandles = await env.DB.prepare(
+    "SELECT id, handle FROM auth_agents WHERE user_id = 'legacy-agent-user' ORDER BY created_at"
+  ).all<{ id: string; handle: string }>();
+  expect(migratedHandles.results.map(({ handle }) => handle)).toEqual([
+    "legacy-review-agent-1",
+    "a-b-2",
+    "a-b-3",
+    "agent-4",
+  ]);
 });
 
 describe("Auth agents, Artifact sessions, and Git credentials", () => {
@@ -157,6 +207,580 @@ describe("Auth agents, Artifact sessions, and Git credentials", () => {
     const buildAgent = agents.results[0];
     const reviewAgent = agents.results[1];
     if (!buildAgent || !reviewAgent) throw new Error("Both agents were not created.");
+
+    const firstAgentPayload = z
+      .object({ data: AgentSchema })
+      .parse(await firstAgentResponse.json());
+    const createdPath = firstAgentPayload.data.profilePath;
+    expect(createdPath).toBe(`/${user.identifier}/@build-assistant`);
+    const duplicateHandle = await accountApi("/agents", "POST", cookie, {
+      handle: "build-assistant",
+      name: "Another display name",
+    });
+    expect(duplicateHandle.status).toBe(409);
+    const renamed = await accountApi(`/agents/${buildAgent.id}`, "PATCH", cookie, {
+      handle: "builder-v2",
+      name: "Builder",
+      profilePublic: false,
+    });
+    expect(renamed.status).toBe(200);
+    const renamedPayload = z.object({ data: AgentSchema }).parse(await renamed.json());
+    expect(renamedPayload.data).toMatchObject({
+      handle: "builder-v2",
+      name: "Builder",
+      profilePath: `/${user.identifier}/@builder-v2`,
+    });
+    const previousProfile = await auth.fetch(
+      new Request(`https://auth.test/agent-profiles/${user.identifier}/build-assistant`),
+      authEnv
+    );
+    expect(previousProfile.status).toBe(404);
+    const privateProfile = await auth.fetch(
+      new Request(`https://auth.test/agent-profiles/${user.identifier}/builder-v2`),
+      authEnv
+    );
+    expect(privateProfile.status).toBe(404);
+    const ownerProfile = await auth.fetch(
+      accountRequest(`/agent-profiles/${user.identifier}/builder-v2`, "GET", cookie),
+      authEnv
+    );
+    expect(ownerProfile.status).toBe(200);
+    expect(await ownerProfile.json()).toMatchObject({
+      data: { owner: user.identifier, handle: "builder-v2", name: "Builder" },
+    });
+    const secondRegistration = await auth.fetch(
+      new Request("https://auth.test/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          identifier: `other-${crypto.randomUUID().slice(0, 8)}`,
+          password: "a-long-test-password-2026",
+        }),
+      }),
+      authEnv
+    );
+    const secondCookie = cookieFrom(secondRegistration);
+    const foreignProfile = await auth.fetch(
+      accountRequest(`/agent-profiles/${user.identifier}/builder-v2`, "GET", secondCookie),
+      authEnv
+    );
+    expect(foreignProfile.status).toBe(404);
+    const publicUpdate = await accountApi(`/agents/${buildAgent.id}`, "PATCH", cookie, {
+      profilePublic: true,
+    });
+    expect(publicUpdate.status).toBe(200);
+    const publicProfile = await auth.fetch(
+      new Request(`https://auth.test/agent-profiles/${user.identifier}/builder-v2`),
+      authEnv
+    );
+    expect(publicProfile.status).toBe(200);
+    expect(await publicProfile.json()).toMatchObject({
+      data: { owner: user.identifier, handle: "builder-v2", name: "Builder" },
+    });
+    await accountApi(`/agents/${buildAgent.id}`, "PATCH", cookie, { profilePublic: false });
+
+    let webhookFetches = 0;
+    let capturedSignature = "";
+    let capturedBody = "";
+    let largeBodyCancelled = false;
+    const webhookDeliveryIds: string[] = [];
+    const pendingBeforeFetch: boolean[] = [];
+    vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+      webhookFetches += 1;
+      const headers = new Headers(init?.headers);
+      capturedSignature = headers.get("X-GitEdge-Signature-256") ?? "";
+      capturedBody = String(init?.body ?? "");
+      const deliveryId = headers.get("GitEdge-Delivery") ?? "";
+      webhookDeliveryIds.push(deliveryId);
+      const recorded = await env.DB.prepare(
+        "SELECT status FROM auth_agent_webhook_deliveries WHERE id = ?"
+      )
+        .bind(deliveryId)
+        .first<{ status: string }>();
+      pendingBeforeFetch.push(recorded?.status === "pending");
+      if (webhookFetches === 3) {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new Uint8Array(4_097));
+            },
+            cancel() {
+              largeBodyCancelled = true;
+            },
+          }),
+          { status: 200 }
+        );
+      }
+      return new Response(null, { status: webhookFetches === 1 ? 500 : 204 });
+    });
+    try {
+      const noKeyEnv = { ...authEnv, WEBHOOK_ENCRYPTION_KEY: undefined };
+      const noKeyResponse = await auth.fetch(
+        accountRequest(`/agents/${buildAgent.id}/webhook`, "PUT", cookie, {
+          url: "https://hooks.example.com/gitedge",
+          events: ["agent.assigned"],
+          enabled: true,
+        }),
+        noKeyEnv
+      );
+      expect(noKeyResponse.status).toBe(503);
+      const settings = await accountApi(`/agents/${buildAgent.id}/webhook`, "PUT", cookie, {
+        url: "https://hooks.example.com/gitedge",
+        events: ["agent.assigned"],
+        enabled: true,
+      });
+      expect(settings.status).toBe(201);
+      const settingsPayload = z
+        .object({ data: z.object({ secret: z.string() }) })
+        .parse(await settings.json());
+      const webhookSecret = settingsPayload.data.secret;
+      expect(webhookSecret).toMatch(/^ge_webhook_[0-9a-f]{64}$/);
+      const encrypted = await env.DB.prepare(
+        "SELECT secret_ciphertext FROM auth_agent_webhooks WHERE agent_id = ?"
+      )
+        .bind(buildAgent.id)
+        .first<{ secret_ciphertext: string }>();
+      expect(encrypted?.secret_ciphertext).not.toContain(webhookSecret);
+      const getSettings = await accountApi(`/agents/${buildAgent.id}/webhook`, "GET", cookie);
+      expect(JSON.stringify(await getSettings.json())).not.toContain(webhookSecret);
+
+      const rejectedInternalHost = await auth.fetch(
+        new Request("https://auth.test/_internal/agent-events", {
+          method: "POST",
+          body: JSON.stringify({
+            agentId: buildAgent.id,
+            repositoryId,
+            actorUserId: user.id,
+            event: "agent.assigned",
+            data: { action: "assigned" },
+          }),
+        }),
+        authEnv
+      );
+      expect(rejectedInternalHost.status).toBe(404);
+      const queuedEvent = await auth.fetch(
+        new Request("https://auth.internal/_internal/agent-events", {
+          method: "POST",
+          body: JSON.stringify({
+            agentId: buildAgent.id,
+            repositoryId,
+            actorUserId: user.id,
+            event: "agent.assigned",
+            data: { action: "assigned" },
+          }),
+        }),
+        authEnv
+      );
+      expect(queuedEvent.status).toBe(202);
+      expect(webhookFetches).toBe(0);
+      await drainAgentEventOutbox(authEnv);
+      expect(webhookFetches).toBe(1);
+      expect(pendingBeforeFetch[0]).toBe(true);
+      const deliveries = await accountApi(
+        `/agents/${buildAgent.id}/webhook/deliveries`,
+        "GET",
+        cookie
+      );
+      const deliveryPayload = z
+        .object({
+          data: z.array(z.object({ id: z.string(), status: z.string(), attemptCount: z.number() })),
+        })
+        .parse(await deliveries.json());
+      expect(deliveryPayload.data[0]).toMatchObject({ status: "failed", attemptCount: 1 });
+      const expectedKey = await crypto.subtle.importKey(
+        "raw",
+        new TextEncoder().encode(webhookSecret),
+        { name: "HMAC", hash: "SHA-256" },
+        false,
+        ["sign"]
+      );
+      const expectedSignatureBytes = new Uint8Array(
+        await crypto.subtle.sign("HMAC", expectedKey, new TextEncoder().encode(capturedBody))
+      );
+      const expectedSignature = Array.from(expectedSignatureBytes, (byte) =>
+        byte.toString(16).padStart(2, "0")
+      ).join("");
+      expect(capturedSignature).toBe(`sha256=${expectedSignature}`);
+      const retried = await accountApi(
+        `/agents/${buildAgent.id}/webhook/deliveries/${deliveryPayload.data[0]?.id}/retry`,
+        "POST",
+        cookie,
+        {}
+      );
+      expect(retried.status).toBe(200);
+      expect(await retried.json()).toMatchObject({ data: { status: "success", attemptCount: 2 } });
+      expect(webhookDeliveryIds.slice(0, 2)).toHaveLength(2);
+      expect(webhookDeliveryIds[0]).toBe(webhookDeliveryIds[1]);
+      await accountApi(`/agents/${buildAgent.id}/webhook`, "PUT", cookie, {
+        url: "https://hooks.example.com/gitedge",
+        events: ["agent.assigned"],
+        enabled: false,
+      });
+      const countBeforeDisabled = webhookFetches;
+      await auth.fetch(
+        new Request("https://auth.internal/_internal/agent-events", {
+          method: "POST",
+          body: JSON.stringify({
+            agentId: buildAgent.id,
+            repositoryId,
+            actorUserId: user.id,
+            event: "agent.assigned",
+            data: { action: "assigned" },
+          }),
+        }),
+        authEnv
+      );
+      expect(webhookFetches).toBe(countBeforeDisabled);
+      const unsafeUrl = await accountApi(`/agents/${buildAgent.id}/webhook`, "PUT", cookie, {
+        url: "https://127.0.0.1/hook",
+        events: ["agent.assigned"],
+        enabled: true,
+      });
+      expect(unsafeUrl.status).toBe(400);
+      await accountApi(`/agents/${buildAgent.id}/webhook`, "PUT", cookie, {
+        url: "https://hooks.example.com/gitedge",
+        events: ["agent.assigned"],
+        enabled: true,
+      });
+      await auth.fetch(
+        new Request("https://auth.internal/_internal/agent-events", {
+          method: "POST",
+          body: JSON.stringify({
+            agentId: buildAgent.id,
+            repositoryId,
+            actorUserId: user.id,
+            event: "agent.assigned",
+            data: { action: "assigned" },
+          }),
+        }),
+        authEnv
+      );
+      await drainAgentEventOutbox(authEnv);
+      expect(largeBodyCancelled).toBe(true);
+      const largeBodyOutboxEvent = await env.DB.prepare(
+        "SELECT id FROM auth_agent_events WHERE agent_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1"
+      )
+        .bind(buildAgent.id)
+        .first<{ id: string }>();
+      if (largeBodyOutboxEvent) {
+        await env.DB.prepare("UPDATE auth_agent_events SET status = 'dropped' WHERE id = ?")
+          .bind(largeBodyOutboxEvent.id)
+          .run();
+      }
+
+      for (const url of [
+        "https://localhost./",
+        "https://LOCALHOST./",
+        "https://service.local./",
+        "https://service.INTERNAL./",
+        "https://service.localdomain./",
+        "https://service.home.arpa./",
+      ]) {
+        const rejected = await accountApi(`/agents/${buildAgent.id}/webhook`, "PUT", cookie, {
+          url,
+          events: ["agent.assigned"],
+          enabled: true,
+        });
+        expect(rejected.status).toBe(400);
+      }
+
+      async function queueEvent(action: string, actorUserId = user.id) {
+        const payload = { testAction: action, repositoryId, agentId: buildAgent.id };
+        const result = await auth.fetch(
+          new Request("https://auth.internal/_internal/agent-events", {
+            method: "POST",
+            body: JSON.stringify({
+              agentId: buildAgent.id,
+              repositoryId,
+              actorUserId,
+              event: "agent.assigned",
+              data: { testAction: action },
+            }),
+          }),
+          authEnv
+        );
+        expect(result.status).toBe(202);
+        const queued = await env.DB.prepare(
+          "SELECT id, agent_id AS agentId, repository_id AS repositoryId, actor_user_id AS actorUserId, event, payload, created_at AS createdAt, next_attempt_at AS nextAttemptAt, attempts, delivery_id AS deliveryId, status, lease_until AS leaseUntil, error_code AS errorCode FROM auth_agent_events WHERE agent_id = ? AND payload = ?"
+        )
+          .bind(buildAgent.id, JSON.stringify(payload))
+          .first<{
+            id: string;
+            agentId: string;
+            repositoryId: string;
+            actorUserId: string;
+            event: string;
+            payload: string;
+            createdAt: number;
+            nextAttemptAt: number;
+            attempts: number;
+            deliveryId: string;
+            status: string;
+            leaseUntil: number | null;
+            errorCode: string | null;
+          }>();
+        if (!queued) throw new Error("Internal event was not written to the outbox.");
+        return queued;
+      }
+
+      await env.DB.prepare("UPDATE repositories SET agents_enabled = 0 WHERE id = ?")
+        .bind(repositoryId)
+        .run();
+      const disabledFeature = await queueEvent("agents-disabled");
+      const fetchesBeforeDisabledFeature = webhookFetches;
+      await drainAgentEventOutbox(authEnv);
+      expect(webhookFetches).toBe(fetchesBeforeDisabledFeature);
+      const droppedFeature = await env.DB.prepare(
+        "SELECT status, error_code AS errorCode FROM auth_agent_events WHERE id = ?"
+      )
+        .bind(disabledFeature.id)
+        .first<{ status: string; errorCode: string | null }>();
+      expect(droppedFeature).toEqual({ status: "dropped", errorCode: "event_scope_lost" });
+      await env.DB.prepare("UPDATE repositories SET agents_enabled = 1 WHERE id = ?")
+        .bind(repositoryId)
+        .run();
+
+      const otherUser = await env.DB.prepare(
+        "SELECT id FROM users WHERE identifier LIKE 'other-%' ORDER BY created_at DESC LIMIT 1"
+      ).first<{ id: string }>();
+      if (!otherUser) throw new Error("Second user fixture was not found.");
+      const actorRoleLost = await queueEvent("actor-role-lost", otherUser.id);
+      const fetchesBeforeActorRoleCheck = webhookFetches;
+      await drainAgentEventOutbox(authEnv);
+      expect(webhookFetches).toBe(fetchesBeforeActorRoleCheck);
+      const droppedActorRole = await env.DB.prepare(
+        "SELECT status FROM auth_agent_events WHERE id = ?"
+      )
+        .bind(actorRoleLost.id)
+        .first<{ status: string }>();
+      expect(droppedActorRole?.status).toBe("dropped");
+      await env.DB.prepare(
+        "INSERT INTO repository_collaborators (repository_id, user_id, role, created_at) VALUES (?, ?, 'write', ?)"
+      )
+        .bind(repositoryId, otherUser.id, Date.now())
+        .run();
+      await env.DB.prepare(
+        "DELETE FROM namespace_memberships WHERE namespace_id = ? AND user_id = ?"
+      )
+        .bind(namespace.id, user.id)
+        .run();
+      const ownerRoleLost = await queueEvent("owner-role-lost", otherUser.id);
+      const fetchesBeforeOwnerRoleCheck = webhookFetches;
+      await drainAgentEventOutbox(authEnv);
+      expect(webhookFetches).toBe(fetchesBeforeOwnerRoleCheck);
+      const droppedOwnerRole = await env.DB.prepare(
+        "SELECT status FROM auth_agent_events WHERE id = ?"
+      )
+        .bind(ownerRoleLost.id)
+        .first<{ status: string }>();
+      expect(droppedOwnerRole?.status).toBe("dropped");
+      await env.DB.prepare(
+        "INSERT INTO namespace_memberships (namespace_id, user_id, created_at) VALUES (?, ?, ?)"
+      )
+        .bind(namespace.id, user.id, Date.now())
+        .run();
+      await env.DB.prepare(
+        "DELETE FROM repository_collaborators WHERE repository_id = ? AND user_id = ?"
+      )
+        .bind(repositoryId, otherUser.id)
+        .run();
+      await env.DB.prepare("UPDATE auth_agents SET disabled_at = ? WHERE id = ?")
+        .bind(Date.now(), buildAgent.id)
+        .run();
+      const disabledAgentEvent = await queueEvent("agent-disabled");
+      const fetchesBeforeAgentCheck = webhookFetches;
+      await drainAgentEventOutbox(authEnv);
+      expect(webhookFetches).toBe(fetchesBeforeAgentCheck);
+      const droppedDisabledAgent = await env.DB.prepare(
+        "SELECT status FROM auth_agent_events WHERE id = ?"
+      )
+        .bind(disabledAgentEvent.id)
+        .first<{ status: string }>();
+      expect(droppedDisabledAgent?.status).toBe("dropped");
+      await env.DB.prepare("UPDATE auth_agents SET disabled_at = NULL WHERE id = ?")
+        .bind(buildAgent.id)
+        .run();
+
+      const concurrentEvent = await queueEvent("concurrent-claim");
+      let concurrentFetches = 0;
+      let concurrentDeliveryId = "";
+      vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+        concurrentFetches += 1;
+        concurrentDeliveryId = new Headers(init?.headers).get("GitEdge-Delivery") ?? "";
+        return new Response(null, { status: 204 });
+      });
+      const concurrentNow = Date.now();
+      await Promise.all([
+        drainAgentEventOutbox(authEnv, concurrentNow),
+        drainAgentEventOutbox(authEnv, concurrentNow),
+      ]);
+      expect(concurrentFetches).toBe(1);
+      expect(concurrentDeliveryId).toBe(concurrentEvent.deliveryId);
+      const deliveredConcurrent = await env.DB.prepare(
+        "SELECT status FROM auth_agent_events WHERE id = ?"
+      )
+        .bind(concurrentEvent.id)
+        .first<{ status: string }>();
+      expect(deliveredConcurrent?.status).toBe("delivered");
+
+      const retryIds: string[] = [];
+      let retryFetchCount = 0;
+      vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+        retryFetchCount += 1;
+        retryIds.push(new Headers(init?.headers).get("GitEdge-Delivery") ?? "");
+        return new Response(null, { status: retryFetchCount < 3 ? 500 : 204 });
+      });
+      const retryEvent = await queueEvent("backoff-retry");
+      let retryNow = Date.now();
+      await drainAgentEventOutbox(authEnv, retryNow);
+      let retryRow = await env.DB.prepare(
+        "SELECT status, attempts, next_attempt_at AS nextAttemptAt FROM auth_agent_events WHERE id = ?"
+      )
+        .bind(retryEvent.id)
+        .first<{ status: string; attempts: number; nextAttemptAt: number }>();
+      expect(retryRow).toMatchObject({ status: "pending", attempts: 1 });
+      if (!retryRow) throw new Error("First webhook retry state was not recorded.");
+      expect(retryRow.nextAttemptAt - retryNow).toBeGreaterThanOrEqual(60_000);
+      retryNow = retryRow.nextAttemptAt;
+      await drainAgentEventOutbox(authEnv, retryNow);
+      retryRow = await env.DB.prepare(
+        "SELECT status, attempts, next_attempt_at AS nextAttemptAt FROM auth_agent_events WHERE id = ?"
+      )
+        .bind(retryEvent.id)
+        .first<{ status: string; attempts: number; nextAttemptAt: number }>();
+      expect(retryRow).toMatchObject({ status: "pending", attempts: 2 });
+      if (!retryRow) throw new Error("Second webhook retry state was not recorded.");
+      expect(retryRow.nextAttemptAt - retryNow).toBeGreaterThanOrEqual(120_000);
+      retryNow = retryRow.nextAttemptAt;
+      await drainAgentEventOutbox(authEnv, retryNow);
+      const deliveredRetry = await env.DB.prepare(
+        "SELECT status, attempts FROM auth_agent_events WHERE id = ?"
+      )
+        .bind(retryEvent.id)
+        .first<{ status: string; attempts: number }>();
+      expect(deliveredRetry).toEqual({ status: "delivered", attempts: 3 });
+      expect(retryFetchCount).toBe(3);
+      expect(new Set(retryIds)).toEqual(new Set([retryEvent.deliveryId]));
+
+      const exhaustedEvent = await queueEvent("attempt-limit");
+      retryFetchCount = 0;
+      retryIds.length = 0;
+      vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+        retryFetchCount += 1;
+        retryIds.push(new Headers(init?.headers).get("GitEdge-Delivery") ?? "");
+        return new Response(null, { status: 500 });
+      });
+      retryNow = Date.now();
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await drainAgentEventOutbox(authEnv, retryNow);
+        const state = await env.DB.prepare(
+          "SELECT status, attempts, next_attempt_at AS nextAttemptAt FROM auth_agent_events WHERE id = ?"
+        )
+          .bind(exhaustedEvent.id)
+          .first<{ status: string; attempts: number; nextAttemptAt: number }>();
+        if (!state) throw new Error("Retry limit event disappeared.");
+        if (state.status === "dead") break;
+        retryNow = state.nextAttemptAt;
+      }
+      const deadEvent = await env.DB.prepare(
+        "SELECT status, attempts FROM auth_agent_events WHERE id = ?"
+      )
+        .bind(exhaustedEvent.id)
+        .first<{ status: string; attempts: number }>();
+      expect(deadEvent).toEqual({ status: "dead", attempts: 5 });
+      expect(retryFetchCount).toBe(5);
+      expect(new Set(retryIds)).toEqual(new Set([exhaustedEvent.deliveryId]));
+
+      let bodyTimedOut = false;
+      vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const signal = init?.signal;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              signal?.addEventListener(
+                "abort",
+                () => {
+                  bodyTimedOut = true;
+                  controller.error(signal.reason);
+                },
+                { once: true }
+              );
+            },
+          }),
+          { status: 200 }
+        );
+      });
+      const timeoutEvent = await queueEvent("body-timeout");
+      await drainAgentEventOutbox(authEnv);
+      expect(bodyTimedOut).toBe(true);
+      const timedOutDelivery = await env.DB.prepare(
+        "SELECT status, error_code AS errorCode FROM auth_agent_webhook_deliveries WHERE id = ?"
+      )
+        .bind(timeoutEvent.deliveryId)
+        .first<{ status: string; errorCode: string | null }>();
+      expect(timedOutDelivery).toEqual({ status: "failed", errorCode: "timeout" });
+
+      let standaloneFetchCount = 0;
+      vi.stubGlobal("fetch", async () => {
+        standaloneFetchCount += 1;
+        return new Response(null, { status: 500 });
+      });
+      const standaloneTest = await accountApi(
+        `/agents/${buildAgent.id}/webhook/test`,
+        "POST",
+        cookie,
+        {}
+      );
+      expect(standaloneTest.status).toBe(502);
+      const standaloneDelivery = z
+        .object({ data: z.object({ id: z.string(), attemptCount: z.number() }) })
+        .parse(await standaloneTest.json()).data;
+      expect(standaloneDelivery.attemptCount).toBe(1);
+
+      let fetchStarted!: () => void;
+      let releaseFetch!: () => void;
+      const started = new Promise<void>((resolve) => {
+        fetchStarted = resolve;
+      });
+      const responseGate = new Promise<void>((resolve) => {
+        releaseFetch = resolve;
+      });
+      vi.stubGlobal("fetch", async () => {
+        standaloneFetchCount += 1;
+        fetchStarted();
+        await responseGate;
+        return new Response(null, { status: 500 });
+      });
+      const retryPath = `/agents/${buildAgent.id}/webhook/deliveries/${standaloneDelivery.id}/retry`;
+      const firstRetryPromise = accountApi(retryPath, "POST", cookie, {});
+      await started;
+      const concurrentRetry = await accountApi(retryPath, "POST", cookie, {});
+      expect(concurrentRetry.status).toBe(409);
+      releaseFetch();
+      const firstRetry = await firstRetryPromise;
+      expect(firstRetry.status).toBe(502);
+      expect(standaloneFetchCount).toBe(2);
+
+      await env.DB.prepare(
+        "UPDATE auth_agent_webhook_deliveries SET attempt_count = 4 WHERE id = ? AND agent_id = ? AND status = 'failed'"
+      )
+        .bind(standaloneDelivery.id, buildAgent.id)
+        .run();
+      vi.stubGlobal("fetch", async () => {
+        standaloneFetchCount += 1;
+        return new Response(null, { status: 500 });
+      });
+      const finalRetry = await accountApi(retryPath, "POST", cookie, {});
+      expect(finalRetry.status).toBe(502);
+      expect(await finalRetry.json()).toMatchObject({
+        data: { id: standaloneDelivery.id, attemptCount: 5, status: "failed" },
+      });
+      const overLimitRetry = await accountApi(retryPath, "POST", cookie, {});
+      expect(overLimitRetry.status).toBe(409);
+      expect(standaloneFetchCount).toBe(3);
+    } finally {
+      vi.unstubAllGlobals();
+    }
 
     const firstSessionResponse = await accountApi(
       `/agents/${buildAgent.id}/sessions`,
@@ -322,5 +946,5 @@ describe("Auth agents, Artifact sessions, and Git credentials", () => {
       authEnv
     );
     expect(disabledAuth.status).toBe(401);
-  });
+  }, 15_000);
 });

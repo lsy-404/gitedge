@@ -202,4 +202,61 @@ describe("Gateway routing", () => {
     expect(await response.text()).toBe("index");
     expect(paths).toEqual(["/owner/repo", "/index.html"]);
   });
+  it("strips trust headers even on directly forwarded Auth requests", async () => {
+    let forwarded = false;
+    const response = await handleGatewayRequest(
+      new Request("https://gitedge.example.com/api/auth/session", {
+        headers: { "X-GitEdge-User-Id": "spoofed", "X-GitEdge-Agent-Session": "spoofed" },
+      }),
+      environment({
+        auth: service((request) => {
+          forwarded = true;
+          expect(request.headers.get("X-GitEdge-User-Id")).toBeNull();
+          expect(request.headers.get("X-GitEdge-Agent-Session")).toBeNull();
+          return Response.json({ data: null });
+        }),
+      })
+    );
+    expect(response.status).toBe(200);
+    expect(forwarded).toBe(true);
+  });
+  it.each([
+    "auth/_internal/agent-events",
+    "actions/internal/push",
+    "forge/internal/actions-check",
+    "forge/internal/merge-authorization",
+  ])("keeps internal %s inaccessible", async (path) => {
+    const response = await handleGatewayRequest(
+      new Request(`https://gitedge.example.com/api/${path}`, {
+        method: "POST",
+        headers: { Origin: "https://gitedge.example.com" },
+      }),
+      environment()
+    );
+    expect(response.status).toBe(404);
+  });
+  it("redirects renamed deep links while retaining refs and path", async () => {
+    const response = await handleGatewayRequest(
+      new Request(
+        "https://gitedge.example.com/owner/old.name/blob/docs/setup.md?ref=feature%2Fbranch"
+      ),
+      environment({
+        forge: service((request) => {
+          expect(new URL(request.url).pathname).toBe("/repositories/by-name/owner/old.name");
+          return Response.json({ data: { owner: "owner", name: "new.name" } });
+        }),
+      })
+    );
+    expect(response.status).toBe(308);
+    expect(response.headers.get("Location")).toBe(
+      "https://gitedge.example.com/owner/new.name/blob/docs/setup.md?ref=feature%2Fbranch"
+    );
+  });
+  it("does not reveal renamed private paths to anonymous readers", async () => {
+    const response = await handleGatewayRequest(
+      new Request("https://gitedge.example.com/owner/private-old"),
+      environment({ forge: service(() => new Response("missing", { status: 404 })) })
+    );
+    expect(response.headers.get("Location")).toBeNull();
+  });
 });

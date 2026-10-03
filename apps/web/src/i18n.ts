@@ -5,9 +5,17 @@ import github from "./i18n/github";
 import workspace from "./i18n/workspace";
 import codeMessages from "./i18n/code";
 import collaborationMessages from "./i18n/collaboration";
+import avatarMessages from "./i18n/avatar";
+import agentsMessages from "./i18n/agents";
+import repositoryControlsMessages from "./i18n/repositoryControls";
+import communityMessages from "./i18n/community";
+import actionsMessages from "./i18n/actions";
 
 const messages = {
   "zh-CN": {
+    categoryQa: "问答",
+    categoryAnnouncements: "公告",
+    organization: "组织",
     brand: "GitEdge",
     brandSub: "边缘 Git Forge",
     loginTitle: "登录到 GitEdge",
@@ -231,6 +239,7 @@ const messages = {
     noSessionFork: "不关联 session",
     draftPull: "草稿 Pull Request",
     agent: "智能体",
+    ciActor: "系统 CI",
     agentAuthored: "智能体提交",
     sessionFork: "Session 分支",
     mergedCommit: "合并提交",
@@ -409,6 +418,9 @@ const messages = {
     agentPolicyHint: "决定谁可以把智能体设为负责人或审核人：仅其所有者，或任意仓库成员。",
   },
   en: {
+    categoryQa: "Q&A",
+    categoryAnnouncements: "Announcements",
+    organization: "Organization",
     brand: "GitEdge",
     brandSub: "Edge Git Forge",
     loginTitle: "Sign in to GitEdge",
@@ -642,6 +654,7 @@ const messages = {
     noSessionFork: "No session fork",
     draftPull: "Draft pull request",
     agent: "Agent",
+    ciActor: "CI",
     agentAuthored: "Authored by agent",
     sessionFork: "Session fork",
     mergedCommit: "Merge commit",
@@ -841,6 +854,11 @@ export const i18n = createI18n({
       ...collaborationMessages["zh-CN"],
       ...settingsMessages["zh-CN"],
       ...repositorySettingsMessages["zh-CN"],
+      ...avatarMessages["zh-CN"],
+      ...agentsMessages["zh-CN"],
+      ...repositoryControlsMessages["zh-CN"],
+      ...communityMessages["zh-CN"],
+      ...actionsMessages["zh-CN"],
     },
     en: {
       ...messages.en,
@@ -850,6 +868,11 @@ export const i18n = createI18n({
       ...collaborationMessages.en,
       ...settingsMessages.en,
       ...repositorySettingsMessages.en,
+      ...avatarMessages.en,
+      ...agentsMessages.en,
+      ...repositoryControlsMessages.en,
+      ...communityMessages.en,
+      ...actionsMessages.en,
     },
   },
 });

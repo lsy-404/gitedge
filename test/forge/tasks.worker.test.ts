@@ -203,7 +203,7 @@ describe("Memory visibility and repository settings", () => {
     expect(
       (await call("/repositories/r1/settings", "PATCH", bob, { memoryVisibility: "public" })).status
     ).toBe(403);
-    expect(await data(await call("/repositories/r1/settings", "GET", bob))).toEqual({
+    expect(await data(await call("/repositories/r1/settings", "GET", bob))).toMatchObject({
       name: "demo",
       slug: "demo",
       description: "",
@@ -298,7 +298,10 @@ describe("Memory visibility and repository settings", () => {
       requirePassingChecks: true,
     });
     expect((await call("/repositories/by-name/alice/renamed", "GET", alice)).status).toBe(200);
-    expect((await call("/repositories/by-name/alice/demo", "GET", alice)).status).toBe(404);
+    expect(await data(await call("/repositories/by-name/alice/demo", "GET", alice))).toMatchObject({
+      name: "renamed",
+      id: "r1",
+    });
     expect((await call("/repositories/r1/tasks", "GET", null)).status).toBe(404);
     await call("/repositories/r1/settings", "PATCH", alice, {
       name: "demo",

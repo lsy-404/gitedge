@@ -1,5 +1,6 @@
 export default {
   "zh-CN": {
+    checkNeutral: "中性",
     filterItems: "筛选协作记录",
     allItems: "全部",
     allCategories: "全部分类",
@@ -29,6 +30,7 @@ export default {
     nothingToPreview: "输入 Markdown 后可在此预览。",
   },
   en: {
+    checkNeutral: "Neutral",
     filterItems: "Filter collaboration items",
     allItems: "All",
     allCategories: "All categories",

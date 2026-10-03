@@ -16,14 +16,19 @@ import { errorMessage } from "../lib/tasks";
 import { oneOf } from "../ui/formEvents";
 import NoticeBar from "./NoticeBar.vue";
 import StatusState from "./StatusState.vue";
+import BranchProtectionSettings from "./BranchProtectionSettings.vue";
+import RepositoryCollaborators from "./RepositoryCollaborators.vue";
 
 type RepositoryDraft = Omit<RepositorySettings, "canManage">;
-type SettingsSection = "general" | "features" | "merge" | "agents" | "archive";
+type SettingsSection =
+  "general" | "features" | "merge" | "branchRules" | "collaborators" | "agents" | "archive";
 
 const sections = [
   ["general", "repoSettingsGeneral"],
   ["features", "repoSettingsFeatures"],
   ["merge", "repoSettingsMergeRules"],
+  ["branchRules", "repoSettingsBranchRules"],
+  ["collaborators", "repoSettingsCollaborators"],
   ["agents", "repoSettingsAgentsMemory"],
   ["archive", "repoSettingsArchive"],
 ] as const satisfies ReadonlyArray<readonly [SettingsSection, string]>;
@@ -49,6 +54,21 @@ const mergeApprovalOptions: readonly FluentSelectOption[] = Array.from(
     label: String(value),
   })
 );
+const featureSwitches = [
+  ["tasksEnabled", "repoSettingsTasks", "repoSettingsTasksHint"],
+  ["agentsEnabled", "repoSettingsAgents", "repoSettingsAgentsHint"],
+  ["deploymentsEnabled", "repoSettingsDeployments", "repoSettingsDeploymentsHint"],
+  ["graphEnabled", "repoSettingsGraph", "repoSettingsGraphHint"],
+  ["actionsEnabled", "repoSettingsActions", "repoSettingsActionsHint"],
+  ["actionsNetworkEnabled", "repoSettingsActionsNetwork", "repoSettingsActionsNetworkHint"],
+  ["onlineEditingEnabled", "repoSettingsOnlineEditing", "repoSettingsOnlineEditingHint"],
+] as const;
+const mergeMethodSwitches = [
+  ["allowMergeCommit", "repoSettingsAllowMergeCommit"],
+  ["allowSquashMerge", "repoSettingsAllowSquashMerge"],
+  ["allowRebaseMerge", "repoSettingsAllowRebaseMerge"],
+  ["deleteBranchOnMerge", "repoSettingsDeleteBranchOnMerge"],
+] as const;
 const editableFields = [
   "name",
   "description",
@@ -59,6 +79,17 @@ const editableFields = [
   "pullsEnabled",
   "discussionsEnabled",
   "wikiEnabled",
+  "tasksEnabled",
+  "agentsEnabled",
+  "deploymentsEnabled",
+  "graphEnabled",
+  "actionsEnabled",
+  "actionsNetworkEnabled",
+  "onlineEditingEnabled",
+  "allowMergeCommit",
+  "allowSquashMerge",
+  "allowRebaseMerge",
+  "deleteBranchOnMerge",
   "requiredApprovals",
   "requirePassingChecks",
   "memoryVisibility",
@@ -90,6 +121,11 @@ const dirty = computed(
     editableFields.some((field) => draft.value?.[field] !== settings.value?.[field])
 );
 const canManage = computed(() => settings.value?.canManage === true);
+const mergeMethodEnabled = computed(
+  () =>
+    draft.value !== null &&
+    (draft.value.allowMergeCommit || draft.value.allowSquashMerge || draft.value.allowRebaseMerge)
+);
 const publicMemoryAllowed = computed(() => draft.value?.visibility === "public");
 const visibilityChoices = computed(() =>
   visibilityOptions.map((option) => ({
@@ -366,6 +402,13 @@ watch(() => props.repository.id, load, { immediate: true });
                 :disabled="!canManage"
               />
             </div>
+            <div v-for="[key, label, hint] in featureSwitches" :key="key" class="settings-row">
+              <div class="row-copy">
+                <span>{{ t(label) }}</span>
+                <p>{{ t(hint) }}</p>
+              </div>
+              <FluentSwitch v-model="draft[key]" :label="t(label)" :disabled="!canManage" />
+            </div>
           </section>
 
           <section
@@ -399,7 +442,28 @@ watch(() => props.repository.id, load, { immediate: true });
                 :disabled="!canManage"
               />
             </div>
+            <div v-for="[key, label] in mergeMethodSwitches" :key="key" class="settings-row">
+              <div class="row-copy">
+                <span>{{ t(label) }}</span>
+                <p v-if="key === 'deleteBranchOnMerge'">{{ t("repoSettingsDeleteBranchHint") }}</p>
+              </div>
+              <FluentSwitch v-model="draft[key]" :label="t(label)" :disabled="!canManage" />
+            </div>
+            <NoticeBar v-if="!mergeMethodEnabled" intent="warning">
+              {{ t("repoSettingsMergeMethodRequired") }}
+            </NoticeBar>
           </section>
+
+          <BranchProtectionSettings
+            v-else-if="activeSection === 'branchRules'"
+            :repository-id="props.repository.id"
+            :can-manage="canManage"
+          />
+          <RepositoryCollaborators
+            v-else-if="activeSection === 'collaborators'"
+            :repository-id="props.repository.id"
+            :can-manage="canManage"
+          />
 
           <section
             v-else-if="activeSection === 'agents'"
@@ -477,7 +541,7 @@ watch(() => props.repository.id, load, { immediate: true });
             <FluentButton
               type="submit"
               tone="primary"
-              :disabled="!canManage || saving || !dirty"
+              :disabled="!canManage || saving || !dirty || !mergeMethodEnabled"
               :busy="saving"
             >
               {{ saving ? t("loading") : t("save") }}

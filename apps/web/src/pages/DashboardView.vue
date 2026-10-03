@@ -11,6 +11,8 @@ import SelectField from "../components/SelectField.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import { oneOf } from "../ui/formEvents";
 import TextField from "../components/TextField.vue";
+import { FluentCheckbox } from "@platform-kit/fluent/vue";
+import { RepositorySlugSchema } from "../../../../packages/contracts/src/repository-controls";
 import "../styles/workspace.css";
 
 const visibilities = ["private", "public"] as const;
@@ -23,10 +25,16 @@ const error = ref("");
 const showForm = ref(false);
 const saving = ref(false);
 const formError = ref("");
-const form = ref<{ name: string; description: string; visibility: Repository["visibility"] }>({
+const form = ref<{
+  name: string;
+  description: string;
+  visibility: Repository["visibility"];
+  initializeReadme: boolean;
+}>({
   name: "",
   description: "",
   visibility: "private",
+  initializeReadme: false,
 });
 const organizations = ref<Organization[]>([]);
 const owner = ref("");
@@ -59,11 +67,16 @@ async function load() {
 }
 
 async function createRepository() {
+  const parsedName = RepositorySlugSchema.safeParse(form.value.name);
+  if (!parsedName.success) {
+    formError.value = t("repositoryNameInvalid");
+    return;
+  }
   saving.value = true;
   formError.value = "";
   try {
-    await api.createRepository({ ...form.value, owner: owner.value });
-    form.value = { name: "", description: "", visibility: "private" };
+    await api.createRepository({ ...form.value, name: parsedName.data, owner: owner.value });
+    form.value = { name: "", description: "", visibility: "private", initializeReadme: false };
     showForm.value = false;
     await router.replace({ path: route.path, query: { ...route.query, new: undefined } });
     await load();
@@ -374,6 +387,10 @@ onMounted(load);
             <option value="private">{{ t("private") }}</option>
             <option value="public">{{ t("public") }}</option>
           </SelectField>
+          <FluentCheckbox v-model="form.initializeReadme">
+            {{ t("repositoryInitializeReadme") }}
+            <small>{{ t("repositoryInitializeReadmeHint") }}</small>
+          </FluentCheckbox>
           <FormActions :saving="saving" :error="formError" @cancel="closeForm" />
         </form>
       </section>

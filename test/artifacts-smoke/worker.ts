@@ -38,7 +38,14 @@ export default {
           return Response.json(await compareArtifacts(repo, head, "main", "main"));
         const input = GitMergeInputSchema.safeParse(await request.json());
         if (!input.success) return new Response("Invalid merge request", { status: 400 });
-        return Response.json(await mergeArtifacts(repo, head, input.data));
+        return Response.json(
+          await mergeArtifacts(repo, head, input.data, {
+            requireLinearHistory: false,
+            requireSignedCommits: false,
+            verifySignature: async () => false,
+            beforePush: async () => {},
+          })
+        );
       }
     }
     if (request.method === "GET" && url.pathname === "/readme" && name) {

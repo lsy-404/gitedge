@@ -14,6 +14,12 @@ import type {
   User,
 } from "../../../../packages/contracts/src/account";
 import type {
+  AgentProfile,
+  AgentWebhookDelivery,
+  AgentWebhookEvent,
+  AgentWebhookSettings,
+} from "../../../../packages/contracts/src/agents";
+import type {
   Agent,
   AgentSession,
   Assignee,
@@ -26,6 +32,7 @@ import type {
   GitGraph,
   GitRef,
   GitTree,
+  GitTreeEntry,
   Issue,
   PullRequest,
   Repository,
@@ -33,7 +40,17 @@ import type {
   WikiPage,
   CreatedAgentSession,
 } from "../../../../packages/contracts/src/forge";
+import type {
+  EditRepositoryFileInput,
+  RepositoryBranch,
+} from "../../../../packages/contracts/src/repository-controls";
 import type { SsoIdentity, SsoProviderSummary } from "../../../../packages/contracts/src/sso";
+import type {
+  ActionRun,
+  ActionRunSummary,
+  ActionWorkflowFile,
+  CreateActionRunInput,
+} from "../../../../packages/contracts/src/actions";
 import type {
   AgentAssignmentPolicy,
   AssigneeCandidate,
@@ -55,12 +72,24 @@ import type {
   TaskStatus,
   TaskTable,
 } from "../../../../packages/contracts/src/tasks";
+import type {
+  BranchProtectionInput,
+  BranchProtectionRule,
+  RepositoryCollaborator,
+  RepositoryCommunity,
+  RepositoryCommunityFile,
+  RepositoryRole,
+} from "../../../../packages/contracts/src/repository-controls";
 
 export type {
   Organization,
   OrganizationMember,
   User,
 } from "../../../../packages/contracts/src/account";
+export type {
+  EditRepositoryFileInput,
+  RepositoryBranch,
+} from "../../../../packages/contracts/src/repository-controls";
 export type {
   Agent,
   AgentSession,
@@ -74,6 +103,7 @@ export type {
   GitGraph,
   GitRef,
   GitTree,
+  GitTreeEntry,
   Issue,
   PullRequest,
   Repository,
@@ -81,6 +111,15 @@ export type {
   WikiPage,
   CreatedAgentSession,
 };
+export type {
+  BranchProtectionInput,
+  BranchProtectionRule,
+  RepositoryCollaborator,
+  RepositoryCommunity,
+  RepositoryCommunityFile,
+  RepositoryRole,
+} from "../../../../packages/contracts/src/repository-controls";
+export type { ActionRun, ActionRunSummary, ActionWorkflowFile, CreateActionRunInput };
 export type { SsoIdentity, SsoProviderSummary };
 export type {
   AgentAssignmentPolicy,
@@ -111,6 +150,17 @@ export class ApiError extends Error {
   ) {
     super(message);
   }
+}
+
+export interface PublicProfile {
+  owner: string;
+  displayName: string;
+  bio: string;
+  location: string;
+  website: string;
+  readme: { content: string; repositoryId: string; path: string } | null;
+  repositories: Repository[];
+  truncated: boolean;
 }
 
 export function ssoAuthorizationUrl(value: string): URL | null {
@@ -192,6 +242,10 @@ function gitPath(repositoryId: string, resource: string): string {
   return `/api/git/repositories/${encodeURIComponent(repositoryId)}/${resource}`;
 }
 
+function actionsRepositoryPath(repositoryId: string, resource: string): string {
+  return `/api/actions/repositories/${encodeURIComponent(repositoryId)}/${resource}`;
+}
+
 export const api = {
   accountProfile: () => request<AccountProfile>("/api/auth/profile"),
   updateAccountProfile: (
@@ -254,6 +308,8 @@ export const api = {
       method: "DELETE",
     }),
   repositories: () => request<Repository[]>("/api/forge/repositories"),
+  publicProfile: (owner: string) =>
+    request<PublicProfile>(`/api/forge/profiles/${encodeURIComponent(owner)}`),
   repository: (owner: string, repo: string) =>
     request<Repository>(
       `/api/forge/repositories/by-name/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`
@@ -263,6 +319,7 @@ export const api = {
     owner: string;
     description: string;
     visibility: "public" | "private";
+    initializeReadme: boolean;
   }) =>
     request<Repository>("/api/forge/repositories", {
       method: "POST",
@@ -271,6 +328,7 @@ export const api = {
         owner: payload.owner,
         description: payload.description,
         visibility: payload.visibility,
+        initializeReadme: payload.initializeReadme,
       }),
     }),
   organizations: () => request<Organization[]>("/api/forge/organizations"),
@@ -296,6 +354,26 @@ export const api = {
     request<GitTree>(gitPath(repositoryId, `tree${query({ ref, path })}`)),
   file: (repositoryId: string, ref: string, path: string) =>
     request<GitFile>(gitPath(repositoryId, `file${query({ ref, path })}`)),
+  repositoryBranches: (repositoryId: string) =>
+    request<RepositoryBranch[]>(gitPath(repositoryId, "branches")),
+  createRepositoryBranch: (
+    repositoryId: string,
+    payload: { name: string; source: string; expectedOid: string }
+  ) =>
+    request<{ name: string; oid: string }>(gitPath(repositoryId, "branches"), {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  deleteRepositoryBranch: (repositoryId: string, payload: { name: string; expectedOid: string }) =>
+    request<{ deleted: boolean }>(gitPath(repositoryId, "branches"), {
+      method: "DELETE",
+      body: JSON.stringify(payload),
+    }),
+  editRepositoryFile: (repositoryId: string, payload: EditRepositoryFileInput) =>
+    request<{ oid: string; branch: string; path: string }>(gitPath(repositoryId, "edit"), {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   commits: (repositoryId: string, ref: string, offset: number, limit: number) =>
     request<GitCommit[]>(gitPath(repositoryId, `commits${query({ ref, offset, limit })}`)),
   graph: (repositoryId: string, ref: string, limit: number) =>
@@ -370,7 +448,11 @@ export const api = {
   mergePull: (
     repositoryId: string,
     number: number,
-    payload: { expectedBaseOid: string; expectedHeadOid: string }
+    payload: {
+      expectedBaseOid: string;
+      expectedHeadOid: string;
+      method: "merge" | "squash" | "rebase";
+    }
   ) =>
     request<PullRequest>(repositoryPath(repositoryId, `pull-requests/${number}/merge`), {
       method: "POST",
@@ -617,8 +699,100 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+  repositoryCommunity: (repositoryId: string, refName: string) =>
+    request<RepositoryCommunity>(`${gitPath(repositoryId, "community")}${query({ ref: refName })}`),
+  branchRules: (repositoryId: string) =>
+    request<BranchProtectionRule[]>(repositoryPath(repositoryId, "branch-rules")),
+  createBranchRule: (repositoryId: string, payload: BranchProtectionInput) =>
+    request<BranchProtectionRule>(repositoryPath(repositoryId, "branch-rules"), {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateBranchRule: (repositoryId: string, ruleId: string, payload: BranchProtectionInput) =>
+    request<BranchProtectionRule>(
+      repositoryPath(repositoryId, `branch-rules/${encodeURIComponent(ruleId)}`),
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      }
+    ),
+  deleteBranchRule: (repositoryId: string, ruleId: string) =>
+    request(
+      repositoryPath(repositoryId, `branch-rules/${encodeURIComponent(ruleId)}`),
+      { method: "DELETE" },
+      true
+    ),
+  repositoryCollaborators: (repositoryId: string) =>
+    request<RepositoryCollaborator[]>(repositoryPath(repositoryId, "collaborators")),
+  putRepositoryCollaborator: (
+    repositoryId: string,
+    payload: { identifier: string; role: RepositoryRole }
+  ) =>
+    request<RepositoryCollaborator>(repositoryPath(repositoryId, "collaborators"), {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  deleteRepositoryCollaborator: (repositoryId: string, userId: string) =>
+    request(
+      repositoryPath(repositoryId, `collaborators/${encodeURIComponent(userId)}`),
+      { method: "DELETE" },
+      true
+    ),
+  actionWorkflows: (repositoryId: string, ref: string, oid?: string) =>
+    request<{ oid: string; workflows: ActionWorkflowFile[] }>(
+      `${actionsRepositoryPath(repositoryId, "workflows")}${query({ ref, oid })}`
+    ),
+  actionRuns: (repositoryId: string) =>
+    request<ActionRunSummary[]>(actionsRepositoryPath(repositoryId, "runs")),
+  actionRun: (runId: string) =>
+    request<ActionRun>(`/api/actions/runs/${encodeURIComponent(runId)}`),
+  startActionRun: (repositoryId: string, input: CreateActionRunInput) =>
+    request<ActionRunSummary>(actionsRepositoryPath(repositoryId, "runs"), {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  cancelActionRun: (runId: string) =>
+    request<ActionRun>(`/api/actions/runs/${encodeURIComponent(runId)}/cancel`, {
+      method: "POST",
+    }),
   agents: () => request<Agent[]>("/api/auth/agents"),
-  createAgent: (payload: { name: string; description: string }) =>
+  agent: (id: string) => request<Agent>(`/api/auth/agents/${encodeURIComponent(id)}`),
+  updateAgent: (
+    id: string,
+    payload: Partial<Pick<Agent, "handle" | "name" | "description" | "profilePublic">>
+  ) =>
+    request<Agent>(`/api/auth/agents/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  agentProfile: (owner: string, handle: string) =>
+    request<AgentProfile>(
+      `/api/auth/agent-profiles/${encodeURIComponent(owner)}/${encodeURIComponent(handle)}`
+    ),
+  agentWebhook: (id: string) =>
+    request<(AgentWebhookSettings & { configured: true; updatedAt: number }) | null>(
+      `/api/auth/agents/${encodeURIComponent(id)}/webhook`
+    ),
+  saveAgentWebhook: (id: string, payload: AgentWebhookSettings, rotateSecret = false) =>
+    request<AgentWebhookSettings & { configured: true; secret: string | null }>(
+      `/api/auth/agents/${encodeURIComponent(id)}/webhook`,
+      { method: "PUT", body: JSON.stringify({ ...payload, rotateSecret }) }
+    ),
+  testAgentWebhook: (id: string) =>
+    request<AgentWebhookDelivery>(`/api/auth/agents/${encodeURIComponent(id)}/webhook/test`, {
+      method: "POST",
+      body: "{}",
+    }),
+  agentWebhookDeliveries: (id: string) =>
+    request<AgentWebhookDelivery[]>(
+      `/api/auth/agents/${encodeURIComponent(id)}/webhook/deliveries`
+    ),
+  retryAgentWebhookDelivery: (id: string, deliveryId: string) =>
+    request<AgentWebhookDelivery>(
+      `/api/auth/agents/${encodeURIComponent(id)}/webhook/deliveries/${encodeURIComponent(deliveryId)}/retry`,
+      { method: "POST", body: "{}" }
+    ),
+  createAgent: (payload: { handle?: string; name: string; description: string }) =>
     request<Agent>("/api/auth/agents", { method: "POST", body: JSON.stringify(payload) }),
   disableAgent: (id: string) =>
     request(`/api/auth/agents/${encodeURIComponent(id)}`, { method: "DELETE" }, true),

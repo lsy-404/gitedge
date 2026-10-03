@@ -1,14 +1,14 @@
 import { z } from "zod";
 
 export const ActorSchema = z.object({
-  kind: z.enum(["user", "agent"]),
+  kind: z.enum(["user", "agent", "ci"]),
   id: z.string().min(1),
   name: z.string().min(1),
   sessionId: z.string().optional(),
 });
 export type Actor = z.infer<typeof ActorSchema>;
 /** A human user or an agent assigned to an issue, pull request or task. */
-export type Assignee = Omit<Actor, "sessionId">;
+export type Assignee = Omit<Actor, "sessionId" | "kind"> & { kind: "user" | "agent" };
 
 export const AgentSessionIdentitySchema = z.object({
   id: z.string().min(1),
@@ -36,6 +36,17 @@ export interface Repository {
   pullsEnabled: boolean;
   discussionsEnabled: boolean;
   wikiEnabled: boolean;
+  tasksEnabled: boolean;
+  agentsEnabled: boolean;
+  deploymentsEnabled: boolean;
+  graphEnabled: boolean;
+  actionsEnabled: boolean;
+  actionsNetworkEnabled: boolean;
+  onlineEditingEnabled: boolean;
+  allowMergeCommit: boolean;
+  allowSquashMerge: boolean;
+  allowRebaseMerge: boolean;
+  deleteBranchOnMerge: boolean;
   requiredApprovals: number;
   requirePassingChecks: boolean;
   createdAt: number;
@@ -129,13 +140,7 @@ export interface CheckRun {
   updatedAt: number;
 }
 
-export interface Agent {
-  id: string;
-  name: string;
-  description: string;
-  createdAt: number;
-  disabledAt: number | null;
-}
+export type { Agent } from "./agents";
 
 export interface AgentSession {
   id: string;
@@ -161,6 +166,7 @@ export interface CreatedAgentSession extends AgentSession {
 export interface GitRef {
   name: string;
   oid: string;
+  peeledOid?: string;
 }
 export interface GitCommit {
   oid: string;
@@ -215,7 +221,7 @@ export interface GitComparison {
 const title = z.string().trim().min(1).max(200);
 const body = z.string().max(50_000);
 export const GitOidSchema = z.string().regex(/^[0-9a-f]{40}$/);
-export const GitBranchSchema = z
+export const GitRefNameSchema = z
   .string()
   .trim()
   .min(1)
@@ -229,8 +235,13 @@ export const GitBranchSchema = z
       value
         .split("/")
         .every((part) => part.length > 0 && !part.startsWith(".") && !part.endsWith(".lock")),
-    "Invalid Git branch name"
+    "Invalid Git ref name"
   );
+export const GitBranchSchema = GitRefNameSchema.refine(
+  (value) =>
+    value !== "@" && value !== "HEAD" && !value.startsWith("-") && !value.startsWith("refs/"),
+  "Expected a branch name, not a symbolic or fully qualified ref"
+);
 export const CreateCommentInputSchema = z.object({ body: body.min(1) });
 export const CreateDiscussionInputSchema = z.object({
   title,
@@ -266,10 +277,7 @@ export const PutCheckRunInputSchema = z
   .refine((value) =>
     value.status === "completed" ? value.conclusion !== null : value.conclusion === null
   );
-export const CreateAgentInputSchema = z.object({
-  name: z.string().trim().min(1).max(80),
-  description: z.string().max(500).default(""),
-});
+export { CreateAgentInputSchema } from "./agents";
 export const CreateAgentSessionInputSchema = z.object({
   repositoryId: z.string().min(1),
   baseRef: GitBranchSchema.default("main"),
@@ -277,6 +285,7 @@ export const CreateAgentSessionInputSchema = z.object({
   ttlSeconds: z.number().int().min(300).max(86_400).default(3_600),
 });
 export const MergePullRequestInputSchema = z.object({
+  method: z.enum(["merge", "squash", "rebase"]).default("merge"),
   expectedBaseOid: GitOidSchema,
   expectedHeadOid: GitOidSchema,
 });

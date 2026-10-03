@@ -23,6 +23,7 @@ GitEdge is an MIT Git forge built with Cloudflare Workers, Artifacts, D1 and Vue
 - `workers/git/` owns Artifacts reads, native Git transport, comparisons and merges. Artifacts is the sole authority for Git objects and refs; do not reintroduce custom pack or repository storage.
 - `workers/deploy/` interprets a declarative manifest and sends bounded Cloudflare API operations. It must not execute repository-supplied scripts.
 - `workers/limits/` owns the request-limiting Durable Objects.
+- `workers/actions/` owns bounded workflow execution and per-run Containers; Forge owns CI check records. Its Durable Objects use only their own storage and container.
 - `apps/web/` contains Vue components, route-level pages and i18n text. Shared API contracts live in `packages/contracts/`.
 - `migrations/` contains D1 schema definitions; `test/` contains all tests. Persistent task decisions and operational evidence belong only in `/agents`.
 

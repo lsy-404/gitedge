@@ -40,6 +40,17 @@ const repository: Repository = {
   pullsEnabled: true,
   discussionsEnabled: true,
   wikiEnabled: true,
+  tasksEnabled: true,
+  agentsEnabled: true,
+  deploymentsEnabled: true,
+  graphEnabled: true,
+  actionsEnabled: true,
+  actionsNetworkEnabled: false,
+  onlineEditingEnabled: true,
+  allowMergeCommit: true,
+  allowSquashMerge: true,
+  allowRebaseMerge: true,
+  deleteBranchOnMerge: false,
   requiredApprovals: 0,
   requirePassingChecks: false,
 };
@@ -166,6 +177,12 @@ function submit(form: HTMLFormElement): void {
 }
 
 beforeEach(() => {
+  vi.spyOn(api, "repositoryCommunity").mockResolvedValue({
+    files: [],
+    issueTemplates: [],
+    pullRequestTemplate: null,
+    truncated: false,
+  });
   i18n.global.mergeLocaleMessage("zh-CN", collaborationMessages["zh-CN"]);
   i18n.global.mergeLocaleMessage("en", collaborationMessages.en);
   i18n.global.locale.value = "en";
@@ -532,11 +549,19 @@ describe("RepositoryCollaboration rendered workflows", () => {
     await settle();
     expect(mounted.root.querySelector(".pull-review")).not.toBeNull();
     expect(mounted.root.querySelector(".checks-panel")).toBeNull();
+    const mergeSelect = control(mounted.root, ".merge-actions select");
+    expect([...mergeSelect.querySelectorAll("option")].map((option) => option.value)).toEqual([
+      "merge",
+      "squash",
+      "rebase",
+    ]);
+    fill(mergeSelect, "squash");
     findButton(mounted.root, "Merge pull request").click();
     await settle();
     expect(mergePullSpy).toHaveBeenCalledWith("repo-1", 12, {
       expectedBaseOid: "base-current-oid",
       expectedHeadOid: "head-current-oid",
+      method: "squash",
     });
     expect(mounted.root.textContent).toContain("Merge commit merged-c");
     expect(mounted.root.querySelector(".merge-actions")).toBeNull();
@@ -652,5 +677,96 @@ describe("RepositoryCollaboration rendered workflows", () => {
     expect(mounted.root.querySelector(".body-content")?.textContent).toContain("Original docs");
     expect(mounted.root.querySelector(".detail-state-row .badge")?.textContent).toContain("r5");
     mounted.unmount();
+  });
+  it("keeps PR creation available when repository agents are disabled", async () => {
+    const sessions = vi.spyOn(api, "repositorySessions");
+    vi.spyOn(api, "pulls").mockResolvedValue([]);
+    repository.agentsEnabled = false;
+    try {
+      const mounted = await mountSection("/_verify/pulls", "pulls");
+      findButton(mounted.root, "New pull request").click();
+      await settle();
+      expect(sessions).not.toHaveBeenCalled();
+      expect(mounted.root.querySelector(".create-form")).not.toBeNull();
+      expect(mounted.root.querySelector(".create-form")?.textContent).not.toContain("Session fork");
+    } finally {
+      repository.agentsEnabled = true;
+    }
+  });
+  it("refreshes late CI results without reloading the PR draft", async () => {
+    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    const pullSpy = vi.spyOn(api, "pull").mockResolvedValue(pull());
+    vi.spyOn(api, "comments").mockResolvedValue([]);
+    vi.spyOn(api, "reviews").mockResolvedValue([]);
+    vi.spyOn(api, "pullDiff").mockResolvedValue({
+      baseOid: "a".repeat(40),
+      headOid: "b".repeat(40),
+      mergeBaseOid: "a".repeat(40),
+      commits: [],
+      files: [],
+      truncated: false,
+    });
+    const check: CheckRun = {
+      id: "ci",
+      name: "verify",
+      commitOid: "b".repeat(40),
+      status: "completed",
+      conclusion: "success",
+      summary: "Live result",
+      detailsUrl: null,
+      actor: { kind: "ci", id: "gitedge-actions", name: "GitEdge Actions" },
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const checks = vi.spyOn(api, "checks").mockResolvedValueOnce([]).mockResolvedValue([check]);
+    const mounted = await mountSection("/_verify/pulls/12", "pulls");
+    mounted.root.querySelectorAll<HTMLElement>(".pull-tabs button")[2]?.click();
+    await new Promise((resolve) => setTimeout(resolve, 5100));
+    await settle();
+    expect(checks.mock.calls.length).toBeGreaterThan(1);
+    expect(pullSpy).toHaveBeenCalledTimes(1);
+    expect(mounted.root.textContent).toContain("Live result");
+    expect(mounted.root.textContent).toContain("Completed");
+  }, 10000);
+  it("applies repository issue templates only to empty draft fields", async () => {
+    vi.spyOn(api, "issues").mockResolvedValue([]);
+    vi.mocked(api.repositoryCommunity).mockResolvedValue({
+      files: [],
+      pullRequestTemplate: null,
+      truncated: false,
+      issueTemplates: [
+        {
+          kind: "issue_template",
+          title: "Bug report",
+          repositoryId: "defaults",
+          owner: "acme",
+          repository: ".github",
+          ref: "main",
+          path: ".github/ISSUE_TEMPLATE/bug.md",
+          inherited: true,
+          truncated: false,
+          content: "---\nname: Bug report\ntitle: Bug\n---\n## Reproduce\n",
+        },
+      ],
+    });
+    const mounted = await mountSection("/_verify/issues", "issues");
+    findButton(mounted.root, "New issue").click();
+    await settle();
+    const form = mounted.root.querySelector<HTMLFormElement>(".create-form");
+    if (!form) throw new Error("Missing creation form");
+    const title = control(form, "input"),
+      body = control(form, "textarea");
+    fill(title, "Existing title");
+    fill(body, "Existing body");
+    findButton(mounted.root, "Use template").click();
+    await settle();
+    expect(Reflect.get(title, "value")).toBe("Existing title");
+    expect(Reflect.get(body, "value")).toBe("Existing body");
+    fill(title, "");
+    fill(body, "");
+    findButton(mounted.root, "Use template").click();
+    await settle();
+    expect(Reflect.get(title, "value")).toBe("Bug");
+    expect(Reflect.get(body, "value")).toBe("## Reproduce\n");
   });
 });

@@ -19,13 +19,20 @@ import {
   SESSION_MAX_AGE_SECONDS,
 } from "./session";
 import { PBKDF2_ITERATIONS } from "./password";
-import { authenticateAgentSession, authenticateGitToken, handleAgentManagement } from "./agents";
+import {
+  authenticateAgentSession,
+  authenticateGitToken,
+  handleAgentManagement,
+  handleAgentProfile,
+} from "./agents";
 import { handleAccountProfile, handleWebSessions } from "./profile";
+import { drainAgentEventOutbox, handleAgentEvent } from "./agent-webhooks";
 
 export type AuthEnv = {
   readonly DB: D1Database;
   readonly ARTIFACTS: Artifacts;
   readonly LOG_LEVEL?: string;
+  readonly WEBHOOK_ENCRYPTION_KEY?: string;
   readonly ALLOW_PUBLIC_SIGNUP: string;
   readonly DEFAULT_USER_GROUP: string;
   readonly SSO_PROVIDERS_JSON?: string;
@@ -75,7 +82,13 @@ function json(body: unknown, status = 200, headers?: HeadersInit): Response {
 
 function fail(
   status: number,
-  code: "bad_request" | "unauthorized" | "forbidden" | "conflict" | "method_not_allowed",
+  code:
+    | "bad_request"
+    | "unauthorized"
+    | "forbidden"
+    | "conflict"
+    | "method_not_allowed"
+    | "service_unavailable",
   message: string
 ): Response {
   return json({ error: { code, message } }, status);
@@ -645,6 +658,19 @@ export default {
       await logout(env, readCookie(request));
       return json({ data: { loggedOut: true } }, 200, { "Set-Cookie": createSessionCookie("", 0) });
     }
+    if (path === "/_internal/agent-events" && request.method === "POST") {
+      if (new URL(request.url).hostname !== "auth.internal")
+        return fail(404, "bad_request", "Endpoint was not found.");
+      try {
+        const result = await handleAgentEvent(request, env);
+        if (result === "invalid") return fail(400, "bad_request", "Invalid agent event.");
+        if (result === "full")
+          return fail(503, "service_unavailable", "Agent event queue is full.");
+        return json({ data: { accepted: result === "queued" } }, 202);
+      } catch {
+        return fail(503, "service_unavailable", "Agent event could not be queued.");
+      }
+    }
     if (request.method === "GET" && path === "/session") {
       const authorization = request.headers.get("Authorization");
       if (authorization) {
@@ -657,6 +683,10 @@ export default {
       }
       const result = await session(env, readCookie(request));
       return result.ok ? json({ data: result.data }) : json({ error: result.error }, result.status);
+    }
+    if (/^\/agent-profiles\//.test(path)) {
+      const profileSession = await session(env, readCookie(request));
+      return handleAgentProfile(request, env, profileSession.ok ? profileSession.data : null);
     }
     if (/^\/(agents|sessions|tokens|web-sessions)(\/|$)/.test(path)) {
       const authorization = request.headers.get("Authorization");
@@ -691,5 +721,8 @@ export default {
     return request.method === "GET" || request.method === "POST"
       ? fail(404, "bad_request", "Unknown auth endpoint.")
       : fail(405, "method_not_allowed", "Method is not allowed.");
+  },
+  async scheduled(_controller: ScheduledController, env: AuthEnv): Promise<void> {
+    await drainAgentEventOutbox(env);
   },
 };

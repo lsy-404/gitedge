@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp, nextTick } from "vue";
 import App from "../../apps/web/src/App.vue";
 import { router } from "../../apps/web/src/router";
@@ -28,6 +28,19 @@ const identity = {
   createdAt: 1,
   lastLoginAt: 2,
 };
+
+beforeEach(() => {
+  localStorage.setItem(
+    "gitedge.preferences",
+    JSON.stringify({
+      theme: "system",
+      locale: "en",
+      density: "comfortable",
+      tabSize: 2,
+      lineWrap: false,
+    })
+  );
+});
 
 async function settle() {
   for (let index = 0; index < 5; index += 1) {

@@ -32,3 +32,15 @@ export async function readTextLimited(
     return null;
   }
 }
+
+export async function readJsonLimited(
+  request: Request,
+  maximumBytes = 1_048_576
+): Promise<unknown> {
+  try {
+    const text = await readTextLimited(request.body, maximumBytes);
+    return text === null ? null : JSON.parse(text);
+  } catch {
+    return null;
+  }
+}

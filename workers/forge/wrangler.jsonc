@@ -31,6 +31,10 @@
     {
       "binding": "GIT",
       "service": "gitedge-git-artifacts"
+    },
+    {
+      "binding": "AUTH",
+      "service": "gitedge-auth"
     }
   ]
 }

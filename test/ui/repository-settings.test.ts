@@ -34,6 +34,17 @@ const settings: Settings = {
   pullsEnabled: true,
   discussionsEnabled: true,
   wikiEnabled: true,
+  tasksEnabled: true,
+  agentsEnabled: true,
+  deploymentsEnabled: true,
+  graphEnabled: true,
+  actionsEnabled: true,
+  actionsNetworkEnabled: false,
+  onlineEditingEnabled: true,
+  allowMergeCommit: true,
+  allowSquashMerge: true,
+  allowRebaseMerge: true,
+  deleteBranchOnMerge: false,
   requiredApprovals: 0,
   requirePassingChecks: false,
   memoryVisibility: "members",
@@ -184,6 +195,17 @@ describe("RepositorySettings", () => {
       pullsEnabled: true,
       discussionsEnabled: true,
       wikiEnabled: true,
+      tasksEnabled: true,
+      agentsEnabled: true,
+      deploymentsEnabled: true,
+      graphEnabled: true,
+      actionsEnabled: true,
+      actionsNetworkEnabled: false,
+      onlineEditingEnabled: true,
+      allowMergeCommit: true,
+      allowSquashMerge: true,
+      allowRebaseMerge: true,
+      deleteBranchOnMerge: false,
       requiredApprovals: 2,
       requirePassingChecks: true,
       memoryVisibility: "members",
@@ -193,6 +215,91 @@ describe("RepositorySettings", () => {
     expect(router.currentRoute.value.path).toBe("/acme/renamed/settings");
     expect(isDisabled(control(mounted.root, "button[type='submit']"))).toBe(true);
     expect(mounted.root.querySelector('[role="status"]')?.textContent).toContain("Settings saved");
+    mounted.unmount();
+  });
+
+  it("persists independent repository feature and merge controls", async () => {
+    vi.spyOn(api, "repositorySettings").mockResolvedValue(settings);
+    const updated: Settings = {
+      ...settings,
+      tasksEnabled: false,
+      agentsEnabled: false,
+      deploymentsEnabled: false,
+      graphEnabled: false,
+      actionsEnabled: false,
+      actionsNetworkEnabled: true,
+      onlineEditingEnabled: false,
+      allowMergeCommit: false,
+      allowSquashMerge: false,
+      allowRebaseMerge: true,
+      deleteBranchOnMerge: true,
+    };
+    const updateSpy = vi.spyOn(api, "updateRepositorySettings").mockResolvedValue(updated);
+    const mounted = await mountSettings(repository);
+    navigation(mounted.root, "Features").click();
+    await settle();
+    for (const label of [
+      "Tasks and project memory",
+      "Repository agents",
+      "Deployments",
+      "Commit graph",
+      "Actions",
+      "Online editing",
+    ]) {
+      const toggle = Array.from(mounted.root.querySelectorAll<HTMLElement>("[role='switch']")).find(
+        (item) => item.closest(".settings-row")?.textContent?.includes(label)
+      );
+      toggle?.click();
+      await settle();
+    }
+    const networkToggle = Array.from(
+      mounted.root.querySelectorAll<HTMLElement>("[role='switch']")
+    ).find((item) =>
+      item.closest(".settings-row")?.textContent?.includes("Allow workflow network access")
+    );
+    expect(isDisabled(networkToggle!)).toBe(false);
+    networkToggle?.click();
+    await settle();
+
+    navigation(mounted.root, "Merge rules").click();
+    await settle();
+    for (const label of ["Allow merge commits", "Allow squash merging", "Allow rebase merging"]) {
+      Array.from(mounted.root.querySelectorAll<HTMLElement>("[role='switch']"))
+        .find((item) => item.closest(".settings-row")?.textContent?.includes(label))
+        ?.click();
+      await settle();
+    }
+    Array.from(mounted.root.querySelectorAll<HTMLElement>("[role='switch']"))
+      .find((item) =>
+        item.closest(".settings-row")?.textContent?.includes("Delete source branch after merge")
+      )
+      ?.click();
+    await settle();
+    expect(mounted.root.textContent).toContain("Enable at least one merge method.");
+    expect(isDisabled(control(mounted.root, "button[type='submit']"))).toBe(true);
+    Array.from(mounted.root.querySelectorAll<HTMLElement>("[role='switch']"))
+      .find((item) => item.closest(".settings-row")?.textContent?.includes("Allow rebase merging"))
+      ?.click();
+    await settle();
+    submit(control(mounted.root, "form"));
+    await settle();
+
+    expect(updateSpy).toHaveBeenCalledWith(
+      "repo-1",
+      expect.objectContaining({
+        tasksEnabled: false,
+        agentsEnabled: false,
+        deploymentsEnabled: false,
+        graphEnabled: false,
+        actionsEnabled: false,
+        actionsNetworkEnabled: true,
+        onlineEditingEnabled: false,
+        allowMergeCommit: false,
+        allowSquashMerge: false,
+        allowRebaseMerge: true,
+        deleteBranchOnMerge: true,
+      })
+    );
     mounted.unmount();
   });
 
@@ -234,7 +341,14 @@ describe("RepositorySettings", () => {
     expect(mounted.root.textContent).toContain(
       "Only the repository owner can change these settings"
     );
-    for (const section of ["Features", "Merge rules", "Agents & memory", "Archive"]) {
+    for (const section of [
+      "Features",
+      "Merge rules",
+      "Branch protection",
+      "Collaborators",
+      "Agents & memory",
+      "Archive",
+    ]) {
       navigation(mounted.root, section).click();
       await settle();
       for (const selector of ["input", "textarea", "[role='combobox']", "[role='switch']"])

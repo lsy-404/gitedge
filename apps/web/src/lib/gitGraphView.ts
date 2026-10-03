@@ -43,7 +43,7 @@ export function projectGitGraph(graph: GitGraph): GitGraphView {
 
   for (const ref of graph.refs) {
     if (!ref.name.startsWith("session/")) {
-      addRef(ref.oid, ref.name.replace(/^refs\/(heads|tags)\//, ""));
+      addRef(ref.peeledOid ?? ref.oid, ref.name.replace(/^refs\/(heads|tags)\//, ""));
       continue;
     }
 

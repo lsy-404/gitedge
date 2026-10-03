@@ -16,15 +16,17 @@
     "test:web": "pnpm --dir apps/web run test",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "typecheck": "tsc --noEmit -p workers/auth/tsconfig.json && tsc --noEmit -p workers/forge/tsconfig.json && tsc --noEmit -p workers/git/tsconfig.json && tsc --noEmit -p workers/gateway/tsconfig.json && tsc --noEmit -p workers/limits/tsconfig.json && pnpm --dir workers/deploy run typecheck",
+    "typecheck": "tsc --noEmit -p workers/auth/tsconfig.json && tsc --noEmit -p workers/forge/tsconfig.json && tsc --noEmit -p workers/git/tsconfig.json && tsc --noEmit -p workers/gateway/tsconfig.json && tsc --noEmit -p workers/limits/tsconfig.json && pnpm --dir workers/deploy run typecheck && pnpm run typecheck:actions",
     "cf-typegen": "wrangler types --config workers/git/wrangler.jsonc worker-configuration.d.ts",
     "db:migrate": "wrangler d1 migrations apply gitedge --remote --config workers/auth/wrangler.jsonc",
-    "db:migrate:local": "wrangler d1 migrations apply gitedge --local --persist-to .wrangler/state --config workers/auth/wrangler.jsonc"
+    "db:migrate:local": "wrangler d1 migrations apply gitedge --local --persist-to .wrangler/state --config workers/auth/wrangler.jsonc",
+    "typecheck:actions": "wrangler types --config workers/actions/wrangler.jsonc --include-runtime=false workers/actions/worker-configuration.d.ts && tsc --noEmit -p workers/actions/tsconfig.json"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.22.0",
     "@cloudflare/workers-types": "^5.20261001.1",
     "@types/node": "^25.7.0",
+    "@types/picomatch": "^4.0.3",
     "cf": "^1.0.0-beta.10",
     "prettier": "^3.6.2",
     "tsx": "^4.7.0",
@@ -42,6 +44,8 @@
     "memfs": "^4.80.0",
     "openid-client": "^6.8.4",
     "openpgp": "^6.3.2",
+    "picomatch": "^4.0.7",
+    "yaml": "^2.9.1",
     "zod": "^4.4.3"
   },
   "license": "MIT",

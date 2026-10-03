@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, defineAsyncComponent, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute } from "vue-router";
 import type { AgentSession, Repository, RepositorySettings } from "../lib/api";
@@ -14,6 +14,7 @@ import RepositoryCode from "../components/RepositoryCode.vue";
 import RepositoryCollaboration from "../components/RepositoryCollaboration.vue";
 import RepositorySettingsPanel from "../components/RepositorySettings.vue";
 import RepositoryTasks from "../components/RepositoryTasks.vue";
+const RepositoryActions = defineAsyncComponent(() => import("../components/RepositoryActions.vue"));
 const route = useRoute();
 const { t, locale } = useI18n();
 const owner = computed(() => String(route.params.owner));
@@ -22,15 +23,16 @@ const base = computed(() => `/${owner.value}/${repoName.value}`);
 const section = computed(() =>
   route.params.view ? "code" : String(route.params.section || route.path.split("/")[3] || "code")
 );
-const activeTab = computed(() =>
-  ["commits", "compare"].includes(section.value) ? "code" : section.value
-);
+const activeTab = computed(() => section.value);
 const tabs: { key: string; label: string; icon: IconName; write?: boolean }[] = [
   { key: "code", label: "code", icon: "code" },
+  { key: "commits", label: "commitGraph", icon: "clock" },
+  { key: "compare", label: "compare", icon: "diff" },
   { key: "issues", label: "issues", icon: "issue" },
   { key: "pulls", label: "pulls", icon: "pr" },
   { key: "tasks", label: "tasks", icon: "task" },
   { key: "agents", label: "agents", icon: "agent", write: true },
+  { key: "actions", label: "ghActionsTab", icon: "activity", write: true },
   { key: "discussions", label: "discussions", icon: "discussion" },
   { key: "wiki", label: "wiki", icon: "wiki" },
   { key: "deploy", label: "ghDeployTab", icon: "cloud", write: true },
@@ -44,7 +46,12 @@ function sectionEnabled(key: string): boolean {
   if (key === "pulls") return current.pullsEnabled;
   if (key === "discussions") return current.discussionsEnabled;
   if (key === "wiki") return current.wikiEnabled;
-  if (key === "deploy") return !current.archived;
+  if (key === "tasks") return current.tasksEnabled;
+  if (key === "agents") return current.agentsEnabled;
+  if (key === "deploy") return current.deploymentsEnabled && !current.archived;
+  if (key === "actions") return current.actionsEnabled;
+  if (key === "commits") return current.graphEnabled;
+  if (key === "compare") return current.graphEnabled || current.pullsEnabled;
   return true;
 }
 const collaborationRepository = computed(() =>
@@ -66,9 +73,21 @@ function settingsUpdated(settings: RepositorySettings): void {
     pullsEnabled: settings.pullsEnabled,
     discussionsEnabled: settings.discussionsEnabled,
     wikiEnabled: settings.wikiEnabled,
+    tasksEnabled: settings.tasksEnabled,
+    agentsEnabled: settings.agentsEnabled,
+    deploymentsEnabled: settings.deploymentsEnabled,
+    graphEnabled: settings.graphEnabled,
+    actionsEnabled: settings.actionsEnabled,
+    actionsNetworkEnabled: settings.actionsNetworkEnabled,
+    onlineEditingEnabled: settings.onlineEditingEnabled,
+    allowMergeCommit: settings.allowMergeCommit,
+    allowSquashMerge: settings.allowSquashMerge,
+    allowRebaseMerge: settings.allowRebaseMerge,
+    deleteBranchOnMerge: settings.deleteBranchOnMerge,
     requiredApprovals: settings.requiredApprovals,
     requirePassingChecks: settings.requirePassingChecks,
   };
+  void loadCounts(repository.value, loadVersion);
 }
 const loading = ref(true);
 const error = ref("");
@@ -79,22 +98,27 @@ const sessionsLoading = ref(false);
 const sessionsError = ref("");
 let loadVersion = 0;
 let sessionVersion = 0;
-async function loadCounts(id: string, version: number) {
+async function loadCounts(current: Repository, version: number) {
   const [issues, pulls, discussions] = await Promise.allSettled([
-    api.issues(id),
-    api.pulls(id),
-    api.discussions(id),
+    current.issuesEnabled ? api.issues(current.id) : Promise.resolve(null),
+    current.pullsEnabled ? api.pulls(current.id) : Promise.resolve(null),
+    current.discussionsEnabled ? api.discussions(current.id) : Promise.resolve(null),
   ]);
   if (version !== loadVersion) return;
   counts.value = {
     ...(issues.status === "fulfilled"
-      ? { issues: issues.value.filter((item) => item.state === "open").length }
+      ? { issues: (issues.value ?? []).filter((item) => item.state === "open").length }
       : {}),
     ...(pulls.status === "fulfilled"
-      ? { pulls: pulls.value.filter((item) => item.state === "open").length }
+      ? { pulls: (pulls.value ?? []).filter((item) => item.state === "open").length }
       : {}),
-    ...(discussions.status === "fulfilled" ? { discussions: discussions.value.length } : {}),
+    ...(discussions.status === "fulfilled" && discussions.value
+      ? { discussions: discussions.value.length }
+      : {}),
   };
+}
+function refreshCounts() {
+  if (repository.value) void loadCounts(repository.value, loadVersion);
 }
 async function load() {
   const version = ++loadVersion;
@@ -107,7 +131,7 @@ async function load() {
     const result = await api.repository(owner.value, repoName.value);
     if (version !== loadVersion) return;
     repository.value = result;
-    void loadCounts(result.id, version);
+    void loadCounts(result, version);
   } catch (cause) {
     if (version !== loadVersion) return;
     notFound.value = cause instanceof ApiError && cause.status === 404;
@@ -118,7 +142,8 @@ async function load() {
 }
 async function loadSessions() {
   const version = ++sessionVersion;
-  if (!repository.value?.canWrite || section.value !== "agents") return;
+  if (!repository.value?.canWrite || !repository.value.agentsEnabled || section.value !== "agents")
+    return;
   sessionsLoading.value = true;
   sessionsError.value = "";
   try {
@@ -145,7 +170,7 @@ watch(() => [section.value, repository.value?.id], loadSessions);
 watch(
   () => route.fullPath,
   () => {
-    if (repository.value) void loadCounts(repository.value.id, loadVersion);
+    if (repository.value) void loadCounts(repository.value, loadVersion);
   }
 );
 </script>
@@ -191,10 +216,13 @@ watch(
             }}</StatusBadge
           >
           <div class="repository-heading-actions">
-            <RouterLink class="btn btn-sm secondary-repo-action" :to="`${base}/commits`"
+            <RouterLink
+              v-if="repository.graphEnabled"
+              class="btn btn-sm secondary-repo-action"
+              :to="`${base}/commits`"
               ><AppIcon name="clock" />{{ t("commits") }}</RouterLink
             ><RouterLink
-              v-if="repository.canWrite && !repository.archived"
+              v-if="repository.canWrite && repository.deploymentsEnabled && !repository.archived"
               class="btn btn-sm"
               :to="`${base}/deploy`"
               ><AppIcon name="cloud" />{{ t("deploy") }}</RouterLink
@@ -211,6 +239,8 @@ watch(
           v-else-if="['code', 'commits', 'compare'].includes(section)"
           :repository="repository"
           :section="section"
+          :graph-enabled="repository.graphEnabled"
+          @changed="refreshCounts"
         />
         <template v-else-if="section === 'deploy' && repository.canWrite && !repository.archived"
           ><div class="repository-panel-head">
@@ -219,6 +249,14 @@ watch(
           </div>
           <DeployWizard :repository="repository"
         /></template>
+        <RepositoryActions
+          v-else-if="section === 'actions' && repository.actionsEnabled"
+          :repository-id="repository.id"
+          :default-branch="repository.defaultBranch"
+          :can-write="repository.canWrite"
+          :archived="repository.archived"
+          :actions-network-enabled="repository.actionsNetworkEnabled"
+        />
         <template v-else-if="section === 'agents' && repository.canWrite"
           ><div class="page-head">
             <div>
@@ -275,7 +313,9 @@ watch(
                     </p>
                   </td>
                   <td>
-                    <RouterLink :to="{ path: `${base}/commits`, query: { ref: session.baseRef } }"
+                    <RouterLink
+                      v-if="repository.graphEnabled"
+                      :to="{ path: `${base}/commits`, query: { ref: session.baseRef } }"
                       ><AppIcon name="branch" />{{ session.baseRef }}</RouterLink
                     >
                   </td>

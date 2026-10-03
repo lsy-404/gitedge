@@ -1,9 +1,13 @@
 import { z } from "zod";
 import { GitBranchSchema, type AgentSessionIdentity } from "./forge";
+import { RepositorySlugSchema } from "./repository-controls";
+export * from "./repository-controls";
 export * from "./forge";
+export * from "./agents";
 export * from "./tasks";
 export * from "./trust";
 export * from "./account";
+export * from "./actions";
 
 export const ErrorCodeSchema = z.enum([
   "bad_request",
@@ -168,12 +172,9 @@ export const AddOrganizationMemberInputSchema = z.object({
 });
 
 export const CreateRepositoryInputSchema = z.object({
+  initializeReadme: z.boolean().default(false),
   owner: NamespaceSlugSchema,
-  slug: z
-    .string()
-    .trim()
-    .toLowerCase()
-    .regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
+  slug: RepositorySlugSchema,
   visibility: z.enum(["public", "private"]),
   description: z.string().trim().max(500).default(""),
 });

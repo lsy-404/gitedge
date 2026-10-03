@@ -6,6 +6,9 @@ const OrganizationsView = () => import("./pages/OrganizationsView.vue");
 const OrganizationView = () => import("./pages/OrganizationView.vue");
 const AccountSettingsView = () => import("./pages/AccountSettingsView.vue");
 const AgentSettingsView = () => import("./pages/AgentSettingsView.vue");
+const AgentProfileView = () => import("./pages/AgentProfileView.vue");
+const AgentWebhookSettings = () => import("./pages/AgentWebhookSettings.vue");
+const UserProfileView = () => import("./pages/UserProfileView.vue");
 import { refreshSession, sessionState } from "./lib/session";
 
 export const router = createRouter({
@@ -23,6 +26,10 @@ export const router = createRouter({
     { path: "/organizations/:slug", component: OrganizationView },
     { path: "/settings/account", component: AccountSettingsView },
     { path: "/settings/agents", component: AgentSettingsView },
+    { path: "/settings/agents/:id", component: AgentWebhookSettings },
+    { path: "/settings/agents/:id/webhook", component: AgentWebhookSettings },
+    { path: "/:owner/@:handle", component: AgentProfileView, meta: { allowAnonymous: true } },
+    { path: "/:owner", component: UserProfileView, props: true, meta: { allowAnonymous: true } },
     {
       path: "/:owner/:repo/issues/:number([0-9]+)",
       component: RepositoryView,
@@ -50,7 +57,7 @@ export const router = createRouter({
       meta: { allowAnonymous: true },
     },
     {
-      path: "/:owner/:repo/:section(code|issues|pulls|discussions|wiki|tasks|commits|compare|settings|agents|deploy)?",
+      path: "/:owner/:repo/:section(code|issues|pulls|discussions|wiki|tasks|commits|compare|settings|agents|deploy|actions)?",
       component: RepositoryView,
       meta: { allowAnonymous: true },
     },

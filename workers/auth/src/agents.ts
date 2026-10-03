@@ -1,25 +1,39 @@
+import { readJsonLimited } from "./http";
+import {
+  repositoryRole,
+  writableRole,
+  resolveRepositoryPath,
+} from "../../../src/worker/common/repositories";
 import { z } from "zod";
 import {
   CreateAgentInputSchema,
   CreateAgentSessionInputSchema,
   sha256Hex,
   type Agent,
+  UpdateAgentInputSchema,
   type AgentSession,
   type CreatedAgentSession,
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
 import { createLogger } from "../../../src/worker/common/logger";
+import { handleAgentWebhookManagement } from "./agent-webhooks";
 
 export interface AgentAuthEnv {
   DB: D1Database;
   ARTIFACTS: Artifacts;
+  WEBHOOK_ENCRYPTION_KEY?: string;
   LOG_LEVEL?: string;
 }
 interface AgentRow {
   id: string;
+  owner: string;
+  handle: string;
+  profilePath: string;
   name: string;
   description: string;
+  profilePublic: number;
   createdAt: number;
+  updatedAt: number;
   disabledAt: number | null;
 }
 interface AgentSessionRow extends AgentSession {
@@ -34,6 +48,8 @@ interface RepositoryRow {
   owner: string;
   slug: string;
   archived: number;
+  agentsEnabled: number;
+  writable: boolean;
 }
 export interface GitAuthentication {
   user: TrustedUser;
@@ -53,13 +69,7 @@ function fail(status: number, code: string, message: string): Response {
     { status, headers: { "Cache-Control": "no-store" } }
   );
 }
-async function readJson(request: Request): Promise<unknown> {
-  try {
-    return await request.json();
-  } catch {
-    return null;
-  }
-}
+
 function newToken(prefix: string): string {
   return (
     prefix +
@@ -90,11 +100,14 @@ async function repositoryForOwner(
   userId: string,
   repositoryId: string
 ): Promise<RepositoryRow | null> {
-  return env.DB.prepare(
-    "SELECT r.id, r.artifact_name AS artifactName, n.slug AS owner, r.slug, r.archived FROM repositories r JOIN namespaces n ON n.id = r.namespace_id JOIN namespace_memberships m ON m.namespace_id = n.id WHERE r.id = ? AND m.user_id = ?"
+  const role = await repositoryRole(env.DB, repositoryId, userId);
+  if (!role) return null;
+  const row = await env.DB.prepare(
+    "SELECT r.id,r.artifact_name AS artifactName,n.slug AS owner,r.slug,r.archived,r.agents_enabled AS agentsEnabled,0 AS writable FROM repositories r JOIN namespaces n ON n.id=r.namespace_id WHERE r.id=?"
   )
-    .bind(repositoryId, userId)
+    .bind(repositoryId)
     .first<RepositoryRow>();
+  return row ? { ...row, writable: writableRole(role) } : null;
 }
 
 export async function authenticateAgentSession(
@@ -104,11 +117,18 @@ export async function authenticateAgentSession(
   if (!/^ge_session_[0-9a-f]{64}$/.test(token)) return null;
   const row = await env.DB.prepare(
     sessionSelect +
-      " WHERE s.token_hash = ? AND s.status = 'active' AND s.expires_at > ? AND a.disabled_at IS NULL AND EXISTS (SELECT 1 FROM repositories r JOIN namespace_memberships m ON m.namespace_id = r.namespace_id WHERE r.id = s.repository_id AND m.user_id = s.user_id)"
+      " WHERE s.token_hash = ? AND s.status = 'active' AND s.expires_at > ? AND a.disabled_at IS NULL"
   )
     .bind(await sha256Hex(token), Date.now())
     .first<AgentSessionRow>();
   if (!row) return null;
+  const repository = await repositoryForOwner(env, row.userId, row.repositoryId);
+  if (
+    !repository ||
+    repository.agentsEnabled === 0 ||
+    (row.permission === "write" && !repository.writable)
+  )
+    return null;
   return {
     id: row.userId,
     identifier: row.identifier,
@@ -145,26 +165,77 @@ export async function authenticateGitToken(
   } else return null;
   const owner = new URL(request.url).searchParams.get("owner");
   const slug = new URL(request.url).searchParams.get("repo");
-  if (!owner || !slug || (username !== null && username !== owner)) return null;
+  if (!owner || !slug) return null;
+  const path = await resolveRepositoryPath(env.DB, owner, slug);
+  if (!path) return null;
   const agent = await authenticateAgentSession(env, token);
   if (agent?.agentSession) {
     const repo = await repositoryForOwner(env, agent.id, agent.agentSession.repositoryId);
-    if (!repo || repo.owner !== owner || repo.slug !== slug) return null;
+    if (
+      !repo ||
+      repo.id !== path.id ||
+      (username !== null && username !== owner && username !== agent.identifier)
+    )
+      return null;
     return { user: agent, repositoryId: repo.id, permission: agent.agentSession.permission };
   }
   if (!/^ge_token_[0-9a-f]{64}$/.test(token)) return null;
   const row = await env.DB.prepare(
-    "SELECT t.repository_id AS repositoryId, t.permission, u.id, u.identifier, u.group_key AS groupKey FROM auth_git_tokens t JOIN users u ON u.id = t.user_id JOIN repositories r ON r.id = t.repository_id JOIN namespaces n ON n.id = r.namespace_id JOIN namespace_memberships m ON m.namespace_id = n.id AND m.user_id = u.id WHERE t.token_hash = ? AND t.revoked_at IS NULL AND t.expires_at > ? AND n.slug = ? AND r.slug = ?"
+    "SELECT t.repository_id AS repositoryId,t.permission,u.id,u.identifier,u.group_key AS groupKey FROM auth_git_tokens t JOIN users u ON u.id=t.user_id WHERE t.token_hash=? AND t.revoked_at IS NULL AND t.expires_at>? AND t.repository_id=?"
   )
-    .bind(await sha256Hex(token), Date.now(), owner, slug)
+    .bind(await sha256Hex(token), Date.now(), path.id)
     .first<TrustedUser & { repositoryId: string; permission: "read" | "write" }>();
-  return row
-    ? {
-        user: { id: row.id, identifier: row.identifier, groupKey: row.groupKey },
-        repositoryId: row.repositoryId,
-        permission: row.permission,
-      }
-    : null;
+  if (!row || (username !== null && username !== owner && username !== row.identifier)) return null;
+  const role = await repositoryRole(env.DB, row.repositoryId, row.id);
+  if (!role) return null;
+  return {
+    user: { id: row.id, identifier: row.identifier, groupKey: row.groupKey },
+    repositoryId: row.repositoryId,
+    permission: row.permission === "write" && writableRole(role) ? "write" : "read",
+  };
+}
+
+function readableHandle(name: string): string {
+  const value = name
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40)
+    .replace(/-+$/g, "");
+  return value || "agent";
+}
+async function availableHandle(
+  env: AgentAuthEnv,
+  userId: string,
+  base: string
+): Promise<string | null> {
+  for (let suffix = 1; suffix <= 100; suffix += 1) {
+    const candidate =
+      suffix === 1
+        ? base
+        : `${base.slice(0, 39 - String(suffix).length).replace(/-+$/g, "")}-${suffix}`;
+    const found = await env.DB.prepare(
+      "SELECT 1 AS found FROM auth_agents WHERE user_id = ? AND handle = ?"
+    )
+      .bind(userId, candidate)
+      .first<{ found: number }>();
+    if (!found) return candidate;
+  }
+  return null;
+}
+async function loadManagedAgent(
+  env: AgentAuthEnv,
+  userId: string,
+  agentId: string
+): Promise<Agent | null> {
+  const row = await env.DB.prepare(
+    "SELECT a.id, u.identifier AS owner, a.handle, '/' || u.identifier || '/@' || a.handle AS profilePath, a.name, a.description, a.profile_public AS profilePublic, a.created_at AS createdAt, a.updated_at AS updatedAt, a.disabled_at AS disabledAt FROM auth_agents a JOIN users u ON u.id = a.user_id WHERE a.id = ? AND a.user_id = ?"
+  )
+    .bind(agentId, userId)
+    .first<AgentRow>();
+  return row ? { ...row, profilePublic: Boolean(row.profilePublic) } : null;
 }
 
 async function revokeSession(env: AgentAuthEnv, row: AgentSessionRow): Promise<void> {
@@ -190,6 +261,11 @@ export async function handleAgentManagement(
     if (parts[0] === "tokens") return await handleGitTokenManagement(request, env, user);
     if (parts[0] === "sessions" && parts.length === 1 && request.method === "GET") {
       const repoId = url.searchParams.get("repositoryId");
+      if (repoId) {
+        const repository = await repositoryForOwner(env, user.id, repoId);
+        if (!repository || repository.agentsEnabled === 0)
+          return fail(404, "not_found", "Repository agent sessions are unavailable.");
+      }
       const rows = repoId
         ? await env.DB.prepare(
             sessionSelect +
@@ -206,38 +282,93 @@ export async function handleAgentManagement(
     }
     if (parts.length === 1 && request.method === "GET") {
       const rows = await env.DB.prepare(
-        "SELECT id, name, description, created_at AS createdAt, disabled_at AS disabledAt FROM auth_agents WHERE user_id = ? ORDER BY created_at DESC"
+        "SELECT a.id, u.identifier AS owner, a.handle, '/' || u.identifier || '/@' || a.handle AS profilePath, a.name, a.description, a.profile_public AS profilePublic, a.created_at AS createdAt, a.updated_at AS updatedAt, a.disabled_at AS disabledAt FROM auth_agents a JOIN users u ON u.id = a.user_id WHERE a.user_id = ? ORDER BY a.created_at DESC"
       )
         .bind(user.id)
         .all<AgentRow>();
-      return json(rows.results);
+      return json(
+        rows.results.map((agent) => ({ ...agent, profilePublic: Boolean(agent.profilePublic) }))
+      );
     }
     if (parts.length === 1 && request.method === "POST") {
-      const parsed = CreateAgentInputSchema.safeParse(await readJson(request));
+      const parsed = CreateAgentInputSchema.safeParse(await readJsonLimited(request));
       if (!parsed.success) return fail(400, "bad_request", "Invalid agent payload.");
-      const created: Agent = {
-        id: crypto.randomUUID(),
-        ...parsed.data,
-        createdAt: Date.now(),
-        disabledAt: null,
-      };
+      const createdAt = Date.now();
+      const id = crypto.randomUUID();
+      const handle =
+        parsed.data.handle ??
+        (await availableHandle(env, user.id, readableHandle(parsed.data.name)));
+      if (!handle) return fail(409, "conflict", "Agent handle or account limit conflicts.");
+      if (parsed.data.handle) {
+        const occupied = await env.DB.prepare(
+          "SELECT 1 AS found FROM auth_agents WHERE user_id = ? AND handle = ?"
+        )
+          .bind(user.id, handle)
+          .first<{ found: number }>();
+        if (occupied) return fail(409, "conflict", "Agent handle or account limit conflicts.");
+      }
       const result = await env.DB.prepare(
-        "INSERT OR IGNORE INTO auth_agents (id,user_id,name,description,created_at) SELECT ?,?,?,?,? WHERE (SELECT COUNT(*) FROM auth_agents WHERE user_id = ? AND disabled_at IS NULL) < 100"
+        "INSERT OR IGNORE INTO auth_agents (id,user_id,name,description,handle,profile_public,created_at,updated_at) SELECT ?,?,?,?,?,0,?,? WHERE (SELECT COUNT(*) FROM auth_agents WHERE user_id = ? AND disabled_at IS NULL) < 100"
       )
-        .bind(created.id, user.id, created.name, created.description, created.createdAt, user.id)
+        .bind(
+          id,
+          user.id,
+          parsed.data.name,
+          parsed.data.description,
+          handle,
+          createdAt,
+          createdAt,
+          user.id
+        )
         .run();
       if (result.meta.changes !== 1)
-        return fail(409, "conflict", "Agent name exists or agent limit reached.");
-      logger.info("agent:created", { agentId: created.id, userId: user.id });
+        return fail(409, "conflict", "Agent handle or account limit conflicts.");
+      const created = await loadManagedAgent(env, user.id, id);
+      if (!created) throw new Error("Created agent was not readable.");
+      logger.info("agent:created", { agentId: id, userId: user.id });
       return json(created, 201);
     }
     const agentId = parts[1];
     const agent = await env.DB.prepare(
-      "SELECT id, name, description, created_at AS createdAt, disabled_at AS disabledAt FROM auth_agents WHERE id = ? AND user_id = ?"
+      "SELECT a.id, u.identifier AS owner, a.handle, '/' || u.identifier || '/@' || a.handle AS profilePath, a.name, a.description, a.profile_public AS profilePublic, a.created_at AS createdAt, a.updated_at AS updatedAt, a.disabled_at AS disabledAt FROM auth_agents a JOIN users u ON u.id = a.user_id WHERE a.id = ? AND a.user_id = ?"
     )
       .bind(agentId ?? "", user.id)
       .first<AgentRow>();
     if (!agent) return fail(404, "not_found", "Agent was not found.");
+    const managedAgent: Agent = { ...agent, profilePublic: Boolean(agent.profilePublic) };
+    const webhookResponse = await handleAgentWebhookManagement(request, env, user, agent.id);
+    if (webhookResponse) return webhookResponse;
+    if (parts.length === 2 && request.method === "GET") return json(managedAgent);
+    if (parts.length === 2 && request.method === "PATCH") {
+      const parsed = UpdateAgentInputSchema.safeParse(await readJsonLimited(request));
+      if (!parsed.success) return fail(400, "bad_request", "Invalid agent payload.");
+      const values = parsed.data;
+      const handle = values.handle ?? agent.handle;
+      if (values.handle && values.handle !== agent.handle) {
+        const occupied = await env.DB.prepare(
+          "SELECT 1 AS found FROM auth_agents WHERE user_id = ? AND handle = ? AND id != ?"
+        )
+          .bind(user.id, handle, agent.id)
+          .first<{ found: number }>();
+        if (occupied) return fail(409, "conflict", "Agent handle is already in use.");
+      }
+      const now = Date.now();
+      await env.DB.prepare(
+        "UPDATE auth_agents SET handle = ?, name = ?, description = ?, profile_public = ?, updated_at = ? WHERE id = ? AND user_id = ?"
+      )
+        .bind(
+          handle,
+          values.name ?? agent.name,
+          values.description ?? agent.description,
+          Number(values.profilePublic ?? Boolean(agent.profilePublic)),
+          now,
+          agent.id,
+          user.id
+        )
+        .run();
+      const updated = await loadManagedAgent(env, user.id, agent.id);
+      return updated ? json(updated) : fail(404, "not_found", "Agent was not found.");
+    }
     if (parts.length === 2 && request.method === "DELETE") {
       await env.DB.prepare("UPDATE auth_agents SET disabled_at = ? WHERE id = ?")
         .bind(Date.now(), agent.id)
@@ -272,10 +403,14 @@ export async function handleAgentManagement(
     if (parts.length !== 3 || request.method !== "POST")
       return fail(405, "method_not_allowed", "Method is not allowed.");
     if (agent.disabledAt !== null) return fail(409, "conflict", "Agent is disabled.");
-    const parsed = CreateAgentSessionInputSchema.safeParse(await readJson(request));
+    const parsed = CreateAgentSessionInputSchema.safeParse(await readJsonLimited(request));
     if (!parsed.success) return fail(400, "bad_request", "Invalid session payload.");
     const repository = await repositoryForOwner(env, user.id, parsed.data.repositoryId);
     if (!repository) return fail(404, "not_found", "Repository was not found.");
+    if (repository.agentsEnabled === 0)
+      return fail(404, "feature_disabled", "Repository agents are disabled.");
+    if (!repository.writable && parsed.data.permission === "write")
+      return fail(403, "forbidden", "Repository write access is required.");
     if (repository.archived === 1 && parsed.data.permission === "write")
       return fail(409, "repository_archived", "Archived repositories cannot issue write sessions.");
     if (!repository.artifactName)
@@ -405,10 +540,12 @@ async function handleGitTokenManagement(
   }
   if (parts.length !== 1 || request.method !== "POST")
     return fail(405, "method_not_allowed", "Method is not allowed.");
-  const parsed = CreateGitTokenInputSchema.safeParse(await readJson(request));
+  const parsed = CreateGitTokenInputSchema.safeParse(await readJsonLimited(request));
   if (!parsed.success) return fail(400, "bad_request", "Invalid Git token payload.");
   const repository = await repositoryForOwner(env, user.id, parsed.data.repositoryId);
   if (!repository) return fail(404, "not_found", "Repository was not found.");
+  if (!repository.writable && parsed.data.permission === "write")
+    return fail(403, "forbidden", "Repository write access is required.");
   if (repository.archived === 1 && parsed.data.permission === "write")
     return fail(
       409,
@@ -450,4 +587,40 @@ async function handleGitTokenManagement(
     },
     201
   );
+}
+
+export async function handleAgentProfile(
+  request: Request,
+  env: AgentAuthEnv,
+  viewer: TrustedUser | null
+): Promise<Response> {
+  const parts = new URL(request.url).pathname.split("/").filter(Boolean);
+  if (parts.length !== 3 || parts[0] !== "agent-profiles" || request.method !== "GET")
+    return fail(404, "not_found", "Agent profile was not found.");
+  const owner = parts[1];
+  const handle = parts[2];
+  const row = await env.DB.prepare(
+    "SELECT u.identifier AS owner, a.handle, a.name, a.description, a.created_at AS createdAt, a.updated_at AS updatedAt, a.profile_public AS profilePublic, a.disabled_at AS disabledAt FROM auth_agents a JOIN users u ON u.id = a.user_id WHERE u.identifier = ? AND a.handle = ?"
+  )
+    .bind(owner, handle)
+    .first<{
+      owner: string;
+      handle: string;
+      name: string;
+      description: string;
+      createdAt: number;
+      updatedAt: number;
+      profilePublic: number;
+      disabledAt: number | null;
+    }>();
+  if (!row || row.disabledAt !== null || (row.profilePublic !== 1 && viewer?.identifier !== owner))
+    return fail(404, "not_found", "Agent profile was not found.");
+  return json({
+    owner: row.owner,
+    handle: row.handle,
+    name: row.name,
+    description: row.description,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  });
 }

@@ -1,3 +1,4 @@
+import { agentEvent } from "./agent-events";
 import { z } from "zod";
 import {
   AGENT_MODE_VERSION,
@@ -217,7 +218,7 @@ async function repositorySettings(
   repositoryId: string
 ): Promise<Omit<RepositorySettings, "canManage">> {
   const row = await env.DB.prepare(
-    "SELECT slug, description, visibility, default_branch, archived, issues_enabled, pulls_enabled, discussions_enabled, wiki_enabled, required_approvals, require_passing_checks, memory_visibility, agent_assignment_policy FROM repositories WHERE id = ?"
+    "SELECT slug, description, visibility, default_branch, archived, issues_enabled, pulls_enabled, discussions_enabled, wiki_enabled, required_approvals, require_passing_checks, tasks_enabled, agents_enabled, deployments_enabled, graph_enabled, actions_enabled, actions_network_enabled, online_editing_enabled, allow_merge_commit, allow_squash_merge, allow_rebase_merge, delete_branch_on_merge, memory_visibility, agent_assignment_policy FROM repositories WHERE id = ?"
   )
     .bind(repositoryId)
     .first<{
@@ -230,6 +231,17 @@ async function repositorySettings(
       pulls_enabled: number;
       discussions_enabled: number;
       wiki_enabled: number;
+      tasks_enabled: number;
+      agents_enabled: number;
+      deployments_enabled: number;
+      graph_enabled: number;
+      actions_enabled: number;
+      actions_network_enabled: number;
+      online_editing_enabled: number;
+      allow_merge_commit: number;
+      allow_squash_merge: number;
+      allow_rebase_merge: number;
+      delete_branch_on_merge: number;
       required_approvals: number;
       require_passing_checks: number;
       memory_visibility: string;
@@ -246,6 +258,17 @@ async function repositorySettings(
     pullsEnabled: row?.pulls_enabled !== 0,
     discussionsEnabled: row?.discussions_enabled !== 0,
     wikiEnabled: row?.wiki_enabled !== 0,
+    tasksEnabled: row?.tasks_enabled !== 0,
+    agentsEnabled: row?.agents_enabled !== 0,
+    deploymentsEnabled: row?.deployments_enabled !== 0,
+    graphEnabled: row?.graph_enabled !== 0,
+    actionsEnabled: row?.actions_enabled === 1,
+    actionsNetworkEnabled: row?.actions_network_enabled === 1,
+    onlineEditingEnabled: row?.online_editing_enabled !== 0,
+    allowMergeCommit: row?.allow_merge_commit !== 0,
+    allowSquashMerge: row?.allow_squash_merge !== 0,
+    allowRebaseMerge: row?.allow_rebase_merge !== 0,
+    deleteBranchOnMerge: row?.delete_branch_on_merge === 1,
     requiredApprovals: row?.required_approvals ?? 0,
     requirePassingChecks: row?.require_passing_checks === 1,
     memoryVisibility: MemoryVisibilitySchema.catch("members").parse(row?.memory_visibility),
@@ -654,6 +677,12 @@ async function assignTask(
   )
     .bind(kind, id, Date.now(), task.id)
     .run();
+  if (kind === "agent" && id)
+    await agentEvent(env, repository, user, id, "agent.assigned", {
+      targetKind: "task",
+      targetId: task.id,
+      number: task.number,
+    });
   createLogger(env.LOG_LEVEL, { service: "forge" }).info("forge:task-assigned", {
     repositoryId: repository.id,
     taskNumber: task.number,
@@ -1049,9 +1078,15 @@ async function settingsRequest(
   if (!parsed.success) return error(400, "bad_request", "Invalid repository settings.");
   const input = parsed.data;
   const slug = input.name ?? input.slug;
+  if (
+    !(input.allowMergeCommit ?? repository.allow_merge_commit !== 0) &&
+    !(input.allowSquashMerge ?? repository.allow_squash_merge !== 0) &&
+    !(input.allowRebaseMerge ?? repository.allow_rebase_merge !== 0)
+  )
+    return error(400, "bad_request", "At least one merge method must be enabled.");
   if (slug && slug !== repository.slug) {
     const collision = await env.DB.prepare(
-      "SELECT 1 AS found FROM repositories WHERE namespace_id = ? AND slug = ? AND id != ?"
+      "SELECT 1 AS found FROM repository_paths WHERE namespace_id = ? AND slug = ? AND repository_id != ?"
     )
       .bind(repository.namespace_id, slug, repository.id)
       .first<{ found: number }>();
@@ -1075,31 +1110,42 @@ async function settingsRequest(
   const visibility = input.visibility ?? null;
   const memoryVisibility = visibility === "private" ? "members" : (input.memoryVisibility ?? null);
   try {
-    const changed = await env.DB.prepare(
-      "UPDATE repositories SET slug = COALESCE(?, slug), description = COALESCE(?, description), visibility = COALESCE(?, visibility), default_branch = COALESCE(?, default_branch), archived = COALESCE(?, archived), issues_enabled = COALESCE(?, issues_enabled), pulls_enabled = COALESCE(?, pulls_enabled), discussions_enabled = COALESCE(?, discussions_enabled), wiki_enabled = COALESCE(?, wiki_enabled), required_approvals = COALESCE(?, required_approvals), require_passing_checks = COALESCE(?, require_passing_checks), memory_visibility = COALESCE(?, memory_visibility), agent_assignment_policy = COALESCE(?, agent_assignment_policy), updated_at = ? WHERE id = ? AND (? IS NULL OR ? = 'members' OR COALESCE(?, visibility) = 'public')"
-    )
-      .bind(
-        slug ?? null,
-        input.description ?? null,
-        visibility,
-        input.defaultBranch ?? null,
-        input.archived === undefined ? null : input.archived ? 1 : 0,
-        input.issuesEnabled === undefined ? null : input.issuesEnabled ? 1 : 0,
-        input.pullsEnabled === undefined ? null : input.pullsEnabled ? 1 : 0,
-        input.discussionsEnabled === undefined ? null : input.discussionsEnabled ? 1 : 0,
-        input.wikiEnabled === undefined ? null : input.wikiEnabled ? 1 : 0,
-        input.requiredApprovals ?? null,
-        input.requirePassingChecks === undefined ? null : input.requirePassingChecks ? 1 : 0,
-        memoryVisibility,
-        input.agentAssignmentPolicy ?? null,
-        Date.now(),
-        repository.id,
-        memoryVisibility,
-        memoryVisibility,
-        visibility
-      )
-      .run();
-    if (changed.meta.changes !== 1)
+    const mutation = env.DB.prepare(
+      "UPDATE repositories SET slug = COALESCE(?, slug), description = COALESCE(?, description), visibility = COALESCE(?, visibility), default_branch = COALESCE(?, default_branch), archived = COALESCE(?, archived), issues_enabled = COALESCE(?, issues_enabled), pulls_enabled = COALESCE(?, pulls_enabled), discussions_enabled = COALESCE(?, discussions_enabled), wiki_enabled = COALESCE(?, wiki_enabled), required_approvals = COALESCE(?, required_approvals), require_passing_checks = COALESCE(?, require_passing_checks), tasks_enabled = COALESCE(?, tasks_enabled), agents_enabled = COALESCE(?, agents_enabled), deployments_enabled = COALESCE(?, deployments_enabled), graph_enabled = COALESCE(?, graph_enabled), actions_enabled = COALESCE(?, actions_enabled), actions_network_enabled = COALESCE(?, actions_network_enabled), online_editing_enabled = COALESCE(?, online_editing_enabled), allow_merge_commit = COALESCE(?, allow_merge_commit), allow_squash_merge = COALESCE(?, allow_squash_merge), allow_rebase_merge = COALESCE(?, allow_rebase_merge), delete_branch_on_merge = COALESCE(?, delete_branch_on_merge), memory_visibility = COALESCE(?, memory_visibility), agent_assignment_policy = COALESCE(?, agent_assignment_policy), updated_at = ? WHERE id = ? AND (? IS NULL OR ? = 'members' OR COALESCE(?, visibility) = 'public')"
+    ).bind(
+      slug ?? null,
+      input.description ?? null,
+      visibility,
+      input.defaultBranch ?? null,
+      input.archived === undefined ? null : input.archived ? 1 : 0,
+      input.issuesEnabled === undefined ? null : input.issuesEnabled ? 1 : 0,
+      input.pullsEnabled === undefined ? null : input.pullsEnabled ? 1 : 0,
+      input.discussionsEnabled === undefined ? null : input.discussionsEnabled ? 1 : 0,
+      input.wikiEnabled === undefined ? null : input.wikiEnabled ? 1 : 0,
+      input.requiredApprovals ?? null,
+      input.requirePassingChecks === undefined ? null : input.requirePassingChecks ? 1 : 0,
+      input.tasksEnabled === undefined ? null : Number(input.tasksEnabled),
+      input.agentsEnabled === undefined ? null : Number(input.agentsEnabled),
+      input.deploymentsEnabled === undefined ? null : Number(input.deploymentsEnabled),
+      input.graphEnabled === undefined ? null : Number(input.graphEnabled),
+      input.actionsEnabled === undefined ? null : Number(input.actionsEnabled),
+      input.actionsNetworkEnabled === undefined ? null : Number(input.actionsNetworkEnabled),
+      input.onlineEditingEnabled === undefined ? null : Number(input.onlineEditingEnabled),
+      input.allowMergeCommit === undefined ? null : Number(input.allowMergeCommit),
+      input.allowSquashMerge === undefined ? null : Number(input.allowSquashMerge),
+      input.allowRebaseMerge === undefined ? null : Number(input.allowRebaseMerge),
+      input.deleteBranchOnMerge === undefined ? null : Number(input.deleteBranchOnMerge),
+
+      memoryVisibility,
+      input.agentAssignmentPolicy ?? null,
+      Date.now(),
+      repository.id,
+      memoryVisibility,
+      memoryVisibility,
+      visibility
+    );
+    const changed = await mutation.run();
+    if (changed.meta.changes < 1)
       return error(
         400,
         "bad_request",
@@ -1107,9 +1153,7 @@ async function settingsRequest(
       );
   } catch (cause) {
     const detail = cause instanceof Error ? cause.message : "unknown";
-    if (
-      !detail.includes("UNIQUE constraint failed: repositories.namespace_id, repositories.slug")
-    ) {
+    if (!detail.includes("UNIQUE constraint") && !detail.includes("repository path")) {
       logger.error("forge:settings-update-failed", { repositoryId: repository.id, error: detail });
       return error(500, "internal_error", "Repository settings could not be updated.");
     }
@@ -1183,6 +1227,8 @@ export async function memoryTaskRequest(
   viewer: Viewer,
   rest: string[]
 ): Promise<Response | null> {
+  if ((rest[0] === "tasks" || rest[0] === "memory") && repository.tasks_enabled === 0)
+    return error(404, "feature_disabled", "Tasks and memory are disabled.");
   const resource = rest[0];
   if (resource === "settings" && rest.length === 1)
     return settingsRequest(env, request, repository, viewer);

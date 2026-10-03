@@ -14,6 +14,7 @@ exec pnpm exec wrangler dev \
   --config workers/forge/wrangler.jsonc \
   --config workers/deploy/wrangler.jsonc \
   --config workers/limits/wrangler.jsonc \
+  --config workers/actions/wrangler.jsonc \
   --persist-to .wrangler/state \
   --ip 127.0.0.1 \
   --local-upstream "localhost:${GITEDGE_GATEWAY_PORT:-8877}" \

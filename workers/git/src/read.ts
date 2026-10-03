@@ -33,7 +33,11 @@ export async function listArtifactRefs(repo: ArtifactsRepo, level?: string): Pro
       peelTags: true,
     });
     logger.debug("artifacts:refs-read", { count: refs.length });
-    return refs.map((ref) => ({ name: ref.ref, oid: ref.oid }));
+    return refs.map((ref) => ({
+      name: ref.ref,
+      oid: ref.oid,
+      ...(ref.peeled ? { peeledOid: ref.peeled } : {}),
+    }));
   } finally {
     try {
       await repo.revokeToken(token.id);

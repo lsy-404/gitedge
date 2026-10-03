@@ -1,3 +1,4 @@
+import { repositoryRole, writableRole } from "../../../src/worker/common/repositories";
 import {
   readTrustedUser,
   type AgentSession,
@@ -7,6 +8,8 @@ import {
 export interface GitEnv {
   DB: D1Database;
   ARTIFACTS: Artifacts;
+  FORGE?: { fetch(request: Request): Promise<Response> };
+  ACTIONS?: { fetch(request: Request): Promise<Response> };
   LOG_LEVEL?: string;
 }
 export interface GitRepositoryRow {
@@ -20,6 +23,9 @@ export interface GitRepositoryRow {
   slug: string;
   canWrite: number;
   archived: number;
+  agentsEnabled: number;
+  graphEnabled: number;
+  onlineEditingEnabled: number;
 }
 export interface GitRepositoryAccess {
   repository: GitRepositoryRow;
@@ -34,11 +40,14 @@ export async function resolveGitAccess(
   const user = readTrustedUser(request);
   if (user?.agentSession && user.agentSession.repositoryId !== repositoryId) return null;
   const repository = await env.DB.prepare(
-    "SELECT r.id, r.namespace_id AS namespaceId, r.artifact_name AS artifactName, r.remote, r.default_branch AS defaultBranch, r.visibility, n.slug AS owner, r.slug, r.archived, EXISTS (SELECT 1 FROM namespace_memberships m WHERE m.namespace_id = r.namespace_id AND m.user_id = ?) AS canWrite FROM repositories r JOIN namespaces n ON n.id = r.namespace_id WHERE r.id = ?"
+    "SELECT r.id, r.namespace_id AS namespaceId, r.artifact_name AS artifactName, r.remote, r.default_branch AS defaultBranch, r.visibility, n.slug AS owner, r.slug, r.archived, r.agents_enabled AS agentsEnabled, r.graph_enabled AS graphEnabled,r.online_editing_enabled AS onlineEditingEnabled,0 AS canWrite FROM repositories r JOIN namespaces n ON n.id = r.namespace_id WHERE r.id = ?"
   )
-    .bind(user?.id ?? "", repositoryId)
+    .bind(repositoryId)
     .first<GitRepositoryRow>();
-  if (!repository || (repository.visibility !== "public" && !repository.canWrite)) return null;
+  if (!repository) return null;
+  const role = user ? await repositoryRole(env.DB, repositoryId, user.id) : null;
+  if (repository.visibility !== "public" && role === null) return null;
+  repository.canWrite = Number(writableRole(role));
   if (user?.agentSession) {
     const active = await env.DB.prepare(
       "SELECT s.id FROM auth_agent_sessions s JOIN auth_agents a ON a.id = s.agent_id WHERE s.id = ? AND s.agent_id = ? AND s.user_id = ? AND s.repository_id = ? AND s.workspace_name = ? AND s.status = 'active' AND s.expires_at > ? AND a.disabled_at IS NULL"
@@ -52,7 +61,13 @@ export async function resolveGitAccess(
         Date.now()
       )
       .first<{ id: string }>();
-    if (!active || !repository.canWrite) return null;
+    if (
+      !active ||
+      !role ||
+      (user.agentSession.permission === "write" && !repository.canWrite) ||
+      repository.agentsEnabled === 0
+    )
+      return null;
   }
   return { repository, user };
 }
@@ -71,7 +86,7 @@ export async function resolveWorkspace(
     .first<AgentSession>();
   if (!row) return null;
   const ownWorkspace = !access.user?.agentSession || access.user.agentSession.id === sessionId;
-  if (!access.repository.canWrite || !ownWorkspace) {
+  if (access.user?.agentSession?.id !== row.id && (!access.repository.canWrite || !ownWorkspace)) {
     // A published PR grants access to its head only, never to the entire private fork.
     if (!publicHeadRef) return null;
     const publicPull = await env.DB.prepare(
@@ -88,7 +103,7 @@ export async function listRepositorySessions(
   env: GitEnv,
   access: GitRepositoryAccess
 ): Promise<AgentSession[]> {
-  if (!access.repository.canWrite) return [];
+  if (!access.repository.canWrite || access.repository.agentsEnabled === 0) return [];
   const rows = await env.DB.prepare(
     "SELECT s.id, s.agent_id AS agentId, a.name AS agentName, s.repository_id AS repositoryId, s.workspace_name AS workspaceName, s.remote, s.base_ref AS baseRef, s.base_oid AS baseOid, s.permission, s.status, s.created_at AS createdAt, s.expires_at AS expiresAt FROM auth_agent_sessions s JOIN auth_agents a ON a.id = s.agent_id WHERE s.repository_id = ? ORDER BY s.created_at DESC LIMIT 100"
   )

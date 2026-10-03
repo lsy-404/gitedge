@@ -51,7 +51,7 @@ Sign in with identity-only GitHub OAuth or configure multiple OIDC or SAML 2.0 p
 
 ## Architecture
 
-The public Gateway serves Vue assets and authenticates requests before forwarding to internal Auth, Forge, Git and Deploy Workers. Auth owns credentials and agent sessions. Forge owns collaboration records in D1. Git owns Artifacts operations and forwards Smart HTTP streams. Deploy interprets a reviewed deployment manifest and relays a fixed set of Cloudflare operations.
+The public Gateway serves Vue assets and authenticates requests before forwarding to internal Auth, Forge, Git, Actions and Deploy Workers. Auth owns credentials, agent subaccounts, webhook delivery and sessions. Forge owns collaboration records in D1. Git owns Artifacts operations and forwards Smart HTTP streams. Actions runs bounded source snapshots in isolated Containers. Deploy interprets a reviewed deployment manifest and relays a fixed set of Cloudflare operations.
 
 Artifacts owns repository contents, refs and Git protocol behavior. Older repositories without an Artifacts mapping must be imported before use. Preserve the prior deployment and its storage until their data has been transferred and verified; deploying the new application does not transfer existing Git data.
 
@@ -64,3 +64,25 @@ Repository deployment accepts prebuilt JavaScript modules plus declared D1, R2 a
 ## License
 
 [MIT](LICENSE). The retained upstream logger attribution is in [LICENSES/MIT-git-on-cloudflare.txt](LICENSES/MIT-git-on-cloudflare.txt).
+
+## Repository controls and Actions
+
+Repository settings independently enable collaboration areas, agents, deployments, commit graphs, Actions and online editing. Renaming preserves historical repository URLs. Branch patterns can require PRs, human approvals, named checks, linear history and verified signatures. Repository collaborators have read, write or admin access.
+
+`node test/e2e/repository-controls.mjs` creates a nonempty verification repository and checks online edits, stale SHA rejection, protected native pushes, squash/rebase, signed-commit requirements, redirects and community defaults.
+
+Container Actions are optional. Workflows under `.github/workflows/*.yml` support literal `name`, `on.workflow_dispatch`, `on.push`, up to three jobs and ten script steps per job. A step accepts `name`, `run`, `shell` (`sh` or `bash`), `working-directory` and literal `env`. `uses`, expressions, matrices, custom images and trigger filters are rejected with a reason. Each run has a 120-second limit, 16 KiB log budget, and an input limit of 128 regular files / 4 MiB. The default network policy is off; repositories are limited to six runs per hour. Local development disables container startup; actual container execution is verified separately on Cloudflare.
+
+```yaml
+name: Verify
+on:
+  workflow_dispatch:
+  push:
+jobs:
+  verify:
+    steps:
+      - name: Check source
+        run: node --check src/index.js
+```
+
+Workflow check names are their file paths, for example `.github/workflows/verify.yml`. Only the Actions service may publish these system CI checks. Agent webhooks use an encrypted signing secret configured through `WEBHOOK_ENCRYPTION_KEY`; the key must be a base64-encoded 32-byte value. Events are signed with HMAC-SHA256 and retried up to five times.
