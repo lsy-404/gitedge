@@ -262,6 +262,24 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
       );
     const session = await authenticate(request, env.AUTH);
     if (session instanceof Response) return session;
+    const expectedUser = request.headers.get("X-GitEdge-Expected-User");
+    const expectedView = request.headers.get("X-GitEdge-Expected-View");
+    if (
+      (expectedUser && (!session.authenticated || session.id !== expectedUser)) ||
+      (expectedView &&
+        expectedView !==
+          (session.authenticated ? (session.agentSession?.id ?? "account") : "account"))
+    ) {
+      return Response.json(
+        {
+          error: {
+            code: "account_changed",
+            message: "The active identity changed. Reload before continuing.",
+          },
+        },
+        { status: 409, headers: { "Cache-Control": "no-store" } }
+      );
+    }
     if (!session.authenticated) {
       if ((request.method === "GET" || request.method === "HEAD") && prefix !== "/api/deploy") {
         return service.fetch(forwardAuthenticated(request, prefix));

@@ -139,7 +139,7 @@ describe("Auth agents, Artifact sessions, and Git credentials", () => {
     const registration = await auth.fetch(
       new Request("https://auth.test/register", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Origin: "https://auth.test" },
         body: JSON.stringify({ identifier: "FixtureUser", password: "a-long-test-password-2026" }),
       }),
       authEnv
@@ -251,7 +251,7 @@ describe("Auth agents, Artifact sessions, and Git credentials", () => {
     const secondRegistration = await auth.fetch(
       new Request("https://auth.test/register", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Origin: "https://auth.test" },
         body: JSON.stringify({
           identifier: `other-${crypto.randomUUID().slice(0, 8)}`,
           password: "a-long-test-password-2026",

@@ -1,3 +1,9 @@
+import {
+  browserAccountLogout,
+  handleBrowserAccounts,
+  readBrowserView,
+  rememberBrowserLogin,
+} from "./browser-accounts";
 import { ReservedAccountIdentifiers } from "../../../packages/contracts/src/account";
 import { handleSigningKeys } from "./signing-keys";
 import { timingSafeEqual } from "node:crypto";
@@ -9,18 +15,11 @@ import {
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
 import { createLogger } from "../../../src/worker/common/logger";
-import {
-  bytesToBase64,
-  createSessionCookie,
-  readCookie,
-  issueSession,
-  hashToken,
-  createToken,
-  SESSION_MAX_AGE_SECONDS,
-} from "./session";
+import { bytesToBase64, readCookie, issueSession, hashToken, createToken } from "./session";
 import { PBKDF2_ITERATIONS } from "./password";
 import {
   authenticateAgentSession,
+  authenticateOwnedAgentSession,
   authenticateGitToken,
   handleAgentManagement,
   handleAgentProfile,
@@ -507,6 +506,8 @@ export async function startGithubOAuth(request: Request, env: AuthEnv): Promise<
   authorizationUrl.searchParams.set("state", state);
   authorizationUrl.searchParams.set("code_challenge", await createPkceChallenge(verifier));
   authorizationUrl.searchParams.set("code_challenge_method", "S256");
+  if (url.searchParams.get("prompt") === "select_account")
+    authorizationUrl.searchParams.set("prompt", "select_account");
   logger.info("github-oauth:started");
   return new Response(null, {
     status: 302,
@@ -585,27 +586,67 @@ export async function completeGithubOAuth(request: Request, env: AuthEnv): Promi
   const user = await findOrCreateGithubUser(env, userPayload);
   const sessionToken = await issueSession(env, user.id);
   logger.info("github-oauth:completed", { userId: user.id });
-  return new Response(null, {
-    status: 302,
-    headers: {
-      Location: oauthState.return_to,
-      "Set-Cookie": createSessionCookie(sessionToken, SESSION_MAX_AGE_SECONDS),
-    },
-  });
+  return rememberBrowserLogin(
+    request,
+    env,
+    user.id,
+    sessionToken,
+    new Response(null, {
+      status: 302,
+      headers: { Location: oauthState.return_to },
+    })
+  );
 }
 
 export default {
   async fetch(request: Request, env: AuthEnv): Promise<Response> {
     const logger = createLogger(env.LOG_LEVEL, { service: "auth" });
     const path = new URL(request.url).pathname;
+    let humanSession: Promise<ServiceResult<SessionData>> | undefined;
+    const getHumanSession = () => (humanSession ??= session(env, readCookie(request)));
+    if (path === "/accounts" || path.startsWith("/accounts/"))
+      return handleBrowserAccounts(request, env);
+    const browserView = readBrowserView(request);
+    const expectedView = request.headers.get("X-GitEdge-Expected-View");
+    if (expectedView && path !== "/session" && expectedView !== (browserView ?? "account"))
+      return fail(409, "conflict", "The active perspective changed. Reload before continuing.");
+    if (
+      browserView &&
+      ![
+        "/session",
+        "/logout",
+        "/login",
+        "/register",
+        "/git-session",
+        "/github/start",
+        "/github/callback",
+        "/sso/providers",
+      ].includes(path) &&
+      !/^\/sso\/[^/]+\/(start|callback|metadata)$/.test(path)
+    )
+      return fail(
+        403,
+        "forbidden",
+        "Return to your account perspective to manage human account settings."
+      );
+    if (
+      ["/login", "/register", "/logout"].includes(path) &&
+      request.method === "POST" &&
+      request.headers.get("Origin") !== new URL(request.url).origin
+    )
+      return fail(403, "forbidden", "Same-origin authentication is required.");
+    const expectedUser = request.headers.get("X-GitEdge-Expected-User");
+    if (expectedUser && path !== "/session") {
+      const expectedSession = await getHumanSession();
+      if (!expectedSession.ok || expectedSession.data.id !== expectedUser)
+        return fail(409, "conflict", "The active account changed. Reload before continuing.");
+    }
     if (path.startsWith("/sso/")) {
-      const active = request.headers.has("Authorization")
-        ? null
-        : await session(env, readCookie(request));
+      const active = request.headers.has("Authorization") ? null : await getHumanSession();
       return handleSso(request, env, active?.ok ? active.data : null);
     }
     if (path === "/signing-keys" || path.startsWith("/signing-keys/")) {
-      const active = await session(env, readCookie(request));
+      const active = await getHumanSession();
       if (!active.ok) return json({ error: active.error }, active.status);
       return handleSigningKeys(request, env, active.data);
     }
@@ -622,41 +663,46 @@ export default {
       const result = await register(env, await readJson(request));
       if (!result.ok) return json({ error: result.error }, result.status);
       logger.info("auth:registered", { userId: result.data.id });
-      return json(
-        {
-          data: {
-            id: result.data.id,
-            identifier: result.data.identifier,
-            groupKey: result.data.groupKey,
+      return rememberBrowserLogin(
+        request,
+        env,
+        result.data.id,
+        result.data.sessionToken,
+        json(
+          {
+            data: {
+              id: result.data.id,
+              identifier: result.data.identifier,
+              groupKey: result.data.groupKey,
+            },
           },
-        },
-        201,
-        {
-          "Set-Cookie": createSessionCookie(result.data.sessionToken, SESSION_MAX_AGE_SECONDS),
-        }
+          201
+        )
       );
     }
     if (request.method === "POST" && path === "/login") {
       const result = await login(env, await readJson(request));
       if (!result.ok) return json({ error: result.error }, result.status);
       logger.info("auth:logged-in", { userId: result.data.id });
-      return json(
-        {
-          data: {
-            id: result.data.id,
-            identifier: result.data.identifier,
-            groupKey: result.data.groupKey,
+      return rememberBrowserLogin(
+        request,
+        env,
+        result.data.id,
+        result.data.sessionToken,
+        json(
+          {
+            data: {
+              id: result.data.id,
+              identifier: result.data.identifier,
+              groupKey: result.data.groupKey,
+            },
           },
-        },
-        200,
-        {
-          "Set-Cookie": createSessionCookie(result.data.sessionToken, SESSION_MAX_AGE_SECONDS),
-        }
+          200
+        )
       );
     }
     if (request.method === "POST" && path === "/logout") {
-      await logout(env, readCookie(request));
-      return json({ data: { loggedOut: true } }, 200, { "Set-Cookie": createSessionCookie("", 0) });
+      return browserAccountLogout(request, env);
     }
     if (path === "/_internal/agent-events" && request.method === "POST") {
       if (new URL(request.url).hostname !== "auth.internal")
@@ -681,11 +727,23 @@ export default {
           ? json({ data: user }, 200, { "Cache-Control": "no-store" })
           : fail(401, "unauthorized", "Invalid agent session.");
       }
-      const result = await session(env, readCookie(request));
-      return result.ok ? json({ data: result.data }) : json({ error: result.error }, result.status);
+      const result = await getHumanSession();
+      if (!result.ok)
+        return json({ error: result.error }, result.status, { "Cache-Control": "no-store" });
+      if (browserView) {
+        const agent = await authenticateOwnedAgentSession(env, result.data.id, browserView);
+        return agent
+          ? json({ data: agent }, 200, { "Cache-Control": "no-store" })
+          : fail(
+              401,
+              "unauthorized",
+              "The selected agent session expired or was revoked. Return to your account perspective."
+            );
+      }
+      return json({ data: result.data }, 200, { "Cache-Control": "no-store" });
     }
     if (/^\/agent-profiles\//.test(path)) {
-      const profileSession = await session(env, readCookie(request));
+      const profileSession = await getHumanSession();
       return handleAgentProfile(request, env, profileSession.ok ? profileSession.data : null);
     }
     if (/^\/(agents|sessions|tokens|web-sessions)(\/|$)/.test(path)) {
@@ -694,7 +752,7 @@ export default {
         ? await authenticateAgentSession(env, authorization.slice(7))
         : null;
       if (agent) return fail(403, "forbidden", "Agent sessions cannot manage human accounts.");
-      const active = await session(env, readCookie(request));
+      const active = await getHumanSession();
       if (!active.ok) return json({ error: active.error }, active.status);
       if (request.method !== "GET" && request.headers.get("Origin") !== new URL(request.url).origin)
         return fail(403, "forbidden", "Same-origin account management is required.");
@@ -714,7 +772,7 @@ export default {
         ? await authenticateAgentSession(env, authorization.slice(7))
         : null;
       if (agent) return fail(403, "forbidden", "Agent sessions cannot manage human accounts.");
-      const active = await session(env, readCookie(request));
+      const active = await getHumanSession();
       if (!active.ok) return json({ error: active.error }, active.status);
       return handleAccountProfile(request, env, active.data);
     }

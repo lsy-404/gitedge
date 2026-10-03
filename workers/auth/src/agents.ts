@@ -96,7 +96,7 @@ function sessionResponse(row: AgentSessionRow): AgentSession {
 }
 
 async function repositoryForOwner(
-  env: AgentAuthEnv,
+  env: { DB: D1Database },
   userId: string,
   repositoryId: string
 ): Promise<RepositoryRow | null> {
@@ -121,6 +121,27 @@ export async function authenticateAgentSession(
   )
     .bind(await sha256Hex(token), Date.now())
     .first<AgentSessionRow>();
+  return authorizedAgentSession(env, row);
+}
+
+export async function authenticateOwnedAgentSession(
+  env: { DB: D1Database },
+  userId: string,
+  sessionId: string
+): Promise<TrustedUser | null> {
+  const row = await env.DB.prepare(
+    sessionSelect +
+      " WHERE s.id=? AND s.user_id=? AND s.status='active' AND s.expires_at>? AND a.disabled_at IS NULL"
+  )
+    .bind(sessionId, userId, Date.now())
+    .first<AgentSessionRow>();
+  return authorizedAgentSession(env, row);
+}
+
+async function authorizedAgentSession(
+  env: { DB: D1Database },
+  row: AgentSessionRow | null
+): Promise<TrustedUser | null> {
   if (!row) return null;
   const repository = await repositoryForOwner(env, row.userId, row.repositoryId);
   if (

@@ -118,7 +118,8 @@ export async function startOidc(
   provider: OidcProvider,
   secrets: SsoProviderSecrets,
   callbackUrl: string,
-  state: string
+  state: string,
+  selectAccount = false
 ): Promise<SsoAuthorization> {
   if (state.length < 16 || state.length > 512) throw new Error("Invalid OIDC state.");
   const callback = validateCallbackUrl(callbackUrl);
@@ -135,6 +136,7 @@ export async function startOidc(
     nonce,
     code_challenge: codeChallenge,
     code_challenge_method: "S256",
+    ...(selectAccount ? { prompt: "select_account" } : {}),
   });
   const flow: OidcFlowPayload = {
     version: 1,

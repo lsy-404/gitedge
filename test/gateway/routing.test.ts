@@ -33,6 +33,51 @@ function environment(
 }
 
 describe("Gateway routing", () => {
+  it("rejects stale browser account and perspective headers before forwarding", async () => {
+    let forwarded = 0;
+    const env = environment({
+      auth: service(() =>
+        Response.json({
+          data: {
+            id: "user-2",
+            identifier: "second",
+            groupKey: "free",
+            agentSession: {
+              id: "session-2",
+              agentId: "agent-2",
+              agentName: "Reviewer",
+              repositoryId: "r1",
+              workspaceName: "fork-2",
+              permission: "read",
+            },
+          },
+        })
+      ),
+      forge: service(() => {
+        forwarded += 1;
+        return new Response("forge");
+      }),
+    });
+    for (const headers of [
+      { "X-GitEdge-Expected-User": "user-1", "X-GitEdge-Expected-View": "session-2" },
+      { "X-GitEdge-Expected-User": "user-2", "X-GitEdge-Expected-View": "account" },
+    ]) {
+      const result = await handleGatewayRequest(
+        new Request("https://gitedge.example.com/api/forge/repositories", { headers }),
+        env
+      );
+      expect(result.status).toBe(409);
+    }
+    expect(forwarded).toBe(0);
+    const result = await handleGatewayRequest(
+      new Request("https://gitedge.example.com/api/forge/repositories", {
+        headers: { "X-GitEdge-Expected-User": "user-2", "X-GitEdge-Expected-View": "session-2" },
+      }),
+      env
+    );
+    expect(result.status).toBe(200);
+    expect(forwarded).toBe(1);
+  });
   it("keeps direct Git merges private even for authenticated callers", async () => {
     let forwarded = false;
     const response = await handleGatewayRequest(

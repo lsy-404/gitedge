@@ -21,9 +21,7 @@ export interface BrowserAgentView {
   expiresAt: number;
 }
 
-export type BrowserView =
-  | { kind: "account" }
-  | { kind: "agent"; session: AgentSessionIdentity };
+export type BrowserView = { kind: "account" } | { kind: "agent"; session: AgentSessionIdentity };
 
 export interface BrowserAccounts {
   accounts: BrowserAccount[];

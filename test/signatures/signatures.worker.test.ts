@@ -69,7 +69,11 @@ beforeAll(async () => {
       password: "fixture-password-for-signatures",
     });
     expect(r.status).toBe(201);
-    const value = r.headers.get("set-cookie")?.split(";")[0] ?? "";
+    const value =
+      r.headers
+        .getSetCookie()
+        .find((entry) => entry.startsWith("gitedge_session="))
+        ?.split(";")[0] ?? "";
     if (name === "signature-owner") cookie = value;
     else otherCookie = value;
   }

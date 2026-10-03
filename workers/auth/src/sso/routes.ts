@@ -1,14 +1,8 @@
+import { rememberBrowserLogin } from "../browser-accounts";
 import type { SsoProviderSummary, TrustedUser } from "../../../../packages/contracts/src/index";
 import { createLogger } from "../../../../src/worker/common/logger";
 import { readTextLimited } from "../../../../src/worker/common/readText";
-import {
-  createToken,
-  hashToken,
-  issueSession,
-  createSessionCookie,
-  readCookie,
-  SESSION_MAX_AGE_SECONDS,
-} from "../session";
+import { createToken, hashToken, issueSession, createSessionCookie, readCookie } from "../session";
 import { ssoProviders, ssoSecrets } from "./config";
 import { listSsoIdentities, resolveSsoIdentity, unlinkSsoIdentity } from "./identities";
 import { startOidc, completeOidc, startOidcLogout } from "./oidc";
@@ -145,12 +139,7 @@ async function finishLogin(
     )
       .bind(await hashToken(token), resolved.identity.id, claims.sessionIndex ?? null)
       .run();
-    const previous = readCookie(request);
-    if (previous)
-      await env.DB.prepare("DELETE FROM auth_sessions WHERE token_hash = ?")
-        .bind(await hashToken(previous))
-        .run();
-    response.headers.append("Set-Cookie", createSessionCookie(token, SESSION_MAX_AGE_SECONDS));
+    return rememberBrowserLogin(request, env, resolved.identity.userId, token, response);
   }
   createLogger(env.LOG_LEVEL, { service: "sso" }).info("sso:authenticated", {
     providerId: provider.id,
@@ -255,7 +244,13 @@ async function handleSsoRequest(
     try {
       const authorization =
         provider.protocol === "oidc"
-          ? await startOidc(provider, secrets, callback, state)
+          ? await startOidc(
+              provider,
+              secrets,
+              callback,
+              state,
+              !linking && url.searchParams.get("prompt") === "select_account"
+            )
           : await startSaml(provider, secrets, callback, state);
       await persistFlow(env, provider, state, proof, {
         intent: linking ? "link" : "login",
