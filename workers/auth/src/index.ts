@@ -26,7 +26,7 @@ import {
   handleAgentProfile,
 } from "./agents";
 import { handleAccountProfile, handleWebSessions } from "./profile";
-import { handleAgentEvent } from "./agent-webhooks";
+import { drainAgentEventOutbox, handleAgentEvent } from "./agent-webhooks";
 
 export type AuthEnv = {
   readonly DB: D1Database;
@@ -82,7 +82,13 @@ function json(body: unknown, status = 200, headers?: HeadersInit): Response {
 
 function fail(
   status: number,
-  code: "bad_request" | "unauthorized" | "forbidden" | "conflict" | "method_not_allowed",
+  code:
+    | "bad_request"
+    | "unauthorized"
+    | "forbidden"
+    | "conflict"
+    | "method_not_allowed"
+    | "service_unavailable",
   message: string
 ): Response {
   return json({ error: { code, message } }, status);
@@ -653,8 +659,17 @@ export default {
       return json({ data: { loggedOut: true } }, 200, { "Set-Cookie": createSessionCookie("", 0) });
     }
     if (path === "/_internal/agent-events" && request.method === "POST") {
-      await handleAgentEvent(request, env);
-      return json({ data: { accepted: true } }, 202);
+      if (new URL(request.url).hostname !== "auth.internal")
+        return fail(404, "bad_request", "Endpoint was not found.");
+      try {
+        const result = await handleAgentEvent(request, env);
+        if (result === "invalid") return fail(400, "bad_request", "Invalid agent event.");
+        if (result === "full")
+          return fail(503, "service_unavailable", "Agent event queue is full.");
+        return json({ data: { accepted: result === "queued" } }, 202);
+      } catch {
+        return fail(503, "service_unavailable", "Agent event could not be queued.");
+      }
     }
     if (request.method === "GET" && path === "/session") {
       const authorization = request.headers.get("Authorization");
@@ -706,5 +721,8 @@ export default {
     return request.method === "GET" || request.method === "POST"
       ? fail(404, "bad_request", "Unknown auth endpoint.")
       : fail(405, "method_not_allowed", "Method is not allowed.");
+  },
+  async scheduled(_controller: ScheduledController, env: AuthEnv): Promise<void> {
+    await drainAgentEventOutbox(env);
   },
 };

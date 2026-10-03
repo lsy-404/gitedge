@@ -4,6 +4,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { AgentSchema, sha256Hex, type Agent } from "../../packages/contracts/src/index";
 import auth from "../../workers/auth/src/index";
+import { drainAgentEventOutbox } from "../../workers/auth/src/agent-webhooks";
 import { FixtureArtifacts } from "../support/artifacts";
 
 const migrations = import.meta.glob<string>("../../migrations/*.sql", {
@@ -282,10 +283,21 @@ describe("Auth agents, Artifact sessions, and Git credentials", () => {
     let capturedSignature = "";
     let capturedBody = "";
     let largeBodyCancelled = false;
+    const webhookDeliveryIds: string[] = [];
+    const pendingBeforeFetch: boolean[] = [];
     vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
       webhookFetches += 1;
-      capturedSignature = new Headers(init?.headers).get("X-GitEdge-Signature-256") ?? "";
+      const headers = new Headers(init?.headers);
+      capturedSignature = headers.get("X-GitEdge-Signature-256") ?? "";
       capturedBody = String(init?.body ?? "");
+      const deliveryId = headers.get("GitEdge-Delivery") ?? "";
+      webhookDeliveryIds.push(deliveryId);
+      const recorded = await env.DB.prepare(
+        "SELECT status FROM auth_agent_webhook_deliveries WHERE id = ?"
+      )
+        .bind(deliveryId)
+        .first<{ status: string }>();
+      pendingBeforeFetch.push(recorded?.status === "pending");
       if (webhookFetches === 3) {
         return new Response(
           new ReadableStream<Uint8Array>({
@@ -332,7 +344,7 @@ describe("Auth agents, Artifact sessions, and Git credentials", () => {
       const getSettings = await accountApi(`/agents/${buildAgent.id}/webhook`, "GET", cookie);
       expect(JSON.stringify(await getSettings.json())).not.toContain(webhookSecret);
 
-      await auth.fetch(
+      const rejectedInternalHost = await auth.fetch(
         new Request("https://auth.test/_internal/agent-events", {
           method: "POST",
           body: JSON.stringify({
@@ -345,6 +357,25 @@ describe("Auth agents, Artifact sessions, and Git credentials", () => {
         }),
         authEnv
       );
+      expect(rejectedInternalHost.status).toBe(404);
+      const queuedEvent = await auth.fetch(
+        new Request("https://auth.internal/_internal/agent-events", {
+          method: "POST",
+          body: JSON.stringify({
+            agentId: buildAgent.id,
+            repositoryId,
+            actorUserId: user.id,
+            event: "agent.assigned",
+            data: { action: "assigned" },
+          }),
+        }),
+        authEnv
+      );
+      expect(queuedEvent.status).toBe(202);
+      expect(webhookFetches).toBe(0);
+      await drainAgentEventOutbox(authEnv);
+      expect(webhookFetches).toBe(1);
+      expect(pendingBeforeFetch[0]).toBe(true);
       const deliveries = await accountApi(
         `/agents/${buildAgent.id}/webhook/deliveries`,
         "GET",
@@ -378,6 +409,8 @@ describe("Auth agents, Artifact sessions, and Git credentials", () => {
       );
       expect(retried.status).toBe(200);
       expect(await retried.json()).toMatchObject({ data: { status: "success", attemptCount: 2 } });
+      expect(webhookDeliveryIds.slice(0, 2)).toHaveLength(2);
+      expect(webhookDeliveryIds[0]).toBe(webhookDeliveryIds[1]);
       await accountApi(`/agents/${buildAgent.id}/webhook`, "PUT", cookie, {
         url: "https://hooks.example.com/gitedge",
         events: ["agent.assigned"],
@@ -385,7 +418,7 @@ describe("Auth agents, Artifact sessions, and Git credentials", () => {
       });
       const countBeforeDisabled = webhookFetches;
       await auth.fetch(
-        new Request("https://auth.test/_internal/agent-events", {
+        new Request("https://auth.internal/_internal/agent-events", {
           method: "POST",
           body: JSON.stringify({
             agentId: buildAgent.id,
@@ -410,7 +443,7 @@ describe("Auth agents, Artifact sessions, and Git credentials", () => {
         enabled: true,
       });
       await auth.fetch(
-        new Request("https://auth.test/_internal/agent-events", {
+        new Request("https://auth.internal/_internal/agent-events", {
           method: "POST",
           body: JSON.stringify({
             agentId: buildAgent.id,
@@ -422,7 +455,18 @@ describe("Auth agents, Artifact sessions, and Git credentials", () => {
         }),
         authEnv
       );
+      await drainAgentEventOutbox(authEnv);
       expect(largeBodyCancelled).toBe(true);
+      const largeBodyOutboxEvent = await env.DB.prepare(
+        "SELECT id FROM auth_agent_events WHERE agent_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1"
+      )
+        .bind(buildAgent.id)
+        .first<{ id: string }>();
+      if (largeBodyOutboxEvent) {
+        await env.DB.prepare("UPDATE auth_agent_events SET status = 'dropped' WHERE id = ?")
+          .bind(largeBodyOutboxEvent.id)
+          .run();
+      }
 
       for (const url of [
         "https://localhost./",
@@ -439,6 +483,242 @@ describe("Auth agents, Artifact sessions, and Git credentials", () => {
         });
         expect(rejected.status).toBe(400);
       }
+
+      async function queueEvent(action: string, actorUserId = user.id) {
+        const payload = { testAction: action, repositoryId, agentId: buildAgent.id };
+        const result = await auth.fetch(
+          new Request("https://auth.internal/_internal/agent-events", {
+            method: "POST",
+            body: JSON.stringify({
+              agentId: buildAgent.id,
+              repositoryId,
+              actorUserId,
+              event: "agent.assigned",
+              data: { testAction: action },
+            }),
+          }),
+          authEnv
+        );
+        expect(result.status).toBe(202);
+        const queued = await env.DB.prepare(
+          "SELECT id, agent_id AS agentId, repository_id AS repositoryId, actor_user_id AS actorUserId, event, payload, created_at AS createdAt, next_attempt_at AS nextAttemptAt, attempts, delivery_id AS deliveryId, status, lease_until AS leaseUntil, error_code AS errorCode FROM auth_agent_events WHERE agent_id = ? AND payload = ?"
+        )
+          .bind(buildAgent.id, JSON.stringify(payload))
+          .first<{
+            id: string;
+            agentId: string;
+            repositoryId: string;
+            actorUserId: string;
+            event: string;
+            payload: string;
+            createdAt: number;
+            nextAttemptAt: number;
+            attempts: number;
+            deliveryId: string;
+            status: string;
+            leaseUntil: number | null;
+            errorCode: string | null;
+          }>();
+        if (!queued) throw new Error("Internal event was not written to the outbox.");
+        return queued;
+      }
+
+      await env.DB.prepare("UPDATE repositories SET agents_enabled = 0 WHERE id = ?")
+        .bind(repositoryId)
+        .run();
+      const disabledFeature = await queueEvent("agents-disabled");
+      const fetchesBeforeDisabledFeature = webhookFetches;
+      await drainAgentEventOutbox(authEnv);
+      expect(webhookFetches).toBe(fetchesBeforeDisabledFeature);
+      const droppedFeature = await env.DB.prepare(
+        "SELECT status, error_code AS errorCode FROM auth_agent_events WHERE id = ?"
+      )
+        .bind(disabledFeature.id)
+        .first<{ status: string; errorCode: string | null }>();
+      expect(droppedFeature).toEqual({ status: "dropped", errorCode: "event_scope_lost" });
+      await env.DB.prepare("UPDATE repositories SET agents_enabled = 1 WHERE id = ?")
+        .bind(repositoryId)
+        .run();
+
+      const otherUser = await env.DB.prepare(
+        "SELECT id FROM users WHERE identifier LIKE 'other-%' ORDER BY created_at DESC LIMIT 1"
+      ).first<{ id: string }>();
+      if (!otherUser) throw new Error("Second user fixture was not found.");
+      const actorRoleLost = await queueEvent("actor-role-lost", otherUser.id);
+      const fetchesBeforeActorRoleCheck = webhookFetches;
+      await drainAgentEventOutbox(authEnv);
+      expect(webhookFetches).toBe(fetchesBeforeActorRoleCheck);
+      const droppedActorRole = await env.DB.prepare(
+        "SELECT status FROM auth_agent_events WHERE id = ?"
+      )
+        .bind(actorRoleLost.id)
+        .first<{ status: string }>();
+      expect(droppedActorRole?.status).toBe("dropped");
+      await env.DB.prepare(
+        "INSERT INTO repository_collaborators (repository_id, user_id, role, created_at) VALUES (?, ?, 'write', ?)"
+      )
+        .bind(repositoryId, otherUser.id, Date.now())
+        .run();
+      await env.DB.prepare(
+        "DELETE FROM namespace_memberships WHERE namespace_id = ? AND user_id = ?"
+      )
+        .bind(namespace.id, user.id)
+        .run();
+      const ownerRoleLost = await queueEvent("owner-role-lost", otherUser.id);
+      const fetchesBeforeOwnerRoleCheck = webhookFetches;
+      await drainAgentEventOutbox(authEnv);
+      expect(webhookFetches).toBe(fetchesBeforeOwnerRoleCheck);
+      const droppedOwnerRole = await env.DB.prepare(
+        "SELECT status FROM auth_agent_events WHERE id = ?"
+      )
+        .bind(ownerRoleLost.id)
+        .first<{ status: string }>();
+      expect(droppedOwnerRole?.status).toBe("dropped");
+      await env.DB.prepare(
+        "INSERT INTO namespace_memberships (namespace_id, user_id, created_at) VALUES (?, ?, ?)"
+      )
+        .bind(namespace.id, user.id, Date.now())
+        .run();
+      await env.DB.prepare(
+        "DELETE FROM repository_collaborators WHERE repository_id = ? AND user_id = ?"
+      )
+        .bind(repositoryId, otherUser.id)
+        .run();
+      await env.DB.prepare("UPDATE auth_agents SET disabled_at = ? WHERE id = ?")
+        .bind(Date.now(), buildAgent.id)
+        .run();
+      const disabledAgentEvent = await queueEvent("agent-disabled");
+      const fetchesBeforeAgentCheck = webhookFetches;
+      await drainAgentEventOutbox(authEnv);
+      expect(webhookFetches).toBe(fetchesBeforeAgentCheck);
+      const droppedDisabledAgent = await env.DB.prepare(
+        "SELECT status FROM auth_agent_events WHERE id = ?"
+      )
+        .bind(disabledAgentEvent.id)
+        .first<{ status: string }>();
+      expect(droppedDisabledAgent?.status).toBe("dropped");
+      await env.DB.prepare("UPDATE auth_agents SET disabled_at = NULL WHERE id = ?")
+        .bind(buildAgent.id)
+        .run();
+
+      const concurrentEvent = await queueEvent("concurrent-claim");
+      let concurrentFetches = 0;
+      let concurrentDeliveryId = "";
+      vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+        concurrentFetches += 1;
+        concurrentDeliveryId = new Headers(init?.headers).get("GitEdge-Delivery") ?? "";
+        return new Response(null, { status: 204 });
+      });
+      const concurrentNow = Date.now();
+      await Promise.all([
+        drainAgentEventOutbox(authEnv, concurrentNow),
+        drainAgentEventOutbox(authEnv, concurrentNow),
+      ]);
+      expect(concurrentFetches).toBe(1);
+      expect(concurrentDeliveryId).toBe(concurrentEvent.deliveryId);
+      const deliveredConcurrent = await env.DB.prepare(
+        "SELECT status FROM auth_agent_events WHERE id = ?"
+      )
+        .bind(concurrentEvent.id)
+        .first<{ status: string }>();
+      expect(deliveredConcurrent?.status).toBe("delivered");
+
+      const retryIds: string[] = [];
+      let retryFetchCount = 0;
+      vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+        retryFetchCount += 1;
+        retryIds.push(new Headers(init?.headers).get("GitEdge-Delivery") ?? "");
+        return new Response(null, { status: retryFetchCount < 3 ? 500 : 204 });
+      });
+      const retryEvent = await queueEvent("backoff-retry");
+      let retryNow = Date.now();
+      await drainAgentEventOutbox(authEnv, retryNow);
+      let retryRow = await env.DB.prepare(
+        "SELECT status, attempts, next_attempt_at AS nextAttemptAt FROM auth_agent_events WHERE id = ?"
+      )
+        .bind(retryEvent.id)
+        .first<{ status: string; attempts: number; nextAttemptAt: number }>();
+      expect(retryRow).toMatchObject({ status: "pending", attempts: 1 });
+      if (!retryRow) throw new Error("First webhook retry state was not recorded.");
+      expect(retryRow.nextAttemptAt - retryNow).toBeGreaterThanOrEqual(60_000);
+      retryNow = retryRow.nextAttemptAt;
+      await drainAgentEventOutbox(authEnv, retryNow);
+      retryRow = await env.DB.prepare(
+        "SELECT status, attempts, next_attempt_at AS nextAttemptAt FROM auth_agent_events WHERE id = ?"
+      )
+        .bind(retryEvent.id)
+        .first<{ status: string; attempts: number; nextAttemptAt: number }>();
+      expect(retryRow).toMatchObject({ status: "pending", attempts: 2 });
+      if (!retryRow) throw new Error("Second webhook retry state was not recorded.");
+      expect(retryRow.nextAttemptAt - retryNow).toBeGreaterThanOrEqual(120_000);
+      retryNow = retryRow.nextAttemptAt;
+      await drainAgentEventOutbox(authEnv, retryNow);
+      const deliveredRetry = await env.DB.prepare(
+        "SELECT status, attempts FROM auth_agent_events WHERE id = ?"
+      )
+        .bind(retryEvent.id)
+        .first<{ status: string; attempts: number }>();
+      expect(deliveredRetry).toEqual({ status: "delivered", attempts: 3 });
+      expect(retryFetchCount).toBe(3);
+      expect(new Set(retryIds)).toEqual(new Set([retryEvent.deliveryId]));
+
+      const exhaustedEvent = await queueEvent("attempt-limit");
+      retryFetchCount = 0;
+      retryIds.length = 0;
+      vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+        retryFetchCount += 1;
+        retryIds.push(new Headers(init?.headers).get("GitEdge-Delivery") ?? "");
+        return new Response(null, { status: 500 });
+      });
+      retryNow = Date.now();
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await drainAgentEventOutbox(authEnv, retryNow);
+        const state = await env.DB.prepare(
+          "SELECT status, attempts, next_attempt_at AS nextAttemptAt FROM auth_agent_events WHERE id = ?"
+        )
+          .bind(exhaustedEvent.id)
+          .first<{ status: string; attempts: number; nextAttemptAt: number }>();
+        if (!state) throw new Error("Retry limit event disappeared.");
+        if (state.status === "dead") break;
+        retryNow = state.nextAttemptAt;
+      }
+      const deadEvent = await env.DB.prepare(
+        "SELECT status, attempts FROM auth_agent_events WHERE id = ?"
+      )
+        .bind(exhaustedEvent.id)
+        .first<{ status: string; attempts: number }>();
+      expect(deadEvent).toEqual({ status: "dead", attempts: 5 });
+      expect(retryFetchCount).toBe(5);
+      expect(new Set(retryIds)).toEqual(new Set([exhaustedEvent.deliveryId]));
+
+      let bodyTimedOut = false;
+      vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const signal = init?.signal;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              signal?.addEventListener(
+                "abort",
+                () => {
+                  bodyTimedOut = true;
+                  controller.error(signal.reason);
+                },
+                { once: true }
+              );
+            },
+          }),
+          { status: 200 }
+        );
+      });
+      const timeoutEvent = await queueEvent("body-timeout");
+      await drainAgentEventOutbox(authEnv);
+      expect(bodyTimedOut).toBe(true);
+      const timedOutDelivery = await env.DB.prepare(
+        "SELECT status, error_code AS errorCode FROM auth_agent_webhook_deliveries WHERE id = ?"
+      )
+        .bind(timeoutEvent.deliveryId)
+        .first<{ status: string; errorCode: string | null }>();
+      expect(timedOutDelivery).toEqual({ status: "failed", errorCode: "timeout" });
     } finally {
       vi.unstubAllGlobals();
     }
@@ -607,5 +887,5 @@ describe("Auth agents, Artifact sessions, and Git credentials", () => {
       authEnv
     );
     expect(disabledAuth.status).toBe(401);
-  });
+  }, 15_000);
 });

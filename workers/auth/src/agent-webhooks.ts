@@ -5,6 +5,7 @@ import {
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
 import { createLogger } from "../../../src/worker/common/logger";
+import { repositoryRole, writableRole } from "../../../src/worker/common/repositories";
 import { dataResponse as response, errorResponse as failure, readJsonLimited } from "./http";
 import { z } from "zod";
 
@@ -32,11 +33,36 @@ type DeliveryRow = {
   createdAt: number;
   deliveredAt: number | null;
 };
+interface StoredDeliveryRow extends Omit<DeliveryRow, "status"> {
+  status: "pending" | "success" | "failed";
+}
+interface AgentEventRow {
+  id: string;
+  agentId: string;
+  repositoryId: string;
+  actorUserId: string;
+  event: AgentWebhookEvent;
+  payload: string;
+  createdAt: number;
+  nextAttemptAt: number;
+  attempts: number;
+  deliveryId: string;
+  status: "pending" | "processing" | "delivered" | "dropped" | "dead";
+  leaseUntil: number | null;
+  errorCode: string | null;
+}
+interface DeliveryAttemptRow {
+  attemptCount: number;
+  createdAt: number;
+}
 
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_RESPONSE_BYTES = 4 * 1024;
 const REQUEST_TIMEOUT_MS = 5_000;
 const MAX_DELIVERY_ATTEMPTS = 5;
+const MAX_OUTBOX_EVENTS_PER_RUN = 10;
+const MAX_PENDING_EVENTS_PER_AGENT = 1_000;
+const OUTBOX_LEASE_MS = 60_000;
 const ALLOWED_EVENTS = ["agent.assigned", "agent.mentioned", "pull_request.updated"] as const;
 const PRIVATE_HOST_SUFFIXES = [
   ".localhost",
@@ -53,6 +79,8 @@ const PRIVATE_HOST_SUFFIXES = [
 ] as const;
 const SETTINGS_SELECT =
   "SELECT agent_id AS agentId, url, events_json AS eventsJson, enabled, secret_ciphertext AS secretCiphertext, secret_iv AS secretIv, updated_at AS updatedAt FROM auth_agent_webhooks";
+const EVENT_SELECT =
+  "SELECT id, agent_id AS agentId, repository_id AS repositoryId, actor_user_id AS actorUserId, event, payload, created_at AS createdAt, next_attempt_at AS nextAttemptAt, attempts, delivery_id AS deliveryId, status, lease_until AS leaseUntil, error_code AS errorCode FROM auth_agent_events";
 
 function decodeKey(value: string | undefined): Uint8Array<ArrayBuffer> | null {
   if (!value) return null;
@@ -204,48 +232,52 @@ async function deliver(
   agentId: string,
   event: AgentWebhookEvent,
   payload: Record<string, unknown>,
-  existingDeliveryId?: string
+  requestedDeliveryId?: string,
+  requestedCreatedAt?: number
 ): Promise<DeliveryRow> {
   const row = await loadSettings(env, agentId);
   if (!row || row.enabled !== 1 || !parseEvents(row.eventsJson).includes(event))
     throw new Error("webhook_not_enabled");
   const secret = await decryptSecret(env, row);
-  const id = existingDeliveryId ?? crypto.randomUUID();
-  const body = JSON.stringify({ id, event, createdAt: Date.now(), data: payload });
+  const id = requestedDeliveryId ?? crypto.randomUUID();
+  const previous = await env.DB.prepare(
+    "SELECT attempt_count AS attemptCount, created_at AS createdAt FROM auth_agent_webhook_deliveries WHERE id = ? AND agent_id = ?"
+  )
+    .bind(id, agentId)
+    .first<DeliveryAttemptRow>();
+  const now = Date.now();
+  const createdAt = previous?.createdAt ?? requestedCreatedAt ?? now;
+  const body = JSON.stringify({ id, event, createdAt, data: payload });
   if (new TextEncoder().encode(body).byteLength > MAX_BODY_BYTES)
     throw new Error("payload_too_large");
+  const serialized = JSON.stringify(payload);
+  await env.DB.prepare(
+    "INSERT INTO auth_agent_webhook_deliveries (id, agent_id, event, payload, status, response_status, error_code, attempt_count, created_at, delivered_at) VALUES (?, ?, ?, ?, 'pending', NULL, 'delivery_pending', 1, ?, NULL) ON CONFLICT(id) DO UPDATE SET status = 'pending', response_status = NULL, error_code = 'delivery_pending', attempt_count = auth_agent_webhook_deliveries.attempt_count + 1, delivered_at = NULL WHERE auth_agent_webhook_deliveries.status IN ('pending', 'failed')"
+  )
+    .bind(id, agentId, event, serialized, createdAt)
+    .run();
+  const attempt = await env.DB.prepare(
+    "SELECT attempt_count AS attemptCount FROM auth_agent_webhook_deliveries WHERE id = ? AND agent_id = ? AND status = 'pending'"
+  )
+    .bind(id, agentId)
+    .first<{ attemptCount: number }>();
+  if (!attempt) throw new Error("delivery_already_final");
   let responseStatus: number | null = null;
   let errorCode: string | null = null;
   let deliveredAt: number | null = null;
-  let attemptCount = 1;
-  if (existingDeliveryId) {
-    const existing = await env.DB.prepare(
-      "SELECT attempt_count AS attemptCount FROM auth_agent_webhook_deliveries WHERE id = ? AND agent_id = ?"
-    )
-      .bind(existingDeliveryId, agentId)
-      .first<{ attemptCount: number }>();
-    attemptCount = (existing?.attemptCount ?? 1) + 1;
-  }
   try {
-    const abort = new AbortController();
-    const timer = setTimeout(() => abort.abort(), REQUEST_TIMEOUT_MS);
-    let result: Response;
-    try {
-      result = await fetch(row.url, {
-        method: "POST",
-        redirect: "manual",
-        signal: abort.signal,
-        headers: {
-          "Content-Type": "application/json",
-          "GitEdge-Delivery": id,
-          "GitEdge-Event": event,
-          "X-GitEdge-Signature-256": `sha256=${await sign(secret, body)}`,
-        },
-        body,
-      });
-    } finally {
-      clearTimeout(timer);
-    }
+    const result = await fetch(row.url, {
+      method: "POST",
+      redirect: "manual",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      headers: {
+        "Content-Type": "application/json",
+        "GitEdge-Delivery": id,
+        "GitEdge-Event": event,
+        "X-GitEdge-Signature-256": `sha256=${await sign(secret, body)}`,
+      },
+      body,
+    });
     responseStatus = result.status;
     await limitedText(result);
     if (result.status >= 200 && result.status < 300) deliveredAt = Date.now();
@@ -253,62 +285,213 @@ async function deliver(
       errorCode = result.status >= 300 && result.status < 400 ? "redirect_rejected" : "http_error";
   } catch (error) {
     errorCode =
-      error instanceof Error && error.name === "AbortError"
+      error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")
         ? "timeout"
         : error instanceof Error && error.message === "response_too_large"
           ? "response_too_large"
           : "network_error";
   }
-  const now = Date.now();
   const status = deliveredAt ? "success" : "failed";
-  const serialized = JSON.stringify(payload);
-  if (existingDeliveryId) {
-    await env.DB.prepare(
-      "UPDATE auth_agent_webhook_deliveries SET status = ?, response_status = ?, error_code = ?, attempt_count = ?, delivered_at = ? WHERE id = ? AND agent_id = ?"
-    )
-      .bind(
-        status,
-        responseStatus,
-        errorCode,
-        attemptCount,
-        deliveredAt,
-        existingDeliveryId,
-        agentId
-      )
-      .run();
-  } else {
-    await env.DB.prepare(
-      "INSERT INTO auth_agent_webhook_deliveries (id, agent_id, event, payload, status, response_status, error_code, attempt_count, created_at, delivered_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    )
-      .bind(
-        id,
-        agentId,
-        event,
-        serialized,
-        status,
-        responseStatus,
-        errorCode,
-        attemptCount,
-        now,
-        deliveredAt
-      )
-      .run();
-    await env.DB.prepare(
-      "DELETE FROM auth_agent_webhook_deliveries WHERE agent_id = ? AND id NOT IN (SELECT id FROM auth_agent_webhook_deliveries WHERE agent_id = ? ORDER BY created_at DESC LIMIT 100)"
-    )
-      .bind(agentId, agentId)
-      .run();
-  }
+  await env.DB.prepare(
+    "UPDATE auth_agent_webhook_deliveries SET status = ?, response_status = ?, error_code = ?, delivered_at = ? WHERE id = ? AND agent_id = ? AND status = 'pending'"
+  )
+    .bind(status, responseStatus, errorCode, deliveredAt, id, agentId)
+    .run();
+  await env.DB.prepare(
+    "DELETE FROM auth_agent_webhook_deliveries WHERE agent_id = ? AND status != 'pending' AND id NOT IN (SELECT id FROM auth_agent_webhook_deliveries WHERE agent_id = ? AND status != 'pending' ORDER BY created_at DESC LIMIT 100)"
+  )
+    .bind(agentId, agentId)
+    .run();
   return {
     id,
     event,
     status,
     responseStatus,
     errorCode,
-    attemptCount,
-    createdAt: now,
+    attemptCount: attempt.attemptCount,
+    createdAt,
     deliveredAt,
   };
+}
+
+async function loadDelivery(
+  env: AgentWebhookEnv,
+  deliveryId: string,
+  agentId: string
+): Promise<StoredDeliveryRow | null> {
+  return env.DB.prepare(
+    "SELECT id, event, status, response_status AS responseStatus, error_code AS errorCode, attempt_count AS attemptCount, created_at AS createdAt, delivered_at AS deliveredAt FROM auth_agent_webhook_deliveries WHERE id = ? AND agent_id = ?"
+  )
+    .bind(deliveryId, agentId)
+    .first<StoredDeliveryRow>();
+}
+
+async function loadOutboxEvent(
+  env: AgentWebhookEnv,
+  deliveryId: string
+): Promise<AgentEventRow | null> {
+  return env.DB.prepare(EVENT_SELECT + " WHERE delivery_id = ?")
+    .bind(deliveryId)
+    .first<AgentEventRow>();
+}
+
+async function claimOutboxEvent(
+  env: AgentWebhookEnv,
+  event: AgentEventRow,
+  now: number,
+  allowEarly = false
+): Promise<boolean> {
+  const result = await env.DB.prepare(
+    "UPDATE auth_agent_events SET status = 'processing', lease_until = ?, attempts = attempts + 1 WHERE id = ? AND attempts < ? AND ((status = 'pending' AND (? = 1 OR next_attempt_at <= ?)) OR (status = 'processing' AND lease_until <= ?))"
+  )
+    .bind(now + OUTBOX_LEASE_MS, event.id, MAX_DELIVERY_ATTEMPTS, Number(allowEarly), now, now)
+    .run();
+  return result.meta.changes === 1;
+}
+
+async function markOutbox(
+  env: AgentWebhookEnv,
+  event: AgentEventRow,
+  status: AgentEventRow["status"],
+  errorCode: string | null
+): Promise<void> {
+  await env.DB.prepare(
+    "UPDATE auth_agent_events SET status = ?, lease_until = NULL, error_code = ? WHERE id = ? AND status = 'processing'"
+  )
+    .bind(status, errorCode, event.id)
+    .run();
+}
+
+async function markDeliveryInvalid(
+  env: AgentWebhookEnv,
+  event: AgentEventRow,
+  errorCode: string
+): Promise<void> {
+  await env.DB.prepare(
+    "UPDATE auth_agent_webhook_deliveries SET status = 'failed', error_code = ?, response_status = NULL, delivered_at = NULL WHERE id = ? AND status IN ('pending', 'failed')"
+  )
+    .bind(errorCode, event.deliveryId)
+    .run();
+}
+
+function retryDelay(attempts: number): number {
+  return Math.min(60_000 * 2 ** Math.max(0, attempts - 1), 15 * 60_000);
+}
+
+async function rescheduleOutbox(
+  env: AgentWebhookEnv,
+  event: AgentEventRow,
+  attempts: number,
+  now: number,
+  errorCode: string
+): Promise<void> {
+  const exhausted = attempts >= MAX_DELIVERY_ATTEMPTS;
+  await env.DB.prepare(
+    "UPDATE auth_agent_events SET status = ?, lease_until = NULL, error_code = ?, next_attempt_at = ? WHERE id = ? AND status = 'processing'"
+  )
+    .bind(exhausted ? "dead" : "pending", errorCode, now + retryDelay(attempts), event.id)
+    .run();
+}
+
+async function eventIsAuthorized(env: AgentWebhookEnv, event: AgentEventRow): Promise<boolean> {
+  const agent = await env.DB.prepare(
+    "SELECT a.user_id AS ownerId, a.disabled_at AS disabledAt, r.agents_enabled AS agentsEnabled FROM auth_agents a JOIN repositories r ON r.id = ? WHERE a.id = ?"
+  )
+    .bind(event.repositoryId, event.agentId)
+    .first<{ ownerId: string; disabledAt: number | null; agentsEnabled: number }>();
+  if (!agent || agent.disabledAt !== null || agent.agentsEnabled !== 1) return false;
+  const actorRole = await repositoryRole(env.DB, event.repositoryId, event.actorUserId);
+  if (!writableRole(actorRole)) return false;
+  const ownerRole = await repositoryRole(env.DB, event.repositoryId, agent.ownerId);
+  if (!writableRole(ownerRole)) return false;
+  const settings = await loadSettings(env, event.agentId);
+  return Boolean(
+    settings && settings.enabled === 1 && parseEvents(settings.eventsJson).includes(event.event)
+  );
+}
+
+async function deliverClaimedEvent(
+  env: AgentWebhookEnv,
+  event: AgentEventRow,
+  now = Date.now()
+): Promise<DeliveryRow | null> {
+  const existing = await loadDelivery(env, event.deliveryId, event.agentId);
+  if (existing?.status === "success") {
+    await markOutbox(env, event, "delivered", null);
+    return { ...existing, status: "success" };
+  }
+  if (!(await eventIsAuthorized(env, event))) {
+    await markDeliveryInvalid(env, event, "event_scope_lost");
+    await markOutbox(env, event, "dropped", "event_scope_lost");
+    return null;
+  }
+  const payload = parsePayload(event.payload);
+  try {
+    const delivery = await deliver(
+      env,
+      event.agentId,
+      event.event,
+      payload,
+      event.deliveryId,
+      event.createdAt
+    );
+    if (delivery.status === "success") await markOutbox(env, event, "delivered", null);
+    else
+      await rescheduleOutbox(env, event, event.attempts, now, delivery.errorCode ?? "http_error");
+    return delivery;
+  } catch (error) {
+    if (error instanceof Error && error.message === "webhook_not_enabled") {
+      await markDeliveryInvalid(env, event, "event_scope_lost");
+      await markOutbox(env, event, "dropped", "event_scope_lost");
+      return null;
+    }
+    throw error;
+  }
+}
+
+export async function drainAgentEventOutbox(
+  env: AgentWebhookEnv,
+  now = Date.now()
+): Promise<number> {
+  const logger = createLogger(env.LOG_LEVEL, { service: "agent-webhook" });
+  await env.DB.prepare(
+    "DELETE FROM auth_agent_events WHERE id IN (SELECT id FROM auth_agent_events WHERE status IN ('delivered', 'dropped', 'dead') AND created_at < ? LIMIT 100)"
+  )
+    .bind(now - 30 * 86_400_000)
+    .run();
+  const events = await env.DB.prepare(
+    EVENT_SELECT +
+      " WHERE (status = 'pending' AND next_attempt_at <= ?) OR (status = 'processing' AND lease_until <= ?) ORDER BY next_attempt_at, created_at LIMIT ?"
+  )
+    .bind(now, now, MAX_OUTBOX_EVENTS_PER_RUN)
+    .all<AgentEventRow>();
+  let processed = 0;
+  for (const event of events.results) {
+    if (event.attempts >= MAX_DELIVERY_ATTEMPTS) {
+      await markOutbox(env, event, "dead", "attempt_limit");
+      await markDeliveryInvalid(env, event, "attempt_limit");
+      processed += 1;
+      continue;
+    }
+    if (!(await claimOutboxEvent(env, event, now))) continue;
+    processed += 1;
+    const claimed = { ...event, attempts: event.attempts + 1 };
+    try {
+      await deliverClaimedEvent(env, claimed, now);
+    } catch (error) {
+      logger.error("agent-webhook:outbox-delivery-failed", {
+        agentId: event.agentId,
+        event: event.event,
+        deliveryId: event.deliveryId,
+        errorCode:
+          error instanceof Error && error.message === "webhook_encryption_unavailable"
+            ? "webhook_encryption_unavailable"
+            : "delivery_error",
+      });
+      await rescheduleOutbox(env, claimed, claimed.attempts, now, "delivery_error");
+    }
+  }
+  return processed;
 }
 
 export async function handleAgentWebhookManagement(
@@ -382,7 +565,7 @@ export async function handleAgentWebhookManagement(
     }
     if (parts.length === 4 && parts[3] === "deliveries" && request.method === "GET") {
       const rows = await env.DB.prepare(
-        "SELECT id, event, status, response_status AS responseStatus, error_code AS errorCode, attempt_count AS attemptCount, created_at AS createdAt, delivered_at AS deliveredAt FROM auth_agent_webhook_deliveries WHERE agent_id = ? ORDER BY created_at DESC LIMIT 100"
+        "SELECT id, event, status, response_status AS responseStatus, error_code AS errorCode, attempt_count AS attemptCount, created_at AS createdAt, delivered_at AS deliveredAt FROM auth_agent_webhook_deliveries WHERE agent_id = ? AND status != 'pending' ORDER BY created_at DESC LIMIT 100"
       )
         .bind(agentId)
         .all<DeliveryRow>();
@@ -402,6 +585,24 @@ export async function handleAgentWebhookManagement(
       if (!failed) return failure(404, "not_found", "Failed delivery was not found.");
       if (failed.attemptCount >= MAX_DELIVERY_ATTEMPTS)
         return failure(409, "conflict", "Delivery retry limit reached.");
+      const queuedEvent = await loadOutboxEvent(env, failed.id);
+      if (queuedEvent) {
+        if (queuedEvent.attempts >= MAX_DELIVERY_ATTEMPTS)
+          return failure(409, "conflict", "Delivery retry limit reached.");
+        const now = Date.now();
+        if (!(await claimOutboxEvent(env, queuedEvent, now, true)))
+          return failure(409, "conflict", "Delivery is already being retried.");
+        const claimed = { ...queuedEvent, attempts: queuedEvent.attempts + 1 };
+        try {
+          const delivery = await deliverClaimedEvent(env, claimed, now);
+          return delivery
+            ? response(delivery, delivery.status === "success" ? 200 : 502)
+            : failure(409, "conflict", "Delivery was discarded because repository access changed.");
+        } catch {
+          await rescheduleOutbox(env, claimed, claimed.attempts, now, "delivery_error");
+          return failure(502, "service_unavailable", "Webhook delivery failed.");
+        }
+      }
       const payload = parsePayload(failed.payload);
       const delivery = await deliver(env, agentId, failed.event, payload, failed.id);
       return response(delivery, delivery.status === "success" ? 200 : 502);
@@ -426,46 +627,67 @@ const AgentEventInputSchema = z.object({
   event: z.enum(ALLOWED_EVENTS),
   data: z.record(z.string(), z.unknown()),
 });
-export async function handleAgentEvent(request: Request, env: AgentWebhookEnv): Promise<void> {
+export type AgentEventQueueResult = "queued" | "ignored" | "invalid" | "full";
+export async function handleAgentEvent(
+  request: Request,
+  env: AgentWebhookEnv
+): Promise<AgentEventQueueResult> {
   const logger = createLogger(env.LOG_LEVEL, { service: "agent-webhook" });
   let agentId = "unknown";
   let repositoryId = "unknown";
   let eventName = "unknown";
   try {
-    if (request.method !== "POST") return;
+    if (request.method !== "POST" || new URL(request.url).hostname !== "auth.internal")
+      return "invalid";
     const raw = await readJsonLimited(request);
     const parsed = AgentEventInputSchema.safeParse(raw);
-    if (!parsed.success) return;
+    if (!parsed.success) return "invalid";
     const input = parsed.data;
     agentId = input.agentId;
     repositoryId = input.repositoryId;
     eventName = input.event;
     const event = input.event;
-    if (!ALLOWED_EVENTS.includes(event)) return;
-    const source = await env.DB.prepare(
-      "SELECT a.user_id AS userId, a.disabled_at AS disabledAt FROM auth_agents a WHERE a.id = ?"
-    )
-      .bind(input.agentId)
-      .first<{ userId: string; disabledAt: number | null }>();
-    if (!source || source.disabledAt !== null) return;
-    const membership = await env.DB.prepare(
-      "SELECT 1 AS valid FROM repositories r JOIN namespace_memberships actor ON actor.namespace_id = r.namespace_id AND actor.user_id = ? JOIN namespace_memberships owner ON owner.namespace_id = r.namespace_id AND owner.user_id = ? WHERE r.id = ?"
-    )
-      .bind(input.actorUserId, source.userId, input.repositoryId)
-      .first<{ valid: number }>();
-    if (!membership) return;
     const row = await loadSettings(env, input.agentId);
-    if (!row || row.enabled !== 1 || !parseEvents(row.eventsJson).includes(event)) return;
+    if (!row || row.enabled !== 1 || !parseEvents(row.eventsJson).includes(event)) return "ignored";
     const payload = { ...input.data, repositoryId: input.repositoryId, agentId: input.agentId };
-    const delivery = await deliver(env, input.agentId, event, payload);
-    if (delivery.status === "failed")
-      logger.warn("agent-webhook:event-delivery-failed", {
-        agentId: input.agentId,
+    const serialized = JSON.stringify(payload);
+    if (new TextEncoder().encode(serialized).byteLength > MAX_BODY_BYTES) return "invalid";
+    const now = Date.now();
+    const id = crypto.randomUUID();
+    const queued = await env.DB.prepare(
+      "INSERT INTO auth_agent_events (id, agent_id, repository_id, actor_user_id, event, payload, created_at, next_attempt_at, attempts, delivery_id, status) SELECT ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'pending' WHERE (SELECT COUNT(*) FROM auth_agent_events WHERE agent_id = ? AND status IN ('pending', 'processing')) < ?"
+    )
+      .bind(
+        id,
+        input.agentId,
+        input.repositoryId,
+        input.actorUserId,
         event,
-        deliveryId: delivery.id,
-        errorCode: delivery.errorCode,
+        serialized,
+        now,
+        now,
+        id,
+        input.agentId,
+        MAX_PENDING_EVENTS_PER_AGENT
+      )
+      .run();
+    if (queued.meta.changes !== 1) {
+      logger.warn("agent-webhook:outbox-limit-reached", {
+        agentId,
+        repositoryId,
+        event: eventName,
       });
+      return "full";
+    }
+    logger.info("agent-webhook:event-queued", {
+      agentId,
+      repositoryId,
+      event: eventName,
+      deliveryId: id,
+    });
+    return "queued";
   } catch {
     logger.error("agent-webhook:event-failed", { agentId, repositoryId, event: eventName });
+    throw new Error("agent_event_queue_failed");
   }
 }

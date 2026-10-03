@@ -41,7 +41,7 @@ CREATE TABLE auth_agent_webhook_deliveries (
   agent_id TEXT NOT NULL REFERENCES auth_agents(id) ON DELETE CASCADE,
   event TEXT NOT NULL,
   payload TEXT NOT NULL,
-  status TEXT NOT NULL CHECK(status IN ('success', 'failed')),
+  status TEXT NOT NULL CHECK(status IN ('pending', 'success', 'failed')),
   response_status INTEGER,
   error_code TEXT,
   attempt_count INTEGER NOT NULL DEFAULT 1,
@@ -49,3 +49,21 @@ CREATE TABLE auth_agent_webhook_deliveries (
   delivered_at INTEGER
 );
 CREATE INDEX idx_agent_webhook_deliveries_agent ON auth_agent_webhook_deliveries(agent_id, created_at DESC);
+
+CREATE TABLE auth_agent_events (
+  id TEXT PRIMARY KEY NOT NULL,
+  agent_id TEXT NOT NULL REFERENCES auth_agents(id) ON DELETE CASCADE,
+  repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+  actor_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  event TEXT NOT NULL CHECK(event IN ('agent.assigned', 'agent.mentioned', 'pull_request.updated')),
+  payload TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  next_attempt_at INTEGER NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  delivery_id TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'processing', 'delivered', 'dropped', 'dead')),
+  lease_until INTEGER,
+  error_code TEXT
+);
+CREATE INDEX idx_agent_events_ready ON auth_agent_events(status, next_attempt_at, created_at);
+CREATE INDEX idx_agent_events_agent ON auth_agent_events(agent_id, created_at DESC);

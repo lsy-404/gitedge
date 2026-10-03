@@ -6,6 +6,9 @@
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
   "vars": {
     "ALLOW_PUBLIC_SIGNUP": "true",
     "DEFAULT_USER_GROUP": "free",
