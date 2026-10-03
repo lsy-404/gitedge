@@ -277,7 +277,16 @@ export async function handleGitApi(
       return fail(
         409,
         result.reason,
-        "Merge was rejected; refresh refs and resolve conflicts before retrying."
+        {
+          refs_changed: "Git refs changed; reload before retrying.",
+          merge_conflict: "The branches conflict. Resolve conflicts on the source branch.",
+          already_merged: "These changes are already in the target branch.",
+          nonlinear_history:
+            "The branch requires linear history. Use squash or rebase, or update the source branch first.",
+          unsigned_commits:
+            "All introduced commits require valid registered signatures; use a fast-forward merge to preserve them.",
+          commit_limit: "This operation exceeds the 100-commit limit.",
+        }[result.reason]
       );
     }
     const operation = recordGitWrite(

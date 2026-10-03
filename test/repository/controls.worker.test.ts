@@ -193,6 +193,80 @@ describe("Repository control authorization and rename invariants", () => {
     );
     expect(pushed.status).toBe(403);
   });
+
+  it("reserves system CI identities, pins checks to the run OID, and attaches earlier runs to new PRs", async () => {
+    await call(`/repositories/${repositoryId}/settings`, "PATCH", "owner", {
+      actionsEnabled: true,
+    });
+    const oid = "a".repeat(40);
+    await env.DB.prepare(
+      "INSERT INTO actions_runs(id,repository_id,commit_oid,workflow,path,source_ref,created_by,created_at,check_status,check_conclusion) VALUES('run-one',?,?,'Verify','.github/workflows/verify.yml','topic','owner-id',1,'completed','success')"
+    )
+      .bind(repositoryId, oid)
+      .run();
+    const created = await call(`/repositories/${repositoryId}/pull-requests`, "POST", "owner", {
+      title: "CI validation",
+      baseRef: "main",
+      headRef: "topic",
+    });
+    expect(created.status).toBe(201);
+    const number = z.object({ data: z.object({ number: z.number() }) }).parse(await created.json())
+      .data.number;
+    const checks = await call(`/repositories/${repositoryId}/pull-requests/${number}/checks`);
+    expect(await checks.json()).toMatchObject({
+      data: [
+        {
+          commitOid: oid,
+          status: "completed",
+          conclusion: "success",
+          actor: { kind: "ci", id: "gitedge-actions" },
+        },
+      ],
+    });
+    expect(
+      (
+        await call(
+          `/repositories/${repositoryId}/pull-requests/${number}/checks`,
+          "POST",
+          "owner",
+          {
+            name: ".github/workflows/verify.yml",
+            commitOid: oid,
+            status: "completed",
+            conclusion: "success",
+          }
+        )
+      ).status
+    ).toBe(403);
+    const callback = (
+      hostname: string,
+      runId: string,
+      status = "completed",
+      conclusion: string | null = "success"
+    ) =>
+      forge.fetch(
+        new Request(`https://${hostname}/internal/actions-check`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ runId, status, conclusion, summary: "Verified" }),
+        }),
+        forgeEnv
+      );
+    expect((await callback("forge.test", "run-one")).status).toBe(404);
+    await env.DB.prepare(
+      "INSERT INTO actions_runs(id,repository_id,commit_oid,workflow,path,source_ref,created_by,created_at) VALUES('run-two',?,?,'Verify','.github/workflows/verify.yml','topic','owner-id',2)"
+    )
+      .bind(repositoryId, oid)
+      .run();
+    expect((await callback("forge.internal", "run-two", "queued", null)).status).toBe(200);
+    expect(await (await callback("forge.internal", "run-one")).json()).toMatchObject({
+      data: { superseded: true },
+    });
+    const latest = await call(`/repositories/${repositoryId}/pull-requests/${number}/checks`);
+    expect(await latest.json()).toMatchObject({
+      data: [{ commitOid: oid, status: "queued", conclusion: null }],
+    });
+  });
   it("enforces feature switches while keeping settings available", async () => {
     const flags = {
       issuesEnabled: false,

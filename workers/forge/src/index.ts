@@ -200,12 +200,18 @@ function mergeResultOid(value: unknown): string | null {
   return /^[0-9a-f]{40}$/.test(data.oid) ? data.oid : null;
 }
 
-function gitConflict(value: unknown): boolean {
-  if (!value || typeof value !== "object" || !("error" in value)) return false;
-  const detail = value.error;
-  return Boolean(
-    detail && typeof detail === "object" && "code" in detail && detail.code === "conflict"
-  );
+function gitFailureMessage(value: unknown): string {
+  if (
+    value &&
+    typeof value === "object" &&
+    "error" in value &&
+    value.error &&
+    typeof value.error === "object" &&
+    "message" in value.error &&
+    typeof value.error.message === "string"
+  )
+    return value.error.message.slice(0, 500);
+  return "Git merge failed.";
 }
 
 function parseJsonArray(value: unknown): string[] {
@@ -1066,6 +1072,12 @@ async function featureRequest(
         );
       const parsed = PutCheckRunInputSchema.safeParse(await parseJson(request));
       if (!parsed.success) return error(400, "bad_request", "Invalid check run payload.");
+      if (parsed.data.name.startsWith(".github/workflows/"))
+        return error(
+          403,
+          "reserved_check",
+          "Workflow check names are reserved for Container Actions."
+        );
       const id = crypto.randomUUID(),
         now = Date.now(),
         key = actorKey(actor);
@@ -1215,7 +1227,7 @@ async function featureRequest(
         return error(
           gitResponse.status === 409 ? 409 : 502,
           "conflict",
-          gitConflict(payload) ? "Git refs changed during merge." : "Git merge failed."
+          gitFailureMessage(payload)
         );
       }
       const now = Date.now();
