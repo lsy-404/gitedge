@@ -18,8 +18,7 @@ export const BranchProtectionInputSchema = z.object({
     .trim()
     .min(1)
     .max(100)
-    .regex(/^[a-zA-Z0-9_./*?-]+$/)
-    .refine((value) => !value.includes("..") && !value.startsWith("/")),
+    .refine((value) => GitBranchSchema.safeParse(value.replace(/[*?]/g, "x")).success),
   enabled: z.boolean().default(true),
   locked: z.boolean().default(false),
   requiredApprovals: z.number().int().min(0).max(5).default(0),
@@ -91,12 +90,11 @@ export interface RepositoryCommunityFile {
   inherited: boolean;
   truncated: boolean;
   content: string;
-  truncated: boolean;
+  ref: string;
 }
 export interface RepositoryCommunity {
   truncated: boolean;
   files: RepositoryCommunityFile[];
   issueTemplates: RepositoryCommunityFile[];
   pullRequestTemplate: RepositoryCommunityFile | null;
-  truncated: boolean;
 }

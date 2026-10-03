@@ -6,6 +6,8 @@ import { gitHttpClient } from "./http";
 import { resolveCommit } from "./read";
 
 export const GitMergeInputSchema = z.object({
+  pullRequestId: z.string().optional(),
+  leaseAt: z.number().optional(),
   method: z.enum(["merge", "squash", "rebase"]).default("merge"),
   baseRef: GitBranchSchema,
   headRef: GitBranchSchema,
@@ -47,8 +49,8 @@ export async function mergeArtifacts(
   if (base?.hash !== input.expectedBaseOid) return { ok: false, reason: "refs_changed" };
   const baseInfo = await baseRepo.info();
   const headInfo = await headRepo.info();
-  const baseToken = await baseRepo.createToken("write", 60);
-  const headToken = await headRepo.createToken("read", 60);
+  const baseToken = await baseRepo.createToken("write", 300);
+  const headToken = await headRepo.createToken("read", 300);
   const fs = createFsFromVolume(new Volume());
   const dir = "/repo";
   try {

@@ -137,7 +137,9 @@ async function authenticate(
 function forwardServicePath(request: Request, prefix: string): Request {
   const pathname = new URL(request.url).pathname;
   const servicePath = pathname.slice(prefix.length) || "/";
-  return withPath(request, servicePath);
+  const headers = new Headers(request.headers);
+  withoutTrustedHeaders(headers);
+  return withPath(new Request(request, { headers }), servicePath);
 }
 
 function forwardAuthenticated(

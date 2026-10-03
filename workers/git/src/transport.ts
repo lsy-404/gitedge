@@ -1,3 +1,5 @@
+import { recordGitWrite } from "./events";
+import type { RefUpdate } from "./receive-commands";
 import { resolveRepositoryPath } from "../../../src/worker/common/repositories";
 import { branchRules, matchingBranchRules } from "../../../src/worker/common/branch-protection";
 import { readReceiveCommands, InvalidReceiveCommands } from "./receive-commands";
@@ -10,7 +12,11 @@ const GitGrantSchema = z.object({
   repositoryId: z.string(),
   permission: z.enum(["read", "write"]),
 });
-export async function proxyGitTransport(request: Request, env: GitEnv): Promise<Response> {
+export async function proxyGitTransport(
+  request: Request,
+  env: GitEnv,
+  ctx?: ExecutionContext
+): Promise<Response> {
   const url = new URL(request.url);
   const match = /^\/([^/]+)\/([^/]+)\.git\/(info\/refs|git-upload-pack|git-receive-pack)$/.exec(
     url.pathname
@@ -54,6 +60,7 @@ export async function proxyGitTransport(request: Request, env: GitEnv): Promise<
       headers: { "WWW-Authenticate": 'Basic realm="GitEdge"', "Cache-Control": "no-store" },
     });
   let upstreamBody = request.body;
+  let updates: RefUpdate[] = [];
   if (match[3] === "git-receive-pack") {
     if (
       request.headers.has("Content-Encoding") &&
@@ -82,6 +89,7 @@ export async function proxyGitTransport(request: Request, env: GitEnv): Promise<
           );
         }
       }
+      updates = parsed.updates;
       upstreamBody = parsed.body;
     } catch (cause) {
       if (cause instanceof InvalidReceiveCommands) return fail(400, "bad_request", cause.message);
@@ -122,7 +130,39 @@ export async function proxyGitTransport(request: Request, env: GitEnv): Promise<
       return fail(502, "upstream_auth_failed", "Artifacts rejected the scoped credential.");
     const responseHeaders = new Headers(response.headers);
     responseHeaders.set("Cache-Control", "no-store");
-    return new Response(response.body, { status: response.status, headers: responseHeaders });
+    const writer = access.user;
+    const body =
+      response.ok && writer && !writer.agentSession && updates.length && response.body
+        ? response.body.pipeThrough(
+            new TransformStream<Uint8Array, Uint8Array>({
+              transform(chunk, controller) {
+                controller.enqueue(chunk);
+              },
+              async flush() {
+                const changed = updates.filter(
+                  (update) =>
+                    update.ref.startsWith("refs/heads/") && update.newOid !== "0".repeat(40)
+                );
+                const notify = async () => {
+                  for (const update of changed.slice(0, 3))
+                    await recordGitWrite(
+                      env,
+                      repository.id,
+                      artifactName,
+                      writer,
+                      update.ref.slice(11),
+                      update.newOid
+                    );
+                  if (changed.length > 3)
+                    logger.warn("actions:push-branches-truncated", { count: changed.length });
+                };
+                if (ctx) ctx.waitUntil(notify());
+                else await notify();
+              },
+            })
+          )
+        : response.body;
+    return new Response(body, { status: response.status, headers: responseHeaders });
   } finally {
     try {
       await repo.revokeToken(token.id);

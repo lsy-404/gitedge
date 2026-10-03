@@ -10,6 +10,7 @@ import {
 export type ForgeEnv = {
   readonly DB: D1Database;
   readonly ARTIFACTS: Artifacts;
+  readonly AUTH?: { fetch(request: Request): Promise<Response> };
   readonly GIT: { fetch(request: Request): Promise<Response> };
   readonly LOG_LEVEL?: string;
   readonly USER_GROUP_LIMITS_JSON?: string;

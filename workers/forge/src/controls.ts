@@ -111,9 +111,9 @@ export async function repositoryControls(
       if (inherited)
         return error(409, "inherited_access", "Manage inherited access in organization settings.");
       const count = await env.DB.prepare(
-        "SELECT COUNT(*) AS count FROM repository_collaborators WHERE repository_id=?"
+        "SELECT COUNT(*) AS count FROM repository_collaborators WHERE repository_id=? AND user_id<>?"
       )
-        .bind(repo.id)
+        .bind(repo.id, person.id)
         .first<{ count: number }>();
       if ((count?.count ?? 0) >= 80)
         return error(409, "member_limit", "Collaborator limit reached.");

@@ -1,3 +1,5 @@
+import { repositoryRole, writableRole } from "../../../src/worker/common/repositories";
+import { agentEvent } from "./agent-events";
 import {
   AgentAssignmentPolicySchema,
   type AgentAssignmentPolicy,
@@ -20,7 +22,6 @@ type AgentRow = {
   user_id: string;
   owner_name: string;
   disabled_at: number | null;
-  owner_is_member: number;
 };
 export type AssignableResult = { ok: true; assignee: Assignee } | { ok: false; response: Response };
 
@@ -31,8 +32,12 @@ export function assignmentsColumn(kind: TaskLinkKind, alias: string): string {
 
 function isAssignmentRow(value: unknown): value is AssignmentRow {
   if (!value || typeof value !== "object") return false;
-  const row = value as Record<string, unknown>;
+  const row = value;
   return (
+    "role" in row &&
+    "kind" in row &&
+    "id" in row &&
+    "name" in row &&
     (row.role === "assignee" || row.role === "reviewer") &&
     (row.kind === "user" || row.kind === "agent") &&
     typeof row.id === "string" &&
@@ -70,10 +75,6 @@ async function agentAssignmentPolicy(
   return AgentAssignmentPolicySchema.catch("owner").parse(row?.policy);
 }
 
-/**
- * Validates one assignee for a repository. Humans must be namespace members. Agents must be
- * enabled, owned by a namespace member, and obey the repository's agent assignment policy.
- */
 export async function resolveAssignable(
   env: ForgeEnv,
   repository: RepositoryRow,
@@ -83,12 +84,10 @@ export async function resolveAssignable(
 ): Promise<AssignableResult> {
   const logger = createLogger(env.LOG_LEVEL, { service: "forge" });
   if (ref.kind === "user") {
-    const row = await env.DB.prepare(
-      "SELECT users.id, users.identifier FROM users JOIN namespace_memberships ON namespace_memberships.user_id = users.id WHERE users.id = ? AND namespace_memberships.namespace_id = ?"
-    )
-      .bind(ref.id, repository.namespace_id)
+    const row = await env.DB.prepare("SELECT id, identifier FROM users WHERE id = ?")
+      .bind(ref.id)
       .first<{ id: string; identifier: string }>();
-    if (!row) {
+    if (!row || !writableRole(await repositoryRole(env.DB, repository.id, ref.id))) {
       logger.warn("forge:assignment-rejected-user", { repositoryId: repository.id });
       return {
         ok: false,
@@ -98,11 +97,16 @@ export async function resolveAssignable(
     return { ok: true, assignee: { kind: "user", id: row.id, name: row.identifier } };
   }
   const agent = await env.DB.prepare(
-    "SELECT auth_agents.id, auth_agents.name, auth_agents.user_id, auth_agents.disabled_at, owner.identifier AS owner_name, EXISTS (SELECT 1 FROM namespace_memberships WHERE namespace_memberships.namespace_id = ? AND namespace_memberships.user_id = auth_agents.user_id) AS owner_is_member FROM auth_agents JOIN users AS owner ON owner.id = auth_agents.user_id WHERE auth_agents.id = ?"
+    "SELECT auth_agents.id, auth_agents.name, auth_agents.user_id, auth_agents.disabled_at, owner.identifier AS owner_name FROM auth_agents JOIN users AS owner ON owner.id = auth_agents.user_id WHERE auth_agents.id = ?"
   )
-    .bind(repository.namespace_id, ref.id)
+    .bind(ref.id)
     .first<AgentRow>();
-  if (!agent || agent.disabled_at !== null || agent.owner_is_member !== 1) {
+  if (
+    !agent ||
+    repository.agents_enabled === 0 ||
+    agent.disabled_at !== null ||
+    !writableRole(await repositoryRole(env.DB, repository.id, agent.user_id))
+  ) {
     logger.warn("forge:assignment-rejected-agent", { repositoryId: repository.id });
     return {
       ok: false,
@@ -135,15 +139,17 @@ export async function assigneeCandidates(
 ): Promise<AssigneeCandidate[]> {
   const policy = await agentAssignmentPolicy(env, repository.id);
   const users = await env.DB.prepare(
-    "SELECT users.id, users.identifier AS name FROM namespace_memberships JOIN users ON users.id = namespace_memberships.user_id WHERE namespace_memberships.namespace_id = ? ORDER BY users.identifier ASC"
+    "SELECT u.id, u.identifier AS name FROM users u WHERE EXISTS(SELECT 1 FROM namespace_memberships m WHERE m.user_id=u.id AND m.namespace_id=?) OR EXISTS(SELECT 1 FROM repository_collaborators c WHERE c.user_id=u.id AND c.repository_id=? AND c.role IN ('write','admin')) ORDER BY u.identifier LIMIT 201"
   )
-    .bind(repository.namespace_id)
+    .bind(repository.namespace_id, repository.id)
     .all<{ id: string; name: string }>();
   const agents = await env.DB.prepare(
-    "SELECT auth_agents.id, auth_agents.name, owner.identifier AS owner_name FROM auth_agents JOIN users AS owner ON owner.id = auth_agents.user_id JOIN namespace_memberships ON namespace_memberships.user_id = auth_agents.user_id AND namespace_memberships.namespace_id = ? WHERE auth_agents.disabled_at IS NULL AND (? = 'members' OR auth_agents.user_id = ?) ORDER BY owner.identifier ASC, auth_agents.name ASC"
+    "SELECT auth_agents.id, auth_agents.name, owner.identifier AS owner_name FROM auth_agents JOIN users AS owner ON owner.id = auth_agents.user_id WHERE auth_agents.disabled_at IS NULL AND ? != 0 AND (EXISTS(SELECT 1 FROM namespace_memberships m WHERE m.user_id=auth_agents.user_id AND m.namespace_id=?) OR EXISTS(SELECT 1 FROM repository_collaborators c WHERE c.user_id=auth_agents.user_id AND c.repository_id=? AND c.role IN ('write','admin'))) AND (? = 'members' OR auth_agents.user_id = ?) ORDER BY owner.identifier ASC, auth_agents.name ASC LIMIT 201"
   )
-    .bind(repository.namespace_id, policy, user.id)
+    .bind(repository.agents_enabled ?? 1, repository.namespace_id, repository.id, policy, user.id)
     .all<{ id: string; name: string; owner_name: string }>();
+  if (users.results.length > 200 || agents.results.length > 200)
+    throw new Error("Assignment candidate limit exceeded.");
   return [
     ...users.results.map((row): AssigneeCandidate => ({ kind: "user", ...row })),
     ...agents.results.map((row): AssigneeCandidate => ({
@@ -210,6 +216,12 @@ export async function replaceAssignments(
       ),
     ]);
   }
+  for (const ref of added.filter((ref) => ref.kind === "agent"))
+    await agentEvent(env, repository, user, ref.id, "agent.assigned", {
+      targetKind: target.kind,
+      targetId: target.id,
+      role: input.role,
+    });
   logger.info("forge:assignments-replaced", {
     repositoryId: repository.id,
     targetKind: target.kind,

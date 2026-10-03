@@ -68,7 +68,8 @@ async function checkout(repo: ArtifactsRepo, branch: string, expectedOid: string
 export async function editRepositoryFile(
   repo: ArtifactsRepo,
   input: EditRepositoryFileInput,
-  user: { id: string; identifier: string }
+  user: { id: string; identifier: string },
+  beforePush: () => Promise<void>
 ): Promise<{ oid: string; branch: string; path: string }> {
   if (
     !editablePath(input.path) ||
@@ -99,6 +100,16 @@ export async function editRepositoryFile(
       } else {
         if (existing && (existing.type !== "blob" || existing.mode === "120000"))
           throw new GitWriteInputError("Only regular text files can be edited.");
+        if (existing && input.content !== null) {
+          const original = await git.readBlob({ fs, dir, oid: existing.oid });
+          if (original.blob.byteLength > 1_000_000 || original.blob.includes(0))
+            throw new GitWriteInputError("Only text files under 1 MB can be edited.");
+          try {
+            new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(original.blob);
+          } catch {
+            throw new GitWriteInputError("Only UTF-8 text files can be edited.");
+          }
+        }
         if (blob === null) {
           if (!existing) throw new GitWriteInputError("The file does not exist.");
           entries.splice(entries.indexOf(existing), 1);
@@ -131,6 +142,7 @@ export async function editRepositoryFile(
     });
     await git.writeRef({ fs, dir, ref: `refs/heads/${target}`, value: oid, force: true });
     const expected = input.newBranch ? ZERO_OID : (input.expectedOid ?? ZERO_OID);
+    await beforePush();
     const pushed = await git.push({
       fs,
       dir,
@@ -160,12 +172,14 @@ export async function createRepositoryBranch(
   repo: ArtifactsRepo,
   name: string,
   source: string,
-  expectedOid: string
+  expectedOid: string,
+  beforePush: () => Promise<void>
 ): Promise<{ name: string; oid: string }> {
   if (await resolveCommit(repo, name)) throw new GitWriteConflict("The branch already exists.");
   const { fs, dir, http, info, token } = await checkout(repo, source, expectedOid);
   try {
     await git.writeRef({ fs, dir, ref: `refs/heads/${name}`, value: expectedOid });
+    await beforePush();
     const pushed = await git.push({
       fs,
       dir,
@@ -193,12 +207,14 @@ export async function createRepositoryBranch(
 export async function deleteRepositoryBranch(
   repo: ArtifactsRepo,
   name: string,
-  expectedOid: string
+  expectedOid: string,
+  beforePush: () => Promise<void>
 ): Promise<void> {
   const { fs, dir, http, info, token } = await checkout(repo, name, expectedOid);
   try {
     if (name === info.defaultBranch)
       throw new GitWriteInputError("The native default branch cannot be deleted.");
+    await beforePush();
     const pushed = await git.push({
       fs,
       dir,

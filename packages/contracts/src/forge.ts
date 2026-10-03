@@ -1,14 +1,14 @@
 import { z } from "zod";
 
 export const ActorSchema = z.object({
-  kind: z.enum(["user", "agent"]),
+  kind: z.enum(["user", "agent", "ci"]),
   id: z.string().min(1),
   name: z.string().min(1),
   sessionId: z.string().optional(),
 });
 export type Actor = z.infer<typeof ActorSchema>;
 /** A human user or an agent assigned to an issue, pull request or task. */
-export type Assignee = Omit<Actor, "sessionId">;
+export type Assignee = Omit<Actor, "sessionId" | "kind"> & { kind: "user" | "agent" };
 
 export const AgentSessionIdentitySchema = z.object({
   id: z.string().min(1),
@@ -228,6 +228,8 @@ export const GitBranchSchema = z
   .refine(
     (value) =>
       !/(\.\.|@\{|[\s~^:?*\[\\\x00-\x1f\x7f])/.test(value) &&
+      value !== "@" &&
+      !value.startsWith("-") &&
       !value.startsWith("/") &&
       !value.endsWith("/") &&
       !value.endsWith(".") &&

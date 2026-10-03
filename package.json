@@ -16,7 +16,7 @@
     "test:web": "npm --prefix apps/web test",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "typecheck": "tsc --noEmit -p workers/auth/tsconfig.json && tsc --noEmit -p workers/forge/tsconfig.json && tsc --noEmit -p workers/git/tsconfig.json && tsc --noEmit -p workers/gateway/tsconfig.json && tsc --noEmit -p workers/limits/tsconfig.json && npm --prefix workers/deploy run typecheck",
+    "typecheck": "tsc --noEmit -p workers/auth/tsconfig.json && tsc --noEmit -p workers/forge/tsconfig.json && tsc --noEmit -p workers/git/tsconfig.json && tsc --noEmit -p workers/gateway/tsconfig.json && tsc --noEmit -p workers/limits/tsconfig.json && npm --prefix workers/deploy run typecheck && tsc --noEmit -p workers/actions/tsconfig.json",
     "cf-typegen": "wrangler types --config workers/git/wrangler.jsonc worker-configuration.d.ts",
     "db:migrate": "wrangler d1 migrations apply gitedge --remote --config workers/auth/wrangler.jsonc",
     "db:migrate:local": "wrangler d1 migrations apply gitedge --local --persist-to .wrangler/state --config workers/auth/wrangler.jsonc"

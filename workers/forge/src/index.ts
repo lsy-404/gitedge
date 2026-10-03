@@ -1,5 +1,12 @@
+import { actionsCheck, attachActionChecks } from "./actions-checks";
+import { authorizeMerge } from "./merge-policy";
+import { mentionAgents, pullRequestEvent } from "./agent-events";
 import { publicProfile } from "./profiles";
-import { repositoryRole, resolveRepositoryPath } from "../../../src/worker/common/repositories";
+import {
+  repositoryRole,
+  resolveRepositoryPath,
+  writableRole,
+} from "../../../src/worker/common/repositories";
 import { branchRules, matchingBranchRules } from "../../../src/worker/common/branch-protection";
 import { repositoryControls } from "./controls";
 import {
@@ -106,7 +113,7 @@ async function repositoryById(env: ForgeEnv, repositoryId: string): Promise<Repo
 function hasActiveMergeLease(resource: Record<string, unknown>): boolean {
   return (
     typeof resource.merge_started_at === "number" &&
-    resource.merge_started_at >= Date.now() - 60_000
+    resource.merge_started_at >= Date.now() - 300_000
   );
 }
 
@@ -127,11 +134,20 @@ async function activeAgentSession(env: ForgeEnv, user: TrustedUser): Promise<Res
   const identity = user.agentSession;
   if (!identity) return null;
   const row = await env.DB.prepare(
-    "SELECT auth_agent_sessions.id, auth_agent_sessions.agent_id, auth_agents.name AS agent_name, auth_agent_sessions.user_id, auth_agent_sessions.repository_id, auth_agent_sessions.workspace_name, auth_agent_sessions.permission, auth_agent_sessions.status, auth_agent_sessions.expires_at, auth_agents.disabled_at FROM auth_agent_sessions JOIN auth_agents ON auth_agents.id = auth_agent_sessions.agent_id WHERE auth_agent_sessions.id = ? AND auth_agent_sessions.user_id = ? AND EXISTS (SELECT 1 FROM repositories r JOIN namespace_memberships m ON m.namespace_id = r.namespace_id WHERE r.id = auth_agent_sessions.repository_id AND m.user_id = auth_agent_sessions.user_id)"
+    "SELECT auth_agent_sessions.id, auth_agent_sessions.agent_id, auth_agents.name AS agent_name, auth_agent_sessions.user_id, auth_agent_sessions.repository_id, auth_agent_sessions.workspace_name, auth_agent_sessions.permission, auth_agent_sessions.status, auth_agent_sessions.expires_at, auth_agents.disabled_at FROM auth_agent_sessions JOIN auth_agents ON auth_agents.id = auth_agent_sessions.agent_id WHERE auth_agent_sessions.id = ? AND auth_agent_sessions.user_id = ?"
   )
     .bind(identity.id, user.id)
     .first<AgentSessionRow>();
+  const role = row ? await repositoryRole(env.DB, row.repository_id, user.id) : null;
+  const enabled = row
+    ? await env.DB.prepare("SELECT agents_enabled FROM repositories WHERE id=?")
+        .bind(row.repository_id)
+        .first<{ agents_enabled: number }>()
+    : null;
   if (
+    !role ||
+    enabled?.agents_enabled !== 1 ||
+    (identity.permission === "write" && !writableRole(role)) ||
     !row ||
     row.status !== "active" ||
     row.expires_at <= Date.now() ||
@@ -601,7 +617,7 @@ async function featureRequest(
         return error(403, "forbidden", "An agent pull request must use its own workspace session.");
       if (parsed.data.headSessionId) {
         const session = await env.DB.prepare(
-          "SELECT id FROM auth_agent_sessions WHERE auth_agent_sessions.id = ? AND auth_agent_sessions.user_id = ? AND auth_agent_sessions.repository_id = ? AND auth_agent_sessions.status = 'active' AND auth_agent_sessions.expires_at > ? AND EXISTS (SELECT 1 FROM auth_agents a WHERE a.id = auth_agent_sessions.agent_id AND a.disabled_at IS NULL) AND EXISTS (SELECT 1 FROM repositories r JOIN namespace_memberships m ON m.namespace_id = r.namespace_id WHERE r.id = auth_agent_sessions.repository_id AND m.user_id = auth_agent_sessions.user_id)"
+          "SELECT id FROM auth_agent_sessions WHERE auth_agent_sessions.id = ? AND auth_agent_sessions.user_id = ? AND auth_agent_sessions.repository_id = ? AND auth_agent_sessions.status = 'active' AND auth_agent_sessions.expires_at > ? AND EXISTS (SELECT 1 FROM auth_agents a WHERE a.id = auth_agent_sessions.agent_id AND a.disabled_at IS NULL)"
         )
           .bind(parsed.data.headSessionId, user.id, repository.id, Date.now())
           .first<{ id: string }>();
@@ -634,6 +650,14 @@ async function featureRequest(
           now
         )
         .run();
+      if (repository.actions_enabled === 1 && !parsed.data.headSessionId)
+        await attachActionChecks(env, repository.id, id, parsed.data.headRef);
+      await mentionAgents(env, repository, user, parsed.data.body, {
+        targetKind: "pull_request",
+        targetId: id,
+        number,
+      });
+      await pullRequestEvent(env, repository, user, id, { number, state: "open" });
       logger.info("forge:pull-request-created", {
         repositoryId: repository.id,
         pullRequestNumber: number,
@@ -756,6 +780,11 @@ async function featureRequest(
           now
         )
         .run();
+      await mentionAgents(env, repository, user, parsed.data.body, {
+        targetKind,
+        targetId: String(current.id),
+        commentId: id,
+      });
       logger.info("forge:comment-created", {
         repositoryId: repository.id,
         targetKind,
@@ -857,7 +886,7 @@ async function featureRequest(
       } else if (targetTable === "forge_pull_requests") {
         const denied = requireMember();
         if (denied) return denied;
-        const staleMergeCutoff = Date.now() - 60_000;
+        const staleMergeCutoff = Date.now() - 300_000;
         if (
           typeof current.merge_started_at === "number" &&
           current.merge_started_at >= staleMergeCutoff
@@ -896,6 +925,10 @@ async function featureRequest(
             "conflict",
             "Pull request changed while it was being updated or merged."
           );
+        await pullRequestEvent(env, repository, user, String(current.id), {
+          number,
+          state: p.state ?? current.state,
+        });
       } else {
         const denied = requireMember();
         if (denied) return denied;
@@ -1120,7 +1153,7 @@ async function featureRequest(
             : repository.allow_rebase_merge !== 0;
       if (!allowed) return error(403, "merge_method_disabled", "This merge method is disabled.");
       const leaseAt = Date.now();
-      const staleBefore = leaseAt - 60_000;
+      const staleBefore = leaseAt - 300_000;
       const lease = await env.DB.prepare(
         "UPDATE forge_pull_requests SET merge_started_at = ?, merge_base_oid = ?, merge_head_oid = ? WHERE id = ? AND state = 'open' AND draft = 0 AND (merge_started_at IS NULL OR merge_started_at < ?) RETURNING id"
       )
@@ -1142,122 +1175,14 @@ async function featureRequest(
           .run();
       };
 
-      const reviewRows = await env.DB.prepare(
-        "SELECT state, actor_json, actor_key, author_id, (EXISTS (SELECT 1 FROM repositories r JOIN namespace_memberships m ON m.namespace_id = r.namespace_id WHERE r.id = forge_reviews.repository_id AND m.user_id = forge_reviews.author_id) OR EXISTS (SELECT 1 FROM repository_collaborators c WHERE c.repository_id=forge_reviews.repository_id AND c.user_id=forge_reviews.author_id AND c.role IN ('write','admin'))) AS reviewer_is_member FROM forge_reviews WHERE pull_request_id = ? AND commit_oid = ? ORDER BY created_at DESC, rowid DESC"
-      )
-        .bind(String(current.id), parsed.data.expectedHeadOid)
-        .all<{
-          state: string;
-          actor_json: string;
-          actor_key: string;
-          author_id: string;
-          reviewer_is_member: number;
-        }>();
-      const latestByActor = new Map<
-        string,
-        { state: string; actor_json: string; author_id: string; reviewer_is_member: number }
-      >();
-      for (const review of reviewRows.results)
-        if (!latestByActor.has(review.actor_key)) latestByActor.set(review.actor_key, review);
-      const latestReviews = [...latestByActor.values()];
-      if (
-        latestReviews.some(
-          (review) => review.state === "changes_requested" && review.reviewer_is_member === 1
-        )
-      ) {
+      const rejected = await authorizeMerge(env, repository, user, current, parsed.data);
+      if (rejected) {
         await releaseLease();
-        logger.warn("forge:pull-request-merge-blocked-review", {
-          repositoryId: repository.id,
-          pullRequestNumber: number,
-          commitOid: parsed.data.expectedHeadOid,
-        });
-        return error(409, "conflict", "The latest review for the current commit requests changes.");
+        return rejected;
       }
-      const pullActor = parseActor(String(current.actor_json), String(current.author_id));
-      const approvals = latestReviews.filter(
-        (review) =>
-          review.state === "approved" &&
-          review.reviewer_is_member === 1 &&
-          !(pullActor.kind === "user" && review.author_id === current.author_id) &&
-          parseActor(review.actor_json, review.author_id).kind === "user"
-      ).length;
-      const requiredApprovals = Math.max(
-        repository.required_approvals ?? 0,
-        ...rules.map((rule) => rule.requiredApprovals)
-      );
-      if (approvals < requiredApprovals) {
-        await releaseLease();
-        logger.warn("forge:pull-request-merge-blocked-approvals", {
-          repositoryId: repository.id,
-          pullRequestNumber: number,
-          commitOid: parsed.data.expectedHeadOid,
-          approvals,
-          requiredApprovals,
-        });
-        return error(409, "conflict", "The current commit does not have enough human approvals.");
-      }
-      const checks = await env.DB.prepare(
-        "SELECT name, status, conclusion FROM forge_check_runs WHERE pull_request_id = ? AND commit_oid = ?"
-      )
-        .bind(String(current.id), parsed.data.expectedHeadOid)
-        .all<{ name: string; status: string; conclusion: string | null }>();
-      if (
-        checks.results.some(
-          (check) =>
-            check.status !== "completed" ||
-            (check.conclusion !== "success" && check.conclusion !== "neutral")
-        )
-      ) {
-        await releaseLease();
-        logger.warn("forge:pull-request-merge-blocked-checks", {
-          repositoryId: repository.id,
-          pullRequestNumber: number,
-          commitOid: parsed.data.expectedHeadOid,
-        });
-        return error(409, "conflict", "Checks for the current commit are incomplete or failed.");
-      }
-      if (
-        (repository.require_passing_checks === 1 ||
-          rules.some((rule) => rule.requirePassingChecks)) &&
-        !checks.results.some(
-          (check) => check.status === "completed" && check.conclusion === "success"
-        )
-      ) {
-        await releaseLease();
-        logger.warn("forge:pull-request-merge-blocked-no-passing-check", {
-          repositoryId: repository.id,
-          pullRequestNumber: number,
-          commitOid: parsed.data.expectedHeadOid,
-        });
-        return error(
-          409,
-          "conflict",
-          "At least one passing check is required for the current commit."
-        );
-      }
-
       const gitUrl = new URL(`/repositories/${repository.id}/merge`, request.url);
       const headSessionId =
         current.head_session_id == null ? null : String(current.head_session_id);
-      const requiredChecks = [...new Set(rules.flatMap((rule) => rule.requiredStatusChecks))];
-      if (
-        requiredChecks.some(
-          (name) =>
-            !checks.results.some(
-              (check) =>
-                check.name === name &&
-                check.status === "completed" &&
-                check.conclusion === "success"
-            )
-        )
-      ) {
-        await releaseLease();
-        return error(
-          409,
-          "required_checks_missing",
-          "A required named check is missing or unsuccessful for the current commit."
-        );
-      }
       const gitHeaders = trustedHeaders(user);
       gitHeaders.set("Content-Type", "application/json");
       const gitResponse = await env.GIT.fetch(
@@ -1265,6 +1190,8 @@ async function featureRequest(
           method: "POST",
           headers: gitHeaders,
           body: JSON.stringify({
+            pullRequestId: String(current.id),
+            leaseAt,
             method: parsed.data.method,
             baseRef: current.base_ref,
             headRef: current.head_ref,
@@ -1322,6 +1249,35 @@ async function featureRequest(
         .bind(current.id)
         .first<Record<string, unknown>>();
       if (merged?.state === "merged" && merged.merged_oid) {
+        await pullRequestEvent(env, repository, user, String(current.id), {
+          number,
+          state: "merged",
+          oid,
+        });
+        if (
+          repository.delete_branch_on_merge === 1 &&
+          !headSessionId &&
+          current.head_ref !== repository.default_branch &&
+          current.head_ref !== current.base_ref
+        ) {
+          const deletion = await env.GIT.fetch(
+            new Request(new URL(`/repositories/${repository.id}/branches`, request.url), {
+              method: "DELETE",
+              headers: gitHeaders,
+              body: JSON.stringify({
+                name: current.head_ref,
+                expectedOid: parsed.data.expectedHeadOid,
+              }),
+            })
+          );
+          if (!deletion.ok)
+            logger.warn("forge:merged-branch-cleanup-skipped", {
+              repositoryId: repository.id,
+              pullRequestNumber: number,
+              status: deletion.status,
+            });
+          await deletion.body?.cancel();
+        }
         logger.info("forge:pull-request-merged", {
           repositoryId: repository.id,
           pullRequestNumber: number,
@@ -1468,7 +1424,42 @@ export default {
     const url = new URL(request.url);
     const parts = url.pathname.split("/").filter(Boolean);
 
+    if (url.pathname === "/internal/actions-check") return actionsCheck(request, env);
     const user = trustedUser(request);
+    if (url.pathname === "/internal/merge-authorization") {
+      if (url.hostname !== "forge.internal" || request.method !== "POST" || !user)
+        return error(404, "not_found", "Endpoint was not found.");
+      const value = await parseJson(request);
+      if (
+        !value ||
+        typeof value !== "object" ||
+        !("pullRequestId" in value) ||
+        typeof value.pullRequestId !== "string" ||
+        !("leaseAt" in value) ||
+        typeof value.leaseAt !== "number"
+      )
+        return error(400, "bad_request", "Invalid merge authorization.");
+      const input = MergePullRequestInputSchema.safeParse(value);
+      if (!input.success) return error(400, "bad_request", "Invalid merge authorization.");
+      const pull = await env.DB.prepare("SELECT * FROM forge_pull_requests WHERE id=?")
+        .bind(value.pullRequestId)
+        .first<Record<string, unknown>>();
+      if (
+        !pull ||
+        pull.state !== "open" ||
+        pull.merge_started_at !== value.leaseAt ||
+        value.leaseAt < Date.now() - 300_000 ||
+        pull.merge_base_oid !== input.data.expectedBaseOid ||
+        pull.merge_head_oid !== input.data.expectedHeadOid
+      )
+        return error(409, "merge_changed", "Merge authorization expired or changed.");
+      const repository = await repositoryById(env, String(pull.repository_id));
+      if (!repository) return error(404, "not_found", "Repository was not found.");
+      return (
+        (await authorizeMerge(env, repository, user, pull, input.data)) ??
+        json({ data: { authorized: true } })
+      );
+    }
     if (request.method === "GET" && parts[0] === "profiles" && parts.length === 2)
       return publicProfile(env, request, parts[1], user);
     if (!user) {

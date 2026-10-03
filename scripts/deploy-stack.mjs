@@ -8,6 +8,7 @@ export const workerConfigs = [
   "workers/forge/wrangler.jsonc",
   "workers/git/wrangler.jsonc",
   "workers/deploy/wrangler.jsonc",
+  "workers/actions/wrangler.jsonc",
   "workers/gateway/wrangler.jsonc",
 ];
 
@@ -89,7 +90,7 @@ export function deployStack({ dryRun = false } = {}) {
     }
   }
 
-  for (const service of ["limits", "auth", "git", "forge", "deploy", "gateway"]) {
+  for (const service of ["limits", "auth", "actions", "git", "forge", "deploy", "gateway"]) {
     const args = ["wrangler", "deploy", "--config", `workers/${service}/wrangler.jsonc`];
     if (dryRun) args.push("--dry-run");
     if (!run("npx", args, { cloudflare: true })) return false;

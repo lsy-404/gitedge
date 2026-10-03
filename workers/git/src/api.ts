@@ -1,3 +1,5 @@
+import { trustedHeaders } from "../../../packages/contracts/src/trust";
+import { recordGitWrite } from "./events";
 import { repositoryCommunity } from "./community";
 import {
   EditRepositoryFileSchema,
@@ -59,7 +61,11 @@ function validPath(path: string): boolean {
     path.split("/").every((part) => part !== ".." && part !== ".")
   );
 }
-export async function handleGitApi(request: Request, env: GitEnv): Promise<Response> {
+export async function handleGitApi(
+  request: Request,
+  env: GitEnv,
+  ctx?: ExecutionContext
+): Promise<Response> {
   const url = new URL(request.url);
   const parts = url.pathname.split("/").filter(Boolean);
   const repositoryId = parts[1];
@@ -135,9 +141,36 @@ export async function handleGitApi(request: Request, env: GitEnv): Promise<Respo
       );
     if (remove?.success && remove.data.name === access.repository.defaultBranch)
       return fail(409, "default_branch", "The default branch cannot be deleted.");
+    const beforeWrite = async () => {
+      const latest = await resolveGitAccess(request, env, repositoryId);
+      if (
+        !latest?.repository.canWrite ||
+        latest.repository.archived ||
+        (resource === "edit" && latest.repository.onlineEditingEnabled === 0) ||
+        (!session && (await protectedBranch(env.DB, repositoryId, target))) ||
+        (remove?.success && latest.repository.defaultBranch === target)
+      )
+        throw new GitWriteConflict(
+          "Repository permissions or protection changed. Reload before retrying."
+        );
+    };
+    const written = async (branch: string, oid: string) => {
+      if (session || !access.user) return;
+      const operation = recordGitWrite(
+        env,
+        repositoryId,
+        access.repository.artifactName!,
+        access.user,
+        branch,
+        oid
+      );
+      if (ctx) ctx.waitUntil(operation);
+      else await operation;
+    };
     try {
       if (edit?.success) {
-        const result = await editRepositoryFile(repo, edit.data, access.user);
+        const result = await editRepositoryFile(repo, edit.data, access.user, beforeWrite);
+        await written(result.branch, result.oid);
         logger.info("git:file-committed", { branch: result.branch, oid: result.oid });
         return json(result, 201);
       }
@@ -146,13 +179,15 @@ export async function handleGitApi(request: Request, env: GitEnv): Promise<Respo
           repo,
           create.data.name,
           create.data.source,
-          create.data.expectedOid
+          create.data.expectedOid,
+          beforeWrite
         );
+        await written(result.name, result.oid);
         logger.info("git:branch-created", { branch: result.name });
         return json(result, 201);
       }
       if (remove?.success) {
-        await deleteRepositoryBranch(repo, remove.data.name, remove.data.expectedOid);
+        await deleteRepositoryBranch(repo, remove.data.name, remove.data.expectedOid, beforeWrite);
         logger.info("git:branch-deleted", { branch: remove.data.name });
         return json({ deleted: true });
       }
@@ -167,8 +202,9 @@ export async function handleGitApi(request: Request, env: GitEnv): Promise<Respo
       return fail(409, "repository_archived", "Archived repositories are read-only.");
     if (!access.user || !access.repository.canWrite || userSession)
       return fail(403, "forbidden", "A repository member must merge proposals.");
-    const input = GitMergeInputSchema.safeParse(await request.json().catch(() => null));
-    if (!input.success) return fail(400, "bad_request", "Invalid merge request.");
+    const input = GitMergeInputSchema.safeParse(await readJsonLimited(request));
+    if (!input.success || !input.data.pullRequestId || !input.data.leaseAt)
+      return fail(400, "bad_request", "Invalid merge request.");
     const headSession = input.data.headSessionId
       ? await resolveWorkspace(env, access, input.data.headSessionId)
       : null;
@@ -205,6 +241,30 @@ export async function handleGitApi(request: Request, env: GitEnv): Promise<Respo
       verifySignature: async (payload, signature) =>
         (await verifyCommitSignature(env.DB, payload, signature)).status === "valid",
       beforePush: async (oid) => {
+        const latest = await resolveGitAccess(request, env, repositoryId);
+        const latestRules = matchingBranchRules(
+          await branchRules(env.DB, repositoryId),
+          input.data.baseRef
+        );
+        if (
+          !latest?.repository.canWrite ||
+          latest.repository.archived ||
+          JSON.stringify(latestRules) !== JSON.stringify(rules)
+        )
+          throw new GitWriteConflict("Repository access or branch rules changed during merge.");
+        if (!env.FORGE) throw new Error("Merge authorization service is unavailable.");
+        const headers = trustedHeaders(access.user ?? undefined);
+        headers.set("Content-Type", "application/json");
+        const authorization = await env.FORGE.fetch(
+          new Request("https://forge.internal/internal/merge-authorization", {
+            method: "POST",
+            headers,
+            body: JSON.stringify(input.data),
+          })
+        );
+        await authorization.body?.cancel();
+        if (!authorization.ok)
+          throw new GitWriteConflict("Merge authorization changed; reload before retrying.");
         await env.DB.prepare(
           "INSERT OR IGNORE INTO git_merge_receipts(operation_key,oid,repository_id,created_at) VALUES(?,?,?,?)"
         )
@@ -220,6 +280,16 @@ export async function handleGitApi(request: Request, env: GitEnv): Promise<Respo
         "Merge was rejected; refresh refs and resolve conflicts before retrying."
       );
     }
+    const operation = recordGitWrite(
+      env,
+      repositoryId,
+      access.repository.artifactName,
+      access.user,
+      input.data.baseRef,
+      result.oid
+    );
+    if (ctx) ctx.waitUntil(operation);
+    else await operation;
     logger.info("artifacts:merged", { oid: result.oid });
     return json({ oid: result.oid });
   }

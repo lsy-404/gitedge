@@ -1,3 +1,4 @@
+import { agentEvent } from "./agent-events";
 import { z } from "zod";
 import {
   AGENT_MODE_VERSION,
@@ -676,6 +677,12 @@ async function assignTask(
   )
     .bind(kind, id, Date.now(), task.id)
     .run();
+  if (kind === "agent" && id)
+    await agentEvent(env, repository, user, id, "agent.assigned", {
+      targetKind: "task",
+      targetId: task.id,
+      number: task.number,
+    });
   createLogger(env.LOG_LEVEL, { service: "forge" }).info("forge:task-assigned", {
     repositoryId: repository.id,
     taskNumber: task.number,

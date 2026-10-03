@@ -1,3 +1,4 @@
+import { readJsonLimited } from "./http";
 import {
   repositoryRole,
   writableRole,
@@ -68,13 +69,7 @@ function fail(status: number, code: string, message: string): Response {
     { status, headers: { "Cache-Control": "no-store" } }
   );
 }
-async function readJson(request: Request): Promise<unknown> {
-  try {
-    return await request.json();
-  } catch {
-    return null;
-  }
-}
+
 function newToken(prefix: string): string {
   return (
     prefix +
@@ -266,6 +261,11 @@ export async function handleAgentManagement(
     if (parts[0] === "tokens") return await handleGitTokenManagement(request, env, user);
     if (parts[0] === "sessions" && parts.length === 1 && request.method === "GET") {
       const repoId = url.searchParams.get("repositoryId");
+      if (repoId) {
+        const repository = await repositoryForOwner(env, user.id, repoId);
+        if (!repository || repository.agentsEnabled === 0)
+          return fail(404, "not_found", "Repository agent sessions are unavailable.");
+      }
       const rows = repoId
         ? await env.DB.prepare(
             sessionSelect +
@@ -291,7 +291,7 @@ export async function handleAgentManagement(
       );
     }
     if (parts.length === 1 && request.method === "POST") {
-      const parsed = CreateAgentInputSchema.safeParse(await readJson(request));
+      const parsed = CreateAgentInputSchema.safeParse(await readJsonLimited(request));
       if (!parsed.success) return fail(400, "bad_request", "Invalid agent payload.");
       const createdAt = Date.now();
       const id = crypto.randomUUID();
@@ -340,7 +340,7 @@ export async function handleAgentManagement(
     if (webhookResponse) return webhookResponse;
     if (parts.length === 2 && request.method === "GET") return json(managedAgent);
     if (parts.length === 2 && request.method === "PATCH") {
-      const parsed = UpdateAgentInputSchema.safeParse(await readJson(request));
+      const parsed = UpdateAgentInputSchema.safeParse(await readJsonLimited(request));
       if (!parsed.success) return fail(400, "bad_request", "Invalid agent payload.");
       const values = parsed.data;
       const handle = values.handle ?? agent.handle;
@@ -403,7 +403,7 @@ export async function handleAgentManagement(
     if (parts.length !== 3 || request.method !== "POST")
       return fail(405, "method_not_allowed", "Method is not allowed.");
     if (agent.disabledAt !== null) return fail(409, "conflict", "Agent is disabled.");
-    const parsed = CreateAgentSessionInputSchema.safeParse(await readJson(request));
+    const parsed = CreateAgentSessionInputSchema.safeParse(await readJsonLimited(request));
     if (!parsed.success) return fail(400, "bad_request", "Invalid session payload.");
     const repository = await repositoryForOwner(env, user.id, parsed.data.repositoryId);
     if (!repository) return fail(404, "not_found", "Repository was not found.");
@@ -540,7 +540,7 @@ async function handleGitTokenManagement(
   }
   if (parts.length !== 1 || request.method !== "POST")
     return fail(405, "method_not_allowed", "Method is not allowed.");
-  const parsed = CreateGitTokenInputSchema.safeParse(await readJson(request));
+  const parsed = CreateGitTokenInputSchema.safeParse(await readJsonLimited(request));
   if (!parsed.success) return fail(400, "bad_request", "Invalid Git token payload.");
   const repository = await repositoryForOwner(env, user.id, parsed.data.repositoryId);
   if (!repository) return fail(404, "not_found", "Repository was not found.");

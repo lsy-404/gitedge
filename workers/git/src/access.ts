@@ -8,6 +8,8 @@ import {
 export interface GitEnv {
   DB: D1Database;
   ARTIFACTS: Artifacts;
+  FORGE?: { fetch(request: Request): Promise<Response> };
+  ACTIONS?: { fetch(request: Request): Promise<Response> };
   LOG_LEVEL?: string;
 }
 export interface GitRepositoryRow {

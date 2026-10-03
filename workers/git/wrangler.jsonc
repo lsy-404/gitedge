@@ -29,5 +29,15 @@
       "namespace": "gitedge",
       "remote": true
     }
+  ],
+  "services": [
+    {
+      "binding": "FORGE",
+      "service": "gitedge-forge"
+    },
+    {
+      "binding": "ACTIONS",
+      "service": "gitedge-actions"
+    }
   ]
 }
