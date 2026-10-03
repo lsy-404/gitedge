@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { AgentSessionIdentity } from "./forge";
 
 export const ReservedAccountIdentifiers: ReadonlySet<string> = new Set([
   "account",
@@ -34,6 +35,7 @@ export interface User {
   id: string;
   identifier: string;
   externalIdentity?: ExternalIdentity;
+  agentSession?: AgentSessionIdentity;
 }
 
 export interface ExternalIdentity {
