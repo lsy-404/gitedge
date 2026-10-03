@@ -3,7 +3,7 @@
   "compilerOptions": {
     "lib": ["ES2022", "ESNext.Disposable"],
     "noEmit": true,
-    "types": ["@cloudflare/workers-types"],
+    "types": ["@cloudflare/workers-types", "node"],
     "target": "ES2022"
   },
   "include": ["src", "../../packages/contracts/src", "../../src/worker/common/logger.ts"]

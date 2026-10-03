@@ -89,9 +89,11 @@ export interface RepositoryCommunityFile {
   repository: string;
   path: string;
   inherited: boolean;
+  truncated: boolean;
   content: string;
 }
 export interface RepositoryCommunity {
+  truncated: boolean;
   files: RepositoryCommunityFile[];
   issueTemplates: RepositoryCommunityFile[];
   pullRequestTemplate: RepositoryCommunityFile | null;

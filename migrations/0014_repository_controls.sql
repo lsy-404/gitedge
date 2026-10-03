@@ -39,3 +39,28 @@ CREATE TABLE repository_collaborators (
   created_at INTEGER NOT NULL,
   PRIMARY KEY(repository_id,user_id)
 );
+CREATE TRIGGER repository_paths_preserve_owner
+BEFORE UPDATE OF repository_id ON repository_paths
+WHEN old.repository_id != new.repository_id
+BEGIN
+  SELECT RAISE(ABORT, 'repository path belongs to another repository');
+END;
+CREATE TRIGGER repositories_register_path
+AFTER INSERT ON repositories
+BEGIN
+  INSERT INTO repository_paths(namespace_id,slug,repository_id) VALUES(new.namespace_id,new.slug,new.id);
+END;
+CREATE TRIGGER repositories_keep_renamed_paths
+AFTER UPDATE OF namespace_id,slug ON repositories
+WHEN old.namespace_id != new.namespace_id OR old.slug != new.slug
+BEGIN
+  INSERT INTO repository_paths(namespace_id,slug,repository_id) VALUES(new.namespace_id,new.slug,new.id)
+  ON CONFLICT(namespace_id,slug) DO UPDATE SET repository_id=excluded.repository_id;
+END;
+CREATE TABLE git_merge_receipts (
+  operation_key TEXT NOT NULL,
+  oid TEXT NOT NULL,
+  repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY(operation_key,oid)
+);

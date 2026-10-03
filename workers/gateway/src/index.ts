@@ -1,3 +1,10 @@
+import { z } from "zod";
+import {
+  RepositorySlugSchema,
+  NamespaceSlugSchema,
+  ReservedAccountIdentifiers,
+} from "../../../packages/contracts/src/index";
+import { readTextLimited } from "../../../src/worker/common/readText";
 import {
   AgentSessionIdentitySchema,
   TRUSTED_USER_HEADERS,
@@ -20,6 +27,7 @@ export interface GatewayEnv {
   FORGE: GatewayService;
   GIT: GatewayService;
   DEPLOY?: GatewayService;
+  ACTIONS?: GatewayService;
   RATE_LIMITER: RateLimitNamespace;
   IP_RPM_LIMIT?: string;
   USER_GROUP_LIMITS_JSON?: string;
@@ -200,6 +208,9 @@ async function serveSpa(request: Request, assets: GatewayService): Promise<Respo
 export async function handleGatewayRequest(request: Request, env: GatewayEnv): Promise<Response> {
   const url = new URL(request.url);
 
+  if (/^\/api\/(?:auth|forge|git|deploy|actions)\/_?internal(?:\/|$)/.test(url.pathname))
+    return new Response("Not found\n", { status: 404 });
+
   const rateLimitPath = isApiPath(url.pathname, "/api") || isGitRequest(url.pathname);
   if (rateLimitPath) {
     const ipLimitResponse = await enforceIpLimit(request, env);
@@ -210,13 +221,24 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
     return env.AUTH.fetch(forwardServicePath(request, "/api/auth"));
   }
 
-  if (["/api/forge", "/api/git", "/api/deploy"].some((prefix) => isApiPath(url.pathname, prefix))) {
+  if (
+    ["/api/forge", "/api/git", "/api/deploy", "/api/actions"].some((prefix) =>
+      isApiPath(url.pathname, prefix)
+    )
+  ) {
     const prefix = isApiPath(url.pathname, "/api/forge")
       ? "/api/forge"
       : isApiPath(url.pathname, "/api/git")
         ? "/api/git"
-        : "/api/deploy";
-    if (prefix === "/api/git" && request.method !== "GET" && request.method !== "HEAD")
+        : isApiPath(url.pathname, "/api/actions")
+          ? "/api/actions"
+          : "/api/deploy";
+    if (
+      prefix === "/api/git" &&
+      request.method !== "GET" &&
+      request.method !== "HEAD" &&
+      !/^\/api\/git\/repositories\/[^/]+\/(edit|branches)$/.test(url.pathname)
+    )
       return Response.json(
         {
           error: { code: "method_not_allowed", message: "Use the pull request workflow to merge." },
@@ -224,7 +246,13 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
         { status: 405, headers: { Allow: "GET, HEAD" } }
       );
     const service =
-      prefix === "/api/forge" ? env.FORGE : prefix === "/api/git" ? env.GIT : env.DEPLOY;
+      prefix === "/api/forge"
+        ? env.FORGE
+        : prefix === "/api/git"
+          ? env.GIT
+          : prefix === "/api/actions"
+            ? env.ACTIONS
+            : env.DEPLOY;
     if (!service)
       return Response.json(
         { error: { code: "service_unavailable", message: "Deployment service is unavailable." } },
@@ -312,6 +340,50 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
   }
 
   if (request.method === "GET" || request.method === "HEAD") {
+    const segments = url.pathname.split("/").filter(Boolean);
+    const [owner, slug] = segments;
+    if (
+      owner &&
+      slug &&
+      !ReservedAccountIdentifiers.has(owner) &&
+      NamespaceSlugSchema.safeParse(owner).success &&
+      RepositorySlugSchema.safeParse(slug).success
+    ) {
+      const session = await authenticate(request, env.AUTH);
+      if (session instanceof Response) return session;
+      const resolveUrl = new URL(
+        `/api/forge/repositories/by-name/${encodeURIComponent(owner)}/${encodeURIComponent(slug)}`,
+        request.url
+      );
+      const resolved = await env.FORGE.fetch(
+        forwardAuthenticated(
+          new Request(resolveUrl, { headers: request.headers }),
+          "/api/forge",
+          session.authenticated ? session : undefined
+        )
+      );
+      if (resolved.ok) {
+        const text = await readTextLimited(resolved.body, 65536);
+        let payload: unknown = null;
+        try {
+          payload = JSON.parse(text ?? "null");
+        } catch {}
+        const parsed = z
+          .object({ data: z.object({ owner: NamespaceSlugSchema, name: RepositorySlugSchema }) })
+          .safeParse(payload);
+        if (
+          parsed.success &&
+          (parsed.data.data.owner !== owner || parsed.data.data.name !== slug)
+        ) {
+          const target = new URL(url);
+          target.pathname = `/${parsed.data.data.owner}/${parsed.data.data.name}${segments.length > 2 ? "/" + segments.slice(2).join("/") : ""}`;
+          return new Response(null, {
+            status: 308,
+            headers: { Location: target.toString(), "Cache-Control": "no-store" },
+          });
+        }
+      } else await resolved.body?.cancel();
+    }
     return serveSpa(request, env.ASSETS);
   }
 

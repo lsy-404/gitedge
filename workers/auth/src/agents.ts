@@ -1,3 +1,8 @@
+import {
+  repositoryRole,
+  writableRole,
+  resolveRepositoryPath,
+} from "../../../src/worker/common/repositories";
 import { z } from "zod";
 import {
   CreateAgentInputSchema,
@@ -42,6 +47,8 @@ interface RepositoryRow {
   owner: string;
   slug: string;
   archived: number;
+  agentsEnabled: number;
+  writable: boolean;
 }
 export interface GitAuthentication {
   user: TrustedUser;
@@ -98,11 +105,14 @@ async function repositoryForOwner(
   userId: string,
   repositoryId: string
 ): Promise<RepositoryRow | null> {
-  return env.DB.prepare(
-    "SELECT r.id, r.artifact_name AS artifactName, n.slug AS owner, r.slug, r.archived FROM repositories r JOIN namespaces n ON n.id = r.namespace_id JOIN namespace_memberships m ON m.namespace_id = n.id WHERE r.id = ? AND m.user_id = ?"
+  const role = await repositoryRole(env.DB, repositoryId, userId);
+  if (!role) return null;
+  const row = await env.DB.prepare(
+    "SELECT r.id,r.artifact_name AS artifactName,n.slug AS owner,r.slug,r.archived,r.agents_enabled AS agentsEnabled,0 AS writable FROM repositories r JOIN namespaces n ON n.id=r.namespace_id WHERE r.id=?"
   )
-    .bind(repositoryId, userId)
+    .bind(repositoryId)
     .first<RepositoryRow>();
+  return row ? { ...row, writable: writableRole(role) } : null;
 }
 
 export async function authenticateAgentSession(
@@ -112,11 +122,18 @@ export async function authenticateAgentSession(
   if (!/^ge_session_[0-9a-f]{64}$/.test(token)) return null;
   const row = await env.DB.prepare(
     sessionSelect +
-      " WHERE s.token_hash = ? AND s.status = 'active' AND s.expires_at > ? AND a.disabled_at IS NULL AND EXISTS (SELECT 1 FROM repositories r JOIN namespace_memberships m ON m.namespace_id = r.namespace_id WHERE r.id = s.repository_id AND m.user_id = s.user_id)"
+      " WHERE s.token_hash = ? AND s.status = 'active' AND s.expires_at > ? AND a.disabled_at IS NULL"
   )
     .bind(await sha256Hex(token), Date.now())
     .first<AgentSessionRow>();
   if (!row) return null;
+  const repository = await repositoryForOwner(env, row.userId, row.repositoryId);
+  if (
+    !repository ||
+    repository.agentsEnabled === 0 ||
+    (row.permission === "write" && !repository.writable)
+  )
+    return null;
   return {
     id: row.userId,
     identifier: row.identifier,
@@ -153,26 +170,34 @@ export async function authenticateGitToken(
   } else return null;
   const owner = new URL(request.url).searchParams.get("owner");
   const slug = new URL(request.url).searchParams.get("repo");
-  if (!owner || !slug || (username !== null && username !== owner)) return null;
+  if (!owner || !slug) return null;
+  const path = await resolveRepositoryPath(env.DB, owner, slug);
+  if (!path) return null;
   const agent = await authenticateAgentSession(env, token);
   if (agent?.agentSession) {
     const repo = await repositoryForOwner(env, agent.id, agent.agentSession.repositoryId);
-    if (!repo || repo.owner !== owner || repo.slug !== slug) return null;
+    if (
+      !repo ||
+      repo.id !== path.id ||
+      (username !== null && username !== owner && username !== agent.identifier)
+    )
+      return null;
     return { user: agent, repositoryId: repo.id, permission: agent.agentSession.permission };
   }
   if (!/^ge_token_[0-9a-f]{64}$/.test(token)) return null;
   const row = await env.DB.prepare(
-    "SELECT t.repository_id AS repositoryId, t.permission, u.id, u.identifier, u.group_key AS groupKey FROM auth_git_tokens t JOIN users u ON u.id = t.user_id JOIN repositories r ON r.id = t.repository_id JOIN namespaces n ON n.id = r.namespace_id JOIN namespace_memberships m ON m.namespace_id = n.id AND m.user_id = u.id WHERE t.token_hash = ? AND t.revoked_at IS NULL AND t.expires_at > ? AND n.slug = ? AND r.slug = ?"
+    "SELECT t.repository_id AS repositoryId,t.permission,u.id,u.identifier,u.group_key AS groupKey FROM auth_git_tokens t JOIN users u ON u.id=t.user_id WHERE t.token_hash=? AND t.revoked_at IS NULL AND t.expires_at>? AND t.repository_id=?"
   )
-    .bind(await sha256Hex(token), Date.now(), owner, slug)
+    .bind(await sha256Hex(token), Date.now(), path.id)
     .first<TrustedUser & { repositoryId: string; permission: "read" | "write" }>();
-  return row
-    ? {
-        user: { id: row.id, identifier: row.identifier, groupKey: row.groupKey },
-        repositoryId: row.repositoryId,
-        permission: row.permission,
-      }
-    : null;
+  if (!row || (username !== null && username !== owner && username !== row.identifier)) return null;
+  const role = await repositoryRole(env.DB, row.repositoryId, row.id);
+  if (!role) return null;
+  return {
+    user: { id: row.id, identifier: row.identifier, groupKey: row.groupKey },
+    repositoryId: row.repositoryId,
+    permission: row.permission === "write" && writableRole(role) ? "write" : "read",
+  };
 }
 
 function readableHandle(name: string): string {
@@ -382,6 +407,10 @@ export async function handleAgentManagement(
     if (!parsed.success) return fail(400, "bad_request", "Invalid session payload.");
     const repository = await repositoryForOwner(env, user.id, parsed.data.repositoryId);
     if (!repository) return fail(404, "not_found", "Repository was not found.");
+    if (repository.agentsEnabled === 0)
+      return fail(404, "feature_disabled", "Repository agents are disabled.");
+    if (!repository.writable && parsed.data.permission === "write")
+      return fail(403, "forbidden", "Repository write access is required.");
     if (repository.archived === 1 && parsed.data.permission === "write")
       return fail(409, "repository_archived", "Archived repositories cannot issue write sessions.");
     if (!repository.artifactName)
@@ -515,6 +544,8 @@ async function handleGitTokenManagement(
   if (!parsed.success) return fail(400, "bad_request", "Invalid Git token payload.");
   const repository = await repositoryForOwner(env, user.id, parsed.data.repositoryId);
   if (!repository) return fail(404, "not_found", "Repository was not found.");
+  if (!repository.writable && parsed.data.permission === "write")
+    return fail(403, "forbidden", "Repository write access is required.");
   if (repository.archived === 1 && parsed.data.permission === "write")
     return fail(
       409,

@@ -1,4 +1,11 @@
-import { ActorSchema, type Actor, type TrustedUser } from "../../../packages/contracts/src/index";
+import { repositoryRole, writableRole } from "../../../src/worker/common/repositories";
+import { readJsonLimited } from "../../../src/worker/common/readText";
+import {
+  ActorSchema,
+  type Actor,
+  type Repository,
+  type TrustedUser,
+} from "../../../packages/contracts/src/index";
 
 export type ForgeEnv = {
   readonly DB: D1Database;
@@ -9,6 +16,7 @@ export type ForgeEnv = {
 };
 export type RepositoryRow = {
   id: string;
+  can_write?: number;
   namespace_id: string;
   owner: string;
   slug: string;
@@ -22,6 +30,17 @@ export type RepositoryRow = {
   pulls_enabled?: number;
   discussions_enabled?: number;
   wiki_enabled?: number;
+  tasks_enabled?: number;
+  agents_enabled?: number;
+  deployments_enabled?: number;
+  graph_enabled?: number;
+  actions_enabled?: number;
+  actions_network_enabled?: number;
+  online_editing_enabled?: number;
+  allow_merge_commit?: number;
+  allow_squash_merge?: number;
+  allow_rebase_merge?: number;
+  delete_branch_on_merge?: number;
   required_approvals?: number;
   require_passing_checks?: number;
   created_at: number;
@@ -43,11 +62,7 @@ export function error(status: number, code: string, message: string): Response {
 }
 
 export async function parseJson(request: Request): Promise<unknown> {
-  try {
-    return await request.json();
-  } catch {
-    return null;
-  }
+  return readJsonLimited(request);
 }
 
 export async function isMember(
@@ -55,12 +70,7 @@ export async function isMember(
   repositoryId: string,
   userId: string
 ): Promise<boolean> {
-  const row = await env.DB.prepare(
-    "SELECT 1 AS found FROM repositories JOIN namespace_memberships ON namespace_memberships.namespace_id = repositories.namespace_id WHERE repositories.id = ? AND namespace_memberships.user_id = ?"
-  )
-    .bind(repositoryId, userId)
-    .first<{ found: number }>();
-  return row !== null;
+  return writableRole(await repositoryRole(env.DB, repositoryId, userId));
 }
 
 export function canWriteSession(user: TrustedUser, repositoryId: string): boolean {
@@ -102,4 +112,40 @@ export function parseActor(value: unknown, authorId: unknown): Actor {
   }
   const id = typeof authorId === "string" ? authorId : "unknown";
   return { kind: "user", id, name: id };
+}
+
+export function repoResponse(row: RepositoryRow, canWrite = false) {
+  return {
+    id: row.id,
+    namespaceId: row.namespace_id,
+    owner: row.owner,
+    name: row.slug,
+    slug: row.slug,
+    artifactName: row.artifact_name ?? "",
+    remote: row.remote ?? "",
+    defaultBranch: row.default_branch ?? "main",
+    visibility: row.visibility,
+    description: row.description,
+    archived: row.archived === 1,
+    issuesEnabled: row.issues_enabled !== 0,
+    pullsEnabled: row.pulls_enabled !== 0,
+    discussionsEnabled: row.discussions_enabled !== 0,
+    wikiEnabled: row.wiki_enabled !== 0,
+    tasksEnabled: row.tasks_enabled !== 0,
+    agentsEnabled: row.agents_enabled !== 0,
+    deploymentsEnabled: row.deployments_enabled !== 0,
+    graphEnabled: row.graph_enabled !== 0,
+    actionsEnabled: row.actions_enabled === 1,
+    actionsNetworkEnabled: row.actions_network_enabled === 1,
+    onlineEditingEnabled: row.online_editing_enabled !== 0,
+    allowMergeCommit: row.allow_merge_commit !== 0,
+    allowSquashMerge: row.allow_squash_merge !== 0,
+    allowRebaseMerge: row.allow_rebase_merge !== 0,
+    deleteBranchOnMerge: row.delete_branch_on_merge === 1,
+    requiredApprovals: row.required_approvals ?? 0,
+    requirePassingChecks: row.require_passing_checks === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    canWrite,
+  } satisfies Omit<Repository, "createdAt"> & { createdAt: number };
 }

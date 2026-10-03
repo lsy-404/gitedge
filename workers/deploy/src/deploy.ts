@@ -1,3 +1,4 @@
+import { repositoryRole } from "../../../src/worker/common/repositories";
 import { readTextLimited } from "../../../src/worker/common/readText";
 import { DeployManifestSchema, type DeployManifest } from "../../../packages/contracts/src/deploy";
 import {
@@ -219,10 +220,11 @@ async function repositoryForUser(
   userId: string,
   repositoryId: string
 ): Promise<boolean> {
+  if ((await repositoryRole(env.DB, repositoryId, userId)) !== "admin") return false;
   const row = await env.DB.prepare(
-    "SELECT repositories.id FROM repositories JOIN namespace_memberships ON namespace_memberships.namespace_id = repositories.namespace_id WHERE repositories.id = ? AND namespace_memberships.user_id = ? AND namespace_memberships.role = 'owner' AND repositories.archived = 0"
+    "SELECT id FROM repositories WHERE id=? AND archived=0 AND deployments_enabled=1"
   )
-    .bind(repositoryId, userId)
+    .bind(repositoryId)
     .first<{ id: string }>();
   return row !== null;
 }

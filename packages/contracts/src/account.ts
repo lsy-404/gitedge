@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const ReservedAccountIdentifiers: ReadonlySet<string> = new Set([
   "account",
+  "assets",
   "agents",
   "api",
   "app",
