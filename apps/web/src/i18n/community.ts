@@ -1,5 +1,6 @@
 const communityMessages = {
   "zh-CN": {
+    communityTemplatePreservesDraft: "模板只填充空白字段，已输入的标题和正文会保留。",
     profilePublic: "公开资料",
     profileRepositories: "公开仓库",
     profileNoRepositories: "尚无公开仓库。",
@@ -32,6 +33,8 @@ const communityMessages = {
     communityTemplatePreview: "预览",
   },
   en: {
+    communityTemplatePreservesDraft:
+      "Templates fill empty fields and preserve the title and body you have already written.",
     profilePublic: "Public profile",
     profileRepositories: "Public repositories",
     profileNoRepositories: "No public repositories yet.",

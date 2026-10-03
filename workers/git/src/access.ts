@@ -103,7 +103,7 @@ export async function listRepositorySessions(
   env: GitEnv,
   access: GitRepositoryAccess
 ): Promise<AgentSession[]> {
-  if (!access.repository.canWrite) return [];
+  if (!access.repository.canWrite || access.repository.agentsEnabled === 0) return [];
   const rows = await env.DB.prepare(
     "SELECT s.id, s.agent_id AS agentId, a.name AS agentName, s.repository_id AS repositoryId, s.workspace_name AS workspaceName, s.remote, s.base_ref AS baseRef, s.base_oid AS baseOid, s.permission, s.status, s.created_at AS createdAt, s.expires_at AS expiresAt FROM auth_agent_sessions s JOIN auth_agents a ON a.id = s.agent_id WHERE s.repository_id = ? ORDER BY s.created_at DESC LIMIT 100"
   )

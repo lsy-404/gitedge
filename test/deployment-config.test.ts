@@ -5,6 +5,7 @@ import { z } from "zod";
 const WorkerConfigSchema = z.object({
   workers_dev: z.boolean(),
   compatibility_date: z.string(),
+  compatibility_flags: z.array(z.string()).default([]),
   account_id: z.string(),
   artifacts: z.array(z.object({ binding: z.string(), namespace: z.string() })).optional(),
   services: z.array(z.object({ binding: z.string(), service: z.string() })).optional(),
@@ -21,6 +22,8 @@ describe("deployment isolation", () => {
       const config = WorkerConfigSchema.parse(JSON.parse(readFileSync(path, "utf8")));
       expect(config.workers_dev).toBe(false);
       expect(config.compatibility_date).toBe(service === "actions" ? "2026-10-03" : "2026-10-01");
+      if (service === "auth")
+        expect(config.compatibility_flags).toContain("global_fetch_strictly_public");
       if (service !== "gateway") expect(config.routes ?? []).toEqual([]);
       if (["auth", "forge", "git"].includes(service))
         expect(config.artifacts).toEqual([{ binding: "ARTIFACTS", namespace: "gitedge" }]);

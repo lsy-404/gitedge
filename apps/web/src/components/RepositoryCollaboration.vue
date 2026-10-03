@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import type {
@@ -28,6 +28,7 @@ import TextField from "./TextField.vue";
 import TextAreaField from "./TextAreaField.vue";
 import MarkdownContent from "./MarkdownContent.vue";
 import DiffViewer from "./DiffViewer.vue";
+import CommunityTemplatePicker from "./CommunityTemplatePicker.vue";
 
 const discussionCategories = [
   "general",
@@ -108,6 +109,10 @@ const form = ref<{
   slug: "",
   headSessionId: "",
 });
+function applyCommunityTemplate(value: { title: string; body: string }) {
+  if (!form.value.title.trim()) form.value.title = value.title;
+  if (!form.value.body.trim()) form.value.body = value.body;
+}
 const commentBody = ref("");
 const editCommentId = ref("");
 const reviewForm = ref<{ state: Review["state"]; body: string }>({ state: "commented", body: "" });
@@ -289,7 +294,7 @@ async function load() {
       } else {
         const [pullRows, sessionRows] = await Promise.all([
           api.pulls(props.repository.id),
-          props.repository.canWrite
+          props.repository.canWrite && props.repository.agentsEnabled
             ? api.repositorySessions(props.repository.id)
             : Promise.resolve([]),
         ]);
@@ -574,6 +579,46 @@ async function markAnswer(comment: Comment | null) {
 function toggleAnswer(comment: Comment) {
   void markAnswer(discussionItem.value?.answerCommentId === comment.id ? null : comment);
 }
+function checkStatusLabel(status: CheckRun["status"]): string {
+  return t(`actionsStatus_${status === "in_progress" ? "running" : status}`);
+}
+function checkConclusionLabel(conclusion: CheckRun["conclusion"]): string {
+  return conclusion === "neutral"
+    ? t("checkNeutral")
+    : conclusion
+      ? t(`actionsConclusion_${conclusion}`)
+      : t("pending");
+}
+let checkTimer: number | undefined;
+let checkPollEpoch = 0;
+watch(
+  () => [props.repository.id, props.section, detailNumber.value, pullIsOpen.value],
+  () => {
+    const epoch = ++checkPollEpoch;
+    window.clearTimeout(checkTimer);
+    if (props.section !== "pulls" || !detailNumber.value || !pullIsOpen.value) return;
+    const id = props.repository.id,
+      number = detailNumber.value;
+    const refreshChecks = async () => {
+      try {
+        if (!document.hidden) {
+          const result = await api.checks(id, number);
+          if (epoch === checkPollEpoch) checks.value = result;
+        }
+      } catch {
+        // Preserve the last result while the connection recovers.
+      } finally {
+        if (epoch === checkPollEpoch) checkTimer = window.setTimeout(refreshChecks, 5000);
+      }
+    };
+    checkTimer = window.setTimeout(refreshChecks, 5000);
+  },
+  { immediate: true }
+);
+onUnmounted(() => {
+  checkPollEpoch++;
+  window.clearTimeout(checkTimer);
+});
 watch(
   () => [props.repository.id, props.section, route.fullPath],
   () => {
@@ -650,6 +695,15 @@ watch(
         class="box box-form form-stack create-form"
         @submit.prevent="submitCreate"
       >
+        <template v-if="section === 'issues' || section === 'pulls'">
+          <CommunityTemplatePicker
+            :repository-id="repository.id"
+            :ref-name="repository.defaultBranch"
+            :kind="section === 'issues' ? 'issue' : 'pull-request'"
+            @select="applyCommunityTemplate"
+          />
+          <p class="muted">{{ t("communityTemplatePreservesDraft") }}</p>
+        </template>
         <TextField v-model="form.title" required>{{ t("issueTitle") }}</TextField>
         <TextField v-if="section === 'wiki'" v-model="form.slug" required>{{
           t("slug")
@@ -663,7 +717,11 @@ watch(
         <template v-if="section === 'pulls'">
           <TextField v-model="form.headRef" required>{{ t("headBranch") }}</TextField>
           <TextField v-model="form.baseRef" required>{{ t("baseBranch") }}</TextField>
-          <SelectField v-model="form.headSessionId" :label="t('sessionFork')">
+          <SelectField
+            v-if="repository.agentsEnabled"
+            v-model="form.headSessionId"
+            :label="t('sessionFork')"
+          >
             <option value="">{{ t("noSessionFork") }}</option>
             <option
               v-for="session in agentSessions.filter((value) => value.status === 'active')"
@@ -1149,7 +1207,8 @@ watch(
         <div v-for="check in checks" :key="check.id" class="item-row">
           <strong>{{ check.name }}</strong
           ><StatusBadge :tone="check.conclusion === 'success' ? 'success' : 'neutral'"
-            >{{ check.status }} · {{ check.conclusion || t("pending") }}</StatusBadge
+            >{{ checkStatusLabel(check.status) }} ·
+            {{ checkConclusionLabel(check.conclusion) }}</StatusBadge
           ><StatusBadge :tone="check.actor.kind === 'agent' ? 'brand' : 'neutral'"
             ><AppIcon v-if="String(check.actor.kind) === 'ci'" name="checkCircle" :size="13" />{{
               actorName(check)
@@ -1175,9 +1234,9 @@ watch(
             :label="t('checkStatus')"
             @update:model-value="checkForm.status = oneOf(checkStatuses, $event, 'completed')"
           >
-            <option value="queued">queued</option>
-            <option value="in_progress">in_progress</option>
-            <option value="completed">completed</option>
+            <option v-for="status in checkStatuses" :key="status" :value="status">
+              {{ checkStatusLabel(status) }}
+            </option>
           </SelectField>
           <SelectField
             v-if="checkForm.status === 'completed'"
@@ -1185,10 +1244,9 @@ watch(
             :label="t('checkConclusion')"
             @update:model-value="checkForm.conclusion = oneOf(checkConclusions, $event, 'success')"
           >
-            <option value="success">success</option>
-            <option value="failure">failure</option>
-            <option value="neutral">neutral</option>
-            <option value="cancelled">cancelled</option>
+            <option v-for="conclusion in checkConclusions" :key="conclusion" :value="conclusion">
+              {{ checkConclusionLabel(conclusion) }}
+            </option>
           </SelectField>
           <TextAreaField
             v-model="checkForm.summary"

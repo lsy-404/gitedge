@@ -621,6 +621,8 @@ async function featureRequest(
       if (!parsed.success) return error(400, "bad_request", "Invalid pull request payload.");
       if (actor.kind === "agent" && parsed.data.headSessionId !== user.agentSession?.id)
         return error(403, "forbidden", "An agent pull request must use its own workspace session.");
+      if (parsed.data.headSessionId && repository.agents_enabled === 0)
+        return error(404, "feature_disabled", "Repository agents are disabled.");
       if (parsed.data.headSessionId) {
         const session = await env.DB.prepare(
           "SELECT id FROM auth_agent_sessions WHERE auth_agent_sessions.id = ? AND auth_agent_sessions.user_id = ? AND auth_agent_sessions.repository_id = ? AND auth_agent_sessions.status = 'active' AND auth_agent_sessions.expires_at > ? AND EXISTS (SELECT 1 FROM auth_agents a WHERE a.id = auth_agent_sessions.agent_id AND a.disabled_at IS NULL)"

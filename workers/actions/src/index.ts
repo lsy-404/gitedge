@@ -1,3 +1,4 @@
+import { readJsonLimited } from "../../../src/worker/common/readText";
 import {
   GitOidSchema,
   trustedHeaders,
@@ -72,14 +73,6 @@ function error(status: number, code: string, message: string): Response {
     { error: { code, message } },
     { status, headers: { "Cache-Control": "no-store" } }
   );
-}
-
-async function readJson(request: Request): Promise<unknown> {
-  try {
-    return await request.json();
-  } catch {
-    return null;
-  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -620,7 +613,7 @@ async function handleInternalPush(request: Request, env: ActionsEnv): Promise<Re
   }
   const user = readTrustedUser(request);
   if (!user) return error(401, "unauthorized", "Trusted user context is required.");
-  const body: unknown = await readJson(request);
+  const body: unknown = await readJsonLimited(request, 65_536);
   if (
     !isRecord(body) ||
     typeof body.repositoryId !== "string" ||
@@ -711,7 +704,7 @@ async function startRun(
   if (repo.actions_enabled !== 1) return error(409, "conflict", "Repository Actions are disabled.");
   if (!(await canWriteRepository(env, repo, user)))
     return error(403, "forbidden", "Write permission is required to run Actions.");
-  const body: unknown = await readJson(request);
+  const body: unknown = await readJsonLimited(request, 65_536);
   if (
     !isRecord(body) ||
     typeof body.workflowPath !== "string" ||
