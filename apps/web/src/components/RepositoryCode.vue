@@ -9,7 +9,9 @@ import type {
   GitGraph,
   GitRef,
   GitTree,
+  GitTreeEntry,
   Repository,
+  RepositoryBranch,
 } from "../lib/api";
 import { ApiError, api } from "../lib/api";
 import AppIcon from "./AppIcon.vue";
@@ -35,6 +37,8 @@ import MarkdownContent from "./MarkdownContent.vue";
 import DiffViewer from "./DiffViewer.vue";
 import CommitSignatureStatus from "./CommitSignatureStatus.vue";
 import { preferencesState } from "../lib/preferences";
+import RepositoryBranches from "./RepositoryBranches.vue";
+import RepositoryFileEditor from "./RepositoryFileEditor.vue";
 
 const props = defineProps<{ repository: Repository; section: string }>();
 const { t } = useI18n();
@@ -43,6 +47,13 @@ const router = useRouter();
 const refs = ref<GitRef[]>([]);
 const tree = ref<GitTree | null>(null);
 const file = ref<GitFile | null>(null);
+const fileHeadOid = ref<string | null>(null);
+const managedBranches = ref<RepositoryBranch[]>([]);
+const branchRefreshKey = ref(0);
+const showFileEditor = ref(false);
+const editorCreatesNew = ref(false);
+const initialEditorPath = ref("");
+const savedFile = ref<{ oid: string; branch: string; path: string } | null>(null);
 const graph = ref<GitGraph | null>(null);
 const commits = ref<GitCommit[]>([]);
 const selectedCommit = computed(() =>
@@ -83,6 +94,33 @@ const isBlob = computed(
   () => String(route.params.view || "") === "blob" || route.path.includes("/blob/")
 );
 const branchRefs = computed(() => refs.value.filter((item) => item.name.startsWith("refs/heads/")));
+const canManageCode = computed(
+  () =>
+    props.section === "code" &&
+    props.repository.onlineEditingEnabled &&
+    props.repository.canWrite &&
+    !props.repository.archived
+);
+const selectedBranchHeadOid = computed(
+  () => branchRefs.value.find((item) => item.name === "refs/heads/" + refName.value)?.oid ?? null
+);
+const selectedBranchInfo = computed(
+  () => managedBranches.value.find((branch) => branch.name === refName.value) ?? null
+);
+const selectedFileEntry = computed(
+  () => tree.value?.entries.find((entry) => entry.path === filePath.value) ?? null
+);
+const selectedFileCanEdit = computed(
+  () =>
+    Boolean(file.value) &&
+    !file.value?.binary &&
+    file.value?.content !== null &&
+    (selectedFileEntry.value?.mode === "100644" || selectedFileEntry.value?.mode === "100755") &&
+    (file.value?.size ?? Infinity) <= 1_000_000
+);
+const canEditCurrentRef = computed(
+  () => Boolean(selectedBranchHeadOid.value) || emptyRepository.value
+);
 const tagRefs = computed(() => refs.value.filter((item) => item.name.startsWith("refs/tags/")));
 const shortRefs = (items: GitRef[]) =>
   items.map((item) => ({ ...item, shortName: item.name.replace(/^refs\/(heads|tags)\//, "") }));
@@ -155,12 +193,17 @@ async function load() {
   emptyRepository.value = false;
   tree.value = null;
   file.value = null;
+  fileHeadOid.value = null;
   graph.value = null;
   comparison.value = null;
   try {
     const refData = await api.refs(props.repository.id);
     if (version !== requestVersion) return;
     refs.value = refData;
+    const branchHead =
+      refData.find((item) => item.name === "refs/heads/" + refName.value)?.oid ?? null;
+    fileHeadOid.value = branchHead;
+    const pinnedRef = branchHead ?? refName.value;
     if (refData.length === 0 && (props.section === "code" || props.section === "commits")) {
       emptyRepository.value = true;
       return;
@@ -197,15 +240,15 @@ async function load() {
     if (isBlob.value && filePath.value) {
       const parent = filePath.value.split("/").slice(0, -1).join("/");
       const [fileData, directory] = await Promise.all([
-        api.file(props.repository.id, refName.value, filePath.value),
-        api.tree(props.repository.id, refName.value, parent),
+        api.file(props.repository.id, pinnedRef, filePath.value),
+        api.tree(props.repository.id, pinnedRef, parent),
       ]);
       if (version !== requestVersion) return;
       file.value = fileData;
       tree.value = directory;
       return;
     }
-    const treeData = await api.tree(props.repository.id, refName.value, filePath.value);
+    const treeData = await api.tree(props.repository.id, pinnedRef, filePath.value);
     if (version !== requestVersion) return;
     tree.value = treeData;
     if (
@@ -214,7 +257,7 @@ async function load() {
     ) {
       const readme = tree.value.entries.find((entry) => entry.name.toLowerCase() === "readme.md");
       if (readme) {
-        const readmeFile = await api.file(props.repository.id, refName.value, readme.path);
+        const readmeFile = await api.file(props.repository.id, pinnedRef, readme.path);
         if (version !== requestVersion) return;
         file.value = readmeFile;
       }
@@ -229,6 +272,47 @@ async function load() {
 }
 async function loadMore() {
   offset.value = commits.value.length;
+  await load();
+}
+function openNewFile() {
+  editorCreatesNew.value = true;
+  initialEditorPath.value = filePath.value ? filePath.value + "/" : "";
+  savedFile.value = null;
+  showFileEditor.value = true;
+}
+function openExistingFileEditor() {
+  editorCreatesNew.value = false;
+  initialEditorPath.value = "";
+  savedFile.value = null;
+  showFileEditor.value = true;
+}
+function onFileSaved(result: { oid: string; branch: string; path: string }) {
+  savedFile.value = result;
+  branchRefreshKey.value += 1;
+  const current = managedBranches.value.find((branch) => branch.name === result.branch);
+  if (current) {
+    managedBranches.value = managedBranches.value.map((branch) =>
+      branch.name === result.branch ? { ...branch, oid: result.oid } : branch
+    );
+  } else {
+    managedBranches.value = [
+      ...managedBranches.value,
+      { name: result.branch, oid: result.oid, protected: false, rules: [], isDefault: false },
+    ];
+  }
+}
+async function closeFileEditor() {
+  showFileEditor.value = false;
+  const changed = savedFile.value;
+  savedFile.value = null;
+  if (!changed) return;
+  if (changed.branch !== refName.value) {
+    await router.push({
+      path: "/" + props.repository.owner + "/" + props.repository.name,
+      query: { ...route.query, ref: changed.branch },
+    });
+    return;
+  }
   await load();
 }
 async function changeRef(value: string) {
@@ -347,6 +431,8 @@ watch(
     showFileSearch.value = false;
     queryText.value = "";
     fileMode.value = "preview";
+    showFileEditor.value = false;
+    savedFile.value = null;
   }
 );
 function fileHref(path: string, view: "tree" | "blob" = "blob") {
@@ -423,6 +509,15 @@ onUnmounted(() => {
             {{ item.shortName }} · {{ t("tags") }}
           </option>
         </SelectField>
+        <RepositoryBranches
+          v-if="canManageCode && branchRefs.length"
+          :repository="repository"
+          :selected-branch="refName"
+          :default-branch="repository.defaultBranch"
+          :refresh-key="branchRefreshKey"
+          @select="changeRef"
+          @branches-loaded="managedBranches = $event"
+        />
         <span class="repo-count"
           >{{ branchRefs.length }} {{ t("branches") }} · {{ tagRefs.length }} {{ t("tags") }}</span
         >
@@ -513,6 +608,22 @@ onUnmounted(() => {
       <code>git remote add gitedge {{ cloneUrl }}</code>
       <code>git push gitedge --all</code>
       <code>git push gitedge --tags</code>
+      <FluentButton v-if="canManageCode" type="button" tone="primary" @click="openNewFile"
+        ><AppIcon name="plus" />{{ t("codeNewFile") }}</FluentButton
+      >
+      <RepositoryFileEditor
+        v-if="showFileEditor && canManageCode"
+        :repository="repository"
+        :branch="repository.defaultBranch"
+        :expected-oid="null"
+        :branch-info="null"
+        :branches="managedBranches"
+        :file="null"
+        :entry="null"
+        :initial-path="initialEditorPath"
+        @close="closeFileEditor"
+        @saved="onFileSaved"
+      />
     </div>
     <template v-else-if="section === 'code'">
       <div v-if="latestCommit && !isBlob" class="latest-commit box">
@@ -527,8 +638,17 @@ onUnmounted(() => {
       </div>
       <div v-if="!isBlob" class="box file-panel">
         <div class="file-table-head">
-          <strong>{{ filePath || refName }}</strong
-          ><span>{{ filteredEntries.length }} {{ t("items") }}</span>
+          <strong>{{ filePath || refName }}</strong>
+          <div class="file-table-actions">
+            <span>{{ filteredEntries.length }} {{ t("items") }}</span>
+            <FluentButton
+              v-if="canManageCode && canEditCurrentRef"
+              type="button"
+              tone="secondary"
+              @click="openNewFile"
+              ><AppIcon name="plus" />{{ t("codeNewFile") }}</FluentButton
+            >
+          </div>
         </div>
         <FluentButton
           v-if="filePath"
@@ -619,6 +739,15 @@ onUnmounted(() => {
           ><span>{{ file.size }} {{ t("bytes") }} · {{ file.oid.slice(0, 7) }}</span>
           <div>
             <FluentButton
+              v-if="canManageCode && selectedBranchHeadOid"
+              type="button"
+              tone="secondary"
+              :disabled="!selectedFileCanEdit"
+              :title="selectedFileCanEdit ? undefined : t('codeNotEditable')"
+              @click="openExistingFileEditor"
+              >{{ t("edit") }}</FluentButton
+            >
+            <FluentButton
               tone="secondary"
               :disabled="file.binary || file.content === null"
               @click="rawFile"
@@ -650,6 +779,19 @@ onUnmounted(() => {
           fileLineNumbers.join("\n")
         }}</code><code class="highlighted-file" v-html="highlightedContent"></code></pre>
       </div>
+      <RepositoryFileEditor
+        v-if="showFileEditor && canManageCode && canEditCurrentRef && !emptyRepository"
+        :repository="repository"
+        :branch="selectedBranchHeadOid ? refName : repository.defaultBranch"
+        :expected-oid="fileHeadOid"
+        :branch-info="selectedBranchInfo"
+        :branches="managedBranches"
+        :file="!editorCreatesNew && !emptyRepository ? file : null"
+        :entry="!editorCreatesNew ? selectedFileEntry : null"
+        :initial-path="initialEditorPath"
+        @close="closeFileEditor"
+        @saved="onFileSaved"
+      />
       <aside v-if="!isBlob" class="about-panel box">
         <div class="box-header">
           <strong>{{ t("about") }}</strong

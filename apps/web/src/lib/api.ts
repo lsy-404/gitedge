@@ -32,6 +32,7 @@ import type {
   GitGraph,
   GitRef,
   GitTree,
+  GitTreeEntry,
   Issue,
   PullRequest,
   Repository,
@@ -39,6 +40,10 @@ import type {
   WikiPage,
   CreatedAgentSession,
 } from "../../../../packages/contracts/src/forge";
+import type {
+  EditRepositoryFileInput,
+  RepositoryBranch,
+} from "../../../../packages/contracts/src/repository-controls";
 import type { SsoIdentity, SsoProviderSummary } from "../../../../packages/contracts/src/sso";
 import type {
   AgentAssignmentPolicy,
@@ -76,6 +81,10 @@ export type {
   User,
 } from "../../../../packages/contracts/src/account";
 export type {
+  EditRepositoryFileInput,
+  RepositoryBranch,
+} from "../../../../packages/contracts/src/repository-controls";
+export type {
   Agent,
   AgentSession,
   Assignee,
@@ -88,6 +97,7 @@ export type {
   GitGraph,
   GitRef,
   GitTree,
+  GitTreeEntry,
   Issue,
   PullRequest,
   Repository,
@@ -333,6 +343,26 @@ export const api = {
     request<GitTree>(gitPath(repositoryId, `tree${query({ ref, path })}`)),
   file: (repositoryId: string, ref: string, path: string) =>
     request<GitFile>(gitPath(repositoryId, `file${query({ ref, path })}`)),
+  repositoryBranches: (repositoryId: string) =>
+    request<RepositoryBranch[]>(gitPath(repositoryId, "branches")),
+  createRepositoryBranch: (
+    repositoryId: string,
+    payload: { name: string; source: string; expectedOid: string }
+  ) =>
+    request<{ name: string; oid: string }>(gitPath(repositoryId, "branches"), {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  deleteRepositoryBranch: (repositoryId: string, payload: { name: string; expectedOid: string }) =>
+    request<{ deleted: boolean }>(gitPath(repositoryId, "branches"), {
+      method: "DELETE",
+      body: JSON.stringify(payload),
+    }),
+  editRepositoryFile: (repositoryId: string, payload: EditRepositoryFileInput) =>
+    request<{ oid: string; branch: string; path: string }>(gitPath(repositoryId, "edit"), {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   commits: (repositoryId: string, ref: string, offset: number, limit: number) =>
     request<GitCommit[]>(gitPath(repositoryId, `commits${query({ ref, offset, limit })}`)),
   graph: (repositoryId: string, ref: string, limit: number) =>
