@@ -1,4 +1,8 @@
-import { GitBranchSchema, GitOidSchema } from "../../../packages/contracts/src/forge";
+import {
+  GitBranchSchema,
+  GitRefNameSchema,
+  GitOidSchema,
+} from "../../../packages/contracts/src/forge";
 
 export interface RefUpdate {
   oldOid: string;
@@ -47,7 +51,9 @@ export async function readReceiveCommands(body: ReadableStream<Uint8Array> | nul
           !match ||
           !GitOidSchema.safeParse(match[1]).success ||
           !GitOidSchema.safeParse(match[2]).success ||
-          !GitBranchSchema.safeParse(match[4]).success ||
+          !(match[3].startsWith("refs/heads/") ? GitBranchSchema : GitRefNameSchema).safeParse(
+            match[4]
+          ).success ||
           updates.some((update) => update.ref === match[3])
         )
           throw new InvalidReceiveCommands("Invalid ref update.");

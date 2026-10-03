@@ -477,6 +477,7 @@ async function queueActionRun(
   snapshot: RepositorySnapshot,
   workflow: ActionWorkflow
 ): Promise<QueueActionResult> {
+  ref = ref.replace(/^refs\/heads\//, "");
   const id = crypto.randomUUID();
   let stub: ActionRunStub;
   try {

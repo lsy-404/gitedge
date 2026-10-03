@@ -327,7 +327,7 @@ export async function handleGitApi(
     );
   }
   if (resource === "snapshot") {
-    const oid = url.searchParams.get("oid") ?? "";
+    const oid = url.searchParams.get("oid") ?? (await resolveCommit(repo, ref))?.hash ?? "";
     if (!GitOidSchema.safeParse(oid).success || !(await refContainsCommit(repo, ref, oid)))
       return fail(404, "not_found", "The selected commit is unavailable.");
     return json(await repositorySnapshot(repo, oid));

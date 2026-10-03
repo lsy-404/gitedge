@@ -1,3 +1,4 @@
+import { GitBranchSchema, GitRefNameSchema } from "../../packages/contracts/src/forge";
 import { describe, it, expect } from "vitest";
 import { readReceiveCommands } from "../../workers/git/src/receive-commands";
 const encoder = new TextEncoder();
@@ -48,4 +49,16 @@ describe("Receive-pack command enforcement", () => {
     await expect(readReceiveCommands(oversized)).rejects.toThrow();
     expect(cancelled).toBe(true);
   });
+});
+
+it("rejects symbolic and fully qualified names where a branch name is required", () => {
+  for (const name of ["HEAD", "refs/heads/main", "refs/tags/v1", "@", "-topic"])
+    expect(GitBranchSchema.safeParse(name).success).toBe(false);
+  for (const name of ["main", "feature/ui", "release-1.0"])
+    expect(GitBranchSchema.safeParse(name).success).toBe(true);
+});
+
+it("retains valid tag names that are reserved for branch inputs", () => {
+  for (const name of ["HEAD", "@", "-release", "refs/release"])
+    expect(GitRefNameSchema.safeParse(name).success).toBe(true);
 });

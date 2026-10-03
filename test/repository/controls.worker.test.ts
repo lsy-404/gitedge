@@ -267,6 +267,23 @@ describe("Repository control authorization and rename invariants", () => {
       data: [{ commitOid: oid, status: "queued", conclusion: null }],
     });
   });
+  it("resolves the current snapshot when listing workflows without a caller OID", async () => {
+    const response = await gitCall("snapshot?ref=main", "GET", undefined);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      data: { oid: "a".repeat(40), files: [], totalBytes: 0 },
+    });
+    expect((await gitCall("snapshot?ref=main&oid=invalid", "GET", undefined)).status).toBe(404);
+    expect(
+      (
+        await call(`/repositories/${repositoryId}/pull-requests`, "POST", "owner", {
+          title: "Invalid fully qualified branch",
+          baseRef: "refs/heads/main",
+          headRef: "topic",
+        })
+      ).status
+    ).toBe(400);
+  });
   it("enforces feature switches while keeping settings available", async () => {
     const flags = {
       issuesEnabled: false,

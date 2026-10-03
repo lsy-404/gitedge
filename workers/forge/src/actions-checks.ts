@@ -59,9 +59,9 @@ export async function actionsCheck(request: Request, env: ForgeEnv): Promise<Res
     .first<RunRow>();
   if (!run) return error(404, "not_found", "Action run was not found.");
   const latest = await env.DB.prepare(
-    "SELECT id FROM actions_runs WHERE repository_id=? AND path=? AND commit_oid=? ORDER BY created_at DESC,id DESC LIMIT 1"
+    "SELECT id FROM actions_runs WHERE repository_id=? AND path=? AND commit_oid=? AND source_ref=? ORDER BY created_at DESC,id DESC LIMIT 1"
   )
-    .bind(run.repository_id, run.path, run.commit_oid)
+    .bind(run.repository_id, run.path, run.commit_oid, run.source_ref)
     .first<{ id: string }>();
   if (latest?.id !== run.id) return json({ data: { superseded: true } });
   const pulls = await env.DB.prepare(

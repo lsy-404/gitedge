@@ -220,7 +220,7 @@ export interface GitComparison {
 const title = z.string().trim().min(1).max(200);
 const body = z.string().max(50_000);
 export const GitOidSchema = z.string().regex(/^[0-9a-f]{40}$/);
-export const GitBranchSchema = z
+export const GitRefNameSchema = z
   .string()
   .trim()
   .min(1)
@@ -228,16 +228,19 @@ export const GitBranchSchema = z
   .refine(
     (value) =>
       !/(\.\.|@\{|[\s~^:?*\[\\\x00-\x1f\x7f])/.test(value) &&
-      value !== "@" &&
-      !value.startsWith("-") &&
       !value.startsWith("/") &&
       !value.endsWith("/") &&
       !value.endsWith(".") &&
       value
         .split("/")
         .every((part) => part.length > 0 && !part.startsWith(".") && !part.endsWith(".lock")),
-    "Invalid Git branch name"
+    "Invalid Git ref name"
   );
+export const GitBranchSchema = GitRefNameSchema.refine(
+  (value) =>
+    value !== "@" && value !== "HEAD" && !value.startsWith("-") && !value.startsWith("refs/"),
+  "Expected a branch name, not a symbolic or fully qualified ref"
+);
 export const CreateCommentInputSchema = z.object({ body: body.min(1) });
 export const CreateDiscussionInputSchema = z.object({
   title,
