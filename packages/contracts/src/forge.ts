@@ -36,6 +36,17 @@ export interface Repository {
   pullsEnabled: boolean;
   discussionsEnabled: boolean;
   wikiEnabled: boolean;
+  tasksEnabled: boolean;
+  agentsEnabled: boolean;
+  deploymentsEnabled: boolean;
+  graphEnabled: boolean;
+  actionsEnabled: boolean;
+  actionsNetworkEnabled: boolean;
+  onlineEditingEnabled: boolean;
+  allowMergeCommit: boolean;
+  allowSquashMerge: boolean;
+  allowRebaseMerge: boolean;
+  deleteBranchOnMerge: boolean;
   requiredApprovals: number;
   requirePassingChecks: boolean;
   createdAt: number;
@@ -277,6 +288,7 @@ export const CreateAgentSessionInputSchema = z.object({
   ttlSeconds: z.number().int().min(300).max(86_400).default(3_600),
 });
 export const MergePullRequestInputSchema = z.object({
+  method: z.enum(["merge", "squash", "rebase"]).default("merge"),
   expectedBaseOid: GitOidSchema,
   expectedHeadOid: GitOidSchema,
 });

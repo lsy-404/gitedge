@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { RepositorySlugSchema } from "./repository-controls";
 import { ActorSchema, GitBranchSchema, GitOidSchema, type Actor, type Assignee } from "./forge";
 
 export const AGENT_MODE_VERSION = "v0.2.2";
@@ -133,6 +134,17 @@ export interface RepositorySettings {
   pullsEnabled: boolean;
   discussionsEnabled: boolean;
   wikiEnabled: boolean;
+  tasksEnabled: boolean;
+  agentsEnabled: boolean;
+  deploymentsEnabled: boolean;
+  graphEnabled: boolean;
+  actionsEnabled: boolean;
+  actionsNetworkEnabled: boolean;
+  onlineEditingEnabled: boolean;
+  allowMergeCommit: boolean;
+  allowSquashMerge: boolean;
+  allowRebaseMerge: boolean;
+  deleteBranchOnMerge: boolean;
   requiredApprovals: number;
   requirePassingChecks: boolean;
   memoryVisibility: MemoryVisibility;
@@ -194,18 +206,8 @@ export const SetAssignmentsInputSchema = z.object({
 
 export const UpdateRepositorySettingsInputSchema = z
   .object({
-    name: z
-      .string()
-      .trim()
-      .toLowerCase()
-      .regex(/^[a-z0-9][a-z0-9-]{0,62}$/)
-      .optional(),
-    slug: z
-      .string()
-      .trim()
-      .toLowerCase()
-      .regex(/^[a-z0-9][a-z0-9-]{0,62}$/)
-      .optional(),
+    name: RepositorySlugSchema.optional(),
+    slug: RepositorySlugSchema.optional(),
     description: z.string().max(500).optional(),
     visibility: z.enum(["public", "private"]).optional(),
     defaultBranch: GitBranchSchema.optional(),
@@ -214,6 +216,17 @@ export const UpdateRepositorySettingsInputSchema = z
     pullsEnabled: z.boolean().optional(),
     discussionsEnabled: z.boolean().optional(),
     wikiEnabled: z.boolean().optional(),
+    tasksEnabled: z.boolean().optional(),
+    agentsEnabled: z.boolean().optional(),
+    deploymentsEnabled: z.boolean().optional(),
+    graphEnabled: z.boolean().optional(),
+    actionsEnabled: z.boolean().optional(),
+    actionsNetworkEnabled: z.boolean().optional(),
+    onlineEditingEnabled: z.boolean().optional(),
+    allowMergeCommit: z.boolean().optional(),
+    allowSquashMerge: z.boolean().optional(),
+    allowRebaseMerge: z.boolean().optional(),
+    deleteBranchOnMerge: z.boolean().optional(),
     requiredApprovals: z.number().int().min(0).max(5).optional(),
     requirePassingChecks: z.boolean().optional(),
     memoryVisibility: MemoryVisibilitySchema.optional(),
