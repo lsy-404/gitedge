@@ -28,13 +28,14 @@ const authPage = computed(() => route.path === "/login" || route.path === "/regi
 const repositoryPath = computed(() =>
   route.params.owner && route.params.repo ? `/${route.params.owner}/${route.params.repo}` : ""
 );
-const pageName = computed(() =>
-  route.path.startsWith("/settings")
-    ? t("account")
-    : route.path.startsWith("/organizations")
-      ? t("organizations")
-      : t("dashboard")
-);
+const pageName = computed(() => {
+  if (route.params.handle) return t("agentProfile");
+  if (route.params.owner && !route.params.repo) return String(route.params.owner);
+  if (route.path.startsWith("/settings/agents")) return t("agents");
+  if (route.path.startsWith("/settings")) return t("account");
+  if (route.path.startsWith("/organizations")) return t("organizations");
+  return t("dashboard");
+});
 const search = ref("");
 const searchExpanded = ref(false);
 const searchInput = ref<HTMLInputElement | null>(null);
@@ -127,7 +128,7 @@ if (!sessionState.checked) void refreshSession();
           >
           <nav v-if="!authPage" class="header-context" :aria-label="t('ghBreadcrumbs')">
             <template v-if="repositoryPath"
-              ><span>{{ route.params.owner }}</span
+              ><RouterLink :to="`/${route.params.owner}`">{{ route.params.owner }}</RouterLink
               ><span class="muted">/</span
               ><RouterLink :to="repositoryPath">{{ route.params.repo }}</RouterLink></template
             >
@@ -184,7 +185,10 @@ if (!sessionState.checked) void refreshSession();
               </summary>
               <div class="dropdown-panel">
                 <p v-if="sessionState.user" class="dropdown-identity">
-                  {{ t("ghSignedIn") }}<strong>{{ accountName }}</strong>
+                  {{ t("ghSignedIn")
+                  }}<RouterLink :to="`/${sessionState.user.identifier}`"
+                    ><strong>{{ accountName }}</strong></RouterLink
+                  >
                 </p>
                 <hr />
                 <template v-if="sessionState.user">

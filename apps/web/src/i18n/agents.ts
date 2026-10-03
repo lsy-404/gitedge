@@ -1,6 +1,8 @@
 const agentsMessages = {
   "zh-CN": {
     agentHandle: "智能体地址",
+    agentsUnavailable: "无法加载智能体子账号。请重试。",
+    noSessionsHint: "创建有明确仓库范围和期限的会话来开始工作。",
     agentHandleHint: "用于 /用户名/{'@'}handle，创建后可以更改。",
     agentProfile: "智能体资料",
     agentProfilePublic: "公开智能体资料",
@@ -28,6 +30,8 @@ const agentsMessages = {
   },
   en: {
     agentHandle: "Agent handle",
+    agentsUnavailable: "Agent subaccounts could not be loaded. Please retry.",
+    noSessionsHint: "Create a session with a repository scope and expiry to begin work.",
     agentHandleHint: "Used in /username/{'@'}handle. You can change it later.",
     agentProfile: "Agent profile",
     agentProfilePublic: "Make this agent profile public",

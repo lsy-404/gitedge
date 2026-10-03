@@ -13,6 +13,9 @@ import actionsMessages from "./i18n/actions";
 
 const messages = {
   "zh-CN": {
+    categoryQa: "问答",
+    categoryAnnouncements: "公告",
+    organization: "组织",
     brand: "GitEdge",
     brandSub: "边缘 Git Forge",
     loginTitle: "登录到 GitEdge",
@@ -415,6 +418,9 @@ const messages = {
     agentPolicyHint: "决定谁可以把智能体设为负责人或审核人：仅其所有者，或任意仓库成员。",
   },
   en: {
+    categoryQa: "Q&A",
+    categoryAnnouncements: "Announcements",
+    organization: "Organization",
     brand: "GitEdge",
     brandSub: "Edge Git Forge",
     loginTitle: "Sign in to GitEdge",
