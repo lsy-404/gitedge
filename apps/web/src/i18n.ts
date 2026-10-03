@@ -6,6 +6,7 @@ import workspace from "./i18n/workspace";
 import codeMessages from "./i18n/code";
 import collaborationMessages from "./i18n/collaboration";
 import avatarMessages from "./i18n/avatar";
+import agentsMessages from "./i18n/agents";
 
 const messages = {
   "zh-CN": {
@@ -843,6 +844,7 @@ export const i18n = createI18n({
       ...settingsMessages["zh-CN"],
       ...repositorySettingsMessages["zh-CN"],
       ...avatarMessages["zh-CN"],
+      ...agentsMessages["zh-CN"],
     },
     en: {
       ...messages.en,
@@ -853,6 +855,7 @@ export const i18n = createI18n({
       ...settingsMessages.en,
       ...repositorySettingsMessages.en,
       ...avatarMessages.en,
+      ...agentsMessages.en,
     },
   },
 });

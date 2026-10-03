@@ -1,8 +1,8 @@
 import { runSqlScript } from "../support/database";
 import { env } from "cloudflare:workers";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { sha256Hex, type Agent } from "../../packages/contracts/src/index";
+import { AgentSchema, sha256Hex, type Agent } from "../../packages/contracts/src/index";
 import auth from "../../workers/auth/src/index";
 import { FixtureArtifacts } from "../support/artifacts";
 
@@ -13,7 +13,21 @@ const migrations = import.meta.glob<string>("../../migrations/*.sql", {
 });
 
 async function applyMigrations(): Promise<void> {
-  for (const path of Object.keys(migrations).sort()) await runSqlScript(env.DB, migrations[path]);
+  for (const path of Object.keys(migrations).sort()) {
+    await runSqlScript(env.DB, migrations[path]);
+    if (path.endsWith("0006_agents.sql")) {
+      await env.DB.prepare(
+        "INSERT INTO users (id, identifier, password_salt, password_hash, created_at) VALUES (?, ?, ?, ?, ?)"
+      )
+        .bind("legacy-agent-user", "legacy-agent-user", "salt", "hash", 1)
+        .run();
+      await env.DB.prepare(
+        "INSERT INTO auth_agents (id, user_id, name, description, created_at) VALUES (?, ?, ?, ?, ?)"
+      )
+        .bind("legacy-agent", "legacy-agent-user", "Legacy Review Agent", "", 2)
+        .run();
+    }
+  }
 }
 
 const artifacts = new FixtureArtifacts();
@@ -22,6 +36,7 @@ const authEnv: Parameters<typeof auth.fetch>[1] = {
   ARTIFACTS: artifacts,
   ALLOW_PUBLIC_SIGNUP: "true",
   DEFAULT_USER_GROUP: "free",
+  WEBHOOK_ENCRYPTION_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 };
 
 const CreatedSessionSchema = z.object({
@@ -82,6 +97,10 @@ async function accountApi(
 
 beforeAll(async () => {
   await applyMigrations();
+  const legacyAgent = await env.DB.prepare(
+    "SELECT handle, profile_public AS profilePublic, updated_at AS updatedAt FROM auth_agents WHERE id = 'legacy-agent'"
+  ).first<{ handle: string; profilePublic: number; updatedAt: number }>();
+  expect(legacyAgent).toEqual({ handle: "legacy-review-agent-1", profilePublic: 0, updatedAt: 2 });
 });
 
 describe("Auth agents, Artifact sessions, and Git credentials", () => {
@@ -157,6 +176,193 @@ describe("Auth agents, Artifact sessions, and Git credentials", () => {
     const buildAgent = agents.results[0];
     const reviewAgent = agents.results[1];
     if (!buildAgent || !reviewAgent) throw new Error("Both agents were not created.");
+
+    const firstAgentPayload = z
+      .object({ data: AgentSchema })
+      .parse(await firstAgentResponse.json());
+    const createdPath = firstAgentPayload.data.profilePath;
+    expect(createdPath).toBe(`/${user.identifier}/@build-assistant`);
+    const duplicateHandle = await accountApi("/agents", "POST", cookie, {
+      handle: "build-assistant",
+      name: "Another display name",
+    });
+    expect(duplicateHandle.status).toBe(409);
+    const renamed = await accountApi(`/agents/${buildAgent.id}`, "PATCH", cookie, {
+      handle: "builder-v2",
+      name: "Builder",
+      profilePublic: false,
+    });
+    expect(renamed.status).toBe(200);
+    const renamedPayload = z.object({ data: AgentSchema }).parse(await renamed.json());
+    expect(renamedPayload.data).toMatchObject({
+      handle: "builder-v2",
+      name: "Builder",
+      profilePath: `/${user.identifier}/@builder-v2`,
+    });
+    const previousProfile = await auth.fetch(
+      new Request(`https://auth.test/agent-profiles/${user.identifier}/build-assistant`),
+      authEnv
+    );
+    expect(previousProfile.status).toBe(404);
+    const privateProfile = await auth.fetch(
+      new Request(`https://auth.test/agent-profiles/${user.identifier}/builder-v2`),
+      authEnv
+    );
+    expect(privateProfile.status).toBe(404);
+    const ownerProfile = await auth.fetch(
+      accountRequest(`/agent-profiles/${user.identifier}/builder-v2`, "GET", cookie),
+      authEnv
+    );
+    expect(ownerProfile.status).toBe(200);
+    expect(await ownerProfile.json()).toMatchObject({
+      data: { owner: user.identifier, handle: "builder-v2", name: "Builder" },
+    });
+    const secondRegistration = await auth.fetch(
+      new Request("https://auth.test/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          identifier: `other-${crypto.randomUUID().slice(0, 8)}`,
+          password: "a-long-test-password-2026",
+        }),
+      }),
+      authEnv
+    );
+    const secondCookie = cookieFrom(secondRegistration);
+    const foreignProfile = await auth.fetch(
+      accountRequest(`/agent-profiles/${user.identifier}/builder-v2`, "GET", secondCookie),
+      authEnv
+    );
+    expect(foreignProfile.status).toBe(404);
+    const publicUpdate = await accountApi(`/agents/${buildAgent.id}`, "PATCH", cookie, {
+      profilePublic: true,
+    });
+    expect(publicUpdate.status).toBe(200);
+    const publicProfile = await auth.fetch(
+      new Request(`https://auth.test/agent-profiles/${user.identifier}/builder-v2`),
+      authEnv
+    );
+    expect(publicProfile.status).toBe(200);
+    expect(await publicProfile.json()).toMatchObject({
+      data: { owner: user.identifier, handle: "builder-v2", name: "Builder" },
+    });
+    await accountApi(`/agents/${buildAgent.id}`, "PATCH", cookie, { profilePublic: false });
+
+    let webhookFetches = 0;
+    let capturedSignature = "";
+    let capturedBody = "";
+    vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+      webhookFetches += 1;
+      capturedSignature = new Headers(init?.headers).get("X-GitEdge-Signature-256") ?? "";
+      capturedBody = String(init?.body ?? "");
+      return new Response(null, { status: webhookFetches === 1 ? 500 : 204 });
+    });
+    try {
+      const noKeyEnv = { ...authEnv, WEBHOOK_ENCRYPTION_KEY: undefined };
+      const noKeyResponse = await auth.fetch(
+        accountRequest(`/agents/${buildAgent.id}/webhook`, "PUT", cookie, {
+          url: "https://hooks.example.com/gitedge",
+          events: ["agent.assigned"],
+          enabled: true,
+        }),
+        noKeyEnv
+      );
+      expect(noKeyResponse.status).toBe(503);
+      const settings = await accountApi(`/agents/${buildAgent.id}/webhook`, "PUT", cookie, {
+        url: "https://hooks.example.com/gitedge",
+        events: ["agent.assigned"],
+        enabled: true,
+      });
+      expect(settings.status).toBe(201);
+      const settingsPayload = z
+        .object({ data: z.object({ secret: z.string() }) })
+        .parse(await settings.json());
+      const webhookSecret = settingsPayload.data.secret;
+      expect(webhookSecret).toMatch(/^ge_webhook_[0-9a-f]{64}$/);
+      const encrypted = await env.DB.prepare(
+        "SELECT secret_ciphertext FROM auth_agent_webhooks WHERE agent_id = ?"
+      )
+        .bind(buildAgent.id)
+        .first<{ secret_ciphertext: string }>();
+      expect(encrypted?.secret_ciphertext).not.toContain(webhookSecret);
+      const getSettings = await accountApi(`/agents/${buildAgent.id}/webhook`, "GET", cookie);
+      expect(JSON.stringify(await getSettings.json())).not.toContain(webhookSecret);
+
+      await auth.fetch(
+        new Request("https://auth.test/_internal/agent-events", {
+          method: "POST",
+          body: JSON.stringify({
+            agentId: buildAgent.id,
+            repositoryId,
+            actorUserId: user.id,
+            event: "agent.assigned",
+            data: { action: "assigned" },
+          }),
+        }),
+        authEnv
+      );
+      const deliveries = await accountApi(
+        `/agents/${buildAgent.id}/webhook/deliveries`,
+        "GET",
+        cookie
+      );
+      const deliveryPayload = z
+        .object({
+          data: z.array(z.object({ id: z.string(), status: z.string(), attemptCount: z.number() })),
+        })
+        .parse(await deliveries.json());
+      expect(deliveryPayload.data[0]).toMatchObject({ status: "failed", attemptCount: 1 });
+      const expectedKey = await crypto.subtle.importKey(
+        "raw",
+        new TextEncoder().encode(webhookSecret),
+        { name: "HMAC", hash: "SHA-256" },
+        false,
+        ["sign"]
+      );
+      const expectedSignatureBytes = new Uint8Array(
+        await crypto.subtle.sign("HMAC", expectedKey, new TextEncoder().encode(capturedBody))
+      );
+      const expectedSignature = Array.from(expectedSignatureBytes, (byte) =>
+        byte.toString(16).padStart(2, "0")
+      ).join("");
+      expect(capturedSignature).toBe(`sha256=${expectedSignature}`);
+      const retried = await accountApi(
+        `/agents/${buildAgent.id}/webhook/deliveries/${deliveryPayload.data[0]?.id}/retry`,
+        "POST",
+        cookie,
+        {}
+      );
+      expect(retried.status).toBe(200);
+      expect(await retried.json()).toMatchObject({ data: { status: "success", attemptCount: 2 } });
+      await accountApi(`/agents/${buildAgent.id}/webhook`, "PUT", cookie, {
+        url: "https://hooks.example.com/gitedge",
+        events: ["agent.assigned"],
+        enabled: false,
+      });
+      const countBeforeDisabled = webhookFetches;
+      await auth.fetch(
+        new Request("https://auth.test/_internal/agent-events", {
+          method: "POST",
+          body: JSON.stringify({
+            agentId: buildAgent.id,
+            repositoryId,
+            actorUserId: user.id,
+            event: "agent.assigned",
+            data: { action: "assigned" },
+          }),
+        }),
+        authEnv
+      );
+      expect(webhookFetches).toBe(countBeforeDisabled);
+      const unsafeUrl = await accountApi(`/agents/${buildAgent.id}/webhook`, "PUT", cookie, {
+        url: "https://127.0.0.1/hook",
+        events: ["agent.assigned"],
+        enabled: true,
+      });
+      expect(unsafeUrl.status).toBe(400);
+    } finally {
+      vi.unstubAllGlobals();
+    }
 
     const firstSessionResponse = await accountApi(
       `/agents/${buildAgent.id}/sessions`,

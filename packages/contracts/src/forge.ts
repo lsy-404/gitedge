@@ -140,13 +140,7 @@ export interface CheckRun {
   updatedAt: number;
 }
 
-export interface Agent {
-  id: string;
-  name: string;
-  description: string;
-  createdAt: number;
-  disabledAt: number | null;
-}
+export type { Agent } from "./agents";
 
 export interface AgentSession {
   id: string;
@@ -277,10 +271,7 @@ export const PutCheckRunInputSchema = z
   .refine((value) =>
     value.status === "completed" ? value.conclusion !== null : value.conclusion === null
   );
-export const CreateAgentInputSchema = z.object({
-  name: z.string().trim().min(1).max(80),
-  description: z.string().max(500).default(""),
-});
+export { CreateAgentInputSchema } from "./agents";
 export const CreateAgentSessionInputSchema = z.object({
   repositoryId: z.string().min(1),
   baseRef: GitBranchSchema.default("main"),

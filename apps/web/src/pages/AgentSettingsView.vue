@@ -46,7 +46,7 @@ const credentialDialogOpen = computed({
     if (!open) clearCredentials();
   },
 });
-const agentForm = ref({ name: "", description: "" });
+const agentForm = ref({ handle: "", name: "", description: "" });
 const showAgentForm = ref(false);
 const showSessionForm = ref(false);
 const sessionForm = ref<{
@@ -131,7 +131,7 @@ async function createAgent() {
     const agent = await api.createAgent(agentForm.value);
     agents.value = [agent, ...agents.value];
     selectedAgent.value = agent.id;
-    agentForm.value = { name: "", description: "" };
+    agentForm.value = { handle: "", name: "", description: "" };
     showAgentForm.value = false;
     if (route.query.new)
       await router.replace({ path: route.path, query: { ...route.query, new: undefined } });
@@ -283,6 +283,12 @@ sessionClockTimer = window.setInterval(() => {
                 <div>
                   <h2>{{ currentAgent.name }}</h2>
                   <p class="muted">{{ currentAgent.description || t("noDescription") }}</p>
+                  <RouterLink :to="currentAgent.profilePath">{{
+                    currentAgent.profilePath
+                  }}</RouterLink>
+                  <RouterLink :to="`/settings/agents/${currentAgent.id}/webhook`">{{
+                    t("agentWebhook")
+                  }}</RouterLink>
                 </div>
                 <FluentButton
                   v-if="!currentAgent.disabledAt"
@@ -423,6 +429,13 @@ sessionClockTimer = window.setInterval(() => {
             </header>
             <p class="muted">{{ t("agentCreateHint") }}</p>
             <form class="form-stack" @submit.prevent="createAgent">
+              <TextField
+                v-model="agentForm.handle"
+                maxlength="40"
+                pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
+                >{{ t("agentHandle") }}</TextField
+              >
+              <small class="muted">{{ t("agentHandleHint") }}</small>
               <TextField v-model="agentForm.name" required maxlength="80">{{
                 t("agentName")
               }}</TextField>

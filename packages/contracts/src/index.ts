@@ -3,6 +3,7 @@ import { GitBranchSchema, type AgentSessionIdentity } from "./forge";
 import { RepositorySlugSchema } from "./repository-controls";
 export * from "./repository-controls";
 export * from "./forge";
+export * from "./agents";
 export * from "./tasks";
 export * from "./trust";
 export * from "./account";

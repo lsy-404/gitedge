@@ -19,13 +19,20 @@ import {
   SESSION_MAX_AGE_SECONDS,
 } from "./session";
 import { PBKDF2_ITERATIONS } from "./password";
-import { authenticateAgentSession, authenticateGitToken, handleAgentManagement } from "./agents";
+import {
+  authenticateAgentSession,
+  authenticateGitToken,
+  handleAgentManagement,
+  handleAgentProfile,
+} from "./agents";
 import { handleAccountProfile, handleWebSessions } from "./profile";
+import { handleAgentEvent } from "./agent-webhooks";
 
 export type AuthEnv = {
   readonly DB: D1Database;
   readonly ARTIFACTS: Artifacts;
   readonly LOG_LEVEL?: string;
+  readonly WEBHOOK_ENCRYPTION_KEY?: string;
   readonly ALLOW_PUBLIC_SIGNUP: string;
   readonly DEFAULT_USER_GROUP: string;
   readonly SSO_PROVIDERS_JSON?: string;
@@ -645,6 +652,10 @@ export default {
       await logout(env, readCookie(request));
       return json({ data: { loggedOut: true } }, 200, { "Set-Cookie": createSessionCookie("", 0) });
     }
+    if (path === "/_internal/agent-events" && request.method === "POST") {
+      await handleAgentEvent(request, env);
+      return json({ data: { accepted: true } }, 202);
+    }
     if (request.method === "GET" && path === "/session") {
       const authorization = request.headers.get("Authorization");
       if (authorization) {
@@ -657,6 +668,10 @@ export default {
       }
       const result = await session(env, readCookie(request));
       return result.ok ? json({ data: result.data }) : json({ error: result.error }, result.status);
+    }
+    if (/^\/agent-profiles\//.test(path)) {
+      const profileSession = await session(env, readCookie(request));
+      return handleAgentProfile(request, env, profileSession.ok ? profileSession.data : null);
     }
     if (/^\/(agents|sessions|tokens|web-sessions)(\/|$)/.test(path)) {
       const authorization = request.headers.get("Authorization");

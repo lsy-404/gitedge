@@ -14,6 +14,12 @@ import type {
   User,
 } from "../../../../packages/contracts/src/account";
 import type {
+  AgentProfile,
+  AgentWebhookDelivery,
+  AgentWebhookEvent,
+  AgentWebhookSettings,
+} from "../../../../packages/contracts/src/agents";
+import type {
   Agent,
   AgentSession,
   Assignee,
@@ -618,7 +624,43 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   agents: () => request<Agent[]>("/api/auth/agents"),
-  createAgent: (payload: { name: string; description: string }) =>
+  agent: (id: string) => request<Agent>(`/api/auth/agents/${encodeURIComponent(id)}`),
+  updateAgent: (
+    id: string,
+    payload: Partial<Pick<Agent, "handle" | "name" | "description" | "profilePublic">>
+  ) =>
+    request<Agent>(`/api/auth/agents/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  agentProfile: (owner: string, handle: string) =>
+    request<AgentProfile>(
+      `/api/auth/agent-profiles/${encodeURIComponent(owner)}/${encodeURIComponent(handle)}`
+    ),
+  agentWebhook: (id: string) =>
+    request<(AgentWebhookSettings & { configured: true; updatedAt: number }) | null>(
+      `/api/auth/agents/${encodeURIComponent(id)}/webhook`
+    ),
+  saveAgentWebhook: (id: string, payload: AgentWebhookSettings, rotateSecret = false) =>
+    request<AgentWebhookSettings & { configured: true; secret: string | null }>(
+      `/api/auth/agents/${encodeURIComponent(id)}/webhook`,
+      { method: "PUT", body: JSON.stringify({ ...payload, rotateSecret }) }
+    ),
+  testAgentWebhook: (id: string) =>
+    request<AgentWebhookDelivery>(`/api/auth/agents/${encodeURIComponent(id)}/webhook/test`, {
+      method: "POST",
+      body: "{}",
+    }),
+  agentWebhookDeliveries: (id: string) =>
+    request<AgentWebhookDelivery[]>(
+      `/api/auth/agents/${encodeURIComponent(id)}/webhook/deliveries`
+    ),
+  retryAgentWebhookDelivery: (id: string, deliveryId: string) =>
+    request<AgentWebhookDelivery>(
+      `/api/auth/agents/${encodeURIComponent(id)}/webhook/deliveries/${encodeURIComponent(deliveryId)}/retry`,
+      { method: "POST", body: "{}" }
+    ),
+  createAgent: (payload: { handle?: string; name: string; description: string }) =>
     request<Agent>("/api/auth/agents", { method: "POST", body: JSON.stringify(payload) }),
   disableAgent: (id: string) =>
     request(`/api/auth/agents/${encodeURIComponent(id)}`, { method: "DELETE" }, true),
