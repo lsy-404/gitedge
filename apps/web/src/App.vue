@@ -172,7 +172,7 @@ if (!sessionState.checked) void refreshSession();
                 </div>
               </details>
             </template>
-            <details v-if="!authPage" ref="userMenu" class="dropdown user-menu">
+            <details ref="userMenu" class="dropdown user-menu">
               <summary :aria-label="t('ghUserMenu')" class="account-trigger">
                 <span v-if="sessionState.user" class="avatar"
                   ><img

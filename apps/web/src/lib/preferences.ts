@@ -55,8 +55,9 @@ export async function updatePreference(
   value: AccountPreferences["locale"] | AccountPreferences["theme"]
 ): Promise<void> {
   if (preferenceSaving.value) return;
+  loadVersion += 1;
   const previous = preferencesState[key];
-  if (previous === value) return;
+  if (previous === value && (!sessionState.user || accountProfileState.value)) return;
   preferenceError.value = "";
   apply({ ...preferencesState, [key]: value });
   const userId = sessionState.user?.id;
