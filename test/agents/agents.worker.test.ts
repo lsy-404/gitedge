@@ -719,6 +719,65 @@ describe("Auth agents, Artifact sessions, and Git credentials", () => {
         .bind(timeoutEvent.deliveryId)
         .first<{ status: string; errorCode: string | null }>();
       expect(timedOutDelivery).toEqual({ status: "failed", errorCode: "timeout" });
+
+      let standaloneFetchCount = 0;
+      vi.stubGlobal("fetch", async () => {
+        standaloneFetchCount += 1;
+        return new Response(null, { status: 500 });
+      });
+      const standaloneTest = await accountApi(
+        `/agents/${buildAgent.id}/webhook/test`,
+        "POST",
+        cookie,
+        {}
+      );
+      expect(standaloneTest.status).toBe(502);
+      const standaloneDelivery = z
+        .object({ data: z.object({ id: z.string(), attemptCount: z.number() }) })
+        .parse(await standaloneTest.json()).data;
+      expect(standaloneDelivery.attemptCount).toBe(1);
+
+      let fetchStarted!: () => void;
+      let releaseFetch!: () => void;
+      const started = new Promise<void>((resolve) => {
+        fetchStarted = resolve;
+      });
+      const responseGate = new Promise<void>((resolve) => {
+        releaseFetch = resolve;
+      });
+      vi.stubGlobal("fetch", async () => {
+        standaloneFetchCount += 1;
+        fetchStarted();
+        await responseGate;
+        return new Response(null, { status: 500 });
+      });
+      const retryPath = `/agents/${buildAgent.id}/webhook/deliveries/${standaloneDelivery.id}/retry`;
+      const firstRetryPromise = accountApi(retryPath, "POST", cookie, {});
+      await started;
+      const concurrentRetry = await accountApi(retryPath, "POST", cookie, {});
+      expect(concurrentRetry.status).toBe(409);
+      releaseFetch();
+      const firstRetry = await firstRetryPromise;
+      expect(firstRetry.status).toBe(502);
+      expect(standaloneFetchCount).toBe(2);
+
+      await env.DB.prepare(
+        "UPDATE auth_agent_webhook_deliveries SET attempt_count = 4 WHERE id = ? AND agent_id = ? AND status = 'failed'"
+      )
+        .bind(standaloneDelivery.id, buildAgent.id)
+        .run();
+      vi.stubGlobal("fetch", async () => {
+        standaloneFetchCount += 1;
+        return new Response(null, { status: 500 });
+      });
+      const finalRetry = await accountApi(retryPath, "POST", cookie, {});
+      expect(finalRetry.status).toBe(502);
+      expect(await finalRetry.json()).toMatchObject({
+        data: { id: standaloneDelivery.id, attemptCount: 5, status: "failed" },
+      });
+      const overLimitRetry = await accountApi(retryPath, "POST", cookie, {});
+      expect(overLimitRetry.status).toBe(409);
+      expect(standaloneFetchCount).toBe(3);
     } finally {
       vi.unstubAllGlobals();
     }

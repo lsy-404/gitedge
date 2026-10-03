@@ -55,6 +55,9 @@ interface DeliveryAttemptRow {
   attemptCount: number;
   createdAt: number;
 }
+type DeliveryClaimMode = "initial" | "manual-retry" | "outbox";
+
+class DeliveryClaimConflict extends Error {}
 
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_RESPONSE_BYTES = 4 * 1024;
@@ -233,7 +236,8 @@ async function deliver(
   event: AgentWebhookEvent,
   payload: Record<string, unknown>,
   requestedDeliveryId?: string,
-  requestedCreatedAt?: number
+  requestedCreatedAt?: number,
+  claimMode: DeliveryClaimMode = "initial"
 ): Promise<DeliveryRow> {
   const row = await loadSettings(env, agentId);
   if (!row || row.enabled !== 1 || !parseEvents(row.eventsJson).includes(event))
@@ -251,11 +255,20 @@ async function deliver(
   if (new TextEncoder().encode(body).byteLength > MAX_BODY_BYTES)
     throw new Error("payload_too_large");
   const serialized = JSON.stringify(payload);
-  await env.DB.prepare(
-    "INSERT INTO auth_agent_webhook_deliveries (id, agent_id, event, payload, status, response_status, error_code, attempt_count, created_at, delivered_at) VALUES (?, ?, ?, ?, 'pending', NULL, 'delivery_pending', 1, ?, NULL) ON CONFLICT(id) DO UPDATE SET status = 'pending', response_status = NULL, error_code = 'delivery_pending', attempt_count = auth_agent_webhook_deliveries.attempt_count + 1, delivered_at = NULL WHERE auth_agent_webhook_deliveries.status IN ('pending', 'failed')"
+  const claim = await env.DB.prepare(
+    "INSERT INTO auth_agent_webhook_deliveries (id, agent_id, event, payload, status, response_status, error_code, attempt_count, created_at, delivered_at) VALUES (?, ?, ?, ?, 'pending', NULL, 'delivery_pending', 1, ?, NULL) ON CONFLICT(id) DO UPDATE SET status = 'pending', response_status = NULL, error_code = 'delivery_pending', attempt_count = auth_agent_webhook_deliveries.attempt_count + 1, delivered_at = NULL WHERE auth_agent_webhook_deliveries.agent_id = excluded.agent_id AND auth_agent_webhook_deliveries.attempt_count < ? AND (auth_agent_webhook_deliveries.status = 'failed' OR (? = 1 AND auth_agent_webhook_deliveries.status = 'pending'))"
   )
-    .bind(id, agentId, event, serialized, createdAt)
+    .bind(
+      id,
+      agentId,
+      event,
+      serialized,
+      createdAt,
+      MAX_DELIVERY_ATTEMPTS,
+      Number(claimMode === "outbox")
+    )
     .run();
+  if (claim.meta.changes !== 1) throw new DeliveryClaimConflict("delivery_claim_conflict");
   const attempt = await env.DB.prepare(
     "SELECT attempt_count AS attemptCount FROM auth_agent_webhook_deliveries WHERE id = ? AND agent_id = ? AND status = 'pending'"
   )
@@ -433,7 +446,8 @@ async function deliverClaimedEvent(
       event.event,
       payload,
       event.deliveryId,
-      event.createdAt
+      event.createdAt,
+      "outbox"
     );
     if (delivery.status === "success") await markOutbox(env, event, "delivered", null);
     else
@@ -578,11 +592,19 @@ export async function handleAgentWebhookManagement(
       request.method === "POST"
     ) {
       const failed = await env.DB.prepare(
-        "SELECT id, event, payload, attempt_count AS attemptCount FROM auth_agent_webhook_deliveries WHERE id = ? AND agent_id = ? AND status = 'failed'"
+        "SELECT id, event, payload, status, attempt_count AS attemptCount FROM auth_agent_webhook_deliveries WHERE id = ? AND agent_id = ?"
       )
         .bind(parts[4], agentId)
-        .first<{ id: string; event: AgentWebhookEvent; payload: string; attemptCount: number }>();
-      if (!failed) return failure(404, "not_found", "Failed delivery was not found.");
+        .first<{
+          id: string;
+          event: AgentWebhookEvent;
+          payload: string;
+          status: StoredDeliveryRow["status"];
+          attemptCount: number;
+        }>();
+      if (!failed) return failure(404, "not_found", "Delivery was not found.");
+      if (failed.status !== "failed")
+        return failure(409, "conflict", "Delivery is already claimed or has already succeeded.");
       if (failed.attemptCount >= MAX_DELIVERY_ATTEMPTS)
         return failure(409, "conflict", "Delivery retry limit reached.");
       const queuedEvent = await loadOutboxEvent(env, failed.id);
@@ -598,17 +620,39 @@ export async function handleAgentWebhookManagement(
           return delivery
             ? response(delivery, delivery.status === "success" ? 200 : 502)
             : failure(409, "conflict", "Delivery was discarded because repository access changed.");
-        } catch {
+        } catch (error) {
+          if (error instanceof DeliveryClaimConflict) {
+            await markOutbox(env, claimed, "dead", "attempt_limit");
+            return failure(
+              409,
+              "conflict",
+              "Delivery is already claimed or has reached its retry limit."
+            );
+          }
           await rescheduleOutbox(env, claimed, claimed.attempts, now, "delivery_error");
           return failure(502, "service_unavailable", "Webhook delivery failed.");
         }
       }
       const payload = parsePayload(failed.payload);
-      const delivery = await deliver(env, agentId, failed.event, payload, failed.id);
+      const delivery = await deliver(
+        env,
+        agentId,
+        failed.event,
+        payload,
+        failed.id,
+        undefined,
+        "manual-retry"
+      );
       return response(delivery, delivery.status === "success" ? 200 : 502);
     }
     return failure(405, "method_not_allowed", "Method is not allowed.");
   } catch (error) {
+    if (error instanceof DeliveryClaimConflict)
+      return failure(
+        409,
+        "conflict",
+        "Delivery is already claimed or has reached its retry limit."
+      );
     logger.error("agent-webhook:operation-failed", {
       userId: user.id,
       agentId,
