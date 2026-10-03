@@ -21,6 +21,7 @@ const props = withDefaults(
 
 const { t } = useI18n();
 const loading = ref(false);
+const workflowLoading = ref(false);
 const saving = ref(false);
 const error = ref("");
 const runError = ref("");
@@ -34,8 +35,19 @@ const selectedRun = ref<ActionRun | null>(null);
 const selectedRunId = ref("");
 let pollingTimer: number | undefined;
 let pollPending = false;
+let workflowEpoch = 0;
 
-const branchRefs = computed(() => refs.value.filter((item) => !item.name.startsWith("refs/tags/")));
+const selectableRefs = computed(() =>
+  refs.value.filter(
+    (item) => item.name.startsWith("refs/heads/") || item.name.startsWith("refs/tags/")
+  )
+);
+const branchRefs = computed(() =>
+  selectableRefs.value.filter((item) => item.name.startsWith("refs/heads/"))
+);
+const tagRefs = computed(() =>
+  selectableRefs.value.filter((item) => item.name.startsWith("refs/tags/"))
+);
 const chosenWorkflow = computed(
   () => workflows.value.find((workflow) => workflow.path === selectedWorkflowPath.value) ?? null
 );
@@ -48,6 +60,7 @@ const canDispatch = computed(() => {
   return Boolean(
     props.canWrite &&
     !props.archived &&
+    !workflowLoading.value &&
     workflowOid.value &&
     workflow?.supported === true &&
     workflow.triggers.includes("workflow_dispatch")
@@ -56,6 +69,14 @@ const canDispatch = computed(() => {
 
 function refLabel(name: string): string {
   return name.startsWith("refs/heads/") ? name.slice("refs/heads/".length) : name;
+}
+
+function selectionRef(name: string): string {
+  return name.startsWith("refs/heads/") ? refLabel(name) : name;
+}
+
+function sourceRef(value: string): string {
+  return value.startsWith("refs/tags/") ? value : `refs/heads/${value}`;
 }
 
 function statusTone(
@@ -76,22 +97,41 @@ function statusText(run: Pick<ActionRunSummary, "status" | "conclusion">): strin
 
 async function loadRefs(): Promise<void> {
   refs.value = await api.refs(props.repositoryId);
-  const available = branchRefs.value;
-  if (!available.some((item) => item.name === selectedRef.value)) {
+  const available = selectableRefs.value;
+  if (!available.some((item) => selectionRef(item.name) === selectedRef.value)) {
     const preferred = available.find((item) => refLabel(item.name) === props.defaultBranch);
-    selectedRef.value = preferred?.name ?? available[0]?.name ?? "";
+    selectedRef.value = preferred
+      ? selectionRef(preferred.name)
+      : selectionRef(available[0]?.name ?? "");
   }
 }
 
 async function loadWorkflows(): Promise<void> {
+  const epoch = ++workflowEpoch;
+  const selected = selectedRef.value;
+  const oid = refs.value.find((item) => item.name === sourceRef(selected))?.oid;
   workflows.value = [];
   workflowOid.value = "";
   selectedWorkflowPath.value = "";
-  if (!selectedRef.value) return;
-  const result = await api.actionWorkflows(props.repositoryId, selectedRef.value);
-  workflows.value = result.workflows;
-  workflowOid.value = result.oid;
-  selectedWorkflowPath.value = result.workflows[0]?.path ?? "";
+  if (!selected || !oid) {
+    workflowLoading.value = false;
+    return;
+  }
+  workflowLoading.value = true;
+  error.value = "";
+  try {
+    const result = await api.actionWorkflows(props.repositoryId, selected, oid);
+    if (epoch !== workflowEpoch || selected !== selectedRef.value) return;
+    workflows.value = result.workflows;
+    workflowOid.value = result.oid;
+    selectedWorkflowPath.value = result.workflows[0]?.path ?? "";
+  } catch {
+    if (epoch === workflowEpoch && selected === selectedRef.value) {
+      error.value = t("actionsLoadError");
+    }
+  } finally {
+    if (epoch === workflowEpoch) workflowLoading.value = false;
+  }
 }
 
 async function loadRuns(): Promise<void> {
@@ -212,6 +252,10 @@ onUnmounted(() => clearInterval(pollingTimer));
     <StatusState v-else-if="error && !runs.length" :loading="false" :error="error" @retry="load" />
 
     <div v-else class="actions-layout">
+      <div v-if="error" class="actions-load-error" role="alert">
+        <p>{{ error }}</p>
+        <FluentButton type="button" @click="load">{{ t("actionsRefresh") }}</FluentButton>
+      </div>
       <p v-if="actionsNetworkEnabled === false" class="actions-warning actions-network-notice">
         {{ t("actionsNetworkDisabled") }}
       </p>
@@ -220,17 +264,20 @@ onUnmounted(() => clearInterval(pollingTimer));
           <SelectField
             v-model="selectedRef"
             :label="t('actionsRef')"
-            :disabled="loading || !branchRefs.length"
+            :disabled="loading || !selectableRefs.length"
           >
             <option value="" disabled>{{ t("actionsNoBranches") }}</option>
-            <option v-for="item in branchRefs" :key="item.name" :value="item.name">
+            <option v-for="item in branchRefs" :key="item.name" :value="selectionRef(item.name)">
               {{ refLabel(item.name) }}
+            </option>
+            <option v-for="item in tagRefs" :key="item.name" :value="selectionRef(item.name)">
+              {{ item.name }}
             </option>
           </SelectField>
           <SelectField
             v-model="selectedWorkflowPath"
             :label="t('actionsWorkflow')"
-            :disabled="loading || !workflows.length"
+            :disabled="loading || workflowLoading || !workflows.length"
           >
             <option value="" disabled>{{ t("actionsChooseWorkflow") }}</option>
             <option v-for="workflow in workflows" :key="workflow.path" :value="workflow.path">
@@ -240,13 +287,16 @@ onUnmounted(() => clearInterval(pollingTimer));
           <FluentButton
             type="button"
             tone="primary"
-            :disabled="saving || loading || !canDispatch"
+            :disabled="saving || loading || workflowLoading || !canDispatch"
             @click="startRun"
             >{{ saving ? t("loading") : t("actionsDispatch") }}</FluentButton
           >
         </div>
-        <p v-if="!branchRefs.length" class="actions-empty">{{ t("actionsNoBranches") }}</p>
-        <p v-else-if="!workflows.length && !loading" class="actions-empty">
+        <p v-if="!selectableRefs.length" class="actions-empty">{{ t("actionsNoBranches") }}</p>
+        <p
+          v-else-if="!workflows.length && !loading && !workflowLoading && !error"
+          class="actions-empty"
+        >
           {{ t("actionsNoWorkflows") }}
         </p>
         <p v-if="chosenWorkflow && !chosenWorkflow.supported" class="actions-warning">
