@@ -3,11 +3,26 @@ import { createApp, nextTick } from "vue";
 import App from "../../apps/web/src/App.vue";
 import { i18n } from "../../apps/web/src/i18n";
 import { api, type Organization, type Repository, type User } from "../../apps/web/src/lib/api";
+import type { AccountProfile } from "../../packages/contracts/src/account";
 import { clearSession, setSession } from "../../apps/web/src/lib/session";
 import { router } from "../../apps/web/src/router";
 import { fluentUi } from "../../apps/web/src/ui/fluent";
 
 const user: User = { id: "user-1", identifier: "octocat" };
+const profile: AccountProfile = {
+  identifier: "octocat",
+  displayName: "Octocat",
+  bio: "",
+  location: "",
+  website: "",
+  preferences: {
+    theme: "system",
+    locale: "en",
+    density: "comfortable",
+    tabSize: 2,
+    lineWrap: false,
+  },
+};
 const repository: Repository = {
   id: "repo-1",
   namespaceId: "namespace-1",
@@ -27,6 +42,17 @@ const repository: Repository = {
   pullsEnabled: true,
   discussionsEnabled: true,
   wikiEnabled: true,
+  tasksEnabled: true,
+  agentsEnabled: true,
+  deploymentsEnabled: true,
+  graphEnabled: true,
+  actionsEnabled: true,
+  actionsNetworkEnabled: false,
+  onlineEditingEnabled: true,
+  allowMergeCommit: true,
+  allowSquashMerge: true,
+  allowRebaseMerge: true,
+  deleteBranchOnMerge: false,
   requiredApprovals: 0,
   requirePassingChecks: false,
 };
@@ -47,6 +73,7 @@ async function settle(): Promise<void> {
 async function mount(path: string) {
   setSession(user);
   vi.spyOn(api, "session").mockResolvedValue(user);
+  vi.spyOn(api, "accountProfile").mockResolvedValue(structuredClone(profile));
   await router.push(path);
   await router.isReady();
   const root = document.createElement("div");

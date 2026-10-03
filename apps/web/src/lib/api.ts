@@ -61,6 +61,12 @@ import type {
   TaskStatus,
   TaskTable,
 } from "../../../../packages/contracts/src/tasks";
+import type {
+  BranchProtectionInput,
+  BranchProtectionRule,
+  RepositoryCollaborator,
+  RepositoryRole,
+} from "../../../../packages/contracts/src/repository-controls";
 
 export type {
   Organization,
@@ -87,6 +93,12 @@ export type {
   WikiPage,
   CreatedAgentSession,
 };
+export type {
+  BranchProtectionInput,
+  BranchProtectionRule,
+  RepositoryCollaborator,
+  RepositoryRole,
+} from "../../../../packages/contracts/src/repository-controls";
 export type { SsoIdentity, SsoProviderSummary };
 export type {
   AgentAssignmentPolicy,
@@ -269,6 +281,7 @@ export const api = {
     owner: string;
     description: string;
     visibility: "public" | "private";
+    initializeReadme: boolean;
   }) =>
     request<Repository>("/api/forge/repositories", {
       method: "POST",
@@ -277,6 +290,7 @@ export const api = {
         owner: payload.owner,
         description: payload.description,
         visibility: payload.visibility,
+        initializeReadme: payload.initializeReadme,
       }),
     }),
   organizations: () => request<Organization[]>("/api/forge/organizations"),
@@ -623,6 +637,43 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+  branchRules: (repositoryId: string) =>
+    request<BranchProtectionRule[]>(repositoryPath(repositoryId, "branch-rules")),
+  createBranchRule: (repositoryId: string, payload: BranchProtectionInput) =>
+    request<BranchProtectionRule>(repositoryPath(repositoryId, "branch-rules"), {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateBranchRule: (repositoryId: string, ruleId: string, payload: BranchProtectionInput) =>
+    request<BranchProtectionRule>(
+      repositoryPath(repositoryId, `branch-rules/${encodeURIComponent(ruleId)}`),
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      }
+    ),
+  deleteBranchRule: (repositoryId: string, ruleId: string) =>
+    request(
+      repositoryPath(repositoryId, `branch-rules/${encodeURIComponent(ruleId)}`),
+      { method: "DELETE" },
+      true
+    ),
+  repositoryCollaborators: (repositoryId: string) =>
+    request<RepositoryCollaborator[]>(repositoryPath(repositoryId, "collaborators")),
+  putRepositoryCollaborator: (
+    repositoryId: string,
+    payload: { identifier: string; role: RepositoryRole }
+  ) =>
+    request<RepositoryCollaborator>(repositoryPath(repositoryId, "collaborators"), {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  deleteRepositoryCollaborator: (repositoryId: string, userId: string) =>
+    request(
+      repositoryPath(repositoryId, `collaborators/${encodeURIComponent(userId)}`),
+      { method: "DELETE" },
+      true
+    ),
   agents: () => request<Agent[]>("/api/auth/agents"),
   agent: (id: string) => request<Agent>(`/api/auth/agents/${encodeURIComponent(id)}`),
   updateAgent: (

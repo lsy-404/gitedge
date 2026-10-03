@@ -85,6 +85,7 @@ describe("GitEdge API client", () => {
       name: "edge",
       description: "At the edge",
       visibility: "public",
+      initializeReadme: true,
     });
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
@@ -96,8 +97,49 @@ describe("GitEdge API client", () => {
           owner: "example-owner",
           description: "At the edge",
           visibility: "public",
+          initializeReadme: true,
         }),
       })
+    );
+  });
+
+  it("uses the repository control endpoints and methods", async () => {
+    const responseBody = { data: { id: "rule-1" } };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      const data = init?.method === "DELETE" ? { data: { deleted: true } } : responseBody;
+      return new Response(JSON.stringify(data), { status: 200 });
+    });
+    const rule = {
+      pattern: "main",
+      enabled: true,
+      locked: false,
+      requiredApprovals: 1,
+      requirePassingChecks: true,
+      requiredStatusChecks: ["unit"],
+      requireLinearHistory: false,
+      requireSignedCommits: false,
+    };
+
+    await api.branchRules("repo-7");
+    await api.createBranchRule("repo-7", rule);
+    await api.updateBranchRule("repo-7", "rule-1", rule);
+    await api.deleteBranchRule("repo-7", "rule-1");
+    await api.repositoryCollaborators("repo-7");
+    await api.putRepositoryCollaborator("repo-7", { identifier: "octocat", role: "write" });
+    await api.deleteRepositoryCollaborator("repo-7", "user / 1");
+
+    expect(fetchMock.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
+      ["/api/forge/repositories/repo-7/branch-rules", undefined],
+      ["/api/forge/repositories/repo-7/branch-rules", "POST"],
+      ["/api/forge/repositories/repo-7/branch-rules/rule-1", "PATCH"],
+      ["/api/forge/repositories/repo-7/branch-rules/rule-1", "DELETE"],
+      ["/api/forge/repositories/repo-7/collaborators", undefined],
+      ["/api/forge/repositories/repo-7/collaborators", "PUT"],
+      ["/api/forge/repositories/repo-7/collaborators/user%20%2F%201", "DELETE"],
+    ]);
+    expect(fetchMock.mock.calls[1]?.[1]?.body).toBe(JSON.stringify(rule));
+    expect(fetchMock.mock.calls[5]?.[1]?.body).toBe(
+      JSON.stringify({ identifier: "octocat", role: "write" })
     );
   });
 
