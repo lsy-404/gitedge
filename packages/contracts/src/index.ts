@@ -7,6 +7,7 @@ export * from "./agents";
 export * from "./tasks";
 export * from "./trust";
 export * from "./account";
+export * from "./actions";
 
 export const ErrorCodeSchema = z.enum([
   "bad_request",

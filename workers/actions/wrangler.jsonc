@@ -1,0 +1,33 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "gitedge-actions",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-03",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "containers": [
+    {
+      "class_name": "ActionRun",
+      "scheduling_policy": "durable_object"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "ACTION_RUNS", "class_name": "ActionRun" }]
+  },
+  "exports": {
+    "ActionRun": { "type": "durable-object", "storage": "sqlite" }
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "gitedge",
+      "database_id": "c9a00d9d-db41-494e-b096-55b8b6bfe3a9"
+    }
+  ],
+  "services": [
+    { "binding": "GIT", "service": "gitedge-git-artifacts" },
+    { "binding": "FORGE", "service": "gitedge-forge" }
+  ],
+  "triggers": { "crons": ["* * * * *"] },
+  "observability": { "enabled": true }
+}
