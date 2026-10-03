@@ -110,18 +110,19 @@ async function repositoryForOwner(
   return row ? { ...row, writable: writableRole(role) } : null;
 }
 
+const activeSessionSelect =
+  sessionSelect +
+  " JOIN repositories r ON r.id=s.repository_id LEFT JOIN namespace_memberships m ON m.namespace_id=r.namespace_id AND m.user_id=s.user_id LEFT JOIN repository_collaborators c ON c.repository_id=r.id AND c.user_id=s.user_id WHERE s.status='active' AND s.expires_at>? AND a.disabled_at IS NULL AND r.agents_enabled=1 AND (m.user_id IS NOT NULL OR c.role IN ('write','admin') OR (s.permission='read' AND c.role='read'))";
+
 export async function authenticateAgentSession(
   env: AgentAuthEnv,
   token: string
 ): Promise<TrustedUser | null> {
   if (!/^ge_session_[0-9a-f]{64}$/.test(token)) return null;
-  const row = await env.DB.prepare(
-    sessionSelect +
-      " WHERE s.token_hash = ? AND s.status = 'active' AND s.expires_at > ? AND a.disabled_at IS NULL"
-  )
-    .bind(await sha256Hex(token), Date.now())
+  const row = await env.DB.prepare(activeSessionSelect + " AND s.token_hash=?")
+    .bind(Date.now(), await sha256Hex(token))
     .first<AgentSessionRow>();
-  return authorizedAgentSession(env, row);
+  return trustedAgentSession(row);
 }
 
 export async function authenticateOwnedAgentSession(
@@ -129,27 +130,14 @@ export async function authenticateOwnedAgentSession(
   userId: string,
   sessionId: string
 ): Promise<TrustedUser | null> {
-  const row = await env.DB.prepare(
-    sessionSelect +
-      " WHERE s.id=? AND s.user_id=? AND s.status='active' AND s.expires_at>? AND a.disabled_at IS NULL"
-  )
-    .bind(sessionId, userId, Date.now())
+  const row = await env.DB.prepare(activeSessionSelect + " AND s.id=? AND s.user_id=?")
+    .bind(Date.now(), sessionId, userId)
     .first<AgentSessionRow>();
-  return authorizedAgentSession(env, row);
+  return trustedAgentSession(row);
 }
 
-async function authorizedAgentSession(
-  env: { DB: D1Database },
-  row: AgentSessionRow | null
-): Promise<TrustedUser | null> {
+function trustedAgentSession(row: AgentSessionRow | null): TrustedUser | null {
   if (!row) return null;
-  const repository = await repositoryForOwner(env, row.userId, row.repositoryId);
-  if (
-    !repository ||
-    repository.agentsEnabled === 0 ||
-    (row.permission === "write" && !repository.writable)
-  )
-    return null;
   return {
     id: row.userId,
     identifier: row.identifier,
@@ -191,14 +179,12 @@ export async function authenticateGitToken(
   if (!path) return null;
   const agent = await authenticateAgentSession(env, token);
   if (agent?.agentSession) {
-    const repo = await repositoryForOwner(env, agent.id, agent.agentSession.repositoryId);
     if (
-      !repo ||
-      repo.id !== path.id ||
+      agent.agentSession.repositoryId !== path.id ||
       (username !== null && username !== owner && username !== agent.identifier)
     )
       return null;
-    return { user: agent, repositoryId: repo.id, permission: agent.agentSession.permission };
+    return { user: agent, repositoryId: path.id, permission: agent.agentSession.permission };
   }
   if (!/^ge_token_[0-9a-f]{64}$/.test(token)) return null;
   const row = await env.DB.prepare(

@@ -187,6 +187,22 @@ describe("Browser account isolation", () => {
     await browser.call("/accounts/logout-all", "POST");
     expect((await browser.accounts()).accounts).toEqual([]);
   });
+  it("removes only this browser login while preserving another browser session", async () => {
+    const browser = new Browser(),
+      otherBrowser = new Browser(),
+      a = await user(),
+      b = await user();
+    await browser.add(a);
+    await otherBrowser.add(a);
+    await browser.add(b);
+    expect(await (await browser.call(`/accounts/${a}`, "DELETE")).json()).toEqual({
+      data: { removed: true, isCurrent: false },
+    });
+    expect((await browser.accounts()).accounts.map((account) => account.id)).toEqual([b]);
+    expect((await otherBrowser.call("/session")).status).toBe(200);
+    await browser.call("/accounts/logout-all", "POST");
+    expect((await otherBrowser.call("/session")).status).toBe(200);
+  });
   it("never reactivates expired or revoked saved logins", async () => {
     const browser = new Browser(),
       a = await user();
@@ -194,6 +210,20 @@ describe("Browser account isolation", () => {
     await env.DB.prepare("UPDATE auth_sessions SET expires_at=0 WHERE user_id=?").bind(a).run();
     expect((await browser.accounts()).accounts).toEqual([]);
     expect((await browser.call("/accounts/switch", "POST", { userId: a })).status).toBe(401);
+  });
+  it("prunes expired saved cookies so later valid accounts remain reachable", async () => {
+    const browser = new Browser();
+    for (let i = 0; i < 5; i++) {
+      const id = await user();
+      await browser.add(id);
+      await env.DB.prepare("UPDATE auth_sessions SET expires_at=0 WHERE user_id=?").bind(id).run();
+    }
+    const survivor = await user();
+    await browser.add(survivor);
+    expect((await browser.accounts()).accounts.map((account) => account.id)).toEqual([survivor]);
+    expect(
+      [...browser.cookies.keys()].filter((name) => name.startsWith("gitedge_account_"))
+    ).toHaveLength(1);
   });
   it("refreshes the same account without retaining its old token", async () => {
     const browser = new Browser(),
@@ -261,6 +291,35 @@ describe("Browser account isolation", () => {
     expect((await browser.call("/accounts/view", "POST", { kind: "account" })).status).toBe(200);
     expect(await (await browser.call("/session")).json()).toMatchObject({ data: { id: a } });
   });
+  it.each(["expired", "disabled", "downgraded"])(
+    "rejects a %s agent perspective on the next request",
+    async (state) => {
+      const browser = new Browser(),
+        a = await user();
+      await browser.add(a);
+      const own = await agentFixture(a);
+      await browser.call("/accounts/view", "POST", { kind: "agent", sessionId: own.sessionId });
+      if (state === "expired")
+        await env.DB.prepare("UPDATE auth_agent_sessions SET expires_at=0 WHERE id=?")
+          .bind(own.sessionId)
+          .run();
+      if (state === "disabled")
+        await env.DB.prepare("UPDATE auth_agents SET disabled_at=? WHERE id=?")
+          .bind(Date.now(), own.agentId)
+          .run();
+      if (state === "downgraded") {
+        await env.DB.batch([
+          env.DB.prepare("DELETE FROM namespace_memberships WHERE namespace_id=?").bind(
+            own.namespaceId
+          ),
+          env.DB.prepare(
+            "INSERT INTO repository_collaborators(repository_id,user_id,role,created_at) VALUES(?,?,'read',1)"
+          ).bind(own.repoId, a),
+        ]);
+      }
+      expect((await browser.call("/session")).status).toBe(401);
+    }
+  );
   it("rechecks membership and feature gates", async () => {
     const browser = new Browser(),
       a = await user();

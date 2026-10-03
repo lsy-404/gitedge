@@ -130,6 +130,30 @@ beforeAll(async () => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("SSO account and callback boundaries", () => {
+  it("keeps the previous browser account through an additional OIDC login", async () => {
+    const firstFlow = await flow("browser-first-account");
+    const firstResponse = await firstFlow.callback();
+    const firstUser = await user(firstResponse);
+    const saved = firstResponse.headers
+      .getSetCookie()
+      .filter((value) => value.startsWith("gitedge_account_"))
+      .map((value) => value.split(";")[0])
+      .join("; ");
+    const next = await flow("browser-second-account", { sessionCookie: firstUser.sessionCookie });
+    const secondResponse = await next.callback(
+      `${next.proof}; ${saved}; ${firstUser.sessionCookie}`
+    );
+    const secondUser = await user(secondResponse);
+    expect(secondUser.id).not.toBe(firstUser.id);
+    expect((await call("/session", "GET", firstUser.sessionCookie)).status).toBe(200);
+    expect(
+      secondResponse.headers.getSetCookie().filter((value) => value.startsWith("gitedge_account_"))
+    ).toHaveLength(2);
+    const chooser = await call("/sso/enterprise/start?prompt=select_account");
+    expect(new URL(chooser.headers.get("Location") ?? "").searchParams.get("prompt")).toBe(
+      "select_account"
+    );
+  });
   it("lists configured protocols without credentials and validates return paths", async () => {
     expect(await (await call("/sso/providers")).json()).toEqual({
       data: [{ id: "enterprise", label: "Enterprise", protocol: "oidc" }],

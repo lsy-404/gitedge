@@ -14,6 +14,7 @@ import { createSessionCookie, hashToken, readCookie, SESSION_MAX_AGE_SECONDS } f
 const ACCOUNT_PREFIX = "gitedge_account_";
 const ACCOUNT_COOKIE_PATTERN = /^gitedge_account_[0-9a-f-]{36}$/;
 const VIEW_COOKIE = "gitedge_view";
+const MAX_SAVED_COOKIES = 20;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 interface AccountEnvironment {
   DB: D1Database;
@@ -52,7 +53,7 @@ function accountTokens(request: Request): string[] {
   const active = readCookie(request);
   const saved = cookieEntries(request)
     .filter(([name, value]) => ACCOUNT_COOKIE_PATTERN.test(name) && TOKEN_PATTERN.test(value))
-    .slice(0, BROWSER_ACCOUNT_LIMIT)
+    .slice(0, MAX_SAVED_COOKIES)
     .map(([, value]) => value);
   return [...new Set([...(active && TOKEN_PATTERN.test(active) ? [active] : []), ...saved])];
 }
@@ -85,6 +86,17 @@ function clearView(response: Response): void {
   response.headers.append("Set-Cookie", cookie(VIEW_COOKIE, "", 0));
 }
 
+function pruneSavedCookies(request: Request, response: Response, accounts: SavedAccount[]): void {
+  for (const [name, value] of cookieEntries(request)
+    .filter(([name]) => ACCOUNT_COOKIE_PATTERN.test(name))
+    .slice(0, MAX_SAVED_COOKIES)) {
+    if (
+      !accounts.some((account) => name === ACCOUNT_PREFIX + account.id && value === account.token)
+    )
+      response.headers.append("Set-Cookie", savedCookie(name, "", 0));
+  }
+}
+
 export async function rememberBrowserLogin(
   request: Request,
   env: AccountEnvironment,
@@ -105,6 +117,7 @@ export async function rememberBrowserLogin(
       .bind(previous.tokenHash)
       .run();
   }
+  pruneSavedCookies(request, response, accounts);
   for (const account of accounts) {
     if (account.id !== userId) response.headers.append("Set-Cookie", accountCookie(account));
   }
@@ -180,11 +193,12 @@ export async function handleBrowserAccounts(
       accountLimit: BROWSER_ACCOUNT_LIMIT,
     };
     const result = response(data);
+    pruneSavedCookies(request, result, accounts);
     for (const account of accounts) result.headers.append("Set-Cookie", accountCookie(account));
     return result;
   }
   if (path === "/accounts/switch" && request.method === "POST") {
-    const parsed = SwitchBrowserAccountSchema.safeParse(await readJsonLimited(request));
+    const parsed = SwitchBrowserAccountSchema.safeParse(await readJsonLimited(request, 1024));
     if (!parsed.success) return fail(400, "bad_request", "Invalid account selection.");
     const selected = accounts.find((account) => account.id === parsed.data.userId);
     if (!selected) return fail(401, "unauthorized", "This account requires sign-in again.");
@@ -201,7 +215,7 @@ export async function handleBrowserAccounts(
   }
   if (path === "/accounts/view" && request.method === "POST") {
     if (!active) return fail(401, "unauthorized", "Sign in before selecting a perspective.");
-    const parsed = SwitchBrowserViewSchema.safeParse(await readJsonLimited(request));
+    const parsed = SwitchBrowserViewSchema.safeParse(await readJsonLimited(request, 1024));
     if (!parsed.success) return fail(400, "bad_request", "Invalid perspective.");
     const view = parsed.data;
     if (
@@ -233,7 +247,7 @@ export async function handleBrowserAccounts(
     const result = response({ loggedOut: true });
     for (const [name] of cookieEntries(request)
       .filter(([name]) => ACCOUNT_COOKIE_PATTERN.test(name))
-      .slice(0, BROWSER_ACCOUNT_LIMIT))
+      .slice(0, MAX_SAVED_COOKIES))
       result.headers.append("Set-Cookie", savedCookie(name, "", 0));
     result.headers.append("Set-Cookie", createSessionCookie("", 0));
     clearView(result);
