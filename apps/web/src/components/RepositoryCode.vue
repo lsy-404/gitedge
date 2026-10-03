@@ -45,6 +45,7 @@ const props = withDefaults(
   defineProps<{ repository: Repository; section: string; graphEnabled?: boolean }>(),
   { graphEnabled: true }
 );
+const emit = defineEmits<{ changed: [] }>();
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
@@ -177,6 +178,7 @@ const compareHead = computed({
   },
 });
 let requestVersion = 0;
+let refsRefreshVersion = 0;
 
 function showError(cause: unknown) {
   error.value =
@@ -260,6 +262,18 @@ async function load() {
     if (version === requestVersion) loading.value = false;
   }
 }
+async function refreshRefs() {
+  const version = ++refsRefreshVersion;
+  try {
+    const updatedRefs = await api.refs(props.repository.id);
+    if (version !== refsRefreshVersion) return;
+    refs.value = updatedRefs;
+    fileHeadOid.value =
+      updatedRefs.find((item) => item.name === "refs/heads/" + refName.value)?.oid ?? null;
+  } catch {
+    // A refresh failure should not discard the editor's successful result.
+  }
+}
 async function loadMore() {
   offset.value = commits.value.length;
   await load();
@@ -290,6 +304,7 @@ function onFileSaved(result: { oid: string; branch: string; path: string }) {
       { name: result.branch, oid: result.oid, protected: false, rules: [], isDefault: false },
     ];
   }
+  void refreshRefs();
 }
 async function closeFileEditor() {
   showFileEditor.value = false;
@@ -507,6 +522,7 @@ onUnmounted(() => {
           :refresh-key="branchRefreshKey"
           @select="changeRef"
           @branches-loaded="managedBranches = $event"
+          @changed="refreshRefs"
         />
         <span class="repo-count"
           >{{ branchRefs.length }} {{ t("branches") }} · {{ tagRefs.length }} {{ t("tags") }}</span
@@ -621,6 +637,7 @@ onUnmounted(() => {
         :initial-path="initialEditorPath"
         @close="closeFileEditor"
         @saved="onFileSaved"
+        @changed="emit('changed')"
       />
     </div>
     <template v-else-if="section === 'code'">
@@ -784,6 +801,7 @@ onUnmounted(() => {
         :initial-path="initialEditorPath"
         @close="closeFileEditor"
         @saved="onFileSaved"
+        @changed="emit('changed')"
       />
       <aside v-if="!isBlob" class="about-panel box">
         <div class="box-header">

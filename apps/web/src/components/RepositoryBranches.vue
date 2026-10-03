@@ -17,6 +17,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   select: [name: string];
   branchesLoaded: [branches: RepositoryBranch[]];
+  changed: [];
 }>();
 const { t } = useI18n();
 const branches = ref<RepositoryBranch[]>([]);
@@ -79,6 +80,7 @@ async function createBranch() {
     const createdName = branchName.value.trim();
     branchName.value = "";
     await load();
+    emit("changed");
     emit("select", createdName);
   } catch (cause) {
     branchError(cause);
@@ -98,6 +100,7 @@ async function deleteBranch() {
     });
     pendingDelete.value = null;
     await load();
+    emit("changed");
     if (props.selectedBranch === branch.name) {
       const fallback = branches.value.find((item) => item.isDefault)?.name;
       if (fallback) emit("select", fallback);

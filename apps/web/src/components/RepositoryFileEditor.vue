@@ -17,7 +17,7 @@ import AppIcon from "./AppIcon.vue";
 import TextAreaField from "./TextAreaField.vue";
 import TextField from "./TextField.vue";
 
-type SavedFile = { oid: string; branch: string; path: string };
+type SavedFile = { oid: string; branch: string; path: string; deleted?: boolean };
 const props = defineProps<{
   repository: Repository;
   branch: string;
@@ -28,7 +28,7 @@ const props = defineProps<{
   entry: GitTreeEntry | null;
   initialPath?: string;
 }>();
-const emit = defineEmits<{ close: []; saved: [result: SavedFile] }>();
+const emit = defineEmits<{ close: []; saved: [result: SavedFile]; changed: [] }>();
 const { t } = useI18n();
 const path = ref(props.file?.path ?? props.initialPath ?? "");
 const content = ref(props.file?.content ?? "");
@@ -41,6 +41,7 @@ const conflict = ref(false);
 const protectedRejected = ref(false);
 const saved = ref<SavedFile | null>(null);
 const pullCreated = ref(false);
+const createdPullNumber = ref<number | null>(null);
 const pullSaving = ref(false);
 const pullError = ref("");
 const deleteOpen = ref(false);
@@ -104,6 +105,7 @@ const compareUrl = computed(
 watch(
   () => [props.file?.oid, props.branch, props.expectedOid],
   () => {
+    if (saved.value) return;
     path.value = props.file?.path ?? props.initialPath ?? "";
     content.value = props.file?.content ?? "";
     message.value = "";
@@ -112,6 +114,7 @@ watch(
     conflict.value = false;
     protectedRejected.value = false;
     pullCreated.value = false;
+    createdPullNumber.value = null;
     pullError.value = "";
   }
 );
@@ -145,8 +148,9 @@ async function saveFile() {
     }
     const result = await api.editRepositoryFile(props.repository.id, parsed.data);
     saved.value = result;
-    if (createPull.value) await createPullRequest();
+    if (createPull.value) await createPullRequest(false);
     emit("saved", result);
+    emit("changed");
   } catch (cause) {
     if (cause instanceof ApiError && cause.status === 409) conflict.value = true;
     saveError.value = saveErrorFor(cause);
@@ -154,19 +158,21 @@ async function saveFile() {
     saving.value = false;
   }
 }
-async function createPullRequest() {
+async function createPullRequest(notifyChange = true) {
   const result = saved.value;
   if (!result || !props.repository.pullsEnabled || result.branch === props.branch) return;
   pullSaving.value = true;
   pullError.value = "";
   try {
-    await api.createPullRequest(props.repository.id, {
+    const pull = await api.createPullRequest(props.repository.id, {
       title: message.value.trim(),
       body: "",
       baseRef: props.branch,
       headRef: result.branch,
     });
     pullCreated.value = true;
+    createdPullNumber.value = pull.number;
+    if (notifyChange) emit("changed");
   } catch {
     pullError.value = t("codePullCreateFailed");
   } finally {
@@ -193,10 +199,11 @@ async function deleteFile() {
       return;
     }
     const result = await api.editRepositoryFile(props.repository.id, parsed.data);
-    saved.value = result;
+    saved.value = { ...result, deleted: true };
     deleteOpen.value = false;
-    if (createPull.value) await createPullRequest();
+    if (createPull.value) await createPullRequest(false);
     emit("saved", result);
+    emit("changed");
   } catch (cause) {
     if (cause instanceof ApiError && cause.status === 409) conflict.value = true;
     saveError.value = saveErrorFor(cause);
@@ -224,45 +231,64 @@ function close() {
     </div>
     <p v-if="!regularTextFile" class="muted" role="status">{{ t("codeNotEditable") }}</p>
     <form v-else class="form-stack" @submit.prevent="saveFile">
-      <TextField v-if="isNew" v-model="path" required maxlength="1000">{{
-        t("codeFilePath")
-      }}</TextField>
-      <p v-else class="muted">
-        <code>{{ file?.path }}</code>
-      </p>
-      <TextAreaField
-        v-model="content"
-        :label="t('codeFileContent')"
-        rows="18"
-        maxlength="1000000"
-        spellcheck="false"
-      />
-      <p class="muted">{{ t("codeFileSize", { bytes: contentBytes }) }}</p>
-      <TextField v-model="message" required maxlength="500">{{ t("codeCommitMessage") }}</TextField>
-      <div v-if="protectedBranch" class="branch-guidance" role="status">
-        <strong>{{ t("codeProtectedEditNeedsBranch") }}</strong>
-        <p>{{ t("codeProtectedBranchSource", { name: branch }) }}</p>
-        <TextField v-model="newBranch" required maxlength="251">{{
-          t("codeNewBranchName")
+      <fieldset class="editor-fields" :disabled="Boolean(saved)">
+        <TextField v-if="isNew" v-model="path" required maxlength="1000">{{
+          t("codeFilePath")
         }}</TextField>
-        <small v-if="newBranch && !targetBranchValid" class="workspace-form-error">{{
-          t("codeBranchNameInvalidOrExists")
-        }}</small>
-      </div>
-      <template v-else>
-        <TextField v-model="newBranch" maxlength="251">{{ t("codeOptionalNewBranch") }}</TextField>
-        <small v-if="newBranch && !targetBranchValid" class="workspace-form-error">{{
-          t("codeBranchNameInvalidOrExists")
-        }}</small>
-      </template>
-      <FluentCheckbox
-        v-if="repository.pullsEnabled && targetBranch && targetBranchValid"
-        v-model="createPull"
-      >
-        {{ t("codeCreatePullAfterSave") }}
-      </FluentCheckbox>
+        <p v-else class="muted">
+          <code>{{ file?.path }}</code>
+        </p>
+        <TextAreaField
+          v-model="content"
+          :label="t('codeFileContent')"
+          rows="18"
+          maxlength="1000000"
+          spellcheck="false"
+        />
+        <p class="muted">{{ t("codeFileSize", { bytes: contentBytes }) }}</p>
+        <TextField v-model="message" required maxlength="500">{{
+          t("codeCommitMessage")
+        }}</TextField>
+        <div v-if="protectedBranch" class="branch-guidance" role="status">
+          <strong>{{ t("codeProtectedEditNeedsBranch") }}</strong>
+          <p>{{ t("codeProtectedBranchSource", { name: branch }) }}</p>
+          <TextField v-model="newBranch" required maxlength="251">{{
+            t("codeNewBranchName")
+          }}</TextField>
+          <small v-if="!saved && newBranch && !targetBranchValid" class="workspace-form-error">{{
+            t("codeBranchNameInvalidOrExists")
+          }}</small>
+        </div>
+        <template v-else>
+          <TextField v-model="newBranch" maxlength="251">{{
+            t("codeOptionalNewBranch")
+          }}</TextField>
+          <small v-if="!saved && newBranch && !targetBranchValid" class="workspace-form-error">{{
+            t("codeBranchNameInvalidOrExists")
+          }}</small>
+        </template>
+        <FluentCheckbox
+          v-if="repository.pullsEnabled && targetBranch && targetBranchValid"
+          v-model="createPull"
+        >
+          {{ t("codeCreatePullAfterSave") }}
+        </FluentCheckbox>
+      </fieldset>
       <div v-if="saved" class="save-result" role="status">
         <strong>{{ t("codeFileSaved", { branch: saved.branch }) }}</strong>
+        <RouterLink
+          v-if="!saved.deleted"
+          :to="{
+            path: `/${repository.owner}/${repository.name}/blob/${saved.path}`,
+            query: { ref: saved.branch },
+          }"
+          >{{ t("codeViewCommittedFile") }}</RouterLink
+        >
+        <RouterLink
+          v-if="pullCreated && createdPullNumber !== null"
+          :to="`/${repository.owner}/${repository.name}/pulls/${createdPullNumber}`"
+          >{{ t("codeViewPullRequest") }}</RouterLink
+        >
         <p>{{ t("codePullStatus", { status: pullStatus }) }}</p>
         <FluentButton
           v-if="createPull && !pullCreated && !pullSaving"
@@ -320,6 +346,14 @@ function close() {
 }
 .file-editor h2 {
   margin: 0;
+}
+.editor-fields {
+  display: grid;
+  gap: var(--spacingVerticalM);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
 .branch-guidance,
 .save-result {

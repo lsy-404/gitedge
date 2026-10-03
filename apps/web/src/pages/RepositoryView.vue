@@ -117,6 +117,9 @@ async function loadCounts(current: Repository, version: number) {
       : {}),
   };
 }
+function refreshCounts() {
+  if (repository.value) void loadCounts(repository.value, loadVersion);
+}
 async function load() {
   const version = ++loadVersion;
   loading.value = true;
@@ -237,6 +240,7 @@ watch(
           :repository="repository"
           :section="section"
           :graph-enabled="repository.graphEnabled"
+          @changed="refreshCounts"
         />
         <template v-else-if="section === 'deploy' && repository.canWrite && !repository.archived"
           ><div class="repository-panel-head">

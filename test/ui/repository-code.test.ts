@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createApp, nextTick } from "vue";
+import { createApp, defineComponent, h, nextTick } from "vue";
 import RepositoryCode from "../../apps/web/src/components/RepositoryCode.vue";
 import { i18n } from "../../apps/web/src/i18n";
 import { router } from "../../apps/web/src/router";
@@ -56,13 +56,25 @@ async function settle() {
 async function mountCode(
   path: string,
   section: string,
-  overrides: Partial<typeof repository> = {}
+  overrides: Partial<typeof repository> = {},
+  onChanged?: () => void
 ) {
   setSession({ id: "user-1", identifier: "user@example.test" });
   await router.push(path);
   const root = document.createElement("div");
   document.body.append(root);
-  const app = createApp(RepositoryCode, { repository: { ...repository, ...overrides }, section });
+  const app = createApp(
+    defineComponent({
+      setup() {
+        return () =>
+          h(RepositoryCode, {
+            repository: { ...repository, ...overrides },
+            section,
+            onChanged,
+          });
+      },
+    })
+  );
   app.use(router);
   app.use(i18n);
   app.use(fluentUi);
@@ -110,7 +122,7 @@ function mockCodeApi(
     branches?: RepositoryBranch[];
     file?: { binary: boolean; content: string | null; size: number; oid?: string };
     onEdit?: (body: Record<string, unknown>) => Response;
-    onPullCreate?: (body: Record<string, unknown>) => void;
+    onPullCreate?: (body: Record<string, unknown>) => Response | void;
     onBranchCreate?: (body: Record<string, unknown>) => void;
     onBranchDelete?: (body: Record<string, unknown>) => void;
   } = {}
@@ -170,14 +182,29 @@ function mockCodeApi(
         binary: options.file?.binary ?? false,
         content: options.file?.content ?? "initial",
       });
-    if (url.pathname.endsWith("/edit"))
-      return (
-        options.onEdit?.(JSON.parse(body) as Record<string, unknown>) ??
-        jsonResponse({ oid: "commit-v2", branch: "main", path: "readme.md" }, 201)
-      );
+    if (url.pathname.endsWith("/edit")) {
+      const input = JSON.parse(body) as { branch: string; newBranch?: string; path: string };
+      const response =
+        options.onEdit?.(input) ??
+        jsonResponse(
+          { oid: "commit-v2", branch: input.newBranch ?? input.branch, path: input.path },
+          201
+        );
+      if (response.ok) {
+        const target = input.newBranch ?? input.branch;
+        branches = branches.some((item) => item.name === target)
+          ? branches.map((item) =>
+              item.name === target ? { ...item, oid: createdCommitOid } : item
+            )
+          : [...branches, branch(target, createdCommitOid)];
+      }
+      return response;
+    }
     if (url.pathname.endsWith("/pull-requests") && method === "POST") {
-      options.onPullCreate?.(JSON.parse(body) as Record<string, unknown>);
-      return jsonResponse({ id: "pull-1" }, 201);
+      return (
+        options.onPullCreate?.(JSON.parse(body) as Record<string, unknown>) ??
+        jsonResponse({ id: "pull-1", number: 12 }, 201)
+      );
     }
     throw new Error("Unexpected mocked API request: " + method + " " + url.pathname);
   });
@@ -374,8 +401,7 @@ describe("repository Code view", () => {
       path: "README.md",
       content: "# First commit",
     });
-    expect(mock.requests).toHaveLength(2);
-    expect(mock.requests.at(1)?.path).toBe("/api/git/repositories/repo-1/edit");
+    expect(mock.requests.filter((request) => request.path.endsWith("/edit"))).toHaveLength(1);
     mounted.unmount();
   });
 
@@ -479,7 +505,9 @@ describe("repository Code view", () => {
     i18n.global.locale.value = "en";
     let editBody: Record<string, unknown> | null = null;
     let pullBody: Record<string, unknown> | null = null;
-    mockCodeApi({
+    let pullAttempts = 0;
+    const changed = vi.fn();
+    const mock = mockCodeApi({
       branches: [branch("main", commitOid, { protected: true, rules: ["required-review"] })],
       onEdit: (body) => {
         editBody = body;
@@ -490,13 +518,24 @@ describe("repository Code view", () => {
       },
       onPullCreate: (body) => {
         pullBody = body;
+        pullAttempts += 1;
+        return pullAttempts === 1
+          ? new Response(JSON.stringify({ error: { code: "failed", message: "failed" } }), {
+              status: 500,
+            })
+          : jsonResponse({ id: "pull-1", number: 12 }, 201);
       },
     });
-    const mounted = await mountCode("/example/sample/blob/readme.md?ref=main", "code", {
-      canWrite: true,
-      onlineEditingEnabled: true,
-      pullsEnabled: true,
-    });
+    const mounted = await mountCode(
+      "/example/sample/blob/readme.md?ref=main",
+      "code",
+      {
+        canWrite: true,
+        onlineEditingEnabled: true,
+        pullsEnabled: true,
+      },
+      changed
+    );
     const editButton = Array.from(
       mounted.root.querySelectorAll<HTMLButtonElement>(".file-actions button")
     ).find((button) => button.textContent?.includes("Edit"));
@@ -531,7 +570,28 @@ describe("repository Code view", () => {
       headRef: "feature/editor",
       title: "Fix protected branch file",
     });
-    expect(mounted.root.querySelector(".save-result")?.textContent).toContain("Created");
+    expect(mounted.root.querySelector(".save-result")?.textContent).toContain(
+      "pull request creation failed"
+    );
+    expect(mounted.root.querySelector(".save-result a")?.textContent).toBe("View committed file");
+    expect(mounted.root.querySelector(".save-result a")?.getAttribute("href")).toContain(
+      "/example/sample/blob/readme.md?ref=feature/editor"
+    );
+    expect(
+      mounted.root.querySelector('.save-result a[href="/example/sample/pulls/12"]')
+    ).toBeNull();
+    mounted.root.querySelector<HTMLButtonElement>(".save-result button")?.click();
+    await settle();
+    const pullLink = mounted.root.querySelector<HTMLAnchorElement>(
+      '.save-result a[href="/example/sample/pulls/12"]'
+    );
+    expect(pullLink?.textContent).toBe("View pull request");
+    expect(mounted.root.querySelector(".editor-fields")?.hasAttribute("disabled")).toBe(true);
+    expect(mounted.root.textContent).not.toContain("branch name is invalid or already exists");
+    expect(changed).toHaveBeenCalledTimes(2);
+    expect(
+      mock.requests.filter((request) => request.path.endsWith("/refs")).length
+    ).toBeGreaterThan(1);
     mounted.unmount();
   });
 
@@ -596,7 +656,7 @@ describe("repository Code view", () => {
     i18n.global.locale.value = "en";
     const creates: Array<Record<string, unknown>> = [];
     const deletes: Array<Record<string, unknown>> = [];
-    mockCodeApi({
+    const mock = mockCodeApi({
       onBranchCreate: (body) => creates.push(body),
       onBranchDelete: (body) => deletes.push(body),
     });
@@ -624,6 +684,7 @@ describe("repository Code view", () => {
     });
     expect(router.currentRoute.value.query.ref).toBe("feature/editor");
     expect(mounted.root.textContent).toContain("feature/editor");
+    expect(mounted.root.querySelector(".repo-count")?.textContent).toContain("2 Branches");
     const deleteButton = mounted.root.querySelector<HTMLButtonElement>(
       'button[aria-label="Delete branch feature/editor"]'
     );
@@ -650,6 +711,10 @@ describe("repository Code view", () => {
 
     expect(deletes[0]).toMatchObject({ name: "feature/editor", expectedOid: createdCommitOid });
     expect(router.currentRoute.value.query.ref).toBe("main");
+    expect(mounted.root.querySelector(".repo-count")?.textContent).toContain("1 Branches");
+    expect(
+      mock.requests.filter((request) => request.path.endsWith("/refs")).length
+    ).toBeGreaterThan(1);
     const defaultDelete = mounted.root.querySelector<HTMLButtonElement>(
       'button[aria-label="Delete branch main"]'
     );
