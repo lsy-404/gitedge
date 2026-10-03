@@ -22,17 +22,18 @@ type RunRow = {
 };
 const actor = JSON.stringify({ kind: "ci", id: "gitedge-actions", name: "GitEdge Actions" });
 
-async function putCheck(
-  env: ForgeEnv,
+function checkStatement(
+  db: ForgeEnv["DB"],
   run: RunRow,
   pullId: string,
   status: string,
   conclusion: string | null,
   summary: string
-): Promise<void> {
-  await env.DB.prepare(
-    "INSERT INTO forge_check_runs(id,repository_id,pull_request_id,actor_json,actor_key,name,commit_oid,status,conclusion,summary,details_url,created_at,updated_at) VALUES(?,?,?,?,'ci:gitedge-actions',?,?,?,?,?,NULL,?,?) ON CONFLICT(pull_request_id,commit_oid,name,actor_key) DO UPDATE SET status=excluded.status,conclusion=excluded.conclusion,summary=excluded.summary,updated_at=excluded.updated_at"
-  )
+): D1PreparedStatement {
+  return db
+    .prepare(
+      "INSERT INTO forge_check_runs(id,repository_id,pull_request_id,actor_json,actor_key,name,commit_oid,status,conclusion,summary,details_url,created_at,updated_at) VALUES(?,?,?,?,'ci:gitedge-actions',?,?,?,?,?,NULL,?,?) ON CONFLICT(pull_request_id,commit_oid,name,actor_key) DO UPDATE SET status=excluded.status,conclusion=excluded.conclusion,summary=excluded.summary,updated_at=excluded.updated_at"
+    )
     .bind(
       crypto.randomUUID(),
       run.repository_id,
@@ -45,8 +46,7 @@ async function putCheck(
       summary,
       run.created_at,
       Date.now()
-    )
-    .run();
+    );
 }
 
 export async function actionsCheck(request: Request, env: ForgeEnv): Promise<Response> {
@@ -77,14 +77,18 @@ export async function actionsCheck(request: Request, env: ForgeEnv): Promise<Res
     )
   )
     return error(409, "merge_in_progress", "Retry check delivery after the active merge.");
-  for (const pull of pulls.results)
-    await putCheck(
-      env,
-      run,
-      pull.id,
-      parsed.data.status,
-      parsed.data.conclusion,
-      parsed.data.summary
+  if (pulls.results.length > 0)
+    await env.DB.batch(
+      pulls.results.map((pull) =>
+        checkStatement(
+          env.DB,
+          run,
+          pull.id,
+          parsed.data.status,
+          parsed.data.conclusion,
+          parsed.data.summary
+        )
+      )
     );
   createLogger(env.LOG_LEVEL, { service: "forge", repoId: run.repository_id }).info(
     "actions:check-published",
@@ -105,19 +109,23 @@ export async function attachActionChecks(
     .bind(repositoryId, headRef)
     .all<RunRow>();
   const seen = new Set<string>();
+  const statements: D1PreparedStatement[] = [];
   for (const run of runs.results.slice(0, 100)) {
     const key = `${run.path}:${run.commit_oid}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    await putCheck(
-      env,
-      run,
-      pullId,
-      run.check_status ?? "queued",
-      run.check_conclusion,
-      `GitEdge Actions run ${run.id}`
+    statements.push(
+      checkStatement(
+        env.DB,
+        run,
+        pullId,
+        run.check_status ?? "queued",
+        run.check_conclusion,
+        `GitEdge Actions run ${run.id}`
+      )
     );
   }
+  if (statements.length > 0) await env.DB.batch(statements);
   if (runs.results.length > 100)
     createLogger(env.LOG_LEVEL, { service: "forge", repoId: repositoryId }).warn(
       "actions:check-history-truncated",
