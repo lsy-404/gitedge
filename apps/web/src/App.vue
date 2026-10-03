@@ -102,7 +102,9 @@ function addBrowserAccount() {
   const redirect = typeof route.query.redirect === "string" ? route.query.redirect : route.fullPath;
   void router.push({ path: "/login", query: { add: "1", redirect } });
 }
+let identityNavigating = false;
 function completeIdentitySwitch(target: string) {
+  identityNavigating = true;
   notifyBrowserIdentityChanged();
   if (target === "/login") clearSession();
   window.location.assign(target);
@@ -124,11 +126,12 @@ function identityKey(): string {
   return `${user.id}:${user.agentSession?.id ?? "account"}`;
 }
 function refreshIdentityOnReturn(): Promise<void> {
+  if (identityNavigating) return Promise.resolve();
   if (identityRefreshInFlight) return identityRefreshInFlight;
   const previousIdentity = identityKey();
   identityRefreshInFlight = refreshSession()
     .then(() => {
-      if (previousIdentity !== identityKey()) window.location.reload();
+      if (!identityNavigating && previousIdentity !== identityKey()) window.location.reload();
     })
     .finally(() => {
       identityRefreshInFlight = null;
@@ -374,7 +377,7 @@ if (!sessionState.checked) void refreshSession();
           {{
             t("agentViewBanner", {
               agent: agentView.agentName,
-              repository: agentView.workspaceName,
+              repository: repositoryPath ? repositoryPath.slice(1) : t("agentViewWorkspace"),
               permission: t(agentView.permission === "write" ? "agentViewWrite" : "agentViewRead"),
             })
           }}

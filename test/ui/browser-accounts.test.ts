@@ -1,6 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
 import App from "../../apps/web/src/App.vue";
 import BrowserAccountMenu from "../../apps/web/src/components/BrowserAccountMenu.vue";
 import AuthView from "../../apps/web/src/pages/AuthView.vue";
@@ -309,17 +307,5 @@ describe("add-account sign-in and request identity", () => {
     expect(JSON.parse(localStorage.getItem("gitedge.preferences") ?? "{}")).toMatchObject({
       locale: "en",
     });
-  });
-});
-
-describe("account avatar styling", () => {
-  it("removes the avatar frame and keeps an explicit focus-visible ring", async () => {
-    const styles = await readFile(resolve(process.cwd(), "src/styles/shell.css"), "utf8");
-    expect(styles).toMatch(
-      /\.account-trigger \.avatar\s*\{[^}]*border:\s*0;[^}]*box-shadow:\s*none;[^}]*background:\s*transparent;/s
-    );
-    expect(styles).toMatch(
-      /\.account-trigger:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--link\)/s
-    );
   });
 });

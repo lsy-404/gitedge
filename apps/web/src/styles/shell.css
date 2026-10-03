@@ -84,9 +84,17 @@
   align-items: center;
   gap: 8px;
 }
+details.user-menu {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
 .account-trigger {
   cursor: pointer;
-  padding-left: 4px;
+  padding: 4px;
+  min-height: 40px;
+  min-width: 40px;
+  justify-content: center;
   display: flex;
   align-items: center;
   border: 0;
