@@ -163,7 +163,7 @@ describe("RepositoryActions", () => {
       { name: "HEAD", oid: "0".repeat(40) },
       { name: "refs/heads/main", oid: "a".repeat(40) },
       { name: "refs/heads/dev", oid: "b".repeat(40) },
-      { name: "refs/tags/main", oid: "c".repeat(40) },
+      { name: "refs/tags/main", oid: "c".repeat(40), peeledOid: "d".repeat(40) },
     ]);
     let resolveDev!: (value: { oid: string; workflows: (typeof workflow)[] }) => void;
     vi.spyOn(api, "actionWorkflows").mockImplementation((_repositoryId, ref) => {
@@ -198,6 +198,13 @@ describe("RepositoryActions", () => {
     expect(mounted.root.textContent).not.toContain("Stale");
     expect(api.actionWorkflows).toHaveBeenCalledWith("repo-1", "dev", "b".repeat(40));
     expect(api.actionWorkflows).toHaveBeenLastCalledWith("repo-1", "main", "a".repeat(40));
+    fill(refSelect, "refs/tags/main");
+    await settle();
+    expect(api.actionWorkflows).toHaveBeenLastCalledWith(
+      "repo-1",
+      "refs/tags/main",
+      "d".repeat(40)
+    );
     mounted.unmount();
   });
 });

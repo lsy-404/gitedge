@@ -109,7 +109,8 @@ async function loadRefs(): Promise<void> {
 async function loadWorkflows(): Promise<void> {
   const epoch = ++workflowEpoch;
   const selected = selectedRef.value;
-  const oid = refs.value.find((item) => item.name === sourceRef(selected))?.oid;
+  const selectedSource = refs.value.find((item) => item.name === sourceRef(selected));
+  const oid = selectedSource?.peeledOid ?? selectedSource?.oid;
   workflows.value = [];
   workflowOid.value = "";
   selectedWorkflowPath.value = "";

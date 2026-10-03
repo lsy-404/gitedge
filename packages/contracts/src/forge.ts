@@ -166,6 +166,7 @@ export interface CreatedAgentSession extends AgentSession {
 export interface GitRef {
   name: string;
   oid: string;
+  peeledOid?: string;
 }
 export interface GitCommit {
   oid: string;
