@@ -10,6 +10,7 @@ import agentsMessages from "./i18n/agents";
 import repositoryControlsMessages from "./i18n/repositoryControls";
 import communityMessages from "./i18n/community";
 import actionsMessages from "./i18n/actions";
+import browserAccountMessages from "./i18n/browserAccounts";
 
 const messages = {
   "zh-CN": {
@@ -859,6 +860,7 @@ export const i18n = createI18n({
       ...repositoryControlsMessages["zh-CN"],
       ...communityMessages["zh-CN"],
       ...actionsMessages["zh-CN"],
+      ...browserAccountMessages["zh-CN"],
     },
     en: {
       ...messages.en,
@@ -873,6 +875,7 @@ export const i18n = createI18n({
       ...repositoryControlsMessages.en,
       ...communityMessages.en,
       ...actionsMessages.en,
+      ...browserAccountMessages.en,
     },
   },
 });

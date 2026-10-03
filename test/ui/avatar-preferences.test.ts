@@ -117,7 +117,9 @@ describe("avatar appearance preferences", () => {
     await settle();
 
     expect(i18n.global.locale.value).toBe("en");
-    expect(mounted.root.querySelector('[role="alert"]')?.textContent).toContain("Could not save");
+    expect(mounted.root.querySelector(".preference-error")?.textContent).toContain(
+      "Could not save"
+    );
     mounted.unmount();
   });
 

@@ -45,6 +45,7 @@ import type {
   RepositoryBranch,
 } from "../../../../packages/contracts/src/repository-controls";
 import type { SsoIdentity, SsoProviderSummary } from "../../../../packages/contracts/src/sso";
+import type { BrowserAccounts } from "../../../../packages/contracts/src/browser-accounts";
 import type {
   ActionRun,
   ActionRunSummary,
@@ -182,6 +183,27 @@ interface ApiEnvelope<T> {
   data: T;
 }
 
+let expectedUserId: string | null = null;
+let expectedViewId = "account";
+
+export function setExpectedIdentity(userId: string | null, agentSessionId?: string): void {
+  expectedUserId = userId;
+  expectedViewId = agentSessionId ?? "account";
+}
+
+export function expectedIdentityHeaders(path: string, method = "GET"): Record<string, string> {
+  if (
+    path === "/api/auth/session" ||
+    (path === "/api/auth/accounts" && method === "GET") ||
+    !expectedUserId
+  )
+    return {};
+  return {
+    "X-GitEdge-Expected-User": expectedUserId,
+    "X-GitEdge-Expected-View": expectedViewId,
+  };
+}
+
 function request<T>(path: string, init?: RequestInit): Promise<T>;
 function request(path: string, init: RequestInit | undefined, allowNoContent: true): Promise<void>;
 async function request<T>(
@@ -190,9 +212,13 @@ async function request<T>(
   allowNoContent = false
 ): Promise<T | void> {
   const response = await fetch(path, {
-    credentials: "include",
-    headers: { "Content-Type": "application/json", ...init?.headers },
     ...init,
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      ...expectedIdentityHeaders(path, (init?.method ?? "GET").toUpperCase()),
+      ...init?.headers,
+    },
   });
   if (!response.ok) {
     const body = await response.text();
@@ -247,6 +273,24 @@ function actionsRepositoryPath(repositoryId: string, resource: string): string {
 }
 
 export const api = {
+  browserAccounts: () => request<BrowserAccounts>("/api/auth/accounts"),
+  switchBrowserAccount: (userId: string) =>
+    request<{ switched: boolean }>("/api/auth/accounts/switch", {
+      method: "POST",
+      body: JSON.stringify({ userId }),
+    }),
+  switchBrowserView: (payload: { kind: "account" } | { kind: "agent"; sessionId: string }) =>
+    request<{ switched: boolean }>("/api/auth/accounts/view", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  removeBrowserAccount: (userId: string) =>
+    request<{ removed: boolean; isCurrent: boolean }>(
+      `/api/auth/accounts/${encodeURIComponent(userId)}`,
+      { method: "DELETE" }
+    ),
+  logoutAllBrowserAccounts: () =>
+    request<{ loggedOut: boolean }>("/api/auth/accounts/logout-all", { method: "POST" }),
   accountProfile: () => request<AccountProfile>("/api/auth/profile"),
   updateAccountProfile: (
     payload: Partial<Omit<AccountProfile, "preferences">> & {

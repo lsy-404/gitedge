@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type { DeployPlan, DeployResult } from "../../../../packages/contracts/src/deploy";
-import type { Repository } from "../lib/api";
+import { expectedIdentityHeaders, type Repository } from "../lib/api";
 import NoticeBar from "./NoticeBar.vue";
 import SelectField from "./SelectField.vue";
 import TextField from "./TextField.vue";
@@ -36,9 +36,13 @@ const endpoint = (name: string) =>
 
 async function call<T>(name: string, init?: RequestInit): Promise<T> {
   const response = await fetch(endpoint(name), {
-    credentials: "include",
-    headers: { "Content-Type": "application/json", ...init?.headers },
     ...init,
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      ...expectedIdentityHeaders(endpoint(name), (init?.method ?? "GET").toUpperCase()),
+      ...init?.headers,
+    },
   });
   const data = (await response.json()) as { data?: T; error?: { message?: string } };
   if (!response.ok) throw new Error(data.error?.message || t("deployWizard.error"));
@@ -46,9 +50,12 @@ async function call<T>(name: string, init?: RequestInit): Promise<T> {
 }
 
 onBeforeUnmount(() => {
-  void fetch(endpoint("session"), { method: "DELETE", credentials: "include" }).catch(
-    () => undefined
-  );
+  const path = endpoint("session");
+  void fetch(path, {
+    method: "DELETE",
+    credentials: "include",
+    headers: expectedIdentityHeaders(path, "DELETE"),
+  }).catch(() => undefined);
 });
 
 async function readPlan() {

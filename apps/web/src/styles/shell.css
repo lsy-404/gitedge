@@ -88,6 +88,25 @@
   cursor: pointer;
   padding-left: 4px;
   display: flex;
+  align-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: none;
+}
+.account-trigger:hover,
+.account-trigger:active {
+  background: transparent;
+  box-shadow: none;
+}
+.account-trigger:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 3px;
+}
+.account-trigger .avatar {
+  border: 0;
+  box-shadow: none;
+  background: transparent;
 }
 .global-nav {
   display: flex;
@@ -172,6 +191,147 @@
   margin: 4px 8px;
   color: var(--danger);
   font-size: 12px;
+}
+.browser-account-menu {
+  padding: 4px 0 2px;
+}
+.browser-account-dropdown {
+  width: min(340px, calc(100vw - 24px));
+  max-height: calc(100vh - 88px);
+  overflow-y: auto;
+}
+.browser-account-menu h3 {
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.browser-account-list {
+  display: grid;
+  gap: 2px;
+}
+.browser-account-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.browser-account-option,
+.browser-account-action,
+.browser-account-remove {
+  color: var(--text);
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+}
+.browser-account-option {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px;
+  text-align: left;
+}
+.browser-account-copy {
+  display: grid;
+  min-width: 0;
+}
+.browser-account-copy strong,
+.browser-account-copy > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browser-account-copy > span,
+.browser-account-status,
+.browser-account-state {
+  color: var(--muted);
+  font-size: 12px;
+}
+.browser-account-status {
+  flex-shrink: 0;
+}
+.browser-agent-expiry {
+  font-variant-numeric: tabular-nums;
+}
+.browser-account-option:not(:disabled):hover,
+.browser-account-action:hover,
+.browser-account-remove:not(:disabled):hover {
+  background: var(--subtle);
+}
+.browser-account-option:disabled {
+  opacity: 1;
+  cursor: default;
+}
+.browser-account-option[aria-pressed="true"] {
+  font-weight: 600;
+}
+.browser-account-remove {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+}
+.browser-account-remove:disabled {
+  visibility: hidden;
+}
+.browser-account-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  text-align: left;
+}
+.browser-account-state {
+  padding: 6px 8px;
+}
+.browser-account-error {
+  color: var(--danger);
+}
+.browser-agent-views {
+  display: grid;
+  gap: 2px;
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+.browser-agent-option {
+  align-items: center;
+}
+.browser-account-logout-all {
+  margin-top: 6px;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  color: var(--danger);
+}
+.agent-view-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--subtle));
+  border-bottom: 1px solid var(--border);
+}
+.agent-view-banner-copy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.agent-view-banner-error {
+  color: var(--danger);
+  font-size: 12px;
+}
+@media (max-width: 560px) {
+  .agent-view-banner {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 .navigation-drawer {
   position: fixed;

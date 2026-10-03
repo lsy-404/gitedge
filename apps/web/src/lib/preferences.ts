@@ -41,7 +41,7 @@ function apply(value: AccountPreferences): void {
   Object.assign(preferencesState, value);
   i18n.global.locale.value = value.locale;
   document.documentElement.lang = value.locale;
-  if (!sessionState.user) saveLocalPreferences();
+  saveLocalPreferences();
 }
 
 apply(readLocalPreferences());
@@ -61,7 +61,7 @@ export async function updatePreference(
   preferenceError.value = "";
   apply({ ...preferencesState, [key]: value });
   const userId = sessionState.user?.id;
-  if (!userId) return;
+  if (!userId || sessionState.user?.agentSession) return;
   preferenceSaving.value = true;
   try {
     const profile = await api.updateAccountProfile({ preferences: { [key]: value } });
@@ -80,6 +80,10 @@ export async function loadAccountPreferences(): Promise<void> {
   const version = ++loadVersion;
   const userId = sessionState.user?.id;
   preferenceError.value = "";
+  if (sessionState.user?.agentSession) {
+    accountProfileState.value = null;
+    return;
+  }
   if (!userId) {
     accountProfileState.value = null;
     apply(readLocalPreferences());

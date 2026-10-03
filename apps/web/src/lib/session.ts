@@ -1,5 +1,5 @@
 import { reactive } from "vue";
-import { api, type User } from "./api";
+import { api, setExpectedIdentity, type User } from "./api";
 
 export const sessionState = reactive<{
   user: User | null;
@@ -18,9 +18,15 @@ export function refreshSession(): Promise<User | null> {
   request = (async () => {
     try {
       const user = await api.session();
-      if (version === refreshVersion) sessionState.user = user;
+      if (version === refreshVersion) {
+        sessionState.user = user;
+        setExpectedIdentity(user.id, user.agentSession?.id);
+      }
     } catch {
-      if (version === refreshVersion) sessionState.user = null;
+      if (version === refreshVersion) {
+        sessionState.user = null;
+        setExpectedIdentity(null);
+      }
     } finally {
       if (version === refreshVersion) {
         sessionState.checked = true;
@@ -38,6 +44,7 @@ export function setSession(user: User): void {
   refreshVersion += 1;
   refreshInFlight = null;
   sessionState.user = user;
+  setExpectedIdentity(user.id, user.agentSession?.id);
   sessionState.checked = true;
   sessionState.loading = false;
 }
@@ -46,6 +53,7 @@ export function clearSession(): void {
   refreshVersion += 1;
   refreshInFlight = null;
   sessionState.user = null;
+  setExpectedIdentity(null);
   sessionState.checked = true;
   sessionState.loading = false;
 }

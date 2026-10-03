@@ -3,8 +3,13 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import AppIcon from "./components/AppIcon.vue";
+import BrowserAccountMenu from "./components/BrowserAccountMenu.vue";
 import { api } from "./lib/api";
 import { clearSession, refreshSession, sessionState } from "./lib/session";
+import {
+  listenForBrowserIdentityChanges,
+  notifyBrowserIdentityChanged,
+} from "./lib/browserIdentity";
 import {
   preferencesState,
   loadAccountPreferences,
@@ -18,6 +23,7 @@ const router = useRouter();
 const route = useRoute();
 const accountName = computed(
   () =>
+    sessionState.user?.agentSession?.agentName ||
     accountProfileState.value?.displayName ||
     sessionState.user?.externalIdentity?.login ||
     sessionState.user?.identifier ||
@@ -41,8 +47,11 @@ const searchExpanded = ref(false);
 const searchInput = ref<HTMLInputElement | null>(null);
 const navigation = ref<HTMLDialogElement | null>(null);
 const userMenu = ref<HTMLDetailsElement | null>(null);
+const userMenuOpen = ref(false);
 const createMenu = ref<HTMLDetailsElement | null>(null);
 const expandedPreference = ref<"language" | "theme" | null>(null);
+const agentView = computed(() => sessionState.user?.agentSession ?? null);
+const identitySwitchError = ref("");
 async function openSearch() {
   searchExpanded.value = true;
   await nextTick();
@@ -52,6 +61,7 @@ function closeMenus() {
   searchExpanded.value = false;
   if (navigation.value?.open) navigation.value.close();
   if (userMenu.value) userMenu.value.open = false;
+  userMenuOpen.value = false;
   if (createMenu.value) createMenu.value.open = false;
 }
 async function setPreference(
@@ -83,9 +93,53 @@ function keyboard(event: KeyboardEvent) {
 }
 async function signOut() {
   await api.logout();
+  notifyBrowserIdentityChanged();
   clearSession();
   closeMenus();
   await router.push("/login");
+}
+function addBrowserAccount() {
+  const redirect = typeof route.query.redirect === "string" ? route.query.redirect : route.fullPath;
+  void router.push({ path: "/login", query: { add: "1", redirect } });
+}
+function completeIdentitySwitch(target: string) {
+  notifyBrowserIdentityChanged();
+  if (target === "/login") clearSession();
+  window.location.assign(target);
+}
+async function returnToAccountView() {
+  identitySwitchError.value = "";
+  try {
+    await api.switchBrowserView({ kind: "account" });
+    completeIdentitySwitch("/dashboard");
+  } catch {
+    identitySwitchError.value = t("returnToAccountViewError");
+  }
+}
+let stopIdentityListener: () => void = () => undefined;
+let identityRefreshInFlight: Promise<void> | null = null;
+function identityKey(): string {
+  const user = sessionState.user;
+  if (!user) return "";
+  return `${user.id}:${user.agentSession?.id ?? "account"}`;
+}
+function refreshIdentityOnReturn(): Promise<void> {
+  if (identityRefreshInFlight) return identityRefreshInFlight;
+  const previousIdentity = identityKey();
+  identityRefreshInFlight = refreshSession()
+    .then(() => {
+      if (previousIdentity !== identityKey()) window.location.reload();
+    })
+    .finally(() => {
+      identityRefreshInFlight = null;
+    });
+  return identityRefreshInFlight;
+}
+function refreshIdentityWhenVisible() {
+  if (document.visibilityState === "visible") void refreshIdentityOnReturn();
+}
+function refreshIdentityOnFocus() {
+  void refreshIdentityOnReturn();
 }
 watch(() => route.fullPath, closeMenus);
 watch(locale, (value) => {
@@ -98,8 +152,18 @@ watch(
   },
   { immediate: true }
 );
-onMounted(() => document.addEventListener("keydown", keyboard));
-onUnmounted(() => document.removeEventListener("keydown", keyboard));
+onMounted(() => {
+  document.addEventListener("keydown", keyboard);
+  stopIdentityListener = listenForBrowserIdentityChanges(() => void refreshIdentityOnReturn());
+  window.addEventListener("focus", refreshIdentityOnFocus);
+  document.addEventListener("visibilitychange", refreshIdentityWhenVisible);
+});
+onUnmounted(() => {
+  document.removeEventListener("keydown", keyboard);
+  window.removeEventListener("focus", refreshIdentityOnFocus);
+  document.removeEventListener("visibilitychange", refreshIdentityWhenVisible);
+  stopIdentityListener();
+});
 if (!sessionState.checked) void refreshSession();
 </script>
 <template>
@@ -157,7 +221,7 @@ if (!sessionState.checked) void refreshSession();
             <AppIcon name="search" />
           </button>
           <div class="global-actions">
-            <template v-if="sessionState.user && !authPage">
+            <template v-if="sessionState.user && !agentView && !authPage">
               <details ref="createMenu" class="dropdown create-menu">
                 <summary role="button" class="btn" :aria-label="t('ghCreate')">
                   <AppIcon name="plus" /><AppIcon name="chevron" :size="12" />
@@ -174,7 +238,12 @@ if (!sessionState.checked) void refreshSession();
               </details>
             </template>
             <details ref="userMenu" class="dropdown user-menu">
-              <summary role="button" :aria-label="t('ghUserMenu')" class="account-trigger">
+              <summary
+                role="button"
+                :aria-label="t('ghUserMenu')"
+                class="account-trigger"
+                @click="userMenuOpen = !userMenuOpen"
+              >
                 <span v-if="sessionState.user" class="avatar"
                   ><img
                     v-if="sessionState.user.externalIdentity?.avatarUrl"
@@ -183,15 +252,20 @@ if (!sessionState.checked) void refreshSession();
                   /><span v-else>{{ initials }}</span></span
                 ><span v-else class="avatar"><AppIcon name="person" /></span>
               </summary>
-              <div class="dropdown-panel">
-                <p v-if="sessionState.user" class="dropdown-identity">
+              <div class="dropdown-panel browser-account-dropdown">
+                <p v-if="sessionState.user && !agentView" class="dropdown-identity">
                   {{ t("ghSignedIn")
                   }}<RouterLink :to="`/${sessionState.user.identifier}`"
                     ><strong>{{ accountName }}</strong></RouterLink
                   >
                 </p>
+                <BrowserAccountMenu
+                  v-if="userMenuOpen"
+                  @identity-switch="completeIdentitySwitch"
+                  @add-account="addBrowserAccount"
+                />
                 <hr />
-                <template v-if="sessionState.user">
+                <template v-if="sessionState.user && !agentView">
                   <RouterLink to="/dashboard"
                     ><AppIcon name="repo" />{{ t("repositories") }}</RouterLink
                   ><RouterLink to="/organizations"
@@ -276,7 +350,7 @@ if (!sessionState.checked) void refreshSession();
                   <AppIcon name="signOut" />{{ t("signOut") }}
                 </button>
                 <RouterLink
-                  v-else
+                  v-else-if="!authPage"
                   class="btn"
                   :to="{ path: '/login', query: { redirect: route.fullPath } }"
                   >{{ t("signIn") }}</RouterLink
@@ -289,9 +363,31 @@ if (!sessionState.checked) void refreshSession();
           <RouterLink to="/dashboard"><AppIcon name="repo" />{{ t("repositories") }}</RouterLink
           ><RouterLink to="/organizations"
             ><AppIcon name="organization" />{{ t("organizations") }}</RouterLink
-          ><RouterLink to="/settings/agents"><AppIcon name="agent" />{{ t("agents") }}</RouterLink>
+          ><RouterLink v-if="!agentView" to="/settings/agents"
+            ><AppIcon name="agent" />{{ t("agents") }}</RouterLink
+          >
         </nav>
       </header>
+      <div v-if="agentView" class="agent-view-banner">
+        <span class="agent-view-banner-copy">
+          <AppIcon name="agent" :size="16" />
+          {{
+            t("agentViewBanner", {
+              agent: agentView.agentName,
+              repository: agentView.workspaceName,
+              permission: t(agentView.permission === "write" ? "agentViewWrite" : "agentViewRead"),
+            })
+          }}
+        </span>
+        <span>
+          <span v-if="identitySwitchError" class="agent-view-banner-error" role="alert">{{
+            identitySwitchError
+          }}</span>
+          <button class="btn btn-subtle" @click="returnToAccountView">
+            {{ t("returnToAccountView") }}
+          </button>
+        </span>
+      </div>
       <dialog
         ref="navigation"
         class="navigation-drawer"
@@ -312,9 +408,13 @@ if (!sessionState.checked) void refreshSession();
           ><RouterLink to="/dashboard"><AppIcon name="repo" />{{ t("repositories") }}</RouterLink
           ><RouterLink to="/organizations"
             ><AppIcon name="organization" />{{ t("organizations") }}</RouterLink
-          ><RouterLink to="/settings/agents"><AppIcon name="agent" />{{ t("agents") }}</RouterLink>
+          ><RouterLink v-if="!agentView" to="/settings/agents"
+            ><AppIcon name="agent" />{{ t("agents") }}</RouterLink
+          >
           <hr />
-          <RouterLink to="/settings/account"><AppIcon name="gear" />{{ t("account") }}</RouterLink>
+          <RouterLink v-if="!agentView" to="/settings/account"
+            ><AppIcon name="gear" />{{ t("account") }}</RouterLink
+          >
         </nav>
         <p class="drawer-footer">{{ t("edge") }}</p>
       </dialog>

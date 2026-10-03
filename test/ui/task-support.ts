@@ -151,9 +151,15 @@ const pendingUnmounts: Array<() => void> = [];
 let routeSequence = 0;
 
 /** Mounts `render` inside a throwaway route so route params and links behave as in the app. */
-export async function mountAt(routePath: string, path: string, render: () => VNode) {
+export async function mountAt(
+  routePath: string,
+  path: string,
+  render: () => VNode,
+  routeRender?: () => VNode
+) {
   setSession({ id: "user-1", identifier: "user@example.test" });
   const Host: Component = defineComponent({ setup: () => render });
+  const RouteHost: Component = routeRender ? defineComponent({ setup: () => routeRender }) : Host;
   const routeName = `task-test-${routeSequence++}`;
   router.addRoute({
     path: routePath,
@@ -161,7 +167,7 @@ export async function mountAt(routePath: string, path: string, render: () => VNo
       ? `/${repository.owner}/${repository.name}/tasks/:number?`
       : [],
     name: routeName,
-    component: Host,
+    component: RouteHost,
     meta: { public: true },
   });
   await router.push(path);

@@ -69,5 +69,8 @@ router.beforeEach(async (to) => {
   if (!to.meta.public && !to.meta.allowAnonymous && !sessionState.user) {
     return { path: "/login", query: { redirect: to.fullPath } };
   }
-  if ((to.path === "/login" || to.path === "/register") && sessionState.user) return "/dashboard";
+  if ((to.path === "/login" || to.path === "/register") && sessionState.user) {
+    if (to.path === "/login" && to.query.add === "1") return;
+    return "/dashboard";
+  }
 });

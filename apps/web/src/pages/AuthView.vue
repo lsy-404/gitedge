@@ -8,13 +8,15 @@ import StatusBadge from "../components/StatusBadge.vue";
 import AppIcon from "../components/AppIcon.vue";
 import { api } from "../lib/api";
 import type { SsoProviderSummary } from "../lib/api";
-import { setSession } from "../lib/session";
+import { setSession, sessionState } from "../lib/session";
+import { notifyBrowserIdentityChanged } from "../lib/browserIdentity";
 import TextField from "../components/TextField.vue";
 import "../styles/workspace.css";
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const register = computed(() => route.path === "/register");
+const addingAccount = computed(() => route.path === "/login" && route.query.add === "1");
 const identifier = ref("");
 const password = ref("");
 const error = ref("");
@@ -53,7 +55,8 @@ function safeReturnTo(candidate: unknown): string {
 }
 
 function providerHref(providerId: string): string {
-  return `/api/auth/sso/${encodeURIComponent(providerId)}/start?returnTo=${encodeURIComponent(returnTo.value)}`;
+  const prompt = addingAccount.value ? "&prompt=select_account" : "";
+  return `/api/auth/sso/${encodeURIComponent(providerId)}/start?returnTo=${encodeURIComponent(returnTo.value)}${prompt}`;
 }
 
 function metadataHref(url: string | undefined): string | null {
@@ -82,6 +85,11 @@ async function submit() {
       ? await api.register({ identifier: identifier.value, password: password.value })
       : await api.login({ identifier: identifier.value, password: password.value });
     setSession(user);
+    if (addingAccount.value) {
+      notifyBrowserIdentityChanged();
+      window.location.assign(returnTo.value);
+      return;
+    }
     await router.push(returnTo.value);
   } catch {
     error.value = t("apiError");
@@ -90,14 +98,28 @@ async function submit() {
   }
 }
 function githubLogin() {
-  window.location.assign(`/api/auth/github/start?returnTo=${encodeURIComponent(returnTo.value)}`);
+  const prompt = addingAccount.value ? "&prompt=select_account" : "";
+  window.location.assign(
+    `/api/auth/github/start?returnTo=${encodeURIComponent(returnTo.value)}${prompt}`
+  );
+}
+async function cancelAddingAccount() {
+  if (sessionState.user) await router.replace(returnTo.value);
 }
 </script>
 <template>
   <section class="workspace-page auth-page">
     <div class="auth-brand">
       <img src="/logo.svg" alt="" width="48" height="48" />
-      <h1>{{ register ? t("registerTitle") : t("loginTitle") }}</h1>
+      <h1>
+        {{
+          addingAccount
+            ? t("addingBrowserAccount")
+            : register
+              ? t("registerTitle")
+              : t("loginTitle")
+        }}
+      </h1>
     </div>
     <div class="auth-card">
       <div class="auth-provider-list">
@@ -157,7 +179,12 @@ function githubLogin() {
       </form>
       <NoticeBar v-if="callbackError" intent="error">{{ callbackError }}</NoticeBar>
     </div>
-    <p class="auth-page-footer">
+    <p v-if="addingAccount && sessionState.user" class="auth-page-footer">
+      <button class="btn btn-subtle" @click="cancelAddingAccount">
+        {{ t("cancelAddingAccount") }}
+      </button>
+    </p>
+    <p v-else-if="!addingAccount" class="auth-page-footer">
       {{ register ? t("hasAccount") : t("needsAccount") }}
       <AppLink :to="register ? '/login' : '/register'">{{
         register ? t("signIn") : t("signUp")
