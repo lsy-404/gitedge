@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { repositoryCodeLocation } from "../lib/gitGraphView";
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import {
@@ -202,7 +203,7 @@ async function deleteFile() {
     saved.value = { ...result, deleted: true };
     deleteOpen.value = false;
     if (createPull.value) await createPullRequest(false);
-    emit("saved", result);
+    emit("saved", saved.value);
     emit("changed");
   } catch (cause) {
     if (cause instanceof ApiError && cause.status === 409) conflict.value = true;
@@ -221,7 +222,7 @@ function close() {
     <div class="box-header">
       <div>
         <h2>{{ isNew ? t("codeNewFile") : t("codeEditFile") }}</h2>
-        <p class="muted">
+        <p v-if="!saved" class="muted">
           {{ t("codeEditAgainst", { branch, oid: expectedOid ?? t("codeEmptyHead") }) }}
         </p>
       </div>
@@ -278,10 +279,9 @@ function close() {
         <strong>{{ t("codeFileSaved", { branch: saved.branch }) }}</strong>
         <RouterLink
           v-if="!saved.deleted"
-          :to="{
-            path: `/${repository.owner}/${repository.name}/blob/${saved.path}`,
-            query: { ref: saved.branch },
-          }"
+          :to="
+            repositoryCodeLocation(repository.owner, repository.name, 'blob', saved.path, saved.oid)
+          "
           >{{ t("codeViewCommittedFile") }}</RouterLink
         >
         <RouterLink

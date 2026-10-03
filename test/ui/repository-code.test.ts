@@ -575,7 +575,7 @@ describe("repository Code view", () => {
     );
     expect(mounted.root.querySelector(".save-result a")?.textContent).toBe("View committed file");
     expect(mounted.root.querySelector(".save-result a")?.getAttribute("href")).toContain(
-      "/example/sample/blob/readme.md?ref=feature/editor"
+      "/example/sample/blob/readme.md?ref=" + "b".repeat(40)
     );
     expect(
       mounted.root.querySelector('.save-result a[href="/example/sample/pulls/12"]')

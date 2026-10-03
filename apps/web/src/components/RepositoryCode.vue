@@ -58,7 +58,9 @@ const branchRefreshKey = ref(0);
 const showFileEditor = ref(false);
 const editorCreatesNew = ref(false);
 const initialEditorPath = ref("");
-const savedFile = ref<{ oid: string; branch: string; path: string } | null>(null);
+const savedFile = ref<{ oid: string; branch: string; path: string; deleted?: boolean } | null>(
+  null
+);
 const graph = ref<GitGraph | null>(null);
 const commits = ref<GitCommit[]>([]);
 const selectedCommit = computed(() =>
@@ -280,7 +282,10 @@ async function loadMore() {
 }
 function openNewFile() {
   editorCreatesNew.value = true;
-  initialEditorPath.value = filePath.value ? filePath.value + "/" : "";
+  const directory = isBlob.value
+    ? filePath.value.split("/").slice(0, -1).join("/")
+    : filePath.value;
+  initialEditorPath.value = directory ? directory + "/" : "";
   savedFile.value = null;
   showFileEditor.value = true;
 }
@@ -290,7 +295,7 @@ function openExistingFileEditor() {
   savedFile.value = null;
   showFileEditor.value = true;
 }
-function onFileSaved(result: { oid: string; branch: string; path: string }) {
+function onFileSaved(result: { oid: string; branch: string; path: string; deleted?: boolean }) {
   savedFile.value = result;
   branchRefreshKey.value += 1;
   const current = managedBranches.value.find((branch) => branch.name === result.branch);
@@ -311,6 +316,19 @@ async function closeFileEditor() {
   const changed = savedFile.value;
   savedFile.value = null;
   if (!changed) return;
+  if (changed.deleted) {
+    const directory = changed.path.split("/").slice(0, -1).join("/");
+    await router.push(
+      repositoryCodeLocation(
+        props.repository.owner,
+        props.repository.name,
+        "tree",
+        directory,
+        changed.branch
+      )
+    );
+    return;
+  }
   if (changed.branch !== refName.value) {
     await router.push({
       path: "/" + props.repository.owner + "/" + props.repository.name,
@@ -507,6 +525,12 @@ onUnmounted(() => {
           :disabled="!refs.length"
           @update:model-value="changeRef"
         >
+          <option
+            v-if="!refs.some((item) => item.name.replace(/^refs\/(heads|tags)\//, '') === refName)"
+            :value="refName"
+          >
+            {{ refName.slice(0, 12) }}
+          </option>
           <option v-for="item in shortRefs(branchRefs)" :key="item.name" :value="item.shortName">
             {{ item.shortName }}
           </option>
@@ -997,11 +1021,23 @@ onUnmounted(() => {
       <p class="eyebrow">{{ t("compare") }}</p>
       <div class="compare-form">
         <SelectField v-model="compareBase" :label="t('baseBranch')">
+          <option
+            v-if="!refs.some((item) => item.name.replace(/^refs\/(heads|tags)\//, '') === refName)"
+            :value="refName"
+          >
+            {{ refName.slice(0, 12) }}
+          </option>
           <option v-for="item in shortRefs(branchRefs)" :key="item.name" :value="item.shortName">
             {{ item.shortName }}
           </option>
         </SelectField>
         <SelectField v-model="compareHead" :label="t('headBranch')">
+          <option
+            v-if="!refs.some((item) => item.name.replace(/^refs\/(heads|tags)\//, '') === refName)"
+            :value="refName"
+          >
+            {{ refName.slice(0, 12) }}
+          </option>
           <option v-for="item in shortRefs(branchRefs)" :key="item.name" :value="item.shortName">
             {{ item.shortName }}
           </option>
