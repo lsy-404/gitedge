@@ -143,6 +143,18 @@ describe("Browser account isolation", () => {
       (await browser.call("/accounts/switch", "POST", { userId: crypto.randomUUID() })).status
     ).toBe(401);
   });
+  it("cancels pending browser authentication when the selected account changes", async () => {
+    const browser = new Browser(),
+      a = await user(),
+      b = await user();
+    await browser.add(a);
+    await browser.add(b);
+    browser.cookies.set("gitedge_sso", "pending-link-proof");
+    browser.cookies.set("gitedge_github_flow", "pending-login-proof");
+    await browser.call("/accounts/switch", "POST", { userId: a });
+    expect(browser.cookies.has("gitedge_sso")).toBe(false);
+    expect(browser.cookies.has("gitedge_github_flow")).toBe(false);
+  });
   it("keeps the previous login after a failed password attempt and rejects login CSRF", async () => {
     const browser = new Browser(),
       a = await user();

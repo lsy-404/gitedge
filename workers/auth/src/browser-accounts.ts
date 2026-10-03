@@ -82,8 +82,16 @@ function fail(status: number, code: string, message: string): Response {
     { status, headers: { "Cache-Control": "no-store" } }
   );
 }
-function clearView(response: Response): void {
+function clearBrowserContext(response: Response): void {
   response.headers.append("Set-Cookie", cookie(VIEW_COOKIE, "", 0));
+  response.headers.append(
+    "Set-Cookie",
+    "gitedge_sso=; Path=/api/auth/sso; Secure; HttpOnly; SameSite=None; Max-Age=0"
+  );
+  response.headers.append(
+    "Set-Cookie",
+    "gitedge_github_flow=; Path=/api/auth/github; Secure; HttpOnly; SameSite=Lax; Max-Age=0"
+  );
 }
 
 function pruneSavedCookies(request: Request, response: Response, accounts: SavedAccount[]): void {
@@ -126,7 +134,7 @@ export async function rememberBrowserLogin(
     savedCookie(ACCOUNT_PREFIX + userId, token, SESSION_MAX_AGE_SECONDS)
   );
   response.headers.append("Set-Cookie", createSessionCookie(token, SESSION_MAX_AGE_SECONDS));
-  clearView(response);
+  clearBrowserContext(response);
   response.headers.set("Cache-Control", "no-store");
   return response;
 }
@@ -147,7 +155,7 @@ export async function browserAccountLogout(
       responseValue.headers.append("Set-Cookie", savedCookie(ACCOUNT_PREFIX + row.id, "", 0));
   }
   responseValue.headers.append("Set-Cookie", createSessionCookie("", 0));
-  clearView(responseValue);
+  clearBrowserContext(responseValue);
   return responseValue;
 }
 
@@ -207,7 +215,7 @@ export async function handleBrowserAccounts(
       "Set-Cookie",
       createSessionCookie(selected.token, remainingAge(selected.expiresAt))
     );
-    clearView(result);
+    clearBrowserContext(result);
     createLogger(env.LOG_LEVEL, { service: "auth" }).info("browser-account-switched", {
       userId: selected.id,
     });
@@ -224,6 +232,7 @@ export async function handleBrowserAccounts(
     )
       return fail(403, "forbidden", "This agent session is unavailable.");
     const result = response({ switched: true });
+    clearBrowserContext(result);
     result.headers.append(
       "Set-Cookie",
       cookie(
@@ -250,7 +259,7 @@ export async function handleBrowserAccounts(
       .slice(0, MAX_SAVED_COOKIES))
       result.headers.append("Set-Cookie", savedCookie(name, "", 0));
     result.headers.append("Set-Cookie", createSessionCookie("", 0));
-    clearView(result);
+    clearBrowserContext(result);
     return result;
   }
   if (/^\/accounts\/[^/]+$/.test(path) && request.method === "DELETE") {
@@ -264,7 +273,7 @@ export async function handleBrowserAccounts(
     result.headers.append("Set-Cookie", savedCookie(ACCOUNT_PREFIX + selected.id, "", 0));
     if (isCurrent) {
       result.headers.append("Set-Cookie", createSessionCookie("", 0));
-      clearView(result);
+      clearBrowserContext(result);
     }
     return result;
   }

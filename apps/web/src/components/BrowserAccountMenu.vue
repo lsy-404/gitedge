@@ -182,8 +182,17 @@ async function logoutAll(): Promise<void> {
         {{ t("browserAccountLimit", { limit: accounts.accountLimit }) }}
       </p>
 
-      <div v-if="accounts.agentViews.length" class="browser-agent-views">
+      <div v-if="sessionState.user" class="browser-agent-views">
         <h3>{{ t("agentViews") }}</h3>
+        <template v-if="!accounts.agentViews.length">
+          <p class="browser-account-state">{{ t("noAgentViews") }}</p>
+          <RouterLink
+            v-if="!sessionState.user.agentSession"
+            class="browser-account-action"
+            to="/settings/agents"
+            >{{ t("agents") }}</RouterLink
+          >
+        </template>
         <button
           v-for="view in accounts.agentViews"
           :key="view.sessionId"
