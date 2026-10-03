@@ -13,7 +13,7 @@ const RUN_KEY = "run";
 const INPUT_CHUNK_PREFIX = "input:";
 const MAX_INPUT_CHUNKS = 160;
 const INPUT_CHUNK_SIZE = 48 * 1024;
-const MAX_OUTPUT_BYTES = 256 * 1024;
+const MAX_OUTPUT_BYTES = 16 * 1024;
 const RUN_TIMEOUT_MS = 120_000;
 
 interface ActionRunEnv {
@@ -80,9 +80,21 @@ function appendBounded(target: string, text: string, budget: OutputBudget): stri
     return target + text;
   }
   budget.truncated = true;
-  const accepted = encoded.subarray(0, remaining);
+  let acceptedLength = Math.min(encoded.byteLength, remaining);
+  let acceptedText = "";
+  while (acceptedLength > 0) {
+    try {
+      acceptedText = new TextDecoder("utf-8", { fatal: true }).decode(
+        encoded.subarray(0, acceptedLength)
+      );
+      break;
+    } catch {
+      acceptedLength -= 1;
+    }
+  }
+  const accepted = encoded.subarray(0, acceptedLength);
   budget.used += accepted.byteLength;
-  return target + new TextDecoder().decode(accepted);
+  return target + acceptedText;
 }
 
 function safeRepositoryPath(path: string): boolean {
@@ -149,9 +161,12 @@ export class ActionRun extends DurableObject<ActionRunEnv> {
       startedAt: null,
       updatedAt: now,
     };
-    await this.ctx.storage.put(RUN_KEY, run);
-    await this.ctx.storage.put("inputChunkCount", chunks);
-    await this.ctx.storage.put("runPlan", input.jobs);
+    await this.ctx.storage.transaction(async (txn) => {
+      if ((await txn.get(RUN_KEY)) !== undefined) return;
+      await txn.put(RUN_KEY, run);
+      await txn.put("inputChunkCount", chunks);
+      await txn.put("runPlan", input.jobs);
+    });
   }
 
   async writeInputChunk(index: number, chunk: string): Promise<void> {
@@ -284,7 +299,20 @@ export class ActionRun extends DurableObject<ActionRunEnv> {
       this.timeoutExpired = true;
       this.activeAbort?.abort();
       const container = this.ctx.container;
-      if (container?.running) void container.destroy("Action run exceeded 120 seconds");
+      if (container?.running) {
+        this.ctx.waitUntil(
+          container.destroy("Action run exceeded 120 seconds").catch((cause: unknown) => {
+            const logger = createLogger(this.env.LOG_LEVEL, {
+              service: "actions",
+              repoId: started.repositoryId,
+              doId: started.id,
+            });
+            logger.warn("actions:container-timeout-cleanup-failed", {
+              reason: cause instanceof Error ? cause.message : "unknown",
+            });
+          })
+        );
+      }
     }, RUN_TIMEOUT_MS);
     const budget: OutputBudget = { used: 0, truncated: false };
 
@@ -400,9 +428,25 @@ export class ActionRun extends DurableObject<ActionRunEnv> {
           status: "completed",
           conclusion: cancelled ? "cancelled" : jobConclusion,
           steps: current.steps.map((step) =>
-            step.status === "queued" && cancelled
-              ? { ...step, status: "completed", conclusion: "cancelled" }
-              : step
+            step.status === "completed"
+              ? step
+              : {
+                  ...step,
+                  status: "completed",
+                  conclusion:
+                    step.conclusion ??
+                    (cancelled || jobConclusion === "success" ? "cancelled" : "failure"),
+                  log:
+                    step.status === "queued"
+                      ? appendBounded(
+                          "",
+                          cancelled
+                            ? "Not run because the run was cancelled."
+                            : "Not run because an earlier step failed.",
+                          budget
+                        )
+                      : step.log,
+                }
           ),
         }));
         if (jobConclusion !== "success" || cancelled) break;
@@ -434,9 +478,13 @@ export class ActionRun extends DurableObject<ActionRunEnv> {
                         ...step,
                         status: "completed",
                         conclusion: cancelled ? "cancelled" : "failure",
-                        log: cancelled
-                          ? "Not run because the run was cancelled."
-                          : "Not run because an earlier step failed.",
+                        log: appendBounded(
+                          "",
+                          cancelled
+                            ? "Not run because the run was cancelled."
+                            : "Not run because an earlier step failed.",
+                          budget
+                        ),
                       }
                     : step
                 ),
@@ -465,22 +513,33 @@ export class ActionRun extends DurableObject<ActionRunEnv> {
           conclusion: cancelled ? "cancelled" : "failure",
           outputTruncated: budget.truncated,
           jobs: current.jobs.map((job) =>
-            job.status === "running"
+            job.status !== "completed"
               ? {
                   ...job,
                   status: "completed",
                   conclusion: cancelled ? "cancelled" : "failure",
                   steps: job.steps.map((step) =>
-                    step.status === "running"
+                    step.status !== "completed"
                       ? {
                           ...step,
                           status: "completed",
                           conclusion: cancelled ? "cancelled" : "failure",
-                          log: appendBounded(
-                            step.log,
-                            cause instanceof Error ? cause.message : "Action execution failed.",
-                            budget
-                          ),
+                          log:
+                            step.status === "running"
+                              ? appendBounded(
+                                  step.log,
+                                  cause instanceof Error
+                                    ? cause.message
+                                    : "Action execution failed.",
+                                  budget
+                                )
+                              : appendBounded(
+                                  "",
+                                  cancelled
+                                    ? "Not run because the run was cancelled."
+                                    : "Not run because the run failed before this step started.",
+                                  budget
+                                ),
                         }
                       : step
                   ),
@@ -543,12 +602,22 @@ export class ActionRun extends DurableObject<ActionRunEnv> {
       signal: controller.signal,
     });
     this.activeProcess = process;
-    void process.exitCode.then(() => {
-      if (this.activeProcess === process) {
-        this.activeAbort = null;
-        this.activeProcess = null;
-      }
-    });
+    void process.exitCode
+      .then(() => {
+        if (this.activeProcess === process) {
+          this.activeAbort = null;
+          this.activeProcess = null;
+        }
+      })
+      .catch((cause: unknown) => {
+        const logger = createLogger(this.env.LOG_LEVEL, {
+          service: "actions",
+          doId: jobId || "run",
+        });
+        logger.warn("actions:process-exit-status-failed", {
+          reason: cause instanceof Error ? cause.message : "unknown",
+        });
+      });
     if (options.stdin !== undefined && process.stdin) {
       const writer = process.stdin.getWriter();
       await writer.write(new TextEncoder().encode(options.stdin));
@@ -564,12 +633,24 @@ export class ActionRun extends DurableObject<ActionRunEnv> {
     ): Promise<void> => {
       if (!stream) return;
       const reader = stream.getReader();
+      const decoder = new TextDecoder();
       try {
         while (true) {
           const { done, value } = await reader.read();
-          if (done) return;
+          if (done) {
+            const tail = decoder.decode();
+            if (tail) {
+              const formattedTail = label ? `${label}${tail}` : tail;
+              const next = appendBounded(log, formattedTail, budget);
+              const delta = next.slice(log.length);
+              log = next;
+              unflushedBytes += new TextEncoder().encode(delta).byteLength;
+              if (label === "stderr: ") stderr += delta.replace(/^stderr: /, "");
+            }
+            return;
+          }
           if (!value) continue;
-          const text = new TextDecoder().decode(value, { stream: true });
+          const text = decoder.decode(value, { stream: true });
           const formatted = label ? `${label}${text}` : text;
           const next = appendBounded(log, formatted, budget);
           const delta = next.slice(log.length);
@@ -677,29 +758,44 @@ export class ActionRun extends DurableObject<ActionRunEnv> {
   }
 
   private async saveRun(run: StoredRun): Promise<StoredRun> {
-    await this.ctx.storage.put(RUN_KEY, { ...run, updatedAt: Date.now() });
-    return run;
+    return this.ctx.storage.transaction(async (txn) => {
+      const currentValue: unknown = await txn.get(RUN_KEY);
+      const current = isStoredRun(currentValue) ? currentValue : null;
+      const saved: StoredRun = {
+        ...(current?.status === "completed" ? current : run),
+        cancelRequested: Boolean(current?.cancelRequested || run.cancelRequested),
+        updatedAt: Date.now(),
+      };
+      await txn.put(RUN_KEY, saved);
+      return saved;
+    });
   }
 
   private async updateJob(id: string, update: (job: ActionRunJob) => ActionRunJob): Promise<void> {
-    const run = await this.readRun();
-    if (!run) return;
-    await this.saveRun({
-      ...run,
-      jobs: run.jobs.map((job) => (job.id === id ? update(job) : job)),
+    await this.ctx.storage.transaction(async (txn) => {
+      const value: unknown = await txn.get(RUN_KEY);
+      if (!isStoredRun(value) || value.status === "completed") return;
+      await txn.put(RUN_KEY, {
+        ...value,
+        jobs: value.jobs.map((job) => (job.id === id ? update(job) : job)),
+        updatedAt: Date.now(),
+      });
     });
   }
 
   private async updateStep(id: string, index: number, step: ActionRunStep): Promise<void> {
-    const run = await this.readRun();
-    if (!run) return;
-    await this.saveRun({
-      ...run,
-      jobs: run.jobs.map((job) =>
-        job.id === id
-          ? { ...job, steps: job.steps.map((item, i) => (i === index ? step : item)) }
-          : job
-      ),
+    await this.ctx.storage.transaction(async (txn) => {
+      const value: unknown = await txn.get(RUN_KEY);
+      if (!isStoredRun(value) || value.status === "completed") return;
+      await txn.put(RUN_KEY, {
+        ...value,
+        jobs: value.jobs.map((job) =>
+          job.id === id
+            ? { ...job, steps: job.steps.map((item, i) => (i === index ? step : item)) }
+            : job
+        ),
+        updatedAt: Date.now(),
+      });
     });
   }
 }

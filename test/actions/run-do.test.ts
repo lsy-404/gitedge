@@ -21,12 +21,25 @@ class MemoryStorage {
   }
 
   async setAlarm(_timestamp: number): Promise<void> {}
+
+  async transaction<T>(callback: (txn: MemoryStorage) => Promise<T>): Promise<T> {
+    return callback(this);
+  }
 }
 
 function readable(value: string): ReadableStream<Uint8Array> {
   return new ReadableStream({
     start(controller) {
       if (value) controller.enqueue(new TextEncoder().encode(value));
+      controller.close();
+    },
+  });
+}
+
+function readableChunks(chunks: Uint8Array[]): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(chunk);
       controller.close();
     },
   });
@@ -58,7 +71,14 @@ function actionInput(jobs = workflowJobs()) {
   };
 }
 
-function makeAction(options: { blockStep?: boolean } = {}) {
+function makeAction(
+  options: {
+    blockStep?: boolean;
+    stdoutChunks?: Uint8Array[];
+    stderr?: string;
+    exitCode?: number;
+  } = {}
+) {
   const storage = new MemoryStorage();
   let running = false;
   let currentInput = "";
@@ -108,16 +128,18 @@ function makeAction(options: { blockStep?: boolean } = {}) {
               stepOutputController = controller;
             },
           })
-        : readable("action-ok");
+        : options.stdoutChunks
+          ? readableChunks(options.stdoutChunks)
+          : readable("action-ok");
       const exitCode = options.blockStep
         ? new Promise<number>((resolve) => {
             stepExitResolve = resolve;
           })
-        : Promise.resolve(0);
+        : Promise.resolve(options.exitCode ?? 0);
       return {
         stdin: null,
         stdout,
-        stderr: readable(""),
+        stderr: readable(options.stderr ?? ""),
         exitCode,
         kill() {
           closeStepOutput();
@@ -131,7 +153,11 @@ function makeAction(options: { blockStep?: boolean } = {}) {
       stepExitResolve(137);
     },
   };
-  const context = { storage, container } as unknown as DurableObjectState;
+  const context = {
+    storage,
+    container,
+    waitUntil: (promise: Promise<unknown>) => void promise,
+  } as unknown as DurableObjectState;
   const action = new ActionRun(context, {} as Cloudflare.Env);
   return { action, starts, stepStarted, storage, getInput: () => currentInput };
 }
@@ -174,6 +200,65 @@ describe("ActionRun Durable Object lifecycle", () => {
     expect(run?.status).toBe("completed");
     expect(run?.conclusion).toBe("cancelled");
     expect(run?.jobs[0]?.steps[0]?.conclusion).toBe("cancelled");
+    expect(
+      run?.jobs
+        .flatMap((job) => [job, ...job.steps])
+        .every((item) => item.status !== "queued" && item.status !== "running")
+    ).toBe(true);
+  });
+
+  it("preserves UTF-8 characters split across output chunks", async () => {
+    const bytes = new TextEncoder().encode("split 🙂");
+    const emojiStart = bytes.indexOf(0xf0);
+    const fixture = makeAction({
+      stdoutChunks: [bytes.slice(0, emojiStart + 2), bytes.slice(emojiStart + 2)],
+    });
+    const chunks = [JSON.stringify([{ path: "entry.js", contentBase64: "", mode: "100644" }])];
+    await fixture.action.initialize(actionInput(), chunks.length);
+    await fixture.action.writeInputChunk(0, chunks[0] ?? "");
+    await fixture.action.schedule();
+    await fixture.action.alarm();
+
+    expect((await fixture.action.getRun())?.jobs[0]?.steps[0]?.log).toContain("split 🙂");
+  });
+
+  it("bounds combined stdout and stderr and completes every skipped step after failure", async () => {
+    const jobs: ActionJob[] = [
+      {
+        id: "build",
+        name: "Build",
+        steps: [
+          { name: "Fail", run: "exit 1", shell: "sh", workingDirectory: null, env: {} },
+          { name: "Skipped", run: "true", shell: "sh", workingDirectory: null, env: {} },
+        ],
+      },
+      {
+        id: "test",
+        name: "Test",
+        steps: [{ name: "Skipped job", run: "true", shell: "sh", workingDirectory: null, env: {} }],
+      },
+    ];
+    const fixture = makeAction({ stderr: "e".repeat(20 * 1024), exitCode: 1 });
+    const chunks = [JSON.stringify([{ path: "entry.js", contentBase64: "", mode: "100644" }])];
+    await fixture.action.initialize(actionInput(jobs), chunks.length);
+    await fixture.action.writeInputChunk(0, chunks[0] ?? "");
+    await fixture.action.schedule();
+    await fixture.action.alarm();
+
+    const run = await fixture.action.getRun();
+    expect(run?.outputTruncated).toBe(true);
+    expect(
+      new TextEncoder().encode(
+        run?.jobs
+          .flatMap((job) => job.steps)
+          .map((step) => step.log)
+          .join("")
+      ).byteLength
+    ).toBeLessThanOrEqual(16 * 1024);
+    expect(
+      run?.jobs.flatMap((job) => [job, ...job.steps]).every((item) => item.status === "completed")
+    ).toBe(true);
+    expect(run?.jobs[0]?.steps[0]?.conclusion).toBe("failure");
   });
 
   it("finishes a run whose alarm state outlives the hard timeout", async () => {

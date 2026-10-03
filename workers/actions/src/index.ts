@@ -319,7 +319,7 @@ async function publishCheck(
   );
   const summary =
     run.status === "completed"
-      ? `${run.workflowName}: ${run.conclusion ?? "completed"}.${failed.length ? ` Failed: ${failed.join(", ")}.` : ""}${run.outputTruncated ? " Output was truncated at 256 KiB." : ""}`
+      ? `${run.workflowName}: ${run.conclusion ?? "completed"}.${failed.length ? ` Failed: ${failed.join(", ")}.` : ""}${run.outputTruncated ? " Output was truncated at 16 KiB." : ""}`
       : `${run.workflowName} is ${run.status}.`;
   return deliverCheck(env, run.id, run.repositoryId, status, conclusion, summary, now);
 }
