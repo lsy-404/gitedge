@@ -46,6 +46,12 @@ import type {
 } from "../../../../packages/contracts/src/repository-controls";
 import type { SsoIdentity, SsoProviderSummary } from "../../../../packages/contracts/src/sso";
 import type {
+  ActionRun,
+  ActionRunSummary,
+  ActionWorkflowFile,
+  CreateActionRunInput,
+} from "../../../../packages/contracts/src/actions";
+import type {
   AgentAssignmentPolicy,
   AssigneeCandidate,
   AssigneeRef,
@@ -113,6 +119,7 @@ export type {
   RepositoryCommunityFile,
   RepositoryRole,
 } from "../../../../packages/contracts/src/repository-controls";
+export type { ActionRun, ActionRunSummary, ActionWorkflowFile, CreateActionRunInput };
 export type { SsoIdentity, SsoProviderSummary };
 export type {
   AgentAssignmentPolicy,
@@ -233,6 +240,10 @@ function repositoryPath(repositoryId: string, resource: string): string {
 
 function gitPath(repositoryId: string, resource: string): string {
   return `/api/git/repositories/${encodeURIComponent(repositoryId)}/${resource}`;
+}
+
+function actionsRepositoryPath(repositoryId: string, resource: string): string {
+  return `/api/actions/repositories/${encodeURIComponent(repositoryId)}/${resource}`;
 }
 
 export const api = {
@@ -723,6 +734,23 @@ export const api = {
       { method: "DELETE" },
       true
     ),
+  actionWorkflows: (repositoryId: string, ref: string, oid?: string) =>
+    request<{ oid: string; workflows: ActionWorkflowFile[] }>(
+      `${actionsRepositoryPath(repositoryId, "workflows")}${query({ ref, oid })}`
+    ),
+  actionRuns: (repositoryId: string) =>
+    request<ActionRunSummary[]>(actionsRepositoryPath(repositoryId, "runs")),
+  actionRun: (runId: string) =>
+    request<ActionRun>(`/api/actions/runs/${encodeURIComponent(runId)}`),
+  startActionRun: (repositoryId: string, input: CreateActionRunInput) =>
+    request<ActionRunSummary>(actionsRepositoryPath(repositoryId, "runs"), {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  cancelActionRun: (runId: string) =>
+    request<ActionRun>(`/api/actions/runs/${encodeURIComponent(runId)}/cancel`, {
+      method: "POST",
+    }),
   agents: () => request<Agent[]>("/api/auth/agents"),
   agent: (id: string) => request<Agent>(`/api/auth/agents/${encodeURIComponent(id)}`),
   updateAgent: (
