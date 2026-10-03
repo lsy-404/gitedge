@@ -543,11 +543,19 @@ describe("RepositoryCollaboration rendered workflows", () => {
     await settle();
     expect(mounted.root.querySelector(".pull-review")).not.toBeNull();
     expect(mounted.root.querySelector(".checks-panel")).toBeNull();
+    const mergeSelect = control(mounted.root, ".merge-actions select");
+    expect([...mergeSelect.querySelectorAll("option")].map((option) => option.value)).toEqual([
+      "merge",
+      "squash",
+      "rebase",
+    ]);
+    fill(mergeSelect, "squash");
     findButton(mounted.root, "Merge pull request").click();
     await settle();
     expect(mergePullSpy).toHaveBeenCalledWith("repo-1", 12, {
       expectedBaseOid: "base-current-oid",
       expectedHeadOid: "head-current-oid",
+      method: "squash",
     });
     expect(mounted.root.textContent).toContain("Merge commit merged-c");
     expect(mounted.root.querySelector(".merge-actions")).toBeNull();

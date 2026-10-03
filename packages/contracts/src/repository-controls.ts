@@ -86,6 +86,7 @@ export interface RepositoryCommunityFile {
   repositoryId: string;
   owner: string;
   repository: string;
+  ref: string;
   path: string;
   inherited: boolean;
   truncated: boolean;

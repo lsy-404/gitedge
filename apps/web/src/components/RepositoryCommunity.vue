@@ -75,15 +75,12 @@ watch(() => [props.repositoryId, props.refName], load, { immediate: true });
       <section v-if="readmeFile" class="community-readme">
         <div class="community-readme-heading">
           <h3>{{ t("communityReadme") }}</h3>
-          <a :href="communitySourceUrl(readmeFile, props.refName)">{{ t("communitySource") }}</a>
+          <a :href="communitySourceUrl(readmeFile)">{{ t("communitySource") }}</a>
         </div>
         <p v-if="isCommunityTruncated(readmeFile)" class="community-truncated muted">
           {{ t("communityTruncated") }}
         </p>
-        <MarkdownContent
-          :source="readmeFile.content"
-          :base-url="communitySourceUrl(readmeFile, props.refName)"
-        />
+        <MarkdownContent :source="readmeFile.content" :base-url="communitySourceUrl(readmeFile)" />
       </section>
       <p v-if="!listedFiles.length && !readmeFile" class="community-empty muted">
         {{ t("communityNoFiles") }}
@@ -106,11 +103,8 @@ watch(() => [props.repositoryId, props.refName], load, { immediate: true });
               <p v-if="isCommunityTruncated(file)" class="community-truncated muted">
                 {{ t("communityTruncated") }}
               </p>
-              <MarkdownContent
-                :source="file.content"
-                :base-url="communitySourceUrl(file, props.refName)"
-              />
-              <a class="community-source" :href="communitySourceUrl(file, props.refName)">{{
+              <MarkdownContent :source="file.content" :base-url="communitySourceUrl(file)" />
+              <a class="community-source" :href="communitySourceUrl(file)">{{
                 t("communitySource")
               }}</a>
             </div>

@@ -64,6 +64,19 @@ const item = ref<Issue | PullRequest | Discussion | WikiPage | null>(null);
 const comments = ref<Comment[]>([]);
 const reviews = ref<Review[]>([]);
 const checks = ref<CheckRun[]>([]);
+const mergeMethod = ref<"merge" | "squash" | "rebase">("merge");
+const availableMergeMethods = computed(() => [
+  ...(props.repository.allowMergeCommit ? (["merge"] as const) : []),
+  ...(props.repository.allowSquashMerge ? (["squash"] as const) : []),
+  ...(props.repository.allowRebaseMerge ? (["rebase"] as const) : []),
+]);
+watch(
+  availableMergeMethods,
+  (methods) => {
+    if (!methods.includes(mergeMethod.value)) mergeMethod.value = methods[0] ?? "merge";
+  },
+  { immediate: true }
+);
 const wikiHistory = ref<WikiPage[]>([]);
 const wikiEditing = ref(false);
 const wikiDraft = ref({ title: "", content: "" });
@@ -201,7 +214,7 @@ function actorName(value: {
   updatedBy?: string;
 }): string {
   return value.actor
-    ? `${value.actor.name}${value.actor.kind === "agent" ? ` · ${t("agent")}` : ""}`
+    ? `${value.actor.name}${value.actor.kind === "agent" ? ` · ${t("agent")}` : value.actor.kind === "ci" ? ` · ${t("ciActor")}` : ""}`
     : value.author || value.updatedBy || "";
 }
 function itemStatus(value: Issue | PullRequest | Discussion | WikiPage): string {
@@ -539,6 +552,7 @@ async function mergePull() {
     item.value = await api.mergePull(props.repository.id, detailNumber.value, {
       expectedBaseOid: diff.value.baseOid,
       expectedHeadOid: diff.value.headOid,
+      method: mergeMethod.value,
     });
     await load();
   } catch (cause) {
@@ -1057,14 +1071,32 @@ watch(
           <span v-else class="muted">{{ t("binaryPreviewUnavailable") }}</span>
         </div>
         <div v-if="showEditActions && pullIsOpen" class="merge-actions">
+          <SelectField v-model="mergeMethod" :label="t('repoMergeMethod')">
+            <option v-if="repository.allowMergeCommit" value="merge">
+              {{ t("repoMergeMethodMerge") }}
+            </option>
+            <option v-if="repository.allowSquashMerge" value="squash">
+              {{ t("repoMergeMethodSquash") }}
+            </option>
+            <option v-if="repository.allowRebaseMerge" value="rebase">
+              {{ t("repoMergeMethodRebase") }}
+            </option>
+          </SelectField>
           <FluentButton
             type="button"
             tone="primary"
-            :disabled="saving || !diff.headOid"
+            :disabled="
+              saving ||
+              !diff.headOid ||
+              (!repository.allowMergeCommit &&
+                !repository.allowSquashMerge &&
+                !repository.allowRebaseMerge)
+            "
             @click="mergePull"
           >
             {{ t("mergePull") }}</FluentButton
           ><span class="muted">{{ t("mergeUsesCurrentHeads") }}</span>
+          <span class="muted">{{ t("repoMergePolicyHint") }}</span>
         </div>
       </section>
       <section
@@ -1074,9 +1106,10 @@ watch(
         <p class="eyebrow">{{ t("reviews") }}</p>
         <div v-for="review in reviews" :key="review.id" class="item-row">
           <strong>{{ t(`review${review.state}`) }}</strong
-          ><StatusBadge :tone="review.actor.kind === 'agent' ? 'brand' : 'neutral'">{{
-            actorName(review)
-          }}</StatusBadge
+          ><StatusBadge :tone="review.actor.kind === 'agent' ? 'brand' : 'neutral'"
+            ><AppIcon v-if="String(review.actor.kind) === 'ci'" name="checkCircle" :size="13" />{{
+              actorName(review)
+            }}</StatusBadge
           ><code>{{ review.commitOid.slice(0, 8) }}</code
           ><StatusBadge v-if="review.commitOid !== diff?.headOid" tone="warning">{{
             t("outdatedReview")
@@ -1117,9 +1150,10 @@ watch(
           <strong>{{ check.name }}</strong
           ><StatusBadge :tone="check.conclusion === 'success' ? 'success' : 'neutral'"
             >{{ check.status }} · {{ check.conclusion || t("pending") }}</StatusBadge
-          ><StatusBadge :tone="check.actor.kind === 'agent' ? 'brand' : 'neutral'">{{
-            actorName(check)
-          }}</StatusBadge
+          ><StatusBadge :tone="check.actor.kind === 'agent' ? 'brand' : 'neutral'"
+            ><AppIcon v-if="String(check.actor.kind) === 'ci'" name="checkCircle" :size="13" />{{
+              actorName(check)
+            }}</StatusBadge
           ><code>{{ check.commitOid.slice(0, 8) }}</code
           ><StatusBadge v-if="check.commitOid !== diff?.headOid" tone="warning">{{
             t("outdatedCheck")

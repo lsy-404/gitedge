@@ -1,9 +1,9 @@
 import type { RepositoryCommunityFile } from "./api";
 
-export function communitySourceUrl(file: RepositoryCommunityFile, refName: string): string {
+export function communitySourceUrl(file: RepositoryCommunityFile): string {
   const path = file.path.split("/").map(encodeURIComponent).join("/");
   const source = `/${encodeURIComponent(file.owner)}/${encodeURIComponent(file.repository)}/blob/${path}`;
-  return file.inherited ? source : `${source}?ref=${encodeURIComponent(refName)}`;
+  return `${source}?ref=${encodeURIComponent(file.ref)}`;
 }
 
 export function isCommunityTruncated(value: object): boolean {

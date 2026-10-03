@@ -17,6 +17,7 @@ const sourceFile: RepositoryCommunityFile = {
   repositoryId: "github-repo",
   owner: "octocat",
   repository: ".github",
+  ref: "main",
   path: "SECURITY.md",
   inherited: true,
   content: "<script>alert('not executable')</script>\n\n[unsafe](javascript:alert(1))",
@@ -48,7 +49,7 @@ describe("repository community files", () => {
 
     expect(mounted.root.textContent).toContain("Inherited from octocat/.github");
     expect(mounted.root.querySelector(".community-source")?.getAttribute("href")).toBe(
-      "/octocat/.github/blob/SECURITY.md"
+      "/octocat/.github/blob/SECURITY.md?ref=main"
     );
     control(mounted.root, ".community-file summary").click();
     await settle();
@@ -82,6 +83,7 @@ describe("repository community files", () => {
       repositoryId: "repo-1",
       owner: "octocat",
       repository: "project",
+      ref: "main",
       path: "README.md",
       inherited: false,
       content: "# Repository README",
@@ -170,6 +172,7 @@ describe("community template picker", () => {
       repositoryId: "repo-1",
       owner: "octocat",
       repository: "project",
+      ref: "main",
       path: ".github/ISSUE_TEMPLATE/bug.md",
       inherited: false,
       truncated: false,
@@ -215,6 +218,7 @@ describe("community template picker", () => {
       repositoryId: "repo-1",
       owner: "octocat",
       repository: "project",
+      ref: "main",
       path: ".github/PULL_REQUEST_TEMPLATE.md",
       inherited: false,
       content: "## Summary\n\nDescribe the changes.",

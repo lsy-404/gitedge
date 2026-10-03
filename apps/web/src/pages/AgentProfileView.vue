@@ -31,7 +31,7 @@ watch([owner, handle], () => void load(), { immediate: true });
 </script>
 
 <template>
-  <main class="workspace-page">
+  <section class="workspace-page">
     <section class="box agent-profile-card">
       <StatusState
         v-if="loading || error"
@@ -50,7 +50,7 @@ watch([owner, handle], () => void load(), { immediate: true });
         </div>
       </template>
     </section>
-  </main>
+  </section>
 </template>
 
 <style scoped>

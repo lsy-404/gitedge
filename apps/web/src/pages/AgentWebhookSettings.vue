@@ -105,7 +105,7 @@ watch(agentId, () => void load(), { immediate: true });
 </script>
 
 <template>
-  <main class="workspace-page settings-page">
+  <section class="workspace-page settings-page">
     <section class="settings-content">
       <RouterLink to="/settings/agents"><AppIcon name="arrowLeft" />{{ t("agents") }}</RouterLink>
       <h1>{{ t("agentWebhook") }}</h1>
@@ -189,7 +189,7 @@ watch(agentId, () => void load(), { immediate: true });
         </section>
       </template>
     </section>
-  </main>
+  </section>
 </template>
 
 <style scoped>

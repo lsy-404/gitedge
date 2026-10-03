@@ -122,6 +122,13 @@ function mockCodeApi(
     const method = init?.method ?? "GET";
     const body = typeof init?.body === "string" ? init.body : "";
     requests.push({ path: url.pathname, method, body, ref: url.searchParams.get("ref") });
+    if (url.pathname.endsWith("/community"))
+      return jsonResponse({
+        files: [],
+        issueTemplates: [],
+        pullRequestTemplate: null,
+        truncated: false,
+      });
     if (url.pathname.endsWith("/refs"))
       return jsonResponse(
         branches.map((item) => ({ name: "refs/heads/" + item.name, oid: item.oid }))

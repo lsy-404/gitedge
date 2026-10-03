@@ -143,9 +143,7 @@ watch(() => [props.repositoryId, props.refName, props.kind], load, { immediate: 
                   }}
                   ·
                 </span>
-                <a :href="communitySourceUrl(choice.file, props.refName)">{{
-                  t("communitySource")
-                }}</a>
+                <a :href="communitySourceUrl(choice.file)">{{ t("communitySource") }}</a>
               </p>
             </div>
             <FluentButton
@@ -165,10 +163,7 @@ watch(() => [props.repositoryId, props.refName, props.kind], load, { immediate: 
           </p>
           <details v-else class="template-preview">
             <summary>{{ t("communityTemplatePreview") }}</summary>
-            <MarkdownContent
-              :source="choice.body"
-              :base-url="communitySourceUrl(choice.file, props.refName)"
-            />
+            <MarkdownContent :source="choice.body" :base-url="communitySourceUrl(choice.file)" />
           </details>
         </li>
       </ul>

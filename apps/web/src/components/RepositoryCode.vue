@@ -39,8 +39,12 @@ import CommitSignatureStatus from "./CommitSignatureStatus.vue";
 import { preferencesState } from "../lib/preferences";
 import RepositoryBranches from "./RepositoryBranches.vue";
 import RepositoryFileEditor from "./RepositoryFileEditor.vue";
+import RepositoryCommunity from "./RepositoryCommunity.vue";
 
-const props = defineProps<{ repository: Repository; section: string }>();
+const props = withDefaults(
+  defineProps<{ repository: Repository; section: string; graphEnabled?: boolean }>(),
+  { graphEnabled: true }
+);
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
@@ -145,9 +149,6 @@ const filteredEntries = computed(() =>
   )
 );
 const latestCommit = computed(() => graph.value?.commits[0] ?? commits.value[0] ?? null);
-const readmeEntry = computed(
-  () => tree.value?.entries.find((entry) => entry.name.toLocaleLowerCase() === "readme.md") ?? null
-);
 const breadcrumbs = computed(() => filePath.value.split("/").filter(Boolean));
 const highlightedContent = computed(() =>
   highlightedCode(file.value?.content ?? "", file.value?.path)
@@ -209,14 +210,14 @@ async function load() {
       return;
     }
     if (props.section === "commits") {
-      const [items, graphData] = await Promise.all([
-        api.commits(props.repository.id, refName.value, offset.value, limit),
-        api.graph(props.repository.id, refName.value, 100),
-      ]);
+      const items = await api.commits(props.repository.id, refName.value, offset.value, limit);
       if (version !== requestVersion) return;
       commits.value = offset.value === 0 ? items : [...commits.value, ...items];
       hasMoreCommits.value = items.length === limit;
-      graph.value = graphData;
+      graph.value = props.graphEnabled
+        ? await api.graph(props.repository.id, refName.value, 100)
+        : null;
+      if (version !== requestVersion) return;
       emptyReason.value = items.length === 0 && offset.value === 0 ? "commits" : "";
       return;
     }
@@ -251,17 +252,6 @@ async function load() {
     const treeData = await api.tree(props.repository.id, pinnedRef, filePath.value);
     if (version !== requestVersion) return;
     tree.value = treeData;
-    if (
-      !filePath.value &&
-      tree.value.entries.some((entry) => entry.name.toLowerCase() === "readme.md")
-    ) {
-      const readme = tree.value.entries.find((entry) => entry.name.toLowerCase() === "readme.md");
-      if (readme) {
-        const readmeFile = await api.file(props.repository.id, pinnedRef, readme.path);
-        if (version !== requestVersion) return;
-        file.value = readmeFile;
-      }
-    }
     emptyReason.value = tree.value.entries.length === 0 ? "tree" : "";
   } catch (cause) {
     if (version !== requestVersion) return;
@@ -629,9 +619,11 @@ onUnmounted(() => {
       <div v-if="latestCommit && !isBlob" class="latest-commit box">
         <AppIcon name="commit" />
         <RouterLink
+          v-if="graphEnabled"
           :to="`/${repository.owner}/${repository.name}/commits?ref=${encodeURIComponent(refName)}`"
           ><strong>{{ latestCommit.author.name }}</strong></RouterLink
         >
+        <strong v-else>{{ latestCommit.author.name }}</strong>
         <span class="commit-message">{{ latestCommit.message.split("\n")[0] }}</span
         ><code>{{ latestCommit.oid.slice(0, 7) }}</code
         ><time>{{ new Date(latestCommit.author.timestamp * 1000).toLocaleDateString() }}</time>
@@ -812,18 +804,17 @@ onUnmounted(() => {
           <dd>{{ tagRefs.length }}</dd>
         </dl>
         <RouterLink
+          v-if="graphEnabled"
           :to="`/${repository.owner}/${repository.name}/commits?ref=${encodeURIComponent(refName)}`"
           >{{ t("commitHistory") }}</RouterLink
         >
       </aside>
-      <section v-if="readmeEntry && !filePath && !loading" class="readme-panel box">
-        <div class="box-header"><AppIcon name="markdown" />{{ t("readme") }}</div>
-        <MarkdownContent
-          allow-images
-          :source="file?.content ?? ''"
-          :base-url="`/${repository.owner}/${repository.name}/blob/README.md?ref=${encodeURIComponent(refName)}`"
-        />
-      </section>
+      <RepositoryCommunity
+        v-if="!filePath && !loading"
+        :repository-id="repository.id"
+        :ref-name="refName"
+        show-readme
+      />
     </template>
     <template v-else-if="section === 'commits'">
       <section v-if="!emptyRepository" class="box box-form graph-panel">

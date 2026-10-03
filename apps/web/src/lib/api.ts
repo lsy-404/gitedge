@@ -448,7 +448,11 @@ export const api = {
   mergePull: (
     repositoryId: string,
     number: number,
-    payload: { expectedBaseOid: string; expectedHeadOid: string }
+    payload: {
+      expectedBaseOid: string;
+      expectedHeadOid: string;
+      method: "merge" | "squash" | "rebase";
+    }
   ) =>
     request<PullRequest>(repositoryPath(repositoryId, `pull-requests/${number}/merge`), {
       method: "POST",
