@@ -19,7 +19,10 @@ async function api(endpoint, method = "GET", body, expected = 200) {
     headers: { Origin: origin, "Content-Type": "application/json", Cookie: cookie },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  if (res.headers.get("set-cookie")) cookie = res.headers.get("set-cookie").split(";")[0];
+  const activeCookie = res.headers
+    .getSetCookie()
+    .find((value) => value.startsWith("gitedge_session="));
+  if (activeCookie) cookie = activeCookie.split(";")[0];
   const text = await res.text();
   assert.equal(res.status, expected, `${method} ${endpoint}: ${text}`);
   return text ? JSON.parse(text).data : undefined;

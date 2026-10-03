@@ -30,7 +30,10 @@ async function api(endpoint, method = "GET", body, token, expectedStatus) {
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  if (response.headers.get("set-cookie")) cookie = response.headers.get("set-cookie").split(";")[0];
+  const activeCookie = response.headers
+    .getSetCookie()
+    .find((value) => value.startsWith("gitedge_session="));
+  if (activeCookie) cookie = activeCookie.split(";")[0];
   const text = await response.text();
   if (expectedStatus) assert.equal(response.status, expectedStatus, `${endpoint}: ${redact(text)}`);
   else assert.ok(response.ok, `${endpoint}: HTTP ${response.status} ${redact(text)}`);
