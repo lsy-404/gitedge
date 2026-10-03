@@ -5,6 +5,7 @@ import {
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
 import { createLogger } from "../../../src/worker/common/logger";
+import { dataResponse as response, errorResponse as failure, readJsonLimited } from "./http";
 import { z } from "zod";
 
 export interface AgentWebhookEnv {
@@ -37,18 +38,22 @@ const MAX_RESPONSE_BYTES = 4 * 1024;
 const REQUEST_TIMEOUT_MS = 5_000;
 const MAX_DELIVERY_ATTEMPTS = 5;
 const ALLOWED_EVENTS = ["agent.assigned", "agent.mentioned", "pull_request.updated"] as const;
+const PRIVATE_HOST_SUFFIXES = [
+  ".localhost",
+  ".local",
+  ".localdomain",
+  ".internal",
+  ".test",
+  ".home",
+  ".home.arpa",
+  ".lan",
+  ".intranet",
+  ".corp",
+  ".private",
+] as const;
 const SETTINGS_SELECT =
   "SELECT agent_id AS agentId, url, events_json AS eventsJson, enabled, secret_ciphertext AS secretCiphertext, secret_iv AS secretIv, updated_at AS updatedAt FROM auth_agent_webhooks";
 
-function response(data: unknown, status = 200): Response {
-  return Response.json({ data }, { status, headers: { "Cache-Control": "no-store" } });
-}
-function failure(status: number, code: string, message: string): Response {
-  return Response.json(
-    { error: { code, message } },
-    { status, headers: { "Cache-Control": "no-store" } }
-  );
-}
 function decodeKey(value: string | undefined): Uint8Array<ArrayBuffer> | null {
   if (!value) return null;
   try {
@@ -95,7 +100,10 @@ async function decryptSecret(env: AgentWebhookEnv, row: SettingsRow): Promise<st
 function validWebhookUrl(value: string): boolean {
   try {
     const url = new URL(value);
-    const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    const host = url.hostname
+      .toLowerCase()
+      .replace(/^\[|\]$/g, "")
+      .replace(/\.+$/g, "");
     if (
       url.protocol !== "https:" ||
       url.username ||
@@ -107,14 +115,7 @@ function validWebhookUrl(value: string): boolean {
     if (
       !host.includes(".") ||
       host === "localhost" ||
-      host.endsWith(".localhost") ||
-      host.endsWith(".local") ||
-      host.endsWith(".internal") ||
-      host.endsWith(".test") ||
-      host.endsWith(".home") ||
-      host.endsWith(".lan") ||
-      host.endsWith(".intranet") ||
-      host.endsWith(".corp")
+      PRIVATE_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix))
     )
       return false;
     if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(host) || host.includes(":")) return false;
@@ -122,36 +123,6 @@ function validWebhookUrl(value: string): boolean {
     return true;
   } catch {
     return false;
-  }
-}
-async function readLimitedJson(request: Request): Promise<unknown | null> {
-  const contentLength = Number(request.headers.get("Content-Length"));
-  if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) return null;
-  const reader = request.body?.getReader();
-  if (!reader) return null;
-  const chunks: Uint8Array[] = [];
-  let length = 0;
-  try {
-    while (true) {
-      const part = await reader.read();
-      if (part.done) break;
-      length += part.value.byteLength;
-      if (length > MAX_BODY_BYTES) {
-        await reader.cancel();
-        return null;
-      }
-      chunks.push(part.value);
-    }
-    const bytes = new Uint8Array(length);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
-    return parsed;
-  } catch {
-    return null;
   }
 }
 function parseEvents(value: string): AgentWebhookEvent[] {
@@ -206,14 +177,26 @@ async function limitedText(response: Response): Promise<void> {
   const reader = response.body?.getReader();
   if (!reader) return;
   let bytes = 0;
-  while (true) {
-    const part = await reader.read();
-    if (part.done) return;
-    bytes += part.value.byteLength;
-    if (bytes > MAX_RESPONSE_BYTES) {
-      await reader.cancel();
-      throw new Error("response_too_large");
+  let completed = false;
+  try {
+    while (true) {
+      const part = await reader.read();
+      if (part.done) {
+        completed = true;
+        return;
+      }
+      bytes += part.value.byteLength;
+      if (bytes > MAX_RESPONSE_BYTES) throw new Error("response_too_large");
     }
+  } finally {
+    if (!completed) {
+      try {
+        await reader.cancel();
+      } catch {
+        // A failed stream may reject cancellation; release its lock regardless.
+      }
+    }
+    reader.releaseLock();
   }
 }
 async function deliver(
@@ -341,7 +324,7 @@ export async function handleAgentWebhookManagement(
     const row = await loadSettings(env, agentId);
     if (parts.length === 3 && request.method === "GET") return response(publicSettings(row));
     if (parts.length === 3 && request.method === "PUT") {
-      const raw = await readLimitedJson(request);
+      const raw = await readJsonLimited(request);
       if (typeof raw !== "object" || raw === null || Array.isArray(raw))
         return failure(400, "bad_request", "Invalid webhook settings.");
       const input = z.record(z.string(), z.unknown()).safeParse(raw);
@@ -450,7 +433,7 @@ export async function handleAgentEvent(request: Request, env: AgentWebhookEnv): 
   let eventName = "unknown";
   try {
     if (request.method !== "POST") return;
-    const raw = await readLimitedJson(request);
+    const raw = await readJsonLimited(request);
     const parsed = AgentEventInputSchema.safeParse(raw);
     if (!parsed.success) return;
     const input = parsed.data;

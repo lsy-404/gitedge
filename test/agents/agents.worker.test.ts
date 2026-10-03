@@ -26,6 +26,27 @@ async function applyMigrations(): Promise<void> {
       )
         .bind("legacy-agent", "legacy-agent-user", "Legacy Review Agent", "", 2)
         .run();
+      await env.DB.prepare(
+        "INSERT INTO auth_agents (id, user_id, name, description, created_at) VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)"
+      )
+        .bind(
+          "legacy-agent-collision-a",
+          "legacy-agent-user",
+          "a-b",
+          "",
+          3,
+          "legacy-agent-collision-b",
+          "legacy-agent-user",
+          "A B",
+          "",
+          4,
+          "legacy-agent-empty",
+          "legacy-agent-user",
+          "!!!",
+          "",
+          5
+        )
+        .run();
     }
   }
 }
@@ -101,6 +122,15 @@ beforeAll(async () => {
     "SELECT handle, profile_public AS profilePublic, updated_at AS updatedAt FROM auth_agents WHERE id = 'legacy-agent'"
   ).first<{ handle: string; profilePublic: number; updatedAt: number }>();
   expect(legacyAgent).toEqual({ handle: "legacy-review-agent-1", profilePublic: 0, updatedAt: 2 });
+  const migratedHandles = await env.DB.prepare(
+    "SELECT id, handle FROM auth_agents WHERE user_id = 'legacy-agent-user' ORDER BY created_at"
+  ).all<{ id: string; handle: string }>();
+  expect(migratedHandles.results.map(({ handle }) => handle)).toEqual([
+    "legacy-review-agent-1",
+    "a-b-2",
+    "a-b-3",
+    "agent-4",
+  ]);
 });
 
 describe("Auth agents, Artifact sessions, and Git credentials", () => {
@@ -251,10 +281,24 @@ describe("Auth agents, Artifact sessions, and Git credentials", () => {
     let webhookFetches = 0;
     let capturedSignature = "";
     let capturedBody = "";
+    let largeBodyCancelled = false;
     vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
       webhookFetches += 1;
       capturedSignature = new Headers(init?.headers).get("X-GitEdge-Signature-256") ?? "";
       capturedBody = String(init?.body ?? "");
+      if (webhookFetches === 3) {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new Uint8Array(4_097));
+            },
+            cancel() {
+              largeBodyCancelled = true;
+            },
+          }),
+          { status: 200 }
+        );
+      }
       return new Response(null, { status: webhookFetches === 1 ? 500 : 204 });
     });
     try {
@@ -360,6 +404,41 @@ describe("Auth agents, Artifact sessions, and Git credentials", () => {
         enabled: true,
       });
       expect(unsafeUrl.status).toBe(400);
+      await accountApi(`/agents/${buildAgent.id}/webhook`, "PUT", cookie, {
+        url: "https://hooks.example.com/gitedge",
+        events: ["agent.assigned"],
+        enabled: true,
+      });
+      await auth.fetch(
+        new Request("https://auth.test/_internal/agent-events", {
+          method: "POST",
+          body: JSON.stringify({
+            agentId: buildAgent.id,
+            repositoryId,
+            actorUserId: user.id,
+            event: "agent.assigned",
+            data: { action: "assigned" },
+          }),
+        }),
+        authEnv
+      );
+      expect(largeBodyCancelled).toBe(true);
+
+      for (const url of [
+        "https://localhost./",
+        "https://LOCALHOST./",
+        "https://service.local./",
+        "https://service.INTERNAL./",
+        "https://service.localdomain./",
+        "https://service.home.arpa./",
+      ]) {
+        const rejected = await accountApi(`/agents/${buildAgent.id}/webhook`, "PUT", cookie, {
+          url,
+          events: ["agent.assigned"],
+          enabled: true,
+        });
+        expect(rejected.status).toBe(400);
+      }
     } finally {
       vi.unstubAllGlobals();
     }
