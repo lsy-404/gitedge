@@ -5,6 +5,7 @@ import github from "./i18n/github";
 import workspace from "./i18n/workspace";
 import codeMessages from "./i18n/code";
 import collaborationMessages from "./i18n/collaboration";
+import avatarMessages from "./i18n/avatar";
 
 const messages = {
   "zh-CN": {
@@ -841,6 +842,7 @@ export const i18n = createI18n({
       ...collaborationMessages["zh-CN"],
       ...settingsMessages["zh-CN"],
       ...repositorySettingsMessages["zh-CN"],
+      ...avatarMessages["zh-CN"],
     },
     en: {
       ...messages.en,
@@ -850,6 +852,7 @@ export const i18n = createI18n({
       ...collaborationMessages.en,
       ...settingsMessages.en,
       ...repositorySettingsMessages.en,
+      ...avatarMessages.en,
     },
   },
 });

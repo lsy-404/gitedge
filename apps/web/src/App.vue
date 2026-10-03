@@ -5,7 +5,14 @@ import { useRoute, useRouter } from "vue-router";
 import AppIcon from "./components/AppIcon.vue";
 import { api } from "./lib/api";
 import { clearSession, refreshSession, sessionState } from "./lib/session";
-import { preferencesState, loadAccountPreferences, accountProfileState } from "./lib/preferences";
+import {
+  preferencesState,
+  loadAccountPreferences,
+  accountProfileState,
+  updatePreference,
+  preferenceError,
+  preferenceSaving,
+} from "./lib/preferences";
 const { t, locale } = useI18n();
 const router = useRouter();
 const route = useRoute();
@@ -34,6 +41,7 @@ const searchInput = ref<HTMLInputElement | null>(null);
 const navigation = ref<HTMLDialogElement | null>(null);
 const userMenu = ref<HTMLDetailsElement | null>(null);
 const createMenu = ref<HTMLDetailsElement | null>(null);
+const expandedPreference = ref<"language" | "theme" | null>(null);
 async function openSearch() {
   searchExpanded.value = true;
   await nextTick();
@@ -45,8 +53,13 @@ function closeMenus() {
   if (userMenu.value) userMenu.value.open = false;
   if (createMenu.value) createMenu.value.open = false;
 }
-function toggleLocale() {
-  locale.value = locale.value === "zh-CN" ? "en" : "zh-CN";
+async function setPreference(
+  key: "locale" | "theme",
+  value: "zh-CN" | "en" | "system" | "light" | "dark"
+) {
+  if (key === "locale" && value !== "zh-CN" && value !== "en") return;
+  if (key === "theme" && value !== "system" && value !== "light" && value !== "dark") return;
+  await updatePreference(key, value);
 }
 function submitSearch() {
   const query = search.value.trim();
@@ -143,13 +156,6 @@ if (!sessionState.checked) void refreshSession();
             <AppIcon name="search" />
           </button>
           <div class="global-actions">
-            <button
-              class="btn btn-subtle locale-button"
-              @click="toggleLocale"
-              :aria-label="t('ghLanguage')"
-            >
-              {{ locale === "zh-CN" ? "EN" : "中文" }}
-            </button>
             <template v-if="sessionState.user && !authPage">
               <details ref="createMenu" class="dropdown create-menu">
                 <summary class="btn" :aria-label="t('ghCreate')">
@@ -165,21 +171,23 @@ if (!sessionState.checked) void refreshSession();
                   >
                 </div>
               </details>
-              <details ref="userMenu" class="dropdown user-menu">
-                <summary :aria-label="t('ghUserMenu')" class="account-trigger">
-                  <span class="avatar"
-                    ><img
-                      v-if="sessionState.user.externalIdentity?.avatarUrl"
-                      :src="sessionState.user.externalIdentity.avatarUrl"
-                      alt=""
-                    /><span v-else>{{ initials }}</span></span
-                  >
-                </summary>
-                <div class="dropdown-panel">
-                  <p class="dropdown-identity">
-                    {{ t("ghSignedIn") }}<strong>{{ accountName }}</strong>
-                  </p>
-                  <hr />
+            </template>
+            <details v-if="!authPage" ref="userMenu" class="dropdown user-menu">
+              <summary :aria-label="t('ghUserMenu')" class="account-trigger">
+                <span v-if="sessionState.user" class="avatar"
+                  ><img
+                    v-if="sessionState.user.externalIdentity?.avatarUrl"
+                    :src="sessionState.user.externalIdentity.avatarUrl"
+                    alt=""
+                  /><span v-else>{{ initials }}</span></span
+                ><span v-else class="avatar"><AppIcon name="person" /></span>
+              </summary>
+              <div class="dropdown-panel">
+                <p v-if="sessionState.user" class="dropdown-identity">
+                  {{ t("ghSignedIn") }}<strong>{{ accountName }}</strong>
+                </p>
+                <hr />
+                <template v-if="sessionState.user">
                   <RouterLink to="/dashboard"
                     ><AppIcon name="repo" />{{ t("repositories") }}</RouterLink
                   ><RouterLink to="/organizations"
@@ -190,16 +198,87 @@ if (!sessionState.checked) void refreshSession();
                     ><AppIcon name="gear" />{{ t("account") }}</RouterLink
                   >
                   <hr />
-                  <button @click="signOut"><AppIcon name="signOut" />{{ t("signOut") }}</button>
+                </template>
+                <p v-if="preferenceError" class="preference-error" role="alert">
+                  {{ preferenceError }}
+                </p>
+                <button
+                  class="preference-group-toggle"
+                  :aria-expanded="expandedPreference === 'language'"
+                  @click="
+                    expandedPreference = expandedPreference === 'language' ? null : 'language'
+                  "
+                >
+                  {{ t("avatarLanguage")
+                  }}<span>{{ locale === "zh-CN" ? "简体中文" : "English" }}</span>
+                </button>
+                <div
+                  v-if="expandedPreference === 'language'"
+                  class="preference-options"
+                  :aria-label="t('avatarLanguage')"
+                >
+                  <button
+                    v-for="option in ['zh-CN', 'en']"
+                    :key="option"
+                    :disabled="preferenceSaving"
+                    :aria-pressed="locale === option"
+                    @click="setPreference('locale', option)"
+                  >
+                    {{ option === "zh-CN" ? "简体中文" : "English"
+                    }}<AppIcon v-if="locale === option" name="check" :size="14" />
+                  </button>
                 </div>
-              </details>
-            </template>
-            <RouterLink
-              v-else-if="!authPage"
-              class="btn"
-              :to="{ path: '/login', query: { redirect: route.fullPath } }"
-              >{{ t("signIn") }}</RouterLink
-            >
+                <button
+                  class="preference-group-toggle"
+                  :aria-expanded="expandedPreference === 'theme'"
+                  @click="expandedPreference = expandedPreference === 'theme' ? null : 'theme'"
+                >
+                  {{ t("avatarTheme")
+                  }}<span>{{
+                    t(
+                      preferencesState.theme === "system"
+                        ? "settingsThemeSystem"
+                        : preferencesState.theme === "light"
+                          ? "settingsThemeLight"
+                          : "settingsThemeDark"
+                    )
+                  }}</span>
+                </button>
+                <div
+                  v-if="expandedPreference === 'theme'"
+                  class="preference-options"
+                  :aria-label="t('avatarTheme')"
+                >
+                  <button
+                    v-for="option in ['system', 'light', 'dark']"
+                    :key="option"
+                    :disabled="preferenceSaving"
+                    :aria-pressed="preferencesState.theme === option"
+                    @click="setPreference('theme', option)"
+                  >
+                    {{
+                      t(
+                        option === "system"
+                          ? "settingsThemeSystem"
+                          : option === "light"
+                            ? "settingsThemeLight"
+                            : "settingsThemeDark"
+                      )
+                    }}<AppIcon v-if="preferencesState.theme === option" name="check" :size="14" />
+                  </button>
+                </div>
+                <hr />
+                <button v-if="sessionState.user" @click="signOut">
+                  <AppIcon name="signOut" />{{ t("signOut") }}
+                </button>
+                <RouterLink
+                  v-else
+                  class="btn"
+                  :to="{ path: '/login', query: { redirect: route.fullPath } }"
+                  >{{ t("signIn") }}</RouterLink
+                >
+              </div>
+            </details>
           </div>
         </div>
         <nav v-if="!authPage && !repositoryPath" class="global-nav" :aria-label="t('mainNav')">
