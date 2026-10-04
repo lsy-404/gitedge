@@ -78,7 +78,16 @@ function submitSearch() {
   searchInput.value?.blur();
 }
 function keyboard(event: KeyboardEvent) {
-  if (event.key === "Escape") closeMenus();
+  if (event.key === "Escape") {
+    const openMenu = userMenu.value?.open
+      ? userMenu.value
+      : createMenu.value?.open
+        ? createMenu.value
+        : null;
+    const trigger = openMenu?.querySelector<HTMLElement>("summary");
+    closeMenus();
+    trigger?.focus();
+  }
   if (
     event.key === "/" &&
     !event.ctrlKey &&

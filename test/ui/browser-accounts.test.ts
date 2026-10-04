@@ -61,6 +61,29 @@ describe("browser account and guest view menu", () => {
     mounted.unmount();
   });
 
+  it("returns keyboard focus to the avatar trigger when Escape closes its menu", async () => {
+    vi.spyOn(api, "accountProfile").mockRejectedValue(new Error("unused profile"));
+    vi.spyOn(api, "browserAccounts").mockResolvedValue(browserAccounts);
+    const mounted = await mountAt(
+      "/_verify/menu-focus",
+      "/_verify/menu-focus",
+      () => testH(App),
+      () => testH("div")
+    );
+    const trigger = control(mounted.root, ".user-menu summary");
+    trigger.click();
+    await settle();
+    const choice = Array.from(mounted.root.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.includes("访客视角")
+    );
+    choice?.focus();
+    choice?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await settle();
+    expect(document.activeElement).toBe(trigger);
+    expect(mounted.root.querySelector(".user-menu")?.hasAttribute("open")).toBe(false);
+    mounted.unmount();
+  });
+
   it("switches a listed account and emits a hard-navigation target", async () => {
     setSession(user);
     vi.spyOn(api, "browserAccounts").mockResolvedValue(browserAccounts);
