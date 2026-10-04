@@ -92,6 +92,7 @@ function settingsUpdated(settings: RepositorySettings): void {
 const loading = ref(true);
 const error = ref("");
 const notFound = ref(false);
+const accessDenied = ref(false);
 const counts = ref<Record<string, number>>({});
 const sessions = ref<AgentSession[]>([]);
 const sessionsLoading = ref(false);
@@ -125,8 +126,13 @@ async function load() {
   loading.value = true;
   error.value = "";
   notFound.value = false;
+  accessDenied.value = false;
   repository.value = null;
   counts.value = {};
+  sessions.value = [];
+  sessionsLoading.value = false;
+  sessionsError.value = "";
+  sessionVersion += 1;
   try {
     const result = await api.repository(owner.value, repoName.value);
     if (version !== loadVersion) return;
@@ -135,7 +141,8 @@ async function load() {
   } catch (cause) {
     if (version !== loadVersion) return;
     notFound.value = cause instanceof ApiError && cause.status === 404;
-    error.value = notFound.value ? "" : t("apiError");
+    accessDenied.value = cause instanceof ApiError && cause.status === 403;
+    error.value = notFound.value || accessDenied.value ? "" : t("apiError");
   } finally {
     if (version === loadVersion) loading.value = false;
   }
@@ -183,6 +190,12 @@ watch(
       <AppIcon name="repo" :size="48" />
       <h1>{{ t("ghRepoMissingTitle") }}</h1>
       <p>{{ t("ghRepoMissingText") }}</p>
+      <RouterLink class="btn" to="/dashboard">{{ t("ghBackHome") }}</RouterLink>
+    </div>
+    <div v-else-if="accessDenied" class="repository-access state">
+      <AppIcon name="lock" :size="48" />
+      <h1>{{ t("ghRepoAccessDeniedTitle") }}</h1>
+      <p>{{ t("ghRepoAccessDeniedText") }}</p>
       <RouterLink class="btn" to="/dashboard">{{ t("ghBackHome") }}</RouterLink>
     </div>
     <template v-else-if="repository">
