@@ -7,7 +7,9 @@ import "./styles/main.css";
 import "./styles/motion.css";
 import { installFluentMotion } from "./ui/fluentMotion";
 
-installFluentMotion();
+const stopFluentMotion = installFluentMotion();
 
 const app = createApp(App).use(fluentUi).use(i18n).use(router);
+app.onUnmount(stopFluentMotion);
+import.meta.hot?.dispose(stopFluentMotion);
 void router.isReady().then(() => app.mount("#app"));

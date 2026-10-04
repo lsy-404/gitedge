@@ -7,6 +7,7 @@ function isVisibleFocusTarget(
 ): target is HTMLElement {
   if (!(target instanceof HTMLElement) || !target.matches(FOCUSABLE_SELECTOR)) return false;
   if (!target.matches(":focus-visible") && !keyboardNavigation) return false;
+  if (target.closest("dialog[open], [popover]")) return false;
   const style = getComputedStyle(target);
   if (style.display === "none" || style.visibility === "hidden") return false;
   const rect = target.getBoundingClientRect();
@@ -23,6 +24,7 @@ export function installFluentMotion(): () => void {
   let activeTarget: HTMLElement | null = null;
   let frame = 0;
   let keyboardNavigation = false;
+  let disposed = false;
   let resizeObserver: ResizeObserver | undefined;
 
   function hide() {
@@ -35,6 +37,7 @@ export function installFluentMotion(): () => void {
   function update() {
     frame = 0;
     if (
+      disposed ||
       reducedMotion.matches ||
       !activeTarget?.isConnected ||
       document.activeElement !== activeTarget ||
@@ -56,7 +59,7 @@ export function installFluentMotion(): () => void {
   }
 
   function scheduleUpdate() {
-    if (!frame) frame = window.requestAnimationFrame(update);
+    if (!disposed && !frame) frame = window.requestAnimationFrame(update);
   }
 
   function trackFocusTarget(target: EventTarget | null) {
@@ -80,7 +83,7 @@ export function installFluentMotion(): () => void {
 
   function onFocusOut() {
     queueMicrotask(() => {
-      if (document.activeElement !== activeTarget) scheduleUpdate();
+      if (!disposed && document.activeElement !== activeTarget) scheduleUpdate();
     });
   }
 
@@ -99,24 +102,50 @@ export function installFluentMotion(): () => void {
     hide();
   }
 
+  function onAnimationEnd(event: AnimationEvent) {
+    if (activeTarget && event.target instanceof Element && event.target.contains(activeTarget)) {
+      scheduleUpdate();
+    }
+  }
+
+  function refreshFocus() {
+    if (document.visibilityState === "visible") trackFocusTarget(document.activeElement);
+    else hide();
+  }
+
+  function onWindowBlur() {
+    hide();
+  }
+
   document.addEventListener("focusin", onFocusIn);
   document.addEventListener("focusout", onFocusOut);
   document.addEventListener("keydown", onKeyDown);
   document.addEventListener("pointerdown", onPointerDown);
+  document.addEventListener("animationend", onAnimationEnd);
+  document.addEventListener("visibilitychange", refreshFocus);
   window.addEventListener("resize", scheduleUpdate);
   window.addEventListener("scroll", scheduleUpdate, true);
+  window.addEventListener("blur", onWindowBlur);
+  window.addEventListener("focus", refreshFocus);
   reducedMotion.addEventListener("change", onMotionPreferenceChange);
 
   return () => {
+    disposed = true;
     document.removeEventListener("focusin", onFocusIn);
     document.removeEventListener("focusout", onFocusOut);
     document.removeEventListener("keydown", onKeyDown);
     document.removeEventListener("pointerdown", onPointerDown);
+    document.removeEventListener("animationend", onAnimationEnd);
+    document.removeEventListener("visibilitychange", refreshFocus);
     window.removeEventListener("resize", scheduleUpdate);
     window.removeEventListener("scroll", scheduleUpdate, true);
+    window.removeEventListener("blur", onWindowBlur);
+    window.removeEventListener("focus", refreshFocus);
     reducedMotion.removeEventListener("change", onMotionPreferenceChange);
     if (frame) window.cancelAnimationFrame(frame);
+    frame = 0;
     activeTarget?.classList.remove("fluent-focus-target--tracked");
+    activeTarget = null;
     resizeObserver?.disconnect();
     indicator.remove();
   };

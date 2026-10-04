@@ -1,16 +1,10 @@
-:root {
-  --gitedge-motion-fast: 120ms;
-  --gitedge-motion-medium: 180ms;
-  --gitedge-motion-ease: cubic-bezier(0.16, 1, 0.3, 1);
-}
-
 :where(button, a, input, textarea, select, summary, .btn, .dropdown-panel) {
   transition:
-    color var(--gitedge-motion-fast) var(--gitedge-motion-ease),
-    background-color var(--gitedge-motion-fast) var(--gitedge-motion-ease),
-    border-color var(--gitedge-motion-fast) var(--gitedge-motion-ease),
-    box-shadow var(--gitedge-motion-fast) var(--gitedge-motion-ease),
-    transform var(--gitedge-motion-fast) var(--gitedge-motion-ease);
+    color var(--fluent-fast, 120ms) var(--fluent-ease, cubic-bezier(0.16, 1, 0.3, 1)),
+    background-color var(--fluent-fast, 120ms) var(--fluent-ease, cubic-bezier(0.16, 1, 0.3, 1)),
+    border-color var(--fluent-fast, 120ms) var(--fluent-ease, cubic-bezier(0.16, 1, 0.3, 1)),
+    box-shadow var(--fluent-fast, 120ms) var(--fluent-ease, cubic-bezier(0.16, 1, 0.3, 1)),
+    transform var(--fluent-fast, 120ms) var(--fluent-ease, cubic-bezier(0.16, 1, 0.3, 1));
 }
 
 :where(button, .btn):active:not(:disabled) {
@@ -18,11 +12,13 @@
 }
 
 .dropdown[open] > .dropdown-panel {
-  animation: gitedge-menu-in var(--gitedge-motion-medium) var(--gitedge-motion-ease) both;
+  animation: gitedge-menu-in calc(var(--fluent-fast, 120ms) + 60ms)
+    var(--fluent-ease, cubic-bezier(0.16, 1, 0.3, 1)) both;
 }
 
 #main > * {
-  animation: gitedge-page-in 220ms var(--gitedge-motion-ease) both;
+  animation: gitedge-page-in calc(var(--fluent-fast, 120ms) + 60ms)
+    var(--fluent-ease, cubic-bezier(0.16, 1, 0.3, 1)) both;
 }
 
 .fluent-focus-indicator {
@@ -33,13 +29,13 @@
   opacity: 0;
   visibility: hidden;
   transition:
-    left 150ms var(--gitedge-motion-ease),
-    top 150ms var(--gitedge-motion-ease),
-    width 150ms var(--gitedge-motion-ease),
-    height 150ms var(--gitedge-motion-ease),
-    border-radius 150ms var(--gitedge-motion-ease),
+    left var(--fluent-fast, 120ms) var(--fluent-ease, cubic-bezier(0.16, 1, 0.3, 1)),
+    top var(--fluent-fast, 120ms) var(--fluent-ease, cubic-bezier(0.16, 1, 0.3, 1)),
+    width var(--fluent-fast, 120ms) var(--fluent-ease, cubic-bezier(0.16, 1, 0.3, 1)),
+    height var(--fluent-fast, 120ms) var(--fluent-ease, cubic-bezier(0.16, 1, 0.3, 1)),
+    border-radius var(--fluent-fast, 120ms) var(--fluent-ease, cubic-bezier(0.16, 1, 0.3, 1)),
     opacity 100ms ease,
-    visibility 0s linear 150ms;
+    visibility 0s linear var(--fluent-fast, 120ms);
 }
 
 .fluent-focus-indicator--visible {
@@ -75,11 +71,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  :root {
-    --gitedge-motion-fast: 0ms;
-    --gitedge-motion-medium: 0ms;
-  }
-
   *,
   *::before,
   *::after {
