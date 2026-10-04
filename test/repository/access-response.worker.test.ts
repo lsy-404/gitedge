@@ -177,11 +177,11 @@ describe("Server repository denial policy", () => {
       );
       expect(repo.status).toBe(200);
       expect(await repo.json()).toMatchObject({ data: { id: "private-id", canWrite: true } });
-      const refs = await handleGatewayRequest(
-        new Request("https://forge.test/api/git/repositories/private-id/refs"),
+      const tree = await handleGatewayRequest(
+        new Request("https://forge.test/api/git/repositories/private-id/tree"),
         bindings
       );
-      expect(refs.status).toBe(200);
+      expect(tree.status).toBe(200);
       const alias = await handleGatewayRequest(
         new Request("https://forge.test/owner/old-name"),
         bindings
