@@ -16,17 +16,6 @@ import type { User } from "../../packages/contracts/src/account";
 import { control, h as testH, mountAt, settle, unmountAll } from "./task-support";
 
 const user: User = { id: "user-1", identifier: "one@example.test" };
-const agentUser: User = {
-  ...user,
-  agentSession: {
-    id: "session-1",
-    agentId: "agent-1",
-    agentName: "Builder",
-    repositoryId: "repo-1",
-    workspaceName: "project",
-    permission: "write",
-  },
-};
 const browserAccounts: BrowserAccounts = {
   accounts: [
     { id: "user-1", identifier: "one@example.test", displayName: "One" },
@@ -34,21 +23,7 @@ const browserAccounts: BrowserAccounts = {
   ],
   activeAccountId: "user-1",
   view: { kind: "account" },
-  agentViews: [
-    {
-      sessionId: "session-1",
-      agentId: "agent-1",
-      agentName: "Builder",
-      agentHandle: "builder",
-      repositoryId: "repo-1",
-      owner: "one",
-      repository: "project",
-      permission: "write",
-      expiresAt: Date.now() + 60_000,
-    },
-  ],
   accountLimit: 5,
-  agentViewsTruncated: false,
 };
 
 afterEach(async () => {
@@ -68,7 +43,7 @@ function accountMenu(targets: string[]) {
   });
 }
 
-describe("browser account and agent view menu", () => {
+describe("browser account and guest view menu", () => {
   it("loads the browser account list only after the avatar menu opens", async () => {
     vi.spyOn(api, "accountProfile").mockRejectedValue(new Error("unused profile"));
     const load = vi.spyOn(api, "browserAccounts").mockResolvedValue(browserAccounts);
@@ -109,24 +84,19 @@ describe("browser account and agent view menu", () => {
     mounted.unmount();
   });
 
-  it("switches to an agent session and returns to the repository", async () => {
-    setSession(user);
+  it("requests guest preview without offering agent identities", async () => {
     vi.spyOn(api, "browserAccounts").mockResolvedValue(browserAccounts);
-    const switchView = vi.spyOn(api, "switchBrowserView").mockResolvedValue({ switched: true });
-    const targets: string[] = [];
-    const mounted = await mountAt("/_verify/agent-view", "/_verify/agent-view", () =>
-      accountMenu(targets)
+    const preview = vi.fn();
+    const mounted = await mountAt("/_verify/guest-view", "/_verify/guest-view", () =>
+      testH(BrowserAccountMenu, { onGuestPreview: preview })
     );
     await settle();
-
-    const agent = Array.from(
-      mounted.root.querySelectorAll<HTMLButtonElement>(".browser-agent-option")
-    ).find((button) => button.textContent?.includes("Builder"));
-    agent?.click();
-    await settle();
-
-    expect(switchView).toHaveBeenCalledWith({ kind: "agent", sessionId: "session-1" });
-    expect(targets).toEqual(["/one/project"]);
+    const choice = Array.from(mounted.root.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.includes("访客视角")
+    );
+    choice?.click();
+    expect(preview).toHaveBeenCalledTimes(1);
+    expect(mounted.root.textContent).not.toContain("智能体视角");
     mounted.unmount();
   });
 
@@ -190,6 +160,13 @@ describe("browser account and agent view menu", () => {
 });
 
 describe("add-account sign-in and request identity", () => {
+  it("sends guest context without a human identity", async () => {
+    setExpectedIdentity(null, "guest");
+    expect(expectedIdentityHeaders("/api/forge/repositories", "GET")).toEqual({
+      "X-GitEdge-Expected-View": "guest",
+    });
+  });
+
   it("allows an existing login to enter add-account mode and returns to the requested page", async () => {
     setSession(user);
     vi.spyOn(api, "ssoProviders").mockResolvedValue([
@@ -241,9 +218,9 @@ describe("add-account sign-in and request identity", () => {
         new Response(JSON.stringify({ data: browserAccounts }), { status: 200 })
     );
     vi.stubGlobal("fetch", fetchMock);
-    setExpectedIdentity("user-1", "session-1");
+    setExpectedIdentity("user-1");
 
-    await api.session();
+    await api.browserSession();
     await api.browserAccounts();
     await api.repositories();
     await api.switchBrowserView({ kind: "account" });
@@ -252,34 +229,32 @@ describe("add-account sign-in and request identity", () => {
     expect(fetchMock.mock.calls[1]?.[1]?.headers).toMatchObject({});
     expect(fetchMock.mock.calls[2]?.[1]?.headers).toMatchObject({
       "X-GitEdge-Expected-User": "user-1",
-      "X-GitEdge-Expected-View": "session-1",
+      "X-GitEdge-Expected-View": "account",
     });
     expect(fetchMock.mock.calls[3]?.[1]?.headers).toMatchObject({
       "X-GitEdge-Expected-User": "user-1",
-      "X-GitEdge-Expected-View": "session-1",
+      "X-GitEdge-Expected-View": "account",
     });
     expect(expectedIdentityHeaders("/api/deploy/plan?repositoryId=repo-1", "GET")).toEqual({
       "X-GitEdge-Expected-User": "user-1",
-      "X-GitEdge-Expected-View": "session-1",
+      "X-GitEdge-Expected-View": "account",
     });
   });
 
-  it("refreshes the session on tab focus and reloads when only the agent session changed", async () => {
+  it("refreshes the session on tab focus and reloads when guest preview changes", async () => {
     const reload = vi.fn();
     vi.stubGlobal("location", { origin: "https://gitedge.test", reload, assign: vi.fn() });
     vi.spyOn(api, "accountProfile").mockRejectedValue(new Error("unused profile"));
-    const nextViewUser: User = {
-      ...agentUser,
-      agentSession: { ...agentUser.agentSession!, id: "session-2" },
-    };
-    const refresh = vi.spyOn(api, "session").mockResolvedValue(nextViewUser);
+    const refresh = vi
+      .spyOn(api, "browserSession")
+      .mockResolvedValue({ user: null, view: { kind: "guest" } });
     const mounted = await mountAt(
       "/_verify/identity-focus",
       "/_verify/identity-focus",
       () => testH(App),
       () => testH("div")
     );
-    setSession(agentUser);
+    setSession(user);
     await settle();
     refresh.mockClear();
     reload.mockClear();
@@ -288,13 +263,15 @@ describe("add-account sign-in and request identity", () => {
     await settle();
 
     expect(refresh).toHaveBeenCalledTimes(1);
-    expect(sessionState.user?.agentSession?.id).toBe("session-2");
+    expect(sessionState.user).toBeNull();
+    expect(sessionState.view).toBe("guest");
     expect(reload).toHaveBeenCalledTimes(1);
     mounted.unmount();
   });
 
-  it("keeps preference changes local in an agent view", async () => {
-    setSession(agentUser);
+  it("keeps preference changes local in guest preview", async () => {
+    clearSession();
+    sessionState.view = "guest";
     const readProfile = vi.spyOn(api, "accountProfile");
     const saveProfile = vi.spyOn(api, "updateAccountProfile");
 

@@ -73,46 +73,6 @@ async function user() {
     .run();
   return id;
 }
-async function agentFixture(userId: string, permission = "write") {
-  const namespaceId = crypto.randomUUID(),
-    repoId = crypto.randomUUID(),
-    agentId = crypto.randomUUID(),
-    sessionId = crypto.randomUUID();
-  await env.DB.batch([
-    env.DB.prepare("INSERT INTO namespaces(id,slug,created_by,created_at) VALUES(?,?,?,?)").bind(
-      namespaceId,
-      `ns-${namespaceId}`,
-      userId,
-      1
-    ),
-    env.DB.prepare(
-      "INSERT INTO namespace_memberships(namespace_id,user_id,created_at,role) VALUES(?,?,1,'owner')"
-    ).bind(namespaceId, userId),
-    env.DB.prepare(
-      "INSERT INTO repositories(id,namespace_id,created_by,slug,do_name,visibility,description,created_at,updated_at) VALUES(?,?,?,'code',?,'private','',1,1)"
-    ).bind(repoId, namespaceId, userId, repoId),
-    env.DB.prepare(
-      "INSERT INTO auth_agents(id,user_id,name,handle,description,created_at) VALUES(?,?,?,'reviewer','',1)"
-    ).bind(agentId, userId, `Agent ${agentId}`),
-    env.DB.prepare(
-      "INSERT INTO auth_agent_sessions(id,agent_id,user_id,repository_id,token_hash,git_token_id,workspace_name,remote,base_ref,permission,status,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,'active',?,?)"
-    ).bind(
-      sessionId,
-      agentId,
-      userId,
-      repoId,
-      sessionId,
-      sessionId,
-      sessionId,
-      "https://git.test/repo",
-      "main",
-      permission,
-      Date.now(),
-      Date.now() + 60000
-    ),
-  ]);
-  return { namespaceId, repoId, agentId, sessionId };
-}
 beforeAll(async () => {
   for (const key of Object.keys(migrations).sort()) await runSqlScript(env.DB, migrations[key]);
 });
@@ -270,84 +230,54 @@ describe("Browser account isolation", () => {
       ).status
     ).toBe(403);
   });
-  it("restricts agent views to existing owned sessions and rechecks revocation", async () => {
+  it("previews anonymously without revoking the human sign-in", async () => {
     const browser = new Browser(),
-      a = await user(),
-      b = await user();
+      a = await user();
     await browser.add(a);
-    const own = await agentFixture(a),
-      foreign = await agentFixture(b);
-    expect((await browser.accounts()).agentViews.map((view) => view.sessionId)).toEqual([
-      own.sessionId,
-    ]);
+    const token = browser.cookies.get("gitedge_session");
+    expect((await browser.call("/accounts/view", "POST", { kind: "guest" })).status).toBe(200);
+    expect(browser.cookies.get("gitedge_session")).toBe(token);
+    expect(await (await browser.call("/session")).json()).toEqual({ data: null, view: "guest" });
+    expect(await (await browser.call("/browser-session")).json()).toEqual({
+      data: { user: null, view: { kind: "guest" } },
+    });
+    expect((await browser.call("/profile")).status).toBe(403);
+    expect((await browser.call("/tokens", "POST", {})).status).toBe(403);
+    expect((await browser.accounts()).view.kind).toBe("guest");
+    expect((await browser.call("/accounts/view", "POST", { kind: "account" })).status).toBe(200);
+    expect(await (await browser.call("/session")).json()).toMatchObject({ data: { id: a } });
+  });
+  it("rejects the removed agent perspective and cross-origin preview changes", async () => {
+    const browser = new Browser();
+    await browser.add(await user());
     expect(
       (
         await browser.call("/accounts/view", "POST", {
           kind: "agent",
-          sessionId: foreign.sessionId,
+          sessionId: crypto.randomUUID(),
         })
       ).status
-    ).toBe(403);
+    ).toBe(400);
     expect(
-      (await browser.call("/accounts/view", "POST", { kind: "agent", sessionId: own.sessionId }))
-        .status
-    ).toBe(200);
-    expect(await (await browser.call("/session")).json()).toMatchObject({
-      data: { id: a, agentSession: { id: own.sessionId, repositoryId: own.repoId } },
-    });
-    expect((await browser.call("/tokens", "POST", {})).status).toBe(403);
-    await env.DB.prepare("UPDATE auth_agent_sessions SET status='revoked' WHERE id=?")
-      .bind(own.sessionId)
-      .run();
-    expect((await browser.call("/session")).status).toBe(401);
-    expect((await browser.call("/accounts/view", "POST", { kind: "account" })).status).toBe(200);
-    expect(await (await browser.call("/session")).json()).toMatchObject({ data: { id: a } });
+      (
+        await browser.call(
+          "/accounts/view",
+          "POST",
+          { kind: "guest" },
+          { Origin: "https://outside.test" }
+        )
+      ).status
+    ).toBe(403);
   });
-  it.each(["expired", "disabled", "downgraded"])(
-    "rejects a %s agent perspective on the next request",
-    async (state) => {
-      const browser = new Browser(),
-        a = await user();
-      await browser.add(a);
-      const own = await agentFixture(a);
-      await browser.call("/accounts/view", "POST", { kind: "agent", sessionId: own.sessionId });
-      if (state === "expired")
-        await env.DB.prepare("UPDATE auth_agent_sessions SET expires_at=0 WHERE id=?")
-          .bind(own.sessionId)
-          .run();
-      if (state === "disabled")
-        await env.DB.prepare("UPDATE auth_agents SET disabled_at=? WHERE id=?")
-          .bind(Date.now(), own.agentId)
-          .run();
-      if (state === "downgraded") {
-        await env.DB.batch([
-          env.DB.prepare("DELETE FROM namespace_memberships WHERE namespace_id=?").bind(
-            own.namespaceId
-          ),
-          env.DB.prepare(
-            "INSERT INTO repository_collaborators(repository_id,user_id,role,created_at) VALUES(?,?,'read',1)"
-          ).bind(own.repoId, a),
-        ]);
-      }
-      expect((await browser.call("/session")).status).toBe(401);
-    }
-  );
-  it("rechecks membership and feature gates", async () => {
-    const browser = new Browser(),
-      a = await user();
+  it("requires sign-in to enter preview but permits clearing it after expiry", async () => {
+    const browser = new Browser();
+    expect((await browser.call("/accounts/view", "POST", { kind: "guest" })).status).toBe(401);
+    const a = await user();
     await browser.add(a);
-    const own = await agentFixture(a);
-    await browser.call("/accounts/view", "POST", { kind: "agent", sessionId: own.sessionId });
-    await env.DB.prepare("UPDATE repositories SET agents_enabled=0 WHERE id=?")
-      .bind(own.repoId)
-      .run();
-    expect((await browser.call("/session")).status).toBe(401);
-    await env.DB.prepare("UPDATE repositories SET agents_enabled=1 WHERE id=?")
-      .bind(own.repoId)
-      .run();
-    await env.DB.prepare("DELETE FROM namespace_memberships WHERE namespace_id=?")
-      .bind(own.namespaceId)
-      .run();
+    await browser.call("/accounts/view", "POST", { kind: "guest" });
+    await env.DB.prepare("UPDATE auth_sessions SET expires_at=0 WHERE user_id=?").bind(a).run();
+    expect(await (await browser.call("/session")).json()).toEqual({ data: null, view: "guest" });
+    expect((await browser.call("/accounts/view", "POST", { kind: "account" })).status).toBe(200);
     expect((await browser.call("/session")).status).toBe(401);
   });
 });

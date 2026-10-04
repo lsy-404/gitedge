@@ -51,33 +51,47 @@ const repository = await api(
   },
   201
 );
-const agent = await api(
-  "/api/auth/agents",
+const publicRepository = await api(
+  "/api/forge/repositories",
   "POST",
-  { name: "Workspace Reviewer", handle: "reviewer", description: "Account perspective validation" },
+  {
+    owner: accounts[0].identifier,
+    slug: "public-preview",
+    visibility: "public",
+    initializeReadme: true,
+  },
   201
 );
-const session = await api(
-  `/api/auth/agents/${agent.id}/sessions`,
-  "POST",
-  { repositoryId: repository.id, baseRef: "main", permission: "read", ttlSeconds: 3600 },
-  201
+await api("/api/auth/accounts/view", "POST", { kind: "guest" });
+assert.equal(
+  (await api(`/api/forge/repositories/by-name/${accounts[0].identifier}/public-preview`)).canWrite,
+  false
 );
-await api("/api/auth/accounts/view", "POST", { kind: "agent", sessionId: session.id });
-assert.equal((await api("/api/auth/session")).agentSession.id, session.id);
 assert.ok(
-  (await api(`/api/git/repositories/${repository.id}/tree?ref=main&path=`)).entries.some(
-    (entry) => entry.path === "README.md" || entry.name === "README.md"
-  )
+  (
+    await api(`/api/git/repositories/${publicRepository.id}/file?ref=main&path=README.md`)
+  ).content.includes("public-preview")
 );
+assert.equal(await api("/api/auth/session"), null);
+await api(
+  `/api/forge/repositories/by-name/${accounts[0].identifier}/perspectives`,
+  "GET",
+  undefined,
+  404
+);
+await api(`/api/git/repositories/${repository.id}/tree?ref=main&path=`, "GET", undefined, 404);
 await api("/api/auth/profile", "GET", undefined, 403);
 await api(
   `/api/forge/repositories/${repository.id}/issues`,
   "POST",
-  { title: "Read-only actor", body: "Must fail" },
-  403
+  { title: "Guest writes", body: "Must fail" },
+  401
 );
 await api("/api/auth/accounts/view", "POST", { kind: "account" });
+assert.equal(
+  (await api(`/api/forge/repositories/by-name/${accounts[0].identifier}/perspectives`)).canWrite,
+  true
+);
 await api("/api/auth/accounts/switch", "POST", { userId: accounts[1].user.id });
 await api(
   `/api/forge/repositories/by-name/${accounts[0].identifier}/perspectives`,
@@ -89,11 +103,7 @@ await api("/api/auth/accounts/switch", "POST", { userId: accounts[0].user.id });
 await mkdir(path.dirname(output), { recursive: true });
 await writeFile(
   output,
-  JSON.stringify(
-    { origin, accounts, repository, agent, session: { id: session.id, agentId: agent.id } },
-    null,
-    2
-  ),
+  JSON.stringify({ origin, accounts, repository, publicRepository }, null, 2),
   { mode: 0o600 }
 );
 await api("/api/auth/accounts/logout-all", "POST");
@@ -103,7 +113,6 @@ console.log(
     ok: true,
     accounts: accounts.map(({ identifier }) => identifier),
     repository: repository.id,
-    agentSession: session.id,
     fixture: output,
   })
 );

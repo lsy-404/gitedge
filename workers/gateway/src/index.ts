@@ -39,12 +39,14 @@ interface AuthenticatedSession extends TrustedUser {
 
 interface AnonymousSession {
   authenticated: false;
+  view?: "guest";
 }
 
 type SessionResult = AuthenticatedSession | AnonymousSession;
 
 interface AuthSessionPayload {
   data: TrustedUser | null;
+  view?: "guest";
 }
 
 function isSessionPayload(value: unknown): value is AuthSessionPayload {
@@ -108,7 +110,8 @@ async function readSession(response: Response): Promise<SessionResult | Response
       headers: { "Content-Type": "application/json; charset=utf-8" },
     });
   }
-  if (payload.data === null) return { authenticated: false };
+  if (payload.data === null)
+    return { authenticated: false, ...(payload.view === "guest" ? { view: "guest" } : {}) };
   return {
     authenticated: true,
     id: payload.data.id,
@@ -268,7 +271,9 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
       (expectedUser && (!session.authenticated || session.id !== expectedUser)) ||
       (expectedView &&
         expectedView !==
-          (session.authenticated ? (session.agentSession?.id ?? "account") : "account"))
+          (session.authenticated
+            ? (session.agentSession?.id ?? "account")
+            : (session.view ?? "account")))
     ) {
       return Response.json(
         {

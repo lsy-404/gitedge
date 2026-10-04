@@ -45,7 +45,11 @@ import type {
   RepositoryBranch,
 } from "../../../../packages/contracts/src/repository-controls";
 import type { SsoIdentity, SsoProviderSummary } from "../../../../packages/contracts/src/sso";
-import type { BrowserAccounts } from "../../../../packages/contracts/src/browser-accounts";
+import type {
+  BrowserAccounts,
+  BrowserIdentity,
+  BrowserView,
+} from "../../../../packages/contracts/src/browser-accounts";
 import type {
   ActionRun,
   ActionRunSummary,
@@ -194,12 +198,12 @@ export function setExpectedIdentity(userId: string | null, agentSessionId?: stri
 export function expectedIdentityHeaders(path: string, method = "GET"): Record<string, string> {
   if (
     path === "/api/auth/session" ||
-    (path === "/api/auth/accounts" && method === "GET") ||
-    !expectedUserId
+    path === "/api/auth/browser-session" ||
+    (path === "/api/auth/accounts" && method === "GET")
   )
     return {};
   return {
-    "X-GitEdge-Expected-User": expectedUserId,
+    ...(expectedUserId ? { "X-GitEdge-Expected-User": expectedUserId } : {}),
     "X-GitEdge-Expected-View": expectedViewId,
   };
 }
@@ -279,7 +283,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ userId }),
     }),
-  switchBrowserView: (payload: { kind: "account" } | { kind: "agent"; sessionId: string }) =>
+  switchBrowserView: (payload: BrowserView) =>
     request<{ switched: boolean }>("/api/auth/accounts/view", {
       method: "POST",
       body: JSON.stringify(payload),
@@ -335,6 +339,7 @@ export const api = {
     request<User>("/api/auth/register", { method: "POST", body: JSON.stringify(payload) }),
   logout: () => request("/api/auth/logout", { method: "POST" }, true),
   session: () => request<User>("/api/auth/session"),
+  browserSession: () => request<BrowserIdentity>("/api/auth/browser-session"),
   ssoProviders: () => request<SsoProviderSummary[]>("/api/auth/sso/providers"),
   ssoIdentities: () => request<SsoIdentity[]>("/api/auth/sso/identities"),
   linkSsoIdentity: (providerId: string, returnTo: string) =>

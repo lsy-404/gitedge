@@ -138,17 +138,8 @@ describe("OIDC and SAML account flows", () => {
     });
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), "https://gitedge.test");
-      if (url.pathname === "/api/auth/session")
-        return new Response(
-          JSON.stringify({
-            data: {
-              id: "user-1",
-              identifier: "person@example.test",
-              externalIdentity: { provider: "github", login: "person" },
-            },
-          }),
-          { status: 200 }
-        );
+      if (url.pathname === "/api/auth/browser-session")
+        return Response.json({ data: { user: sessionState.user, view: { kind: "account" } } });
       if (url.pathname === "/api/auth/sso/providers")
         return new Response(JSON.stringify({ data: providers }), { status: 200 });
       if (url.pathname === "/api/auth/sso/identities")
@@ -195,11 +186,8 @@ describe("OIDC and SAML account flows", () => {
     setSession({ id: "user-1", identifier: "person@example.test" });
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), "https://gitedge.test");
-      if (url.pathname === "/api/auth/session")
-        return new Response(
-          JSON.stringify({ data: { id: "user-1", identifier: "person@example.test" } }),
-          { status: 200 }
-        );
+      if (url.pathname === "/api/auth/browser-session")
+        return Response.json({ data: { user: sessionState.user, view: { kind: "account" } } });
       if (url.pathname === "/api/auth/sso/providers")
         return new Response(JSON.stringify({ data: [providers[0]] }), { status: 200 });
       if (url.pathname === "/api/auth/sso/identities")
@@ -233,11 +221,8 @@ describe("OIDC and SAML account flows", () => {
     setSession({ id: "user-1", identifier: "user@example.test" });
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), "https://gitedge.test");
-      if (url.pathname === "/api/auth/session")
-        return new Response(
-          JSON.stringify({ data: { id: "user-1", identifier: "user@example.test" } }),
-          { status: 200 }
-        );
+      if (url.pathname === "/api/auth/browser-session")
+        return Response.json({ data: { user: sessionState.user, view: { kind: "account" } } });
       if (url.pathname === "/api/auth/sso/providers")
         return new Response(JSON.stringify({ data: [providers[0]] }), { status: 200 });
       if (url.pathname === "/api/auth/sso/identities")
@@ -356,8 +341,8 @@ describe("External sign-in options", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = new URL(String(input), "https://gitedge.test");
-        if (url.pathname === "/api/auth/session")
-          return new Response(JSON.stringify({ data: user }), { status: 200 });
+        if (url.pathname === "/api/auth/browser-session")
+          return Response.json({ data: { user: sessionState.user, view: { kind: "account" } } });
         return new Response(JSON.stringify({ data: [] }), { status: 200 });
       })
     );

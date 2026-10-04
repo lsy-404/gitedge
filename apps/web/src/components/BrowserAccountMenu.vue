@@ -4,17 +4,17 @@ import { useI18n } from "vue-i18n";
 import type {
   BrowserAccount,
   BrowserAccounts,
-  BrowserAgentView,
 } from "../../../../packages/contracts/src/browser-accounts";
 import AppIcon from "./AppIcon.vue";
-import { ApiError, api, setExpectedIdentity } from "../lib/api";
+import { ApiError, api } from "../lib/api";
 import { sessionState } from "../lib/session";
 
 const emit = defineEmits<{
   "identity-switch": [target: string];
   "add-account": [];
+  "guest-preview": [];
 }>();
-const { locale, t } = useI18n();
+const { t } = useI18n();
 const accounts = ref<BrowserAccounts | null>(null);
 const loading = ref(true);
 const busy = ref(false);
@@ -27,9 +27,6 @@ async function loadAccounts(): Promise<void> {
   error.value = "";
   try {
     accounts.value = await api.browserAccounts();
-    if (!sessionState.user && accounts.value.activeAccountId) {
-      setExpectedIdentity(accounts.value.activeAccountId);
-    }
   } catch (cause) {
     accounts.value = null;
     error.value =
@@ -42,18 +39,7 @@ async function loadAccounts(): Promise<void> {
 }
 
 function selectedAccount(account: BrowserAccount): boolean {
-  return sessionState.user?.id === account.id && !sessionState.user.agentSession;
-}
-
-function selectedAgent(view: BrowserAgentView): boolean {
-  return sessionState.user?.agentSession?.id === view.sessionId;
-}
-
-function agentExpiry(view: BrowserAgentView): string {
-  if (view.expiresAt <= Date.now()) return t("browserAgentSessionExpired");
-  return t("browserAgentSessionExpires", {
-    date: new Date(view.expiresAt).toLocaleString(locale.value),
-  });
+  return sessionState.user?.id === account.id && sessionState.view === "account";
 }
 
 async function selectAccount(account: BrowserAccount): Promise<void> {
@@ -72,23 +58,6 @@ async function selectAccount(account: BrowserAccount): Promise<void> {
     emit("identity-switch", "/dashboard");
   } catch {
     error.value = t("browserAccountSwitchError");
-  } finally {
-    busy.value = false;
-  }
-}
-
-async function selectAgent(view: BrowserAgentView): Promise<void> {
-  if (busy.value || selectedAgent(view) || !sessionState.user) return;
-  busy.value = true;
-  error.value = "";
-  try {
-    await api.switchBrowserView({ kind: "agent", sessionId: view.sessionId });
-    emit(
-      "identity-switch",
-      `/${encodeURIComponent(view.owner)}/${encodeURIComponent(view.repository)}`
-    );
-  } catch {
-    error.value = t("browserAgentViewError");
   } finally {
     busy.value = false;
   }
@@ -182,42 +151,20 @@ async function logoutAll(): Promise<void> {
         {{ t("browserAccountLimit", { limit: accounts.accountLimit }) }}
       </p>
 
-      <div v-if="sessionState.user" class="browser-agent-views">
-        <h3>{{ t("agentViews") }}</h3>
-        <template v-if="!accounts.agentViews.length">
-          <p class="browser-account-state">{{ t("noAgentViews") }}</p>
-          <RouterLink
-            v-if="!sessionState.user.agentSession"
-            class="browser-account-action"
-            to="/settings/agents"
-            >{{ t("agents") }}</RouterLink
-          >
-        </template>
+      <div
+        v-if="accounts.activeAccountId || sessionState.view === 'guest'"
+        class="browser-view-options"
+      >
+        <h3>{{ t("browserViews") }}</h3>
         <button
-          v-for="view in accounts.agentViews"
-          :key="view.sessionId"
-          class="browser-account-option browser-agent-option"
-          :aria-pressed="selectedAgent(view)"
-          :disabled="
-            busy || !sessionState.user || selectedAgent(view) || view.expiresAt <= Date.now()
-          "
-          @click="selectAgent(view)"
+          class="browser-account-option"
+          :aria-pressed="sessionState.view === 'guest'"
+          :disabled="busy || sessionState.view === 'guest'"
+          @click="emit('guest-preview')"
         >
-          <span class="browser-account-copy">
-            <strong
-              >{{ view.agentName }} <span class="muted">@{{ view.agentHandle }}</span></strong
-            >
-            <span
-              >{{ view.owner }}/{{ view.repository }} ·
-              {{ t(view.permission === "write" ? "agentViewWrite" : "agentViewRead") }}</span
-            >
-            <span class="browser-agent-expiry">{{ agentExpiry(view) }}</span>
-          </span>
-          <AppIcon v-if="selectedAgent(view)" name="check" :size="14" />
+          <AppIcon name="eye" :size="16" />{{ t("guestView") }}
+          <AppIcon v-if="sessionState.view === 'guest'" name="check" :size="14" />
         </button>
-        <p v-if="accounts.agentViewsTruncated" class="browser-account-state">
-          {{ t("agentViewsTruncated") }}
-        </p>
       </div>
       <button
         v-if="accounts.accounts.length > 1"

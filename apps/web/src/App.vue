@@ -23,7 +23,6 @@ const router = useRouter();
 const route = useRoute();
 const accountName = computed(
   () =>
-    sessionState.user?.agentSession?.agentName ||
     accountProfileState.value?.displayName ||
     sessionState.user?.externalIdentity?.login ||
     sessionState.user?.identifier ||
@@ -50,7 +49,7 @@ const userMenu = ref<HTMLDetailsElement | null>(null);
 const userMenuOpen = ref(false);
 const createMenu = ref<HTMLDetailsElement | null>(null);
 const expandedPreference = ref<"language" | "theme" | null>(null);
-const agentView = computed(() => sessionState.user?.agentSession ?? null);
+const guestView = computed(() => sessionState.view === "guest");
 const identitySwitchError = ref("");
 async function openSearch() {
   searchExpanded.value = true;
@@ -113,17 +112,27 @@ async function returnToAccountView() {
   identitySwitchError.value = "";
   try {
     await api.switchBrowserView({ kind: "account" });
-    completeIdentitySwitch("/dashboard");
+    completeIdentitySwitch(route.meta.allowAnonymous ? route.fullPath : "/dashboard");
   } catch {
     identitySwitchError.value = t("returnToAccountViewError");
+  }
+}
+async function previewAsGuest() {
+  if (!sessionState.user) return;
+  const target = route.meta.allowAnonymous ? route.fullPath : `/${sessionState.user.identifier}`;
+  identitySwitchError.value = "";
+  try {
+    await api.switchBrowserView({ kind: "guest" });
+    completeIdentitySwitch(target);
+  } catch {
+    identitySwitchError.value = t("guestViewError");
   }
 }
 let stopIdentityListener: () => void = () => undefined;
 let identityRefreshInFlight: Promise<void> | null = null;
 function identityKey(): string {
   const user = sessionState.user;
-  if (!user) return "";
-  return `${user.id}:${user.agentSession?.id ?? "account"}`;
+  return `${user?.id ?? ""}:${sessionState.view}`;
 }
 function refreshIdentityOnReturn(): Promise<void> {
   if (identityNavigating) return Promise.resolve();
@@ -224,7 +233,7 @@ if (!sessionState.checked) void refreshSession();
             <AppIcon name="search" />
           </button>
           <div class="global-actions">
-            <template v-if="sessionState.user && !agentView && !authPage">
+            <template v-if="sessionState.user && !guestView && !authPage">
               <details ref="createMenu" class="dropdown create-menu">
                 <summary role="button" class="btn" :aria-label="t('ghCreate')">
                   <AppIcon name="plus" /><AppIcon name="chevron" :size="12" />
@@ -256,7 +265,7 @@ if (!sessionState.checked) void refreshSession();
                 ><span v-else class="avatar"><AppIcon name="person" /></span>
               </summary>
               <div class="dropdown-panel browser-account-dropdown">
-                <p v-if="sessionState.user && !agentView" class="dropdown-identity">
+                <p v-if="sessionState.user && !guestView" class="dropdown-identity">
                   {{ t("ghSignedIn")
                   }}<RouterLink :to="`/${sessionState.user.identifier}`"
                     ><strong>{{ accountName }}</strong></RouterLink
@@ -266,9 +275,10 @@ if (!sessionState.checked) void refreshSession();
                   v-if="userMenuOpen"
                   @identity-switch="completeIdentitySwitch"
                   @add-account="addBrowserAccount"
+                  @guest-preview="previewAsGuest"
                 />
                 <hr />
-                <template v-if="sessionState.user && !agentView">
+                <template v-if="sessionState.user && !guestView">
                   <RouterLink to="/dashboard"
                     ><AppIcon name="repo" />{{ t("repositories") }}</RouterLink
                   ><RouterLink to="/organizations"
@@ -280,6 +290,9 @@ if (!sessionState.checked) void refreshSession();
                   >
                   <hr />
                 </template>
+                <p v-if="identitySwitchError && !guestView" class="preference-error" role="alert">
+                  {{ identitySwitchError }}
+                </p>
                 <p v-if="preferenceError" class="preference-error" role="alert">
                   {{ preferenceError }}
                 </p>
@@ -366,24 +379,17 @@ if (!sessionState.checked) void refreshSession();
           <RouterLink to="/dashboard"><AppIcon name="repo" />{{ t("repositories") }}</RouterLink
           ><RouterLink to="/organizations"
             ><AppIcon name="organization" />{{ t("organizations") }}</RouterLink
-          ><RouterLink v-if="!agentView" to="/settings/agents"
+          ><RouterLink v-if="!guestView" to="/settings/agents"
             ><AppIcon name="agent" />{{ t("agents") }}</RouterLink
           >
         </nav>
       </header>
-      <div v-if="agentView" class="agent-view-banner">
-        <span class="agent-view-banner-copy">
-          <AppIcon name="agent" :size="16" />
-          {{
-            t("agentViewBanner", {
-              agent: agentView.agentName,
-              repository: repositoryPath ? repositoryPath.slice(1) : t("agentViewWorkspace"),
-              permission: t(agentView.permission === "write" ? "agentViewWrite" : "agentViewRead"),
-            })
-          }}
-        </span>
+      <div v-if="guestView" class="guest-view-banner" role="status">
+        <span class="guest-view-banner-copy"
+          ><AppIcon name="eye" :size="16" />{{ t("guestViewBanner") }}</span
+        >
         <span>
-          <span v-if="identitySwitchError" class="agent-view-banner-error" role="alert">{{
+          <span v-if="identitySwitchError" class="guest-view-banner-error" role="alert">{{
             identitySwitchError
           }}</span>
           <button class="btn btn-subtle" @click="returnToAccountView">
@@ -411,11 +417,11 @@ if (!sessionState.checked) void refreshSession();
           ><RouterLink to="/dashboard"><AppIcon name="repo" />{{ t("repositories") }}</RouterLink
           ><RouterLink to="/organizations"
             ><AppIcon name="organization" />{{ t("organizations") }}</RouterLink
-          ><RouterLink v-if="!agentView" to="/settings/agents"
+          ><RouterLink v-if="!guestView" to="/settings/agents"
             ><AppIcon name="agent" />{{ t("agents") }}</RouterLink
           >
           <hr />
-          <RouterLink v-if="!agentView" to="/settings/account"
+          <RouterLink v-if="!guestView" to="/settings/account"
             ><AppIcon name="gear" />{{ t("account") }}</RouterLink
           >
         </nav>

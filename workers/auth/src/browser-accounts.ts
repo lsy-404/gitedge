@@ -4,11 +4,9 @@ import {
   SwitchBrowserViewSchema,
   type BrowserAccount,
   type BrowserAccounts,
-  type BrowserAgentView,
 } from "../../../packages/contracts/src/index";
 import { createLogger } from "../../../src/worker/common/logger";
 import { readJsonLimited } from "../../../src/worker/common/readText";
-import { authenticateOwnedAgentSession } from "./agents";
 import { createSessionCookie, hashToken, readCookie, SESSION_MAX_AGE_SECONDS } from "./session";
 
 const ACCOUNT_PREFIX = "gitedge_account_";
@@ -168,24 +166,19 @@ export async function handleBrowserAccounts(
   const path = new URL(request.url).pathname;
   if (request.method !== "GET" && request.headers.get("Origin") !== new URL(request.url).origin)
     return fail(403, "forbidden", "Same-origin account management is required.");
+  const expectedView = request.headers.get("X-GitEdge-Expected-View");
+  if (expectedView && expectedView !== (readBrowserView(request) ? "guest" : "account"))
+    return fail(
+      409,
+      "account_changed",
+      "The active perspective changed. Reload before continuing."
+    );
   const accounts = await savedAccounts(request, env);
   const active = accounts.find((account) => account.token === readCookie(request));
   const expected = request.headers.get("X-GitEdge-Expected-User");
   if (expected && expected !== active?.id)
     return fail(409, "account_changed", "The active account changed. Reload before continuing.");
   if (path === "/accounts" && request.method === "GET") {
-    const rows = active
-      ? await env.DB.prepare(
-          "SELECT s.id AS sessionId,a.id AS agentId,a.name AS agentName,a.handle AS agentHandle,s.repository_id AS repositoryId,n.slug AS owner,r.slug AS repository,s.permission,s.expires_at AS expiresAt FROM auth_agent_sessions s JOIN auth_agents a ON a.id=s.agent_id JOIN repositories r ON r.id=s.repository_id JOIN namespaces n ON n.id=r.namespace_id WHERE s.user_id=? AND a.disabled_at IS NULL AND s.status='active' AND s.expires_at>? AND r.agents_enabled=1 AND (EXISTS(SELECT 1 FROM namespace_memberships m WHERE m.namespace_id=r.namespace_id AND m.user_id=s.user_id) OR EXISTS(SELECT 1 FROM repository_collaborators c WHERE c.repository_id=r.id AND c.user_id=s.user_id AND (s.permission='read' OR c.role IN ('write','admin')))) ORDER BY s.created_at DESC LIMIT 101"
-        )
-          .bind(active.id, Date.now())
-          .all<BrowserAgentView>()
-      : null;
-    const selectedView = readBrowserView(request);
-    const selected =
-      active && selectedView
-        ? await authenticateOwnedAgentSession(env, active.id, selectedView)
-        : null;
     const data: BrowserAccounts = {
       accounts: accounts.map(({ id, identifier, displayName }) => ({
         id,
@@ -193,11 +186,7 @@ export async function handleBrowserAccounts(
         displayName,
       })),
       activeAccountId: active?.id ?? null,
-      view: selected?.agentSession
-        ? { kind: "agent", session: selected.agentSession }
-        : { kind: "account" },
-      agentViews: rows?.results.slice(0, 100) ?? [],
-      agentViewsTruncated: (rows?.results.length ?? 0) > 100,
+      view: { kind: readBrowserView(request) ? "guest" : "account" },
       accountLimit: BROWSER_ACCOUNT_LIMIT,
     };
     const result = response(data);
@@ -222,23 +211,19 @@ export async function handleBrowserAccounts(
     return result;
   }
   if (path === "/accounts/view" && request.method === "POST") {
-    if (!active) return fail(401, "unauthorized", "Sign in before selecting a perspective.");
     const parsed = SwitchBrowserViewSchema.safeParse(await readJsonLimited(request, 1024));
     if (!parsed.success) return fail(400, "bad_request", "Invalid perspective.");
     const view = parsed.data;
-    if (
-      view.kind === "agent" &&
-      !(await authenticateOwnedAgentSession(env, active.id, view.sessionId))
-    )
-      return fail(403, "forbidden", "This agent session is unavailable.");
+    if (view.kind === "guest" && !active)
+      return fail(401, "unauthorized", "Sign in before previewing as a guest.");
     const result = response({ switched: true });
     clearBrowserContext(result);
     result.headers.append(
       "Set-Cookie",
       cookie(
         VIEW_COOKIE,
-        view.kind === "agent" ? view.sessionId : "",
-        view.kind === "agent" ? remainingAge(active.expiresAt) : 0
+        view.kind === "guest" ? "guest" : "",
+        view.kind === "guest" && active ? remainingAge(active.expiresAt) : 0
       )
     );
     return result;

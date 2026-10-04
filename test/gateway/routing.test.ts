@@ -33,6 +33,56 @@ function environment(
 }
 
 describe("Gateway routing", () => {
+  it("forwards guest reads without credentials or identity and refuses guest writes", async () => {
+    let forwarded = 0;
+    const env = environment({
+      auth: service(() => Response.json({ data: null, view: "guest" })),
+      forge: service((request) => {
+        forwarded += 1;
+        expect(request.headers.has("Cookie")).toBe(false);
+        expect(request.headers.has("Authorization")).toBe(false);
+        expect(request.headers.has("X-GitEdge-User-Id")).toBe(false);
+        return new Response("public");
+      }),
+    });
+    const headers = {
+      Cookie: "gitedge_session=human; gitedge_view=guest",
+      "X-GitEdge-Expected-View": "guest",
+      "X-GitEdge-User-Id": "forged",
+      Origin: "https://gitedge.example.com",
+    };
+    expect(
+      (
+        await handleGatewayRequest(
+          new Request("https://gitedge.example.com/api/forge/repositories", { headers }),
+          env
+        )
+      ).status
+    ).toBe(200);
+    expect(
+      (
+        await handleGatewayRequest(
+          new Request("https://gitedge.example.com/api/forge/repositories", {
+            method: "POST",
+            headers,
+            body: "{}",
+          }),
+          env
+        )
+      ).status
+    ).toBe(401);
+    expect(forwarded).toBe(1);
+    expect(
+      (
+        await handleGatewayRequest(
+          new Request("https://gitedge.example.com/api/forge/repositories", {
+            headers: { ...headers, "X-GitEdge-Expected-View": "account" },
+          }),
+          env
+        )
+      ).status
+    ).toBe(409);
+  });
   it("rejects stale browser account and perspective headers before forwarding", async () => {
     let forwarded = 0;
     const env = environment({

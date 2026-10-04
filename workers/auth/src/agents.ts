@@ -125,17 +125,6 @@ export async function authenticateAgentSession(
   return trustedAgentSession(row);
 }
 
-export async function authenticateOwnedAgentSession(
-  env: { DB: D1Database },
-  userId: string,
-  sessionId: string
-): Promise<TrustedUser | null> {
-  const row = await env.DB.prepare(activeSessionSelect + " AND s.id=? AND s.user_id=?")
-    .bind(Date.now(), sessionId, userId)
-    .first<AgentSessionRow>();
-  return trustedAgentSession(row);
-}
-
 function trustedAgentSession(row: AgentSessionRow | null): TrustedUser | null {
   if (!row) return null;
   return {

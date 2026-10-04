@@ -61,7 +61,7 @@ export async function updatePreference(
   preferenceError.value = "";
   apply({ ...preferencesState, [key]: value });
   const userId = sessionState.user?.id;
-  if (!userId || sessionState.user?.agentSession) return;
+  if (!userId) return;
   preferenceSaving.value = true;
   try {
     const profile = await api.updateAccountProfile({ preferences: { [key]: value } });
@@ -80,10 +80,6 @@ export async function loadAccountPreferences(): Promise<void> {
   const version = ++loadVersion;
   const userId = sessionState.user?.id;
   preferenceError.value = "";
-  if (sessionState.user?.agentSession) {
-    accountProfileState.value = null;
-    return;
-  }
   if (!userId) {
     accountProfileState.value = null;
     apply(readLocalPreferences());

@@ -19,7 +19,6 @@ import { bytesToBase64, readCookie, issueSession, hashToken, createToken } from 
 import { PBKDF2_ITERATIONS } from "./password";
 import {
   authenticateAgentSession,
-  authenticateOwnedAgentSession,
   authenticateGitToken,
   handleAgentManagement,
   handleAgentProfile,
@@ -609,21 +608,26 @@ export default {
       return handleBrowserAccounts(request, env);
     const browserView = readBrowserView(request);
     const expectedView = request.headers.get("X-GitEdge-Expected-View");
-    if (expectedView && path !== "/session" && expectedView !== (browserView ?? "account"))
+    if (
+      expectedView &&
+      !["/session", "/browser-session"].includes(path) &&
+      expectedView !== (browserView ? "guest" : "account")
+    )
       return fail(409, "conflict", "The active perspective changed. Reload before continuing.");
     if (
       browserView &&
       ![
         "/session",
+        "/browser-session",
         "/logout",
         "/login",
         "/register",
-        "/git-session",
         "/github/start",
         "/github/callback",
         "/sso/providers",
       ].includes(path) &&
-      !/^\/sso\/[^/]+\/(start|callback|metadata)$/.test(path)
+      !/^\/sso\/[^/]+\/(start|callback|metadata)$/.test(path) &&
+      !/^\/agent-profiles\//.test(path)
     )
       return fail(
         403,
@@ -637,7 +641,7 @@ export default {
     )
       return fail(403, "forbidden", "Same-origin authentication is required.");
     const expectedUser = request.headers.get("X-GitEdge-Expected-User");
-    if (expectedUser && path !== "/session") {
+    if (expectedUser && !["/session", "/browser-session"].includes(path)) {
       const expectedSession = await getHumanSession();
       if (!expectedSession.ok || expectedSession.data.id !== expectedUser)
         return fail(409, "conflict", "The active account changed. Reload before continuing.");
@@ -718,7 +722,13 @@ export default {
         return fail(503, "service_unavailable", "Agent event could not be queued.");
       }
     }
+    if (request.method === "GET" && path === "/browser-session") {
+      if (browserView) return json({ data: { user: null, view: { kind: "guest" } } });
+      const result = await getHumanSession();
+      return json({ data: { user: result.ok ? result.data : null, view: { kind: "account" } } });
+    }
     if (request.method === "GET" && path === "/session") {
+      if (browserView) return json({ data: null, view: "guest" });
       const authorization = request.headers.get("Authorization");
       if (authorization) {
         const user = authorization.startsWith("Bearer ")
@@ -731,21 +741,11 @@ export default {
       const result = await getHumanSession();
       if (!result.ok)
         return json({ error: result.error }, result.status, { "Cache-Control": "no-store" });
-      if (browserView) {
-        const agent = await authenticateOwnedAgentSession(env, result.data.id, browserView);
-        return agent
-          ? json({ data: agent }, 200, { "Cache-Control": "no-store" })
-          : fail(
-              401,
-              "unauthorized",
-              "The selected agent session expired or was revoked. Return to your account perspective."
-            );
-      }
       return json({ data: result.data }, 200, { "Cache-Control": "no-store" });
     }
     if (/^\/agent-profiles\//.test(path)) {
-      const profileSession = await getHumanSession();
-      return handleAgentProfile(request, env, profileSession.ok ? profileSession.data : null);
+      const profileSession = browserView ? null : await getHumanSession();
+      return handleAgentProfile(request, env, profileSession?.ok ? profileSession.data : null);
     }
     if (/^\/(agents|sessions|tokens|web-sessions)(\/|$)/.test(path)) {
       const authorization = request.headers.get("Authorization");
