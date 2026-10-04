@@ -1,3 +1,4 @@
+import { repositoryNotFound } from "../../../src/worker/common/repository-response";
 import { recordGitWrite } from "./events";
 import type { RefUpdate } from "./receive-commands";
 import { resolveRepositoryPath } from "../../../src/worker/common/repositories";
@@ -23,9 +24,10 @@ export async function proxyGitTransport(
   );
   if (!match) return fail(404, "not_found", "Git endpoint was not found.");
   const repository = await resolveRepositoryPath(env.DB, match[1], match[2]);
-  if (!repository) return fail(404, "not_found", "Repository was not found.");
+  if (!repository) return repositoryNotFound();
   const access = await resolveGitAccess(request, env, repository.id);
-  if (!access) return fail(404, "not_found", "Repository was not found.");
+  if (access instanceof Response) return access;
+  if (!access) return repositoryNotFound();
   if (repository.owner !== match[1] || repository.slug !== match[2]) {
     const redirect = new URL(request.url);
     redirect.pathname = `/${repository.owner}/${repository.slug}.git/${match[3]}`;

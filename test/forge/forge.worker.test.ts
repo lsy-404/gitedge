@@ -618,7 +618,7 @@ describe("Public repository boundaries", () => {
     const request = new Request("https://git.test/repositories/r1/tree");
     const access = await resolveGitAccess(request, forgeEnv, "r1");
     expect(access).not.toBeNull();
-    if (!access) throw new Error("Missing public fixture");
+    if (!access || access instanceof Response) throw new Error("Missing public fixture");
     expect(await resolveWorkspace(forgeEnv, access, "s1")).toBeNull();
     expect(await resolveWorkspace(forgeEnv, access, "s1", "unpublished")).toBeNull();
     const pull = await env.DB.prepare(

@@ -1,6 +1,8 @@
 import { AgentSessionIdentitySchema, type Actor } from "./forge";
 import type { TrustedUser } from "./index";
 
+export const REPOSITORY_ACCESS_DENIED_HEADER = "X-GitEdge-Repository-Access-Denied";
+
 export const TRUSTED_USER_HEADERS = [
   "x-gitedge-user-id",
   "x-gitedge-user-email",
@@ -8,6 +10,7 @@ export const TRUSTED_USER_HEADERS = [
   "x-gitedge-user-group",
   "x-gitedge-agent-session",
   "x-gitedge-git-grant",
+  REPOSITORY_ACCESS_DENIED_HEADER,
 ] as const;
 
 export function readTrustedUser(request: Request): TrustedUser | null {

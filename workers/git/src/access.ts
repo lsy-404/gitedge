@@ -1,3 +1,4 @@
+import { repositoryAccessDenied } from "../../../src/worker/common/repository-response";
 import { repositoryRole, writableRole } from "../../../src/worker/common/repositories";
 import {
   readTrustedUser,
@@ -36,7 +37,7 @@ export async function resolveGitAccess(
   request: Request,
   env: GitEnv,
   repositoryId: string
-): Promise<GitRepositoryAccess | null> {
+): Promise<GitRepositoryAccess | Response | null> {
   const user = readTrustedUser(request);
   if (user?.agentSession && user.agentSession.repositoryId !== repositoryId) return null;
   const repository = await env.DB.prepare(
@@ -46,7 +47,7 @@ export async function resolveGitAccess(
     .first<GitRepositoryRow>();
   if (!repository) return null;
   const role = user ? await repositoryRole(env.DB, repositoryId, user.id) : null;
-  if (repository.visibility !== "public" && role === null) return null;
+  if (repository.visibility !== "public" && role === null) return repositoryAccessDenied();
   repository.canWrite = Number(writableRole(role));
   if (user?.agentSession) {
     const active = await env.DB.prepare(

@@ -30,7 +30,7 @@ GitEdge is an MIT Git forge built with Cloudflare Workers, Artifacts, D1 and Vue
 ## Security and correctness
 
 - Strip inbound trust headers at the Gateway. Validate agent repository scope, current membership, expiry and disabled/revoked state in privileged services.
-- Public repositories permit anonymous reads. Private repositories return 404 to unauthorized readers.
+- Public repositories permit anonymous reads. Private repositories default to 404 for unauthorized readers; Gateway may explicitly configure 403 without exposing contents.
 - Each agent session has its own Artifacts fork. Publishing a PR permits reading its selected head, not arbitrary unpublished fork branches.
 - Revoke initial Artifacts creation/fork tokens before issuing scoped credentials. API/Git plaintext is returned once; store only credential hashes in D1. Do not provide untracked token-minting endpoints.
 - Use disposable Artifacts handles and the official binding contract. `get()` returns a capability; use `info()` for metadata.

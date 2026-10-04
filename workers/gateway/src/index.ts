@@ -8,6 +8,7 @@ import { readTextLimited } from "../../../src/worker/common/readText";
 import {
   AgentSessionIdentitySchema,
   TRUSTED_USER_HEADERS,
+  REPOSITORY_ACCESS_DENIED_HEADER,
   trustedHeaders,
   consumeRateLimit,
   parseUserGroupLimits,
@@ -31,6 +32,7 @@ export interface GatewayEnv {
   RATE_LIMITER: RateLimitNamespace;
   IP_RPM_LIMIT?: string;
   USER_GROUP_LIMITS_JSON?: string;
+  PRIVATE_REPOSITORY_RESPONSE?: string;
 }
 
 interface AuthenticatedSession extends TrustedUser {
@@ -90,6 +92,26 @@ function withoutTrustedHeaders(headers: Headers): void {
   for (const header of TRUSTED_USER_HEADERS) {
     headers.delete(header);
   }
+}
+
+async function presentRepositoryResponse(response: Response, env: GatewayEnv): Promise<Response> {
+  const denied =
+    response.status === 404 && response.headers.get(REPOSITORY_ACCESS_DENIED_HEADER) === "1";
+  if (!response.headers.has(REPOSITORY_ACCESS_DENIED_HEADER)) return response;
+  if (denied && env.PRIVATE_REPOSITORY_RESPONSE === "forbidden") {
+    await response.body?.cancel();
+    return Response.json(
+      { error: { code: "forbidden", message: "Repository access is denied." } },
+      { status: 403, headers: { "Cache-Control": "no-store" } }
+    );
+  }
+  const headers = new Headers(response.headers);
+  headers.delete(REPOSITORY_ACCESS_DENIED_HEADER);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 async function readSession(response: Response): Promise<SessionResult | Response> {
@@ -287,7 +309,10 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
     }
     if (!session.authenticated) {
       if ((request.method === "GET" || request.method === "HEAD") && prefix !== "/api/deploy") {
-        return service.fetch(forwardAuthenticated(request, prefix));
+        return presentRepositoryResponse(
+          await service.fetch(forwardAuthenticated(request, prefix)),
+          env
+        );
       }
       return new Response(JSON.stringify({ error: "Authentication required" }), {
         status: 401,
@@ -311,7 +336,10 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
     }
     const userLimitResponse = await enforceUserLimit(session, env);
     if (userLimitResponse) return userLimitResponse;
-    return service.fetch(forwardAuthenticated(request, prefix, session));
+    return presentRepositoryResponse(
+      await service.fetch(forwardAuthenticated(request, prefix, session)),
+      env
+    );
   }
 
   if (isGitRequest(url.pathname)) {
@@ -361,7 +389,7 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
       if (userLimit) return userLimit;
     }
     headers.delete("Authorization");
-    return env.GIT.fetch(new Request(request, { headers }));
+    return presentRepositoryResponse(await env.GIT.fetch(new Request(request, { headers })), env);
   }
 
   if (request.method === "GET" || request.method === "HEAD") {
@@ -380,12 +408,15 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
         `/api/forge/repositories/by-name/${encodeURIComponent(owner)}/${encodeURIComponent(slug)}`,
         request.url
       );
-      const resolved = await env.FORGE.fetch(
-        forwardAuthenticated(
-          new Request(resolveUrl, { headers: request.headers }),
-          "/api/forge",
-          session.authenticated ? session : undefined
-        )
+      const resolved = await presentRepositoryResponse(
+        await env.FORGE.fetch(
+          forwardAuthenticated(
+            new Request(resolveUrl, { headers: request.headers }),
+            "/api/forge",
+            session.authenticated ? session : undefined
+          )
+        ),
+        env
       );
       if (resolved.ok) {
         const text = await readTextLimited(resolved.body, 65536);
@@ -407,7 +438,18 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
             headers: { Location: target.toString(), "Cache-Control": "no-store" },
           });
         }
-      } else await resolved.body?.cancel();
+      } else {
+        await resolved.body?.cancel();
+        if (resolved.status === 403 || resolved.status === 404) {
+          const page = await serveSpa(request, env.ASSETS);
+          const headers = new Headers(page.headers);
+          headers.set("Cache-Control", "no-store");
+          return new Response(request.method === "HEAD" ? null : page.body, {
+            status: resolved.status,
+            headers,
+          });
+        }
+      }
     }
     return serveSpa(request, env.ASSETS);
   }

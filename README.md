@@ -86,3 +86,12 @@ jobs:
 ```
 
 Workflow check names are their file paths, for example `.github/workflows/verify.yml`. Only the Actions service may publish these system CI checks. Agent webhooks use an encrypted signing secret configured through `WEBHOOK_ENCRYPTION_KEY`; the key must be a base64-encoded 32-byte value. Events are signed with HMAC-SHA256 and retried up to five times.
+
+## Private repository access responses
+
+Configure `PRIVATE_REPOSITORY_RESPONSE` in `workers/gateway/wrangler.jsonc` and redeploy the Gateway:
+
+- `not_found` (default): unauthorized private repositories return the same 404 response as missing repositories.
+- `forbidden`: unauthorized private repositories return 403 with an explicit access-denied message. This discloses repository existence, but never its contents.
+
+Unset or invalid values use `not_found`. The policy covers browser repository routes, Forge and Git APIs, and anonymous Git HTTPS reads. Missing repositories remain 404 in both modes. Repository listings continue to omit inaccessible repositories. Invalid Git credentials still receive an authentication challenge.

@@ -1,3 +1,7 @@
+import {
+  repositoryAccessDenied,
+  repositoryNotFound,
+} from "../../../src/worker/common/repository-response";
 import { actionsCheck, attachActionChecks } from "./actions-checks";
 import { authorizeMerge } from "./merge-policy";
 import { mentionAgents, pullRequestEvent } from "./agent-events";
@@ -179,7 +183,7 @@ async function authorizeRepository(
     repository.visibility === "private" &&
     (await repositoryRole(env.DB, repository.id, user.id)) === null
   )
-    return error(404, "not_found", "Repository was not found.");
+    return repositoryAccessDenied();
   return null;
 }
 
@@ -187,9 +191,10 @@ async function publicRepositoryForOwnerAndSlug(
   env: ForgeEnv,
   owner: string,
   slug: string
-): Promise<RepositoryRow | null> {
+): Promise<RepositoryRow | Response | null> {
   const resolved = await resolveRepositoryPath(env.DB, owner, slug);
-  return resolved?.visibility === "public" ? repositoryById(env, resolved.id) : null;
+  if (resolved?.visibility === "private") return repositoryAccessDenied();
+  return resolved ? repositoryById(env, resolved.id) : null;
 }
 
 function mergeResultOid(value: unknown): string | null {
@@ -1468,7 +1473,7 @@ export default {
       )
         return error(409, "merge_changed", "Merge authorization expired or changed.");
       const repository = await repositoryById(env, String(pull.repository_id));
-      if (!repository) return error(404, "not_found", "Repository was not found.");
+      if (!repository) return repositoryNotFound();
       return (
         (await authorizeMerge(env, repository, user, pull, input.data)) ??
         json({ data: { authorized: true } })
@@ -1483,8 +1488,9 @@ export default {
       const repository = byName
         ? await publicRepositoryForOwnerAndSlug(env, parts[2] ?? "", parts[3] ?? "")
         : await repositoryById(env, parts[1] ?? "");
-      if (!repository || repository.visibility !== "public")
-        return error(404, "not_found", "Repository was not found.");
+      if (repository instanceof Response) return repository;
+      if (!repository) return repositoryNotFound();
+      if (repository.visibility !== "public") return repositoryAccessDenied();
       return publicRepositoryRead(env, repository, parts.slice(byName ? 4 : 2), request);
     }
     const sessionError = await activeAgentSession(env, user);
@@ -1758,12 +1764,12 @@ export default {
     if (request.method === "GET" && repositoryId === "by-name" && parts[2] && parts[3]) {
       const path = await resolveRepositoryPath(env.DB, parts[2], parts[3]);
       const named = path ? await repositoryById(env, path.id) : null;
+      if (!named) return repositoryNotFound();
       if (
-        !named ||
-        (named.visibility === "private" &&
-          (await repositoryRole(env.DB, named.id, user.id)) === null)
+        named.visibility === "private" &&
+        (await repositoryRole(env.DB, named.id, user.id)) === null
       )
-        return error(404, "not_found", "Repository was not found.");
+        return repositoryAccessDenied();
       if (user.agentSession && named.id !== user.agentSession.repositoryId)
         return error(403, "forbidden", "Agent session is limited to its repository.");
       if (!named.artifact_name || !named.remote)
@@ -1774,7 +1780,7 @@ export default {
       });
     }
     const repository = await repositoryById(env, repositoryId);
-    if (!repository) return error(404, "not_found", "Repository was not found.");
+    if (!repository) return repositoryNotFound();
     const access = await authorizeRepository(env, user, repository);
     if (access) return access;
     if (!repository.artifact_name || !repository.remote)

@@ -1,3 +1,4 @@
+import { repositoryNotFound } from "../../../src/worker/common/repository-response";
 import { trustedHeaders } from "../../../packages/contracts/src/trust";
 import { recordGitWrite } from "./events";
 import { repositoryCommunity } from "./community";
@@ -72,7 +73,8 @@ export async function handleGitApi(
   if (parts[0] !== "repositories" || !repositoryId || parts.length !== 3)
     return fail(404, "not_found", "Endpoint was not found.");
   const access = await resolveGitAccess(request, env, repositoryId);
-  if (!access) return fail(404, "not_found", "Repository was not found.");
+  if (access instanceof Response) return access;
+  if (!access) return repositoryNotFound();
   if (!access.repository.artifactName)
     return fail(
       409,
@@ -144,6 +146,7 @@ export async function handleGitApi(
     const beforeWrite = async () => {
       const latest = await resolveGitAccess(request, env, repositoryId);
       if (
+        latest instanceof Response ||
         !latest?.repository.canWrite ||
         latest.repository.archived ||
         (resource === "edit" && latest.repository.onlineEditingEnabled === 0) ||
@@ -247,6 +250,7 @@ export async function handleGitApi(
           input.data.baseRef
         );
         if (
+          latest instanceof Response ||
           !latest?.repository.canWrite ||
           latest.repository.archived ||
           JSON.stringify(latestRules) !== JSON.stringify(rules)
