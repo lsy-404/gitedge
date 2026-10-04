@@ -1,0 +1,92 @@
+:root {
+  --gitedge-motion-fast: 120ms;
+  --gitedge-motion-medium: 180ms;
+  --gitedge-motion-ease: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+:where(button, a, input, textarea, select, summary, .btn, .dropdown-panel) {
+  transition:
+    color var(--gitedge-motion-fast) var(--gitedge-motion-ease),
+    background-color var(--gitedge-motion-fast) var(--gitedge-motion-ease),
+    border-color var(--gitedge-motion-fast) var(--gitedge-motion-ease),
+    box-shadow var(--gitedge-motion-fast) var(--gitedge-motion-ease),
+    transform var(--gitedge-motion-fast) var(--gitedge-motion-ease);
+}
+
+:where(button, .btn):active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.dropdown[open] > .dropdown-panel {
+  animation: gitedge-menu-in var(--gitedge-motion-medium) var(--gitedge-motion-ease) both;
+}
+
+#main > * {
+  animation: gitedge-page-in 220ms var(--gitedge-motion-ease) both;
+}
+
+.fluent-focus-indicator {
+  position: fixed;
+  z-index: 10000;
+  pointer-events: none;
+  border: 2px solid var(--fluent-accent, var(--link));
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    left 150ms var(--gitedge-motion-ease),
+    top 150ms var(--gitedge-motion-ease),
+    width 150ms var(--gitedge-motion-ease),
+    height 150ms var(--gitedge-motion-ease),
+    border-radius 150ms var(--gitedge-motion-ease),
+    opacity 100ms ease,
+    visibility 0s linear 150ms;
+}
+
+.fluent-focus-indicator--visible {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: 0s;
+}
+
+:focus-visible.fluent-focus-target--tracked {
+  outline-color: transparent !important;
+}
+
+@keyframes gitedge-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes gitedge-page-in {
+  from {
+    opacity: 0.7;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --gitedge-motion-fast: 0ms;
+    --gitedge-motion-medium: 0ms;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+  }
+}
