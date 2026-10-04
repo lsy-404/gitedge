@@ -48,7 +48,9 @@ export function installFluentMotion(): () => void {
     }
 
     const rect = activeTarget.getBoundingClientRect();
-    const radius = Number.parseFloat(getComputedStyle(activeTarget).borderTopLeftRadius) || 0;
+    const style = getComputedStyle(activeTarget);
+    const radius = Number.parseFloat(style.borderTopLeftRadius) || 0;
+    indicator.style.borderColor = style.getPropertyValue("--link").trim() || style.color;
     activeTarget.classList.add("fluent-focus-target--tracked");
     indicator.style.left = `${rect.left - 4}px`;
     indicator.style.top = `${rect.top - 4}px`;
@@ -59,7 +61,7 @@ export function installFluentMotion(): () => void {
   }
 
   function scheduleUpdate() {
-    if (!disposed && !frame) frame = window.requestAnimationFrame(update);
+    if (!disposed && activeTarget && !frame) frame = window.requestAnimationFrame(update);
   }
 
   function trackFocusTarget(target: EventTarget | null) {

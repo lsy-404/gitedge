@@ -56,7 +56,10 @@ describe("Account settings using Platform Kit", () => {
     const save = vi
       .spyOn(api, "updateAccountProfile")
       .mockResolvedValue({ ...profile, identifier: "maintainer", displayName: "New display" });
-    vi.spyOn(api, "session").mockResolvedValue({ id: "user-1", identifier: "maintainer" });
+    vi.spyOn(api, "browserSession").mockResolvedValue({
+      user: { id: "user-1", identifier: "maintainer" },
+      view: { kind: "account" },
+    });
     const mounted = await mountAt("/_verify/account/profile", "/_verify/account/profile", () =>
       h(AccountProfilePanel, { section: "profile" })
     );
@@ -73,7 +76,10 @@ describe("Account settings using Platform Kit", () => {
   });
   it("persists the code wrapping preference through the actual switch", async () => {
     vi.spyOn(api, "accountProfile").mockResolvedValue(structuredClone(profile));
-    vi.spyOn(api, "session").mockResolvedValue({ id: "user-1", identifier: profile.identifier });
+    vi.spyOn(api, "browserSession").mockResolvedValue({
+      user: { id: "user-1", identifier: profile.identifier },
+      view: { kind: "account" },
+    });
     const save = vi
       .spyOn(api, "updateAccountProfile")
       .mockResolvedValue({ ...profile, preferences: { ...profile.preferences, lineWrap: true } });

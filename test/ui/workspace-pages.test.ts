@@ -72,7 +72,7 @@ async function settle(): Promise<void> {
 
 async function mount(path: string) {
   setSession(user);
-  vi.spyOn(api, "session").mockResolvedValue(user);
+  vi.spyOn(api, "browserSession").mockResolvedValue({ user, view: { kind: "account" } });
   vi.spyOn(api, "accountProfile").mockResolvedValue(structuredClone(profile));
   await router.push(path);
   await router.isReady();

@@ -19,7 +19,7 @@ function mockFocusLayout(element: HTMLElement, left: number) {
     width: 80,
     height: 32,
     toJSON: () => ({}),
-  } as DOMRect);
+  });
   vi.spyOn(element, "getClientRects").mockReturnValue([element.getBoundingClientRect()]);
 }
 
@@ -48,19 +48,17 @@ describe("Fluent motion focus indicator", () => {
   });
 
   it("keeps the native focus state and suppresses the moving ring for reduced motion", () => {
-    const listeners = new Set<(event: MediaQueryListEvent) => void>();
+    const listeners = new Set<() => void>();
     const media = {
       matches: true,
       media: "(prefers-reduced-motion: reduce)",
       onchange: null,
       addListener() {},
       removeListener() {},
-      addEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) =>
-        listeners.add(listener),
-      removeEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) =>
-        listeners.delete(listener),
+      addEventListener: (_type: string, listener: () => void) => listeners.add(listener),
+      removeEventListener: (_type: string, listener: () => void) => listeners.delete(listener),
       dispatchEvent: () => true,
-    } as MediaQueryList;
+    };
     vi.stubGlobal(
       "matchMedia",
       vi.fn(() => media)
@@ -77,7 +75,7 @@ describe("Fluent motion focus indicator", () => {
     expect(indicator?.classList.contains("fluent-focus-indicator--visible")).toBe(false);
 
     Object.defineProperty(media, "matches", { value: false, configurable: true });
-    listeners.forEach((listener) => listener({ matches: false } as MediaQueryListEvent));
+    listeners.forEach((listener) => listener());
     expect(indicator?.classList.contains("fluent-focus-indicator--visible")).toBe(true);
   });
 
@@ -140,20 +138,17 @@ describe("Fluent motion focus indicator", () => {
     menu.append(button);
     document.body.append(menu);
     let left = 10;
-    vi.spyOn(button, "getBoundingClientRect").mockImplementation(
-      () =>
-        ({
-          x: left,
-          y: 20,
-          left,
-          top: 20,
-          right: left + 80,
-          bottom: 52,
-          width: 80,
-          height: 32,
-          toJSON: () => ({}),
-        }) as DOMRect
-    );
+    vi.spyOn(button, "getBoundingClientRect").mockImplementation(() => ({
+      x: left,
+      y: 20,
+      left,
+      top: 20,
+      right: left + 80,
+      bottom: 52,
+      width: 80,
+      height: 32,
+      toJSON: () => ({}),
+    }));
     vi.spyOn(button, "getClientRects").mockReturnValue([button.getBoundingClientRect()]);
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab" }));
     button.focus();

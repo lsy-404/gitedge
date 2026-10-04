@@ -28,9 +28,14 @@ describe("browser session refresh", () => {
     expect(routeGuardRefresh).toBe(shellRefresh);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     resolveFetch(
-      new Response(JSON.stringify({ data: { id: "user-1", identifier: "example-user" } }), {
-        status: 200,
-      })
+      new Response(
+        JSON.stringify({
+          data: { user: { id: "user-1", identifier: "example-user" }, view: { kind: "account" } },
+        }),
+        {
+          status: 200,
+        }
+      )
     );
     await expect(Promise.all([shellRefresh, routeGuardRefresh])).resolves.toEqual([
       { id: "user-1", identifier: "example-user" },
@@ -55,9 +60,14 @@ describe("browser session refresh", () => {
     const pending = refreshSession();
     clearSession();
     resolveFetch(
-      new Response(JSON.stringify({ data: { id: "user-1", identifier: "example-user" } }), {
-        status: 200,
-      })
+      new Response(
+        JSON.stringify({
+          data: { user: { id: "user-1", identifier: "example-user" }, view: { kind: "account" } },
+        }),
+        {
+          status: 200,
+        }
+      )
     );
     await pending;
 
@@ -81,9 +91,14 @@ describe("browser session refresh", () => {
     const pending = refreshSession();
     setSession({ id: "current-user", identifier: "current-user" });
     resolveFetch(
-      new Response(JSON.stringify({ data: { id: "stale-user", identifier: "stale-user" } }), {
-        status: 200,
-      })
+      new Response(
+        JSON.stringify({
+          data: { user: { id: "stale-user", identifier: "stale-user" }, view: { kind: "account" } },
+        }),
+        {
+          status: 200,
+        }
+      )
     );
     await expect(pending).resolves.toMatchObject({ id: "current-user" });
     expect(sessionState.user?.id).toBe("current-user");
