@@ -69,6 +69,7 @@ import type {
   RepositorySettings,
   RepositorySettingsUpdate,
   RevisionActor,
+  CollaboratorRemoval,
   RevocationOutcome,
   Task,
   TaskCommit,
@@ -875,7 +876,7 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   deleteRepositoryCollaborator: (repositoryId: string, userId: string) =>
-    request<{ deleted: boolean; revocationIncomplete: boolean }>(
+    request<CollaboratorRemoval>(
       repositoryPath(repositoryId, `collaborators/${encodeURIComponent(userId)}`),
       { method: "DELETE" }
     ),

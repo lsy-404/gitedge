@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { api, type Organization, type OrganizationMember, errorMessage } from "../lib/api";
 import AppIcon from "../components/AppIcon.vue";
@@ -13,6 +13,7 @@ import StatusState from "../components/StatusState.vue";
 import TextField from "../components/TextField.vue";
 import "../styles/workspace.css";
 const route = useRoute();
+const router = useRouter();
 const { t } = useI18n();
 const roles = ["member", "owner"] as const;
 const slug = computed(() => String(route.params.slug));
@@ -21,6 +22,7 @@ const members = ref<OrganizationMember[]>([]);
 const loading = ref(true);
 const error = ref("");
 const formError = ref("");
+const memberError = ref("");
 const saving = ref(false);
 const removingIdentifier = ref("");
 const memberNotice = ref("");
@@ -64,22 +66,35 @@ async function addMember() {
   }
 }
 async function removeMember(member: OrganizationMember) {
+  if (removingIdentifier.value) return;
   const target = slug.value;
   removingIdentifier.value = member.identifier;
-  formError.value = "";
+  memberError.value = "";
   memberNotice.value = "";
   revocationIncomplete.value = false;
   try {
     revocationIncomplete.value = await api.removeOrganizationMember(target, member.identifier);
     memberNotice.value = t("organizationMemberRemoved");
     await load();
+    if (error.value && target === slug.value) await router.replace("/organizations");
   } catch (cause) {
-    formError.value = errorMessage(cause, t, {}, "organizationMemberRemoveError");
+    memberError.value = errorMessage(cause, t, {}, "organizationMemberRemoveError");
   } finally {
     removingIdentifier.value = "";
   }
 }
-watch(slug, load, { immediate: true });
+watch(
+  slug,
+  () => {
+    formError.value = "";
+    memberError.value = "";
+    memberNotice.value = "";
+    revocationIncomplete.value = false;
+    form.value = { identifier: "", role: "member" };
+    void load();
+  },
+  { immediate: true }
+);
 </script>
 <template>
   <section class="workspace-page organization-page">
@@ -162,6 +177,7 @@ watch(slug, load, { immediate: true });
               @confirm="removeMember(member)"
             />
           </div>
+          <NoticeBar v-if="memberError" intent="error">{{ memberError }}</NoticeBar>
           <NoticeBar v-if="memberNotice" intent="success">{{ memberNotice }}</NoticeBar>
           <NoticeBar v-if="revocationIncomplete" intent="warning">{{
             t("revocationIncomplete")

@@ -403,7 +403,7 @@ const migrationPaths = computed(
             item.state === "done" ? "✓" : item.state === "failed" ? "!" : "…"
           }}</span>
           {{ stepLabel(item.id) }}
-          <span class="sr-only">: {{ t(`deployWizard.state.${item.state}`) }}</span>
+          <span class="visually-hidden">: {{ t(`deployWizard.state.${item.state}`) }}</span>
         </li>
       </ol>
     </div>

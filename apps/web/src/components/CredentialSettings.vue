@@ -158,6 +158,7 @@ async function copyCredential(): Promise<void> {
 }
 
 async function revokeCredential(credential: GitCredential): Promise<void> {
+  if (revokingId.value) return;
   revokingId.value = credential.id;
   actionError.value = "";
   try {

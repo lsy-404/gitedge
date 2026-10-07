@@ -104,7 +104,7 @@ async function remove(item: RepositoryCollaborator): Promise<void> {
     const result = await api.deleteRepositoryCollaborator(props.repositoryId, item.id);
     collaborators.value = collaborators.value.filter((entry) => entry.id !== item.id);
     notice.value = t("collaboratorDeleted");
-    revocationIncomplete.value = result.revocationIncomplete;
+    revocationIncomplete.value = result.revocationIncomplete === true;
   } catch {
     saveError.value = t("collaboratorDeleteError");
   } finally {

@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { FluentButton } from "@platform-kit/fluent/vue";
 import type { ActionRun, ActionRunSummary, ActionWorkflowFile, GitRef } from "../lib/api";
-import { ApiError, api } from "../lib/api";
+import { ApiError, api, errorMessage } from "../lib/api";
 import ConfirmButton from "./ConfirmButton.vue";
 import SelectField from "./SelectField.vue";
 import StatusBadge from "./StatusBadge.vue";
@@ -27,6 +27,7 @@ const saving = ref(false);
 const cancelling = ref(false);
 const error = ref("");
 const runError = ref("");
+let pollOwnsError = false;
 const workflows = ref<ActionWorkflowFile[]>([]);
 const refs = ref<GitRef[]>([]);
 const workflowOid = ref("");
@@ -122,6 +123,7 @@ async function loadWorkflows(): Promise<void> {
   }
   workflowLoading.value = true;
   error.value = "";
+  pollOwnsError = false;
   try {
     const result = await api.actionWorkflows(props.repositoryId, selected, oid);
     if (epoch !== workflowEpoch || selected !== selectedRef.value) return;
@@ -150,6 +152,7 @@ async function loadRuns(): Promise<void> {
 async function load(): Promise<void> {
   loading.value = true;
   error.value = "";
+  pollOwnsError = false;
   try {
     await Promise.all([loadRefs(), loadRuns()]);
     await loadWorkflows();
@@ -165,9 +168,13 @@ async function refreshRuns(): Promise<void> {
   pollPending = true;
   try {
     await loadRuns();
-    error.value = "";
+    if (pollOwnsError) {
+      error.value = "";
+      pollOwnsError = false;
+    }
   } catch {
     error.value = t("actionsLoadError");
+    pollOwnsError = true;
   } finally {
     pollPending = false;
   }
@@ -196,9 +203,9 @@ async function startRun(): Promise<void> {
     if (run.id === selectedRunId.value) selectedRun.value = detail;
   } catch (cause) {
     runError.value =
-      cause instanceof ApiError && cause.status === 429
+      cause instanceof ApiError && cause.status === 429 && cause.code === "run_limit"
         ? t("actionsRunLimit")
-        : t("actionsRunError");
+        : errorMessage(cause, t, {}, "actionsRunError");
   } finally {
     saving.value = false;
   }
@@ -211,7 +218,10 @@ async function openRun(runId: string): Promise<void> {
     const detail = await api.actionRun(runId);
     if (runId === selectedRunId.value) selectedRun.value = detail;
   } catch {
-    if (runId === selectedRunId.value) error.value = t("actionsLoadError");
+    if (runId === selectedRunId.value) {
+      error.value = t("actionsLoadError");
+      pollOwnsError = false;
+    }
   }
 }
 

@@ -82,6 +82,7 @@ async function link(provider: SsoProviderSummary) {
 }
 
 async function unlink(identity: SsoIdentity) {
+  if (busyIdentityId.value || busyLogoutIdentityId.value) return;
   busyIdentityId.value = identity.id;
   actionError.value = "";
   notice.value = "";
@@ -101,6 +102,7 @@ async function unlink(identity: SsoIdentity) {
 }
 
 async function federatedLogout(identity: SsoIdentity) {
+  if (busyIdentityId.value || busyLogoutIdentityId.value) return;
   busyLogoutIdentityId.value = identity.id;
   actionError.value = "";
   try {

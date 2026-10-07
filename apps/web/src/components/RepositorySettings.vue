@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, ref, useTemplateRef, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import {
@@ -123,6 +123,7 @@ const dirty = computed(
     editableFields.some((field) => draft.value?.[field] !== settings.value?.[field])
 );
 const canManage = computed(() => settings.value?.canManage === true);
+const archiveConfirm = useTemplateRef<InstanceType<typeof ConfirmButton>>("archiveConfirm");
 const archivingNow = computed(
   () => draft.value?.archived === true && settings.value?.archived === false
 );
@@ -226,7 +227,7 @@ function setName(value: string) {
 }
 
 async function save() {
-  if (!draft.value || !settings.value || !canManage.value) return;
+  if (!draft.value || !settings.value || !canManage.value || !mergeMethodEnabled.value) return;
   saving.value = true;
   saveError.value = "";
   saved.value = false;
@@ -261,7 +262,10 @@ async function save() {
 }
 
 function submit() {
-  if (archivingNow.value) return;
+  if (archivingNow.value) {
+    void archiveConfirm.value?.arm();
+    return;
+  }
   void save();
 }
 
@@ -557,6 +561,7 @@ watch(() => props.repository.id, load, { immediate: true });
           <div class="settings-actions">
             <ConfirmButton
               v-if="archivingNow"
+              ref="archiveConfirm"
               tone="primary"
               :label="t('save')"
               :prompt="t('confirmArchiveRepository')"

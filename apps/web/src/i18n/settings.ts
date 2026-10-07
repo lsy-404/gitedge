@@ -98,7 +98,7 @@ export const settingsMessages = {
     confirmArchiveRepository: "保存后仓库将归档并变为只读。确定归档？",
     unsavedChangesConfirm: "有尚未保存的更改，确定离开并放弃吗？",
     revocationIncomplete:
-      "更改已保存，但部分 Agent 会话未能撤销。请在 Agent 设置中检查并手动撤销。",
+      "更改已保存，但部分 Agent 会话未能撤销，它们可能保持有效直至过期。请联系管理员处理。",
     removeMember: "移除成员",
     organizationMemberRemoved: "成员已移除。",
     organizationMemberRemoveError: "无法移除此成员。",
@@ -209,7 +209,7 @@ export const settingsMessages = {
       "Saving will archive the repository and make it read-only. Archive it?",
     unsavedChangesConfirm: "You have unsaved changes. Leave and discard them?",
     revocationIncomplete:
-      "Changes were saved, but some agent sessions could not be revoked. Check agent settings and revoke them manually.",
+      "Changes were saved, but some agent sessions could not be revoked and may stay active until they expire. Contact an administrator.",
     removeMember: "Remove member",
     organizationMemberRemoved: "Member removed.",
     organizationMemberRemoveError: "Could not remove this member.",

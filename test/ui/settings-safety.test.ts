@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { h, resolveComponent } from "vue";
+import { defineComponent, h, ref, resolveComponent } from "vue";
 import AccountProfilePanel from "../../apps/web/src/components/AccountProfilePanel.vue";
 import BrowserSessions from "../../apps/web/src/components/BrowserSessions.vue";
 import ConfirmButton from "../../apps/web/src/components/ConfirmButton.vue";
@@ -8,7 +8,13 @@ import RepositoryCollaborators from "../../apps/web/src/components/RepositoryCol
 import RepositorySettings from "../../apps/web/src/components/RepositorySettings.vue";
 import OrganizationView from "../../apps/web/src/pages/OrganizationView.vue";
 import { i18n } from "../../apps/web/src/i18n";
-import { api, type ActionRun } from "../../apps/web/src/lib/api";
+import {
+  ApiError,
+  api,
+  type ActionRun,
+  type ActionRunSummary,
+  type ActionWorkflowFile,
+} from "../../apps/web/src/lib/api";
 import { router } from "../../apps/web/src/router";
 import type { AccountProfile } from "../../packages/contracts/src/account";
 import type { RepositorySettings as Settings } from "../../packages/contracts/src/tasks";
@@ -17,7 +23,9 @@ import {
   control,
   fill,
   findButton,
+  isDisabled,
   mountAt,
+  submit,
   repository,
   settle,
   unmountAll,
@@ -33,6 +41,37 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
+
+function settingsFixture(): Settings {
+  return {
+    name: repository.name,
+    slug: repository.slug,
+    description: repository.description,
+    visibility: repository.visibility,
+    defaultBranch: repository.defaultBranch,
+    archived: false,
+    issuesEnabled: true,
+    pullsEnabled: true,
+    discussionsEnabled: true,
+    wikiEnabled: true,
+    tasksEnabled: true,
+    agentsEnabled: true,
+    deploymentsEnabled: true,
+    graphEnabled: true,
+    actionsEnabled: true,
+    actionsNetworkEnabled: false,
+    onlineEditingEnabled: true,
+    allowMergeCommit: true,
+    allowSquashMerge: true,
+    allowRebaseMerge: true,
+    deleteBranchOnMerge: false,
+    requiredApprovals: 0,
+    requirePassingChecks: false,
+    memoryVisibility: "members",
+    agentAssignmentPolicy: "owner",
+    canManage: true,
+  };
+}
 
 describe("inline confirmation", () => {
   it("makes no request until confirmed and restores the trigger on Escape", async () => {
@@ -91,34 +130,7 @@ describe("revocation warnings", () => {
   });
 
   it("warns when disabling agents could not revoke every session", async () => {
-    const settings: Settings = {
-      name: repository.name,
-      slug: repository.slug,
-      description: repository.description,
-      visibility: repository.visibility,
-      defaultBranch: repository.defaultBranch,
-      archived: false,
-      issuesEnabled: true,
-      pullsEnabled: true,
-      discussionsEnabled: true,
-      wikiEnabled: true,
-      tasksEnabled: true,
-      agentsEnabled: true,
-      deploymentsEnabled: true,
-      graphEnabled: true,
-      actionsEnabled: true,
-      actionsNetworkEnabled: false,
-      onlineEditingEnabled: true,
-      allowMergeCommit: true,
-      allowSquashMerge: true,
-      allowRebaseMerge: true,
-      deleteBranchOnMerge: false,
-      requiredApprovals: 0,
-      requirePassingChecks: false,
-      memoryVisibility: "members",
-      agentAssignmentPolicy: "owner",
-      canManage: true,
-    };
+    const settings = settingsFixture();
     vi.spyOn(api, "repositorySettings").mockResolvedValue(settings);
     vi.spyOn(api, "refs").mockResolvedValue([]);
     vi.spyOn(api, "updateRepositorySettings").mockResolvedValue({
@@ -241,10 +253,10 @@ describe("unsaved changes", () => {
 });
 
 describe("Actions run state", () => {
-  const workflow = {
+  const workflow: ActionWorkflowFile = {
     path: ".github/workflows/verify.yml",
     name: "Verify",
-    triggers: ["workflow_dispatch", "push"] as Array<"workflow_dispatch" | "push">,
+    triggers: ["workflow_dispatch", "push"],
     supported: true,
     jobs: [],
   };
@@ -265,7 +277,7 @@ describe("Actions run state", () => {
       jobs: [],
     };
   }
-  function summary(id: string): Awaited<ReturnType<typeof api.actionRuns>>[number] {
+  function summary(id: string): ActionRunSummary {
     const { jobs: _jobs, repositoryId: _repositoryId, ...rest } = detail(id, "running");
     return rest;
   }
@@ -315,5 +327,301 @@ describe("Actions run state", () => {
     expect(details.textContent).toContain("6 runs per hour");
     expect(mounted.root.textContent).toContain("Triggers: workflow_dispatch, push");
     expect(mounted.root.querySelector("[aria-label='Workflows']")).not.toBeNull();
+  });
+});
+
+describe("confirmation hardening", () => {
+  it("keeps focus on the trigger after a confirmation", async () => {
+    const mounted = await mountAt("/_verify/confirm-focus", "/_verify/confirm-focus", () =>
+      h(ConfirmButton, { label: "Remove", prompt: "Sure?" })
+    );
+    await confirmClick(findButton(mounted.root, "Remove"));
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement?.textContent).toContain("Remove");
+  });
+
+  it("disarms sibling prompts and ignores Confirm while another action runs", async () => {
+    const blocked = ref(false);
+    const confirmed: string[] = [];
+    const Host = defineComponent({
+      setup: () => () =>
+        h(
+          "div",
+          ["a", "b"].map((name) =>
+            h(ConfirmButton, {
+              label: `Remove ${name}`,
+              prompt: "Sure?",
+              disabled: blocked.value,
+              onConfirm: () => {
+                confirmed.push(name);
+                blocked.value = true;
+              },
+            })
+          )
+        ),
+    });
+    const mounted = await mountAt("/_verify/confirm-busy", "/_verify/confirm-busy", () => h(Host));
+    findButton(mounted.root, "Remove a").click();
+    findButton(mounted.root, "Remove b").click();
+    await settle();
+    const groups = mounted.root.querySelectorAll<HTMLElement>("[role='group']");
+    expect(groups).toHaveLength(2);
+
+    groups[0]?.querySelector<HTMLElement>(".fluent-button")?.click();
+    await settle();
+    expect(confirmed).toEqual(["a"]);
+    expect(mounted.root.querySelector("[role='group']")).toBeNull();
+    expect(isDisabled(findButton(mounted.root, "Remove b"))).toBe(true);
+  });
+});
+
+describe("repository settings safeguards", () => {
+  async function mountSettings(path: string) {
+    const settings = settingsFixture();
+    vi.spyOn(api, "repositorySettings").mockResolvedValue(settings);
+    vi.spyOn(api, "refs").mockResolvedValue([]);
+    const update = vi.spyOn(api, "updateRepositorySettings").mockResolvedValue({
+      ...settings,
+      archived: true,
+    });
+    const mounted = await mountAt(
+      path,
+      path,
+      () => h(resolveComponent("RouterView")),
+      () => h(RepositorySettings, { repository })
+    );
+    return { mounted, update };
+  }
+
+  it("needs a second confirmation before saving an archive change", async () => {
+    const { mounted, update } = await mountSettings("/_verify/archive-confirm");
+    control(mounted.root, ".settings-nav button:last-child").click();
+    await settle();
+    control(mounted.root, "[role='switch']").click();
+    await settle();
+
+    findButton(mounted.root, "Save").click();
+    await settle();
+    expect(update).not.toHaveBeenCalled();
+    control(mounted.root, "[role='group'] .fluent-button").click();
+    await settle();
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it("arms the archive confirmation when the form is submitted with Enter", async () => {
+    const { mounted, update } = await mountSettings("/_verify/archive-enter");
+    control(mounted.root, ".settings-nav button:last-child").click();
+    await settle();
+    control(mounted.root, "[role='switch']").click();
+    await settle();
+
+    submit(control(mounted.root, "form"));
+    await settle();
+    expect(update).not.toHaveBeenCalled();
+    expect(mounted.root.querySelector("[role='group']")).not.toBeNull();
+  });
+
+  it("asks before leaving with unsaved settings", async () => {
+    const { mounted } = await mountSettings("/_verify/settings-dirty");
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    fill(control(mounted.root, "textarea"), "changed");
+    await settle();
+    await router.push("/dashboard").catch(() => undefined);
+    await settle();
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(router.currentRoute.value.path).toBe("/_verify/settings-dirty");
+  });
+});
+
+describe("account form sections", () => {
+  it("switches between profile and preferences without a prompt", async () => {
+    const profile: AccountProfile = {
+      identifier: "workspace",
+      displayName: "Maintainer",
+      bio: "",
+      location: "",
+      website: "",
+      preferences: {
+        theme: "light",
+        locale: "en",
+        density: "comfortable",
+        tabSize: 2,
+        lineWrap: false,
+      },
+    };
+    vi.spyOn(api, "accountProfile").mockResolvedValue(profile);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    await mountAt(
+      "/_verify/account-sections",
+      "/_verify/account-sections",
+      () => h(resolveComponent("RouterView")),
+      () => h(AccountProfilePanel, { section: "profile" })
+    );
+    fill(control(document.body, "input"), "renamed");
+    await settle();
+    await router.push({ path: "/_verify/account-sections", query: { section: "preferences" } });
+    await settle();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(router.currentRoute.value.query.section).toBe("preferences");
+  });
+});
+
+describe("OrganizationView navigation", () => {
+  it("reloads when the organization slug changes and clears stale notices", async () => {
+    const organization = vi.spyOn(api, "organization").mockImplementation(async (slug) => ({
+      id: `org-${slug}`,
+      slug,
+      displayName: slug.toUpperCase(),
+      description: "",
+      role: "owner",
+    }));
+    vi.spyOn(api, "organizationMembers").mockResolvedValue([
+      { identifier: "alice", role: "owner" },
+      { identifier: "bob", role: "member" },
+    ]);
+    vi.spyOn(api, "removeOrganizationMember").mockResolvedValue(true);
+    const mounted = await mountAt("/organizations/:slug", "/organizations/a", () =>
+      h(OrganizationView)
+    );
+    const bobRow = Array.from(
+      mounted.root.querySelectorAll<HTMLElement>(".organization-member-row")
+    ).find((row) => row.textContent?.includes("bob"));
+    await confirmClick(findButton(bobRow ?? mounted.root, "Remove member"));
+    expect(mounted.root.textContent).toContain("Member removed");
+
+    await router.push("/organizations/b");
+    await settle();
+    expect(organization).toHaveBeenLastCalledWith("b");
+    expect(mounted.root.textContent).toContain("B");
+    expect(mounted.root.textContent).not.toContain("Member removed");
+    expect(mounted.root.textContent).not.toContain("some agent sessions could not be revoked");
+  });
+});
+
+describe("Actions polling", () => {
+  const workflow: ActionWorkflowFile = {
+    path: ".github/workflows/verify.yml",
+    name: "Verify",
+    triggers: ["workflow_dispatch"],
+    supported: true,
+    jobs: [],
+  };
+  const running = (status: ActionRun["status"] = "running"): ActionRun => ({
+    id: "run-a",
+    repositoryId: "repo-1",
+    commitOid: "a".repeat(40),
+    workflowPath: workflow.path,
+    workflowName: "Run a",
+    ref: "refs/heads/main",
+    createdBy: "user-1",
+    createdAt: 10,
+    startedAt: 11,
+    status,
+    conclusion: null,
+    outputTruncated: false,
+    jobs: [],
+  });
+  function summaryOf(run: ActionRun): ActionRunSummary {
+    const { jobs: _jobs, repositoryId: _repositoryId, ...rest } = run;
+    return rest;
+  }
+
+  async function mountPolling(path: string) {
+    let tick: () => void = () => undefined;
+    vi.spyOn(window, "setInterval").mockImplementation((handler) => {
+      tick = () => (typeof handler === "function" ? handler() : undefined);
+      return 1;
+    });
+    vi.spyOn(api, "refs").mockResolvedValue([{ name: "refs/heads/main", oid: "a".repeat(40) }]);
+    vi.spyOn(api, "actionRun").mockResolvedValue(running());
+    const mounted = await mountAt(path, path, () =>
+      h(RepositoryActions, { repositoryId: "repo-1", defaultBranch: "main", canWrite: true })
+    );
+    return { mounted, tick: () => tick() };
+  }
+
+  it("clears a poll failure after the next successful poll", async () => {
+    vi.spyOn(api, "actionWorkflows").mockResolvedValue({
+      oid: "a".repeat(40),
+      workflows: [workflow],
+    });
+    const runs = vi
+      .spyOn(api, "actionRuns")
+      .mockResolvedValueOnce([summaryOf(running())])
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValue([summaryOf(running())]);
+    const { mounted, tick } = await mountPolling("/_verify/poll-recover");
+    tick();
+    await settle();
+    expect(mounted.root.querySelector(".actions-load-error")).not.toBeNull();
+    tick();
+    await settle();
+    expect(runs).toHaveBeenCalledTimes(3);
+    expect(mounted.root.querySelector(".actions-load-error")).toBeNull();
+  });
+
+  it("keeps a workflow loading error when a later poll succeeds", async () => {
+    vi.spyOn(api, "actionWorkflows").mockRejectedValue(new Error("offline"));
+    vi.spyOn(api, "actionRuns").mockResolvedValue([summaryOf(running())]);
+    const { mounted, tick } = await mountPolling("/_verify/poll-keeps-error");
+    expect(mounted.root.querySelector(".actions-load-error")).not.toBeNull();
+    tick();
+    await settle();
+    expect(mounted.root.querySelector(".actions-load-error")).not.toBeNull();
+  });
+
+  it("does not poll while the tab is hidden", async () => {
+    vi.spyOn(api, "actionWorkflows").mockResolvedValue({
+      oid: "a".repeat(40),
+      workflows: [workflow],
+    });
+    const runs = vi.spyOn(api, "actionRuns").mockResolvedValue([summaryOf(running())]);
+    const { tick } = await mountPolling("/_verify/poll-hidden");
+    const before = runs.mock.calls.length;
+    vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    tick();
+    await settle();
+    expect(runs).toHaveBeenCalledTimes(before);
+  });
+
+  it("sends a single cancel request while one is in flight", async () => {
+    vi.spyOn(api, "actionWorkflows").mockResolvedValue({
+      oid: "a".repeat(40),
+      workflows: [workflow],
+    });
+    vi.spyOn(api, "actionRuns").mockResolvedValue([summaryOf(running())]);
+    const cancel = vi
+      .spyOn(api, "cancelActionRun")
+      .mockImplementation(() => new Promise<ActionRun>(() => undefined));
+    const { mounted } = await mountPolling("/_verify/cancel-busy");
+    mounted.root.querySelector<HTMLElement>(".actions-run-button")?.click();
+    await settle();
+    await confirmClick(findButton(mounted.root, "Cancel run"));
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(mounted.root.querySelector("[role='group']")).toBeNull();
+    findButton(mounted.root, "Cancelling").click();
+    await settle();
+    expect(mounted.root.querySelector("[role='group']")).toBeNull();
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("explains the run quota only for the run limit code", async () => {
+    vi.spyOn(api, "actionWorkflows").mockResolvedValue({
+      oid: "a".repeat(40),
+      workflows: [workflow],
+    });
+    vi.spyOn(api, "actionRuns").mockResolvedValue([]);
+    const start = vi
+      .spyOn(api, "startActionRun")
+      .mockRejectedValueOnce(new ApiError(429, "Rate limit exceeded"))
+      .mockRejectedValueOnce(new ApiError(429, "Quota", "run_limit"));
+    const { mounted } = await mountPolling("/_verify/run-limit");
+    findButton(mounted.root, "Run workflow").click();
+    await settle();
+    expect(mounted.root.querySelector(".actions-error")?.textContent).not.toContain("6 runs");
+    findButton(mounted.root, "Run workflow").click();
+    await settle();
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(mounted.root.querySelector(".actions-error")?.textContent).toContain("6 runs per hour");
   });
 });

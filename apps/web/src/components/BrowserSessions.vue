@@ -32,6 +32,7 @@ async function load(): Promise<void> {
 }
 
 async function signOut(session: BrowserSession): Promise<void> {
+  if (revokingId.value) return;
   revokingId.value = session.id;
   actionError.value = "";
   try {

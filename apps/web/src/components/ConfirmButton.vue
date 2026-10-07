@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref, useTemplateRef } from "vue";
+import { nextTick, ref, useId, useTemplateRef, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 const props = withDefaults(
@@ -26,6 +26,7 @@ const emit = defineEmits<{ confirm: [] }>();
 
 const { t } = useI18n();
 const armed = ref(false);
+const promptId = useId();
 const root = useTemplateRef<HTMLElement>("root");
 
 async function focusFirstButton(): Promise<void> {
@@ -44,10 +45,20 @@ async function cancel(): Promise<void> {
   await focusFirstButton();
 }
 
-function confirm(): void {
+async function confirm(): Promise<void> {
+  if (props.disabled || props.busy) return;
   armed.value = false;
   emit("confirm");
+  await focusFirstButton();
 }
+
+watch(
+  () => props.disabled || props.busy,
+  (blocked) => {
+    if (blocked) armed.value = false;
+  }
+);
+defineExpose({ arm });
 </script>
 
 <template>
@@ -71,11 +82,18 @@ function confirm(): void {
       :aria-label="prompt"
       @keydown.esc.stop="cancel"
     >
-      <FluentButton type="button" :tone="tone" :size="size" @click="confirm">
+      <FluentButton
+        type="button"
+        :tone="tone"
+        :size="size"
+        :disabled="disabled || busy"
+        :aria-describedby="promptId"
+        @click="confirm"
+      >
         {{ confirmLabel ?? t("confirmAction") }}
       </FluentButton>
       <FluentButton type="button" :size="size" @click="cancel">{{ t("cancel") }}</FluentButton>
-      <span class="muted" role="status">{{ prompt }}</span>
+      <span :id="promptId" class="muted">{{ prompt }}</span>
     </span>
   </span>
 </template>

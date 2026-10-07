@@ -339,10 +339,55 @@ describe("Cloudflare deployment wizard", () => {
     submitForm(mounted.root, ".deploy-confirm-form");
     await settle();
 
-    const states = Array.from(mounted.root.querySelectorAll(".deploy-progress .sr-only")).map(
-      (item) => item.textContent
-    );
+    const states = Array.from(
+      mounted.root.querySelectorAll(".deploy-progress .visually-hidden")
+    ).map((item) => item.textContent);
     expect(states).toEqual([": Done", ": Failed"]);
+    mounted.unmount();
+  });
+
+  it("marks the running deployment step with aria-current", async () => {
+    i18n.global.locale.value = "en";
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const action = new URL(String(input), "https://gitedge.test").pathname.split("/").at(-1);
+      if (action === "plan") return new Response(JSON.stringify({ data: plan }), { status: 200 });
+      if (action === "session")
+        return new Response(
+          JSON.stringify({
+            data: { accounts: [{ id: "account-1", name: "Account" }], nonce: "nonce" },
+          }),
+          { status: 200 }
+        );
+      if (action === "resources")
+        return new Response(
+          JSON.stringify({ data: { resources: [{ id: "database", exists: false }] } }),
+          { status: 200 }
+        );
+      if (action === "migrate") return new Promise<Response>(() => undefined);
+      return new Response(JSON.stringify({ data: {} }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const mounted = mountWizard();
+
+    submitForm(mounted.root, ".deploy-read-form");
+    await settle();
+    const tokenInput = mounted.root.querySelector<HTMLElement>("#deploy-token");
+    if (!tokenInput) throw new Error("Token field was not rendered");
+    Reflect.set(tokenInput, "value", "temporary-test-token");
+    tokenInput.dispatchEvent(new Event("input", { bubbles: true }));
+    submitForm(mounted.root, ".deploy-token-form");
+    await settle();
+    const confirm = mounted.root.querySelector<HTMLElement>("#deploy-confirm");
+    if (!confirm) throw new Error("Deployment confirmation was not rendered");
+    Reflect.set(confirm, "checked", true);
+    confirm.dispatchEvent(new Event("change", { bubbles: true }));
+    await settle();
+    submitForm(mounted.root, ".deploy-confirm-form");
+    await settle();
+
+    const running = mounted.root.querySelectorAll(".deploy-progress li[aria-current='step']");
+    expect(running).toHaveLength(1);
+    expect(running[0]?.getAttribute("data-state")).toBe("running");
     mounted.unmount();
   });
 });

@@ -127,6 +127,10 @@ export interface RevocationOutcome {
   revocationIncomplete?: boolean;
 }
 
+export interface CollaboratorRemoval extends RevocationOutcome {
+  deleted: boolean;
+}
+
 export interface RepositorySettings {
   /** Repository display name and URL slug share one canonical value. */
   name: string;

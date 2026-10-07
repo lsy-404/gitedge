@@ -64,6 +64,7 @@ async function finish() {
   }
 }
 async function revoke(key: SigningKey) {
+  if (busy.value) return;
   busy.value = true;
   error.value = "";
   try {
