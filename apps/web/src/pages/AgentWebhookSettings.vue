@@ -9,8 +9,11 @@ import type {
   AgentWebhookSettings,
 } from "../../../../packages/contracts/src/agents";
 import AppIcon from "../components/AppIcon.vue";
+import NoticeBar from "../components/NoticeBar.vue";
+import SettingsSidebar from "../components/SettingsSidebar.vue";
 import StatusState from "../components/StatusState.vue";
 import TextField from "../components/TextField.vue";
+import "../styles/settings.css";
 
 const { t, d } = useI18n();
 const route = useRoute();
@@ -127,24 +130,31 @@ watch(agentId, () => void load(), { immediate: true });
 </script>
 
 <template>
-  <section class="workspace-page settings-page">
-    <section class="settings-content">
-      <RouterLink to="/settings/agents"><AppIcon name="arrowLeft" />{{ t("agents") }}</RouterLink>
-      <h1>{{ t("agentWebhook") }}</h1>
-      <p class="muted">{{ t("agentWebhookDescription") }}</p>
-      <StatusState
-        v-if="loading || loadError"
-        :loading="loading"
-        :error="loadError"
-        :empty="false"
-        @retry="load"
-      />
+  <section class="settings-page">
+    <SettingsSidebar active="agents" />
+    <div class="settings-content">
+      <RouterLink class="settings-back" to="/settings/agents"
+        ><AppIcon name="arrowLeft" />{{ t("agents") }}</RouterLink
+      >
+      <header class="settings-header">
+        <div>
+          <h2>{{ t("agentWebhook") }}</h2>
+          <p>{{ t("agentWebhookDescription") }}</p>
+        </div>
+      </header>
+      <div v-if="loading || loadError" class="box">
+        <StatusState :loading="loading" :error="loadError" :empty="false" @retry="load" />
+      </div>
       <template v-else>
-        <form class="settings-card form-stack" @submit.prevent="save()">
-          <TextField v-model="settings.url" type="url" required autocomplete="url">{{
-            t("agentWebhookUrl")
-          }}</TextField>
-          <p class="muted">{{ t("agentWebhookHttpsOnly") }}</p>
+        <form class="box box-form form-stack" @submit.prevent="save()">
+          <TextField
+            v-model="settings.url"
+            type="url"
+            required
+            autocomplete="url"
+            :hint="t('agentWebhookHttpsOnly')"
+            >{{ t("agentWebhookUrl") }}</TextField
+          >
           <fieldset class="event-list">
             <legend>{{ t("agentWebhookEvents") }}</legend>
             <label v-for="event in eventOptions" :key="event" class="event-choice">
@@ -156,100 +166,91 @@ watch(agentId, () => void load(), { immediate: true });
             </label>
           </fieldset>
           <FluentCheckbox v-model="settings.enabled">{{ t("agentWebhookEnabled") }}</FluentCheckbox>
+          <div v-if="secret" class="secret-card">
+            <strong>{{ t("agentWebhookSecret") }}</strong
+            ><code>{{ secret }}</code>
+          </div>
+          <NoticeBar v-if="notice" intent="success">{{ notice }}</NoticeBar>
+          <NoticeBar v-if="error" intent="error">{{ error }}</NoticeBar>
           <div class="form-actions">
-            <FluentButton type="submit" tone="primary" :disabled="saving">{{
-              t("agentWebhookSave")
-            }}</FluentButton>
-            <FluentButton type="button" :disabled="saving" @click="save(true)">{{
-              t("agentWebhookRotate")
-            }}</FluentButton>
             <FluentButton
               type="button"
               :disabled="saving || testing || !settings.enabled"
               @click="test"
               >{{ t("agentWebhookTest") }}</FluentButton
             >
+            <FluentButton type="button" :disabled="saving" @click="save(true)">{{
+              t("agentWebhookRotate")
+            }}</FluentButton>
+            <FluentButton type="submit" tone="primary" :disabled="saving">{{
+              t("agentWebhookSave")
+            }}</FluentButton>
           </div>
-          <div v-if="secret" class="secret-card">
-            <strong>{{ t("agentWebhookSecret") }}</strong
-            ><code>{{ secret }}</code>
-          </div>
-          <p v-if="notice" role="status" class="muted">{{ notice }}</p>
-          <p v-if="error" role="alert" class="workspace-form-error">{{ error }}</p>
         </form>
-        <section class="settings-section">
-          <div class="agent-section-heading">
-            <h2>{{ t("agentWebhookDeliveries") }}</h2>
-            <small>{{ t("agentWebhookTruncated") }}</small>
-          </div>
-          <div class="settings-card">
-            <div
-              v-for="delivery in deliveries"
-              :key="delivery.id"
-              class="settings-card-row delivery-row"
-            >
-              <div class="grow">
-                <strong>{{ eventLabel(delivery.event) }}</strong>
-                <div class="row-meta">
-                  <code>{{ delivery.id }}</code
-                  ><span>{{ delivery.status }}</span
-                  ><span v-if="delivery.responseStatus">HTTP {{ delivery.responseStatus }}</span
-                  ><span v-if="delivery.errorCode">{{ delivery.errorCode }}</span
-                  ><span>{{ d(delivery.createdAt, "long") }}</span>
-                </div>
+        <section class="box" aria-labelledby="webhook-deliveries-title">
+          <header class="box-header">
+            <h3 id="webhook-deliveries-title">{{ t("agentWebhookDeliveries") }}</h3>
+            <small class="box-header-end muted">{{ t("agentWebhookTruncated") }}</small>
+          </header>
+          <div v-for="delivery in deliveries" :key="delivery.id" class="box-row settings-item">
+            <div class="settings-item-copy">
+              <strong>{{ eventLabel(delivery.event) }}</strong>
+              <div class="row-meta">
+                <code>{{ delivery.id }}</code
+                ><span>{{ delivery.status }}</span
+                ><span v-if="delivery.responseStatus">HTTP {{ delivery.responseStatus }}</span
+                ><span v-if="delivery.errorCode">{{ delivery.errorCode }}</span
+                ><span>{{ d(delivery.createdAt, "long") }}</span>
               </div>
-              <button
-                v-if="delivery.status === 'failed'"
-                class="btn btn-sm"
-                type="button"
-                :disabled="retryingId !== null"
-                @click="retry(delivery)"
-              >
-                {{ t("agentWebhookRetry") }}
-              </button>
             </div>
-            <div v-if="!deliveries.length" class="settings-empty-state">
-              {{ t("agentWebhookEmpty") }}
-            </div>
+            <button
+              v-if="delivery.status === 'failed'"
+              class="btn btn-sm"
+              type="button"
+              :disabled="retryingId !== null"
+              @click="retry(delivery)"
+            >
+              {{ t("agentWebhookRetry") }}
+            </button>
           </div>
+          <p v-if="!deliveries.length" class="settings-empty">{{ t("agentWebhookEmpty") }}</p>
         </section>
       </template>
-    </section>
+    </div>
   </section>
 </template>
 
 <style scoped>
-.settings-content {
-  width: min(960px, 100%);
-  margin-inline: auto;
-}
 .event-list {
   display: grid;
   gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-3);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
-  padding: var(--space-3);
 }
 .event-list legend {
   padding-inline: var(--space-1);
+  font-weight: var(--font-weight-semibold);
 }
 .event-choice {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
 }
 .event-choice code {
   margin-left: auto;
   color: var(--fg-muted);
-}
-.delivery-row {
-  align-items: center;
+  font-size: var(--font-size-meta);
 }
 .secret-card {
   display: grid;
   gap: var(--space-2);
   padding: var(--space-3);
   background: var(--bg-subtle);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
 }
 .secret-card code {

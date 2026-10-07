@@ -17,6 +17,7 @@ import {
 } from "@platform-kit/fluent/vue";
 import ConfirmButton from "./ConfirmButton.vue";
 import NoticeBar from "./NoticeBar.vue";
+import StatusBadge from "./StatusBadge.vue";
 import StatusState from "./StatusState.vue";
 
 const props = defineProps<{ repositoryId: string; canManage: boolean }>();
@@ -161,17 +162,23 @@ watch(
 </script>
 
 <template>
-  <section class="branch-protection settings-card">
-    <h3>{{ t("repoSettingsBranchRules") }}</h3>
-    <p class="controls-intro">{{ t("branchRulesIntro") }}</p>
+  <section class="box" aria-labelledby="branch-rules-title">
+    <header class="box-header">
+      <h3 id="branch-rules-title">{{ t("repoSettingsBranchRules") }}</h3>
+    </header>
+    <p class="box-row field-hint">{{ t("branchRulesIntro") }}</p>
     <StatusState v-if="loading || error" :loading="loading" :error="error" @retry="load" />
     <template v-else>
-      <p v-if="!rules.length" class="controls-empty">{{ t("branchRuleEmpty") }}</p>
-      <ul v-else class="control-list">
-        <li v-for="rule in rules" :key="rule.id" class="control-list-item">
-          <div class="control-list-copy">
-            <strong>{{ rule.pattern }}</strong>
-            <span>{{ rule.enabled ? t("branchRuleEnabled") : t("branchRuleDisabled") }}</span>
+      <p v-if="!rules.length" class="settings-empty">{{ t("branchRuleEmpty") }}</p>
+      <ul v-else class="settings-list">
+        <li v-for="rule in rules" :key="rule.id" class="box-row settings-item">
+          <div class="settings-item-copy">
+            <div class="row-title">
+              {{ rule.pattern }}
+              <StatusBadge :tone="rule.enabled ? 'success' : 'neutral'">{{
+                rule.enabled ? t("branchRuleEnabled") : t("branchRuleDisabled")
+              }}</StatusBadge>
+            </div>
             <small v-if="rule.locked">{{ t("branchRuleLocked") }}</small>
             <small v-if="rule.requiredApprovals"
               >{{ t("branchRuleApprovals") }}: {{ rule.requiredApprovals }}</small
@@ -197,7 +204,7 @@ watch(
               }}
             </small>
           </div>
-          <div class="control-list-actions">
+          <div class="settings-actions">
             <FluentButton
               type="button"
               :disabled="!canManage || saving || Boolean(deletingId)"
@@ -215,7 +222,7 @@ watch(
         </li>
       </ul>
 
-      <div class="branch-rule-form" @keydown.enter="handleEnter">
+      <div class="box-form form-stack branch-rule-form" @keydown.enter="handleEnter">
         <h4>{{ t(editingId ? "branchRuleEdit" : "branchRuleCreate") }}</h4>
         <FluentField
           v-model="pattern"
@@ -249,11 +256,11 @@ watch(
             :disabled="!canManage || saving"
           />
         </div>
-        <p class="controls-hint">{{ t("branchRuleLockedHint") }}</p>
-        <p v-if="requireLinearHistory" class="controls-hint">
+        <p class="field-hint">{{ t("branchRuleLockedHint") }}</p>
+        <p v-if="requireLinearHistory" class="field-hint">
           {{ t("branchRuleLinearHint") }}
         </p>
-        <p v-if="requireSignedCommits" class="controls-hint">
+        <p v-if="requireSignedCommits" class="field-hint">
           {{ t("branchRuleSignedHint") }}
         </p>
         <FluentSelect
@@ -263,7 +270,7 @@ watch(
           :disabled="!canManage || saving"
           @update:model-value="requiredApprovals = Number($event)"
         />
-        <p class="controls-hint">{{ t("branchRuleRequiredChecksHint") }}</p>
+        <p class="field-hint">{{ t("branchRuleRequiredChecksHint") }}</p>
         <FluentTextArea
           v-model="requiredStatusChecksText"
           :label="t('branchRuleRequiredChecks')"
@@ -272,7 +279,7 @@ watch(
         <NoticeBar v-if="saveError" intent="error">{{ saveError }}</NoticeBar>
         <NoticeBar v-if="deleteError" intent="error">{{ deleteError }}</NoticeBar>
         <NoticeBar v-if="notice" intent="success">{{ notice }}</NoticeBar>
-        <div class="control-form-actions">
+        <div class="form-actions">
           <FluentButton
             type="button"
             tone="primary"
@@ -293,64 +300,11 @@ watch(
 </template>
 
 <style scoped>
-.controls-intro,
-.controls-empty,
-.controls-hint {
-  margin: 14px 20px;
-  color: var(--fg-muted);
-  font-size: 13px;
+.branch-rule-form {
+  border-top: 1px solid var(--border-muted);
 }
-.control-list {
-  display: grid;
-  gap: 0;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.control-list-item {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 16px 20px;
-  border-top: 1px solid var(--border-default);
-}
-.control-list-copy,
-.control-list-actions,
-.branch-rule-form,
 .control-fields {
   display: grid;
-  gap: 10px;
-}
-.control-list-copy small,
-.control-list-copy span {
-  color: var(--fg-muted);
-  font-size: 12px;
-}
-.control-list-actions {
-  align-content: start;
-}
-.branch-rule-form {
-  padding: 20px;
-  border-top: 1px solid var(--border-default);
-}
-.branch-rule-form h4 {
-  margin: 0;
-}
-.controls-hint {
-  margin: 0;
-}
-.control-form-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-@media (max-width: 760px) {
-  .control-list-item {
-    flex-direction: column;
-  }
-  .control-list-actions {
-    display: flex;
-    flex-wrap: wrap;
-  }
+  gap: var(--space-3);
 }
 </style>

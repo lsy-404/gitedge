@@ -9,6 +9,7 @@ import type {
 import { api, errorMessage } from "../lib/api";
 import ConfirmButton from "./ConfirmButton.vue";
 import NoticeBar from "./NoticeBar.vue";
+import StatusBadge from "./StatusBadge.vue";
 import StatusState from "./StatusState.vue";
 const { t, d } = useI18n();
 const keys = ref<SigningKey[]>([]),
@@ -90,74 +91,107 @@ function download() {
 onMounted(load);
 </script>
 <template>
-  <section class="preference-panel">
-    <h2 class="settings-page-title">{{ t("settingsSigning") }}</h2>
-    <p class="muted">{{ t("settingsSigningDescription") }}</p>
-    <NoticeBar v-if="error" intent="error">{{ error }}</NoticeBar
-    ><StatusState v-if="loading" :loading="true" />
-    <div v-else class="credential-list">
-      <div v-if="!keys.length" class="settings-surface muted">{{ t("settingsNoKeys") }}</div>
-      <article v-for="key in keys" :key="key.id" class="settings-surface credential-row">
-        <div>
-          <h3>{{ key.title }}</h3>
-          <p>
-            <code>{{ key.fingerprint }}</code>
-          </p>
-          <p class="muted">
-            {{ t(key.revokedAt ? "settingsRevoked" : "settingsRegistered") }} ·
-            {{ d(key.createdAt, "short") }}
-          </p>
-        </div>
-        <ConfirmButton
-          v-if="!key.revokedAt"
-          :label="t('settingsRevoke')"
-          :prompt="t('confirmRevokeSigningKey')"
-          :disabled="busy"
-          @confirm="revoke(key)"
+  <section class="settings-panel">
+    <header class="settings-header">
+      <div>
+        <h2>{{ t("settingsSigning") }}</h2>
+        <p>{{ t("settingsSigningDescription") }}</p>
+      </div>
+      <FluentButton v-if="!showForm" tone="primary" @click="showForm = true">{{
+        t("settingsNewKey")
+      }}</FluentButton>
+    </header>
+    <NoticeBar v-if="error" intent="error">{{ error }}</NoticeBar>
+    <div v-if="loading" class="box"><StatusState :loading="true" /></div>
+    <section v-else class="box" aria-labelledby="signing-key-list-title">
+      <header class="box-header">
+        <h3 id="signing-key-list-title">{{ t("settingsKeyList") }}</h3>
+        <StatusBadge>{{ keys.length }}</StatusBadge>
+      </header>
+      <p v-if="!keys.length" class="settings-empty">{{ t("settingsNoKeys") }}</p>
+      <ul v-else class="settings-list">
+        <li v-for="key in keys" :key="key.id" class="box-row settings-item">
+          <div class="settings-item-copy">
+            <div class="row-title">
+              {{ key.title }}
+              <StatusBadge :tone="key.revokedAt ? 'neutral' : 'success'">{{
+                t(key.revokedAt ? "settingsRevoked" : "settingsRegistered")
+              }}</StatusBadge>
+            </div>
+            <div class="row-meta">
+              <code>{{ key.fingerprint }}</code>
+              <span>{{ d(key.createdAt, "short") }}</span>
+            </div>
+          </div>
+          <ConfirmButton
+            v-if="!key.revokedAt"
+            :label="t('settingsRevoke')"
+            :prompt="t('confirmRevokeSigningKey')"
+            :disabled="busy"
+            @confirm="revoke(key)"
+          />
+        </li>
+      </ul>
+    </section>
+    <form
+      v-if="showForm && !challenge"
+      class="box"
+      aria-labelledby="signing-key-new-title"
+      @submit.prevent="start"
+    >
+      <header class="box-header">
+        <h3 id="signing-key-new-title">{{ t("settingsNewKey") }}</h3>
+      </header>
+      <div class="box-form form-stack">
+        <FluentField v-model="title" :label="t('settingsKeyTitle')" maxlength="80" required />
+        <FluentTextArea
+          v-model="publicKey"
+          :label="t('settingsPublicKey')"
+          rows="8"
+          maxlength="32768"
+          required
+          spellcheck="false"
+          placeholder="-----BEGIN PGP PUBLIC KEY BLOCK-----"
         />
-      </article>
-    </div>
-    <FluentButton v-if="!showForm" tone="primary" @click="showForm = true">{{
-      t("settingsNewKey")
-    }}</FluentButton>
-    <form v-else-if="!challenge" class="settings-surface form-stack" @submit.prevent="start">
-      <FluentField v-model="title" :label="t('settingsKeyTitle')" maxlength="80" required />
-      <FluentTextArea
-        v-model="publicKey"
-        :label="t('settingsPublicKey')"
-        rows="8"
-        maxlength="32768"
-        required
-        spellcheck="false"
-        placeholder="-----BEGIN PGP PUBLIC KEY BLOCK-----"
-      />
-      <div class="settings-actions">
-        <FluentButton type="submit" tone="primary" :busy="busy">{{
-          t("settingsCreateChallenge")
-        }}</FluentButton
-        ><FluentButton :disabled="busy" @click="showForm = false">{{ t("cancel") }}</FluentButton>
+        <div class="form-actions">
+          <FluentButton :disabled="busy" @click="showForm = false">{{ t("cancel") }}</FluentButton>
+          <FluentButton type="submit" tone="primary" :busy="busy">{{
+            t("settingsCreateChallenge")
+          }}</FluentButton>
+        </div>
       </div>
     </form>
-    <form v-else class="settings-surface form-stack" @submit.prevent="finish">
-      <h3>{{ t("settingsProofTitle") }}</h3>
-      <p>{{ t("settingsProofDescription") }}</p>
-      <FluentButton @click="download">{{ t("settingsDownloadChallenge") }}</FluentButton>
-      <pre class="settings-code">
+    <form
+      v-else-if="showForm"
+      class="box"
+      aria-labelledby="signing-key-proof-title"
+      @submit.prevent="finish"
+    >
+      <header class="box-header">
+        <h3 id="signing-key-proof-title">{{ t("settingsProofTitle") }}</h3>
+      </header>
+      <div v-if="challenge" class="box-form form-stack">
+        <p>{{ t("settingsProofDescription") }}</p>
+        <div class="settings-actions">
+          <FluentButton @click="download">{{ t("settingsDownloadChallenge") }}</FluentButton>
+        </div>
+        <pre class="settings-code">
 gpg --armor --detach-sign --local-user {{ challenge.fingerprint }} gitedge-key-proof.txt</pre>
-      <FluentTextArea
-        v-model="signature"
-        :label="t('settingsDetachedSignature')"
-        rows="6"
-        maxlength="16384"
-        required
-        spellcheck="false"
-        placeholder="-----BEGIN PGP SIGNATURE-----"
-      />
-      <div class="settings-actions">
-        <FluentButton type="submit" tone="primary" :busy="busy">{{
-          t("settingsFinishKey")
-        }}</FluentButton
-        ><FluentButton :disabled="busy" @click="challenge = null">{{ t("back") }}</FluentButton>
+        <FluentTextArea
+          v-model="signature"
+          :label="t('settingsDetachedSignature')"
+          rows="6"
+          maxlength="16384"
+          required
+          spellcheck="false"
+          placeholder="-----BEGIN PGP SIGNATURE-----"
+        />
+        <div class="form-actions">
+          <FluentButton :disabled="busy" @click="challenge = null">{{ t("back") }}</FluentButton>
+          <FluentButton type="submit" tone="primary" :busy="busy">{{
+            t("settingsFinishKey")
+          }}</FluentButton>
+        </div>
       </div>
     </form>
   </section>

@@ -5,6 +5,8 @@ const agentsMessages = {
     noSessionsHint: "创建有明确仓库范围和期限的会话来开始工作。",
     agentHandleHint: "用于 /用户名/{'@'}handle，创建后可以更改。",
     agentProfile: "智能体资料",
+    dangerZone: "危险操作",
+    agentDisableHint: "停用会撤销此智能体的所有有效 session，且无法撤销此操作。",
     agentHandleInUse: "此地址已被占用。",
     agentProfileSaved: "智能体资料已保存。",
     profilePublicHint: "公开后，任何人都可以通过资料地址查看名称和说明。",
@@ -36,6 +38,8 @@ const agentsMessages = {
     noSessionsHint: "Create a session with a repository scope and expiry to begin work.",
     agentHandleHint: "Used in /username/{'@'}handle. You can change it later.",
     agentProfile: "Agent profile",
+    dangerZone: "Danger zone",
+    agentDisableHint: "Disabling revokes all active sessions of this agent. This cannot be undone.",
     agentHandleInUse: "This handle is already in use.",
     agentProfileSaved: "Agent profile saved.",
     profilePublicHint:

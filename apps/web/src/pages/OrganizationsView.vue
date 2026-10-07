@@ -178,7 +178,7 @@ onMounted(load);
             <AppIcon name="chevronRight" />
           </RouterLink>
         </div>
-        <div v-else-if="organizations.length" class="settings-empty-state">
+        <div v-else-if="organizations.length" class="settings-empty">
           {{ t("noMatchingOrganizations") }}
         </div>
         <div v-else class="dashboard-repo-onboarding organization-onboarding">

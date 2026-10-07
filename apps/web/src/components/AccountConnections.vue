@@ -141,117 +141,123 @@ onMounted(load);
 </script>
 
 <template>
-  <section class="account-settings">
-    <h2 class="settings-page-title">{{ t("accountSettingsTitle") }}</h2>
-    <div class="settings-notices">
-      <NoticeBar v-if="linkedNotice" intent="success">{{ t("ssoLinked") }}</NoticeBar>
-      <NoticeBar v-if="callbackError" intent="error">{{ callbackError }}</NoticeBar>
-      <NoticeBar v-if="loadingError" intent="error">{{ loadingError }}</NoticeBar>
-      <NoticeBar v-if="actionError" intent="error">{{ actionError }}</NoticeBar>
-      <NoticeBar v-if="notice" intent="success">{{ notice }}</NoticeBar>
-    </div>
+  <section class="settings-panel">
+    <header class="settings-header">
+      <h2>{{ t("accountSettingsTitle") }}</h2>
+    </header>
+    <NoticeBar v-if="linkedNotice" intent="success">{{ t("ssoLinked") }}</NoticeBar>
+    <NoticeBar v-if="callbackError" intent="error">{{ callbackError }}</NoticeBar>
+    <NoticeBar v-if="loadingError" intent="error">{{ loadingError }}</NoticeBar>
+    <NoticeBar v-if="actionError" intent="error">{{ actionError }}</NoticeBar>
+    <NoticeBar v-if="notice" intent="success">{{ notice }}</NoticeBar>
 
-    <section class="settings-section" aria-labelledby="linked-provider-heading">
-      <h2 id="linked-provider-heading">{{ t("signInMethods") }}</h2>
-      <div v-if="externalIdentity" class="settings-card">
-        <div class="settings-card-row identity">
-          <span class="avatar" :aria-label="externalIdentity.login">
-            <img v-if="externalIdentity.avatarUrl" :src="externalIdentity.avatarUrl" alt="" />
-          </span>
-          <div class="grow">
-            <div class="row-title">
-              @{{ externalIdentity.login }}
-              <StatusBadge>{{ externalIdentity.label }}</StatusBadge>
-            </div>
-            <a
-              v-if="externalIdentity.profileUrl"
-              :href="externalIdentity.profileUrl"
-              target="_blank"
-              rel="noreferrer"
-              >{{ t("viewProfile") }}</a
-            >
+    <section class="box" aria-labelledby="linked-provider-heading">
+      <header class="box-header">
+        <h3 id="linked-provider-heading">{{ t("signInMethods") }}</h3>
+      </header>
+      <div v-if="externalIdentity" class="box-row settings-item">
+        <span class="avatar" :aria-label="externalIdentity.login">
+          <img v-if="externalIdentity.avatarUrl" :src="externalIdentity.avatarUrl" alt="" />
+        </span>
+        <div class="settings-item-copy">
+          <div class="row-title">
+            @{{ externalIdentity.login }}
+            <StatusBadge>{{ externalIdentity.label }}</StatusBadge>
           </div>
+          <a
+            v-if="externalIdentity.profileUrl"
+            :href="externalIdentity.profileUrl"
+            target="_blank"
+            rel="noreferrer"
+            >{{ t("viewProfile") }}</a
+          >
         </div>
       </div>
-      <div v-else class="settings-card settings-card-row">
-        <div class="settings-card-copy">
+      <div v-else class="box-row">
+        <div class="settings-item-copy">
           <strong>{{ t("noExternalIdentity") }}</strong>
-          <p>{{ t("noExternalIdentityHint") }}</p>
+          <span class="field-hint">{{ t("noExternalIdentityHint") }}</span>
         </div>
       </div>
     </section>
 
-    <section class="settings-section sso-settings" aria-labelledby="sso-identities-heading">
-      <div class="settings-section-heading">
-        <div>
-          <h2 id="sso-identities-heading">{{ t("ssoIdentities") }}</h2>
-          <p class="muted">{{ t("ssoIdentitiesHint") }}</p>
-          <p class="muted">{{ t("ssoFederatedLogoutHint") }}</p>
-        </div>
+    <section class="box" aria-labelledby="sso-identities-heading">
+      <header class="box-header">
+        <h3 id="sso-identities-heading">{{ t("ssoIdentities") }}</h3>
         <FluentButton
-          class="btn btn-sm"
+          class="box-header-end"
+          size="small"
           type="button"
           tone="subtle"
           :disabled="loading"
           @click="load"
           >{{ t("refresh") }}</FluentButton
         >
+      </header>
+      <div class="box-row field-hint sso-hints">
+        <p>{{ t("ssoIdentitiesHint") }}</p>
+        <p>{{ t("ssoFederatedLogoutHint") }}</p>
       </div>
-      <div class="settings-card">
-        <div v-if="!loading && !identities.length" class="settings-card-row settings-card-copy">
-          <strong>{{ t("ssoNoIdentities") }}</strong>
-        </div>
-        <div v-else class="sso-identity-list">
-          <div
-            v-for="identity in identities"
-            :key="identity.id"
-            class="settings-card-row sso-identity"
-          >
-            <div class="settings-card-copy">
-              <strong>{{ identity.displayName }}</strong>
+      <p v-if="!loading && !identities.length" class="settings-empty">
+        {{ t("ssoNoIdentities") }}
+      </p>
+      <ul v-else class="settings-list">
+        <li
+          v-for="identity in identities"
+          :key="identity.id"
+          class="box-row settings-item sso-identity"
+        >
+          <div class="settings-item-copy">
+            <div class="row-title">
+              {{ identity.displayName }}
               <StatusBadge>{{ identity.protocol.toUpperCase() }}</StatusBadge>
-              <p>
-                {{ identity.providerLabel
-                }}<span v-if="identity.email"> · {{ identity.email }}</span>
-              </p>
               <StatusBadge v-if="identity.email && identity.emailVerified" tone="success">{{
                 t("ssoVerifiedEmail")
               }}</StatusBadge>
             </div>
-            <div class="sso-actions settings-actions">
-              <ConfirmButton
-                tone="subtle"
-                :label="busyIdentityId === identity.id ? t('loading') : t('ssoUnlink')"
-                :accessible-name="`${t('ssoUnlink')} · ${identity.providerLabel}`"
-                :prompt="t('confirmUnlinkIdentity')"
-                :disabled="loading || busyIdentityId === identity.id"
-                @confirm="unlink(identity)"
-              />
-              <ConfirmButton
-                tone="secondary"
-                :label="
-                  busyLogoutIdentityId === identity.id ? t('loading') : t('ssoFederatedLogout')
-                "
-                :accessible-name="`${t('ssoFederatedLogout')} · ${identity.providerLabel}`"
-                :prompt="t('confirmFederatedLogout')"
-                :disabled="loading || busyLogoutIdentityId === identity.id"
-                @confirm="federatedLogout(identity)"
-              />
+            <div class="row-meta">
+              <span>{{ identity.providerLabel }}</span>
+              <span v-if="identity.email">{{ identity.email }}</span>
             </div>
           </div>
-        </div>
-      </div>
-      <div class="sso-provider-list">
-        <h3>{{ t("ssoAddIdentity") }}</h3>
-        <p v-if="!availableProviders.length" class="muted">{{ t("ssoNoProviders") }}</p>
-        <article
+          <div class="settings-actions">
+            <ConfirmButton
+              tone="subtle"
+              :label="busyIdentityId === identity.id ? t('loading') : t('ssoUnlink')"
+              :accessible-name="`${t('ssoUnlink')} · ${identity.providerLabel}`"
+              :prompt="t('confirmUnlinkIdentity')"
+              :disabled="loading || busyIdentityId === identity.id"
+              @confirm="unlink(identity)"
+            />
+            <ConfirmButton
+              tone="secondary"
+              :label="busyLogoutIdentityId === identity.id ? t('loading') : t('ssoFederatedLogout')"
+              :accessible-name="`${t('ssoFederatedLogout')} · ${identity.providerLabel}`"
+              :prompt="t('confirmFederatedLogout')"
+              :disabled="loading || busyLogoutIdentityId === identity.id"
+              @confirm="federatedLogout(identity)"
+            />
+          </div>
+        </li>
+      </ul>
+    </section>
+
+    <section class="box" aria-labelledby="sso-add-heading">
+      <header class="box-header">
+        <h3 id="sso-add-heading">{{ t("ssoAddIdentity") }}</h3>
+      </header>
+      <p v-if="!availableProviders.length" class="settings-empty">{{ t("ssoNoProviders") }}</p>
+      <ul v-else class="settings-list">
+        <li
           v-for="provider in availableProviders"
           :key="provider.id"
-          class="settings-card-row sso-provider"
+          class="box-row settings-item sso-provider"
         >
-          <div class="settings-card-copy">
-            <strong>{{ provider.label }}</strong>
-            <StatusBadge>{{ provider.protocol.toUpperCase() }}</StatusBadge>
+          <div class="settings-item-copy">
+            <div class="row-title">
+              {{ provider.label }}
+              <StatusBadge>{{ provider.protocol.toUpperCase() }}</StatusBadge>
+            </div>
             <a
               v-if="provider.protocol === 'saml' && metadataHref(provider.metadataUrl)"
               :href="metadataHref(provider.metadataUrl) || undefined"
@@ -267,8 +273,15 @@ onMounted(load);
           >
             {{ busyProviderId === provider.id ? t("loading") : t("ssoLink") }}
           </FluentButton>
-        </article>
-      </div>
+        </li>
+      </ul>
     </section>
   </section>
 </template>
+
+<style scoped>
+.sso-hints {
+  display: grid;
+  gap: var(--space-1);
+}
+</style>

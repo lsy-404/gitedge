@@ -12,7 +12,7 @@ import type { SsoProviderSummary } from "../lib/api";
 import { setSession, sessionState } from "../lib/session";
 import { notifyBrowserIdentityChanged } from "../lib/browserIdentity";
 import TextField from "../components/TextField.vue";
-import "../styles/workspace.css";
+import "../styles/auth.css";
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
@@ -125,7 +125,7 @@ async function cancelAddingAccount() {
 }
 </script>
 <template>
-  <section class="workspace-page auth-page">
+  <section class="auth-page">
     <div class="auth-brand">
       <img src="/logo.svg" alt="" width="48" height="48" />
       <h1>
@@ -139,13 +139,14 @@ async function cancelAddingAccount() {
       </h1>
     </div>
     <div class="auth-card">
+      <NoticeBar v-if="callbackError" intent="error">{{ callbackError }}</NoticeBar>
       <div class="auth-provider-list">
         <FluentButton
           type="button"
           class="btn auth-provider-choice github-auth-choice"
           @click="githubLogin"
         >
-          <span class="provider-mark github-mark"><AppIcon name="github" /></span>
+          <span class="provider-mark github-mark"><AppIcon name="github" :size="16" /></span>
           <strong>{{ t("githubSignIn") }}</strong
           ><StatusBadge>OAuth</StatusBadge>
         </FluentButton>
@@ -155,7 +156,7 @@ async function cancelAddingAccount() {
           class="btn auth-provider-choice federation-provider"
           :href="providerHref(provider.id)"
         >
-          <span class="provider-mark oidc-mark"><AppIcon name="lock" /></span
+          <span class="provider-mark oidc-mark"><AppIcon name="lock" :size="16" /></span
           ><strong>{{ t("continueWith", { provider: provider.label }) }}</strong
           ><StatusBadge>{{ provider.protocol.toUpperCase() }}</StatusBadge>
         </a>
@@ -179,6 +180,7 @@ async function cancelAddingAccount() {
           autocomplete="username"
           :pattern="register ? '[A-Za-z0-9][A-Za-z0-9-]{2,62}' : undefined"
           :maxlength="register ? 63 : 64"
+          :hint="register ? t('identifierHint') : undefined"
           >{{ t(register ? "registrationIdentifier" : "identifier") }}</TextField
         >
         <TextField
@@ -187,14 +189,14 @@ async function cancelAddingAccount() {
           required
           minlength="12"
           :autocomplete="register ? 'new-password' : 'current-password'"
+          :hint="register ? t('passwordHint') : undefined"
           >{{ t("password") }}</TextField
         >
         <NoticeBar v-if="error" intent="error">{{ error }}</NoticeBar>
-        <button type="submit" class="btn btn-primary block" :disabled="busy">
+        <button type="submit" class="btn btn-primary auth-submit" :disabled="busy">
           {{ busy ? t("loading") : register ? t("signUp") : t("signIn") }}
         </button>
       </form>
-      <NoticeBar v-if="callbackError" intent="error">{{ callbackError }}</NoticeBar>
     </div>
     <p v-if="addingAccount && sessionState.user" class="auth-page-footer">
       <button class="btn btn-subtle" @click="cancelAddingAccount">
