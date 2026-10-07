@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@lucide/vue": "^1.49.0",
-    "@platform-kit/fluent": "https://github.com/lsy-404/platform-kit/releases/download/fluent-v0.2.5/platform-kit-fluent-0.2.5.tgz",
+    "@platform-kit/fluent": "https://github.com/lsy-404/platform-kit/releases/download/fluent-v0.2.10/platform-kit-fluent-0.2.10.tgz",
     "dompurify": "^3.4.16",
     "highlight.js": "^11.12.0",
     "marked": "^18.0.14",
