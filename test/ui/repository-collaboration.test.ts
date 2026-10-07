@@ -687,13 +687,11 @@ describe("RepositoryCollaboration rendered workflows", () => {
       truncated: false,
     }));
     vi.spyOn(api, "wiki").mockResolvedValue({ items: [current], truncated: false });
-    const wikiRevisionSpy = vi
-      .spyOn(api, "wikiRevision")
-      .mockImplementation(async (_id, _slug, revision) => {
-        const found = history.find((entry) => entry.revision === revision);
-        if (!found) throw new ApiError(404, "Wiki revision was not found");
-        return found;
-      });
+    vi.spyOn(api, "wikiRevision").mockImplementation(async (_id, _slug, revision) => {
+      const found = history.find((entry) => entry.revision === revision);
+      if (!found) throw new ApiError(404, "Wiki revision was not found");
+      return found;
+    });
     const updateWikiSpy = vi
       .spyOn(api, "updateWikiPage")
       .mockImplementation(async (_id, _slug, patch) => {
@@ -716,6 +714,15 @@ describe("RepositoryCollaboration rendered workflows", () => {
         history = [...history, current];
         return current;
       });
+    const restoreSpy = vi
+      .spyOn(api, "restoreWikiRevision")
+      .mockImplementation(async (_id, _slug, revision) => {
+        const found = history.find((entry) => entry.revision === revision);
+        if (!found) throw new ApiError(404, "Wiki revision was not found");
+        current = page({ ...found, revision: history.length + 1 });
+        history = [...history, current];
+        return current;
+      });
     const mounted = await mountSection("/_verify/wiki/guide", "wiki");
 
     findButton(mounted.root, "Edit").click();
@@ -730,7 +737,7 @@ describe("RepositoryCollaboration rendered workflows", () => {
     expect(wikiAlert).not.toContain("pull request");
     expect(wikiAlert).not.toContain("Wiki page revision");
 
-    findButton(mounted.root, "Retry").click();
+    findButton(mounted.root, "Reload latest").click();
     await settle();
     expect(mounted.root.querySelector(".detail-titlebar h2")?.textContent).toContain(
       "Guide updated elsewhere"
@@ -755,14 +762,10 @@ describe("RepositoryCollaboration rendered workflows", () => {
 
     const firstHistoryRow = mounted.root.querySelector<HTMLElement>(".wiki-history .item-row");
     if (!firstHistoryRow) throw new Error("Wiki revision history was not rendered.");
-    firstHistoryRow.querySelector<HTMLButtonElement>(".fluent-button")?.click();
+    expect(restoreSpy).not.toHaveBeenCalled();
+    findButton(firstHistoryRow, "Restore revision").click();
     await settle();
-    expect(wikiRevisionSpy).toHaveBeenCalledWith("repo-1", "guide", 1);
-    expect(updateWikiSpy).toHaveBeenLastCalledWith("repo-1", "guide", {
-      title: "Guide v1",
-      content: "Original docs",
-      expectedRevision: 4,
-    });
+    expect(restoreSpy).toHaveBeenCalledWith("repo-1", "guide", 1, 4);
     expect(mounted.root.querySelector(".body-content")?.textContent).toContain("Original docs");
     expect(mounted.root.querySelector(".detail-state-row .badge")?.textContent).toContain("r5");
     mounted.unmount();
@@ -857,5 +860,220 @@ describe("RepositoryCollaboration rendered workflows", () => {
     await settle();
     expect(Reflect.get(title, "value")).toBe("Bug");
     expect(Reflect.get(body, "value")).toBe("## Reproduce\n");
+  });
+});
+
+describe("RepositoryCollaboration action errors, ownership and review aids", () => {
+  const other: Actor = { kind: "user", id: "user-2", name: "Other User" };
+  function detailMocks(opts: { item?: Issue; comments?: Comment[] } = {}) {
+    vi.spyOn(api, "issue").mockResolvedValue(opts.item ?? issue());
+    vi.spyOn(api, "comments").mockResolvedValue({
+      items: opts.comments ?? [],
+      truncated: false,
+    });
+  }
+
+  it("keeps the issue visible and shows an inline alert when a comment fails", async () => {
+    detailMocks();
+    vi.spyOn(api, "createComment").mockRejectedValue(new ApiError(500, "boom"));
+    const mounted = await mountSection("/_verify/issues/7", "issues");
+    fill(control(mounted.root, ".comments-panel textarea"), "hello");
+    submit(control(mounted.root, ".comments-panel form") as HTMLFormElement);
+    await settle();
+    expect(mounted.root.querySelector(".detail-titlebar h2")?.textContent).toContain(
+      "Initial issue"
+    );
+    expect(mounted.root.querySelector('[role="alert"], .fluent-notice')).not.toBeNull();
+    expect(mounted.root.textContent).not.toContain("Retry");
+    mounted.unmount();
+  });
+
+  it("lets a non-member author edit and delete only their own comment and issue", async () => {
+    repository.canWrite = false;
+    try {
+      detailMocks({
+        item: issue({ actor: human }),
+        comments: [
+          comment({ id: "mine", actor: human }),
+          comment({ id: "theirs", actor: other, body: "Not mine" }),
+        ],
+      });
+      const mounted = await mountSection("/_verify/issues/7", "issues");
+      const rows = mounted.root.querySelectorAll<HTMLElement>(".comment-row");
+      expect(rows).toHaveLength(2);
+      expect(rows[0]?.textContent).toContain("Edit");
+      expect(rows[0]?.textContent).toContain("Delete");
+      expect(rows[1]?.textContent).not.toContain("Edit");
+      expect(rows[1]?.textContent).not.toContain("Delete");
+      const update = vi.spyOn(api, "updateIssue").mockResolvedValue(issue());
+      findButton(mounted.root, "Close").click();
+      await settle();
+      expect(update).toHaveBeenNthCalledWith(1, "repo-1", 7, { state: "closed" });
+      findButton(mounted.root, "Edit").click();
+      await settle();
+      const editForm = control(mounted.root, ".item-edit") as HTMLFormElement;
+      expect(editForm.textContent).not.toContain("Labels");
+      submit(editForm);
+      await settle();
+      expect(update).toHaveBeenCalledTimes(2);
+      expect(Object.keys(update.mock.calls[1]?.[2] ?? {})).not.toContain("labels");
+      mounted.unmount();
+
+      for (const restriction of ["private", "archived"] as const) {
+        const previous = { visibility: repository.visibility, archived: repository.archived };
+        if (restriction === "private") repository.visibility = "private";
+        else repository.archived = true;
+        try {
+          detailMocks({ item: issue({ actor: human }), comments: [comment({ actor: human })] });
+          const restricted = await mountSection("/_verify/issues/7", "issues");
+          expect(restricted.root.querySelector(".detail-actions")).toBeNull();
+          if (restriction === "archived") {
+            const row = restricted.root.querySelector<HTMLElement>(".comment-row");
+            expect(row?.textContent).not.toContain("Edit");
+            expect(row?.textContent).not.toContain("Delete");
+          }
+          restricted.unmount();
+        } finally {
+          repository.visibility = previous.visibility;
+          repository.archived = previous.archived;
+        }
+      }
+
+      detailMocks({ item: issue({ actor: other }) });
+      const foreign = await mountSection("/_verify/issues/7", "issues");
+      expect(foreign.root.querySelector(".detail-actions")).toBeNull();
+      foreign.unmount();
+    } finally {
+      repository.canWrite = true;
+    }
+  });
+
+  it("warns about truncated pull request diffs and labels omitted patches", async () => {
+    vi.spyOn(api, "pull").mockResolvedValue(pull());
+    vi.spyOn(api, "comments").mockResolvedValue({ items: [], truncated: false });
+    vi.spyOn(api, "reviews").mockResolvedValue([]);
+    vi.spyOn(api, "checks").mockResolvedValue([]);
+    vi.spyOn(api, "pullDiff").mockResolvedValue({
+      baseOid: "a".repeat(40),
+      headOid: "b".repeat(40),
+      mergeBaseOid: null,
+      commits: [],
+      truncated: true,
+      files: [
+        {
+          path: "big.txt",
+          type: "modified",
+          oldOid: "c".repeat(40),
+          newOid: "d".repeat(40),
+          binary: false,
+          patch: null,
+        },
+        {
+          path: "logo.png",
+          type: "added",
+          oldOid: null,
+          newOid: "e".repeat(40),
+          binary: true,
+          patch: null,
+        },
+      ],
+    } satisfies GitComparison);
+    const mounted = await mountSection("/_verify/pulls/12", "pulls");
+    const tabs = mounted.root.querySelectorAll<HTMLElement>(".pull-tabs button");
+    tabs[1]?.click();
+    await settle();
+    const text = mounted.root.querySelector(".pull-review")?.textContent ?? "";
+    expect(text).toContain("This comparison is too large");
+    expect(text).toContain("Diff omitted because the comparison exceeded");
+    expect(text).toContain("Binary files do not have a text preview");
+    mounted.unmount();
+  });
+
+  it("creates a pull request from branch selects with the draft option", async () => {
+    vi.spyOn(api, "pulls").mockResolvedValue({ items: [], truncated: false });
+    vi.spyOn(api, "repositorySessions").mockResolvedValue([]);
+    vi.spyOn(api, "repositoryBranches").mockResolvedValue([
+      { name: "main", oid: "1", protected: false, rules: [], isDefault: true },
+      { name: "feature", oid: "2", protected: false, rules: [], isDefault: false },
+    ]);
+    const create = vi.spyOn(api, "createPullRequest").mockResolvedValue(pull());
+    vi.spyOn(api, "pull").mockResolvedValue(pull());
+    const mounted = await mountSection("/_verify/pulls", "pulls");
+    findButton(mounted.root, "New pull request").click();
+    await settle();
+    const form = control(mounted.root, ".create-form") as HTMLFormElement;
+    const selects = form.querySelectorAll<HTMLSelectElement>("select");
+    expect(Array.from(selects[0]?.options ?? []).map((option) => option.value)).toContain(
+      "feature"
+    );
+    fill(control(form, 'input[type="text"], input:not([type])'), "Title");
+    fill(selects[0] as HTMLElement, "feature");
+    const draft = form.querySelector<HTMLInputElement>("#create-draft");
+    expect(draft).not.toBeNull();
+    draft?.click();
+    submit(form);
+    await settle();
+    expect(create).toHaveBeenCalledWith(
+      "repo-1",
+      expect.objectContaining({ headRef: "feature", baseRef: "main", draft: true })
+    );
+    mounted.unmount();
+  });
+
+  it("shows a historical wiki revision with a diff against the current page", async () => {
+    const current = page({ revision: 2, content: "New line" });
+    vi.spyOn(api, "wikiPage").mockResolvedValue(current);
+    vi.spyOn(api, "wiki").mockResolvedValue({ items: [current], truncated: false });
+    vi.spyOn(api, "wikiHistory").mockResolvedValue({
+      items: [page({ revision: 1 }), current],
+      truncated: false,
+    });
+    const revision = vi
+      .spyOn(api, "wikiRevision")
+      .mockResolvedValue(page({ revision: 1, content: "Old line" }));
+    const mounted = await mountSection("/_verify/wiki/guide", "wiki");
+    findButton(mounted.root, "View revision").click();
+    await settle();
+    expect(revision).toHaveBeenCalledWith("repo-1", "guide", 1);
+    const view = mounted.root.querySelector(".wiki-revision-view");
+    expect(view?.textContent).toContain("Old line");
+    expect(view?.querySelector(".diff-deletion")?.textContent).toContain("Old line");
+    expect(view?.querySelector(".diff-addition")?.textContent).toContain("New line");
+    expect(view?.querySelector("table th")).not.toBeNull();
+    mounted.unmount();
+  });
+
+  it("shows a no-changes message when a revision matches the current content", async () => {
+    const current = page({ revision: 2, content: "Same" });
+    vi.spyOn(api, "wikiPage").mockResolvedValue(current);
+    vi.spyOn(api, "wiki").mockResolvedValue({ items: [current], truncated: false });
+    vi.spyOn(api, "wikiHistory").mockResolvedValue({
+      items: [page({ revision: 1, content: "Same" }), current],
+      truncated: false,
+    });
+    vi.spyOn(api, "wikiRevision").mockResolvedValue(page({ revision: 1, content: "Same" }));
+    const mounted = await mountSection("/_verify/wiki/guide", "wiki");
+    findButton(mounted.root, "View revision").click();
+    await settle();
+    const view = mounted.root.querySelector(".wiki-revision-view");
+    expect(view?.textContent).toContain("same content as the current page");
+    expect(view?.querySelector("table")).toBeNull();
+    expect(view?.querySelector("pre")).toBeNull();
+    mounted.unmount();
+  });
+
+  it("opens and prefills the pull request form from query parameters", async () => {
+    vi.spyOn(api, "pulls").mockResolvedValue({ items: [], truncated: false });
+    vi.spyOn(api, "repositorySessions").mockResolvedValue([]);
+    vi.spyOn(api, "repositoryBranches").mockResolvedValue([
+      { name: "main", oid: "1", protected: false, rules: [], isDefault: true },
+      { name: "feature", oid: "2", protected: false, rules: [], isDefault: false },
+    ]);
+    const mounted = await mountSection("/_verify/pulls?new=1&base=main&head=feature", "pulls");
+    const form = control(mounted.root, ".create-form") as HTMLFormElement;
+    const selects = form.querySelectorAll<HTMLSelectElement>("select");
+    expect(selects[0]?.value).toBe("feature");
+    expect(selects[1]?.value).toBe("main");
+    mounted.unmount();
   });
 });

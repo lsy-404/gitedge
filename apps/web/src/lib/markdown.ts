@@ -24,25 +24,27 @@ for (const [name, language] of Object.entries({
 })) {
   hljs.registerLanguage(name, language);
 }
-const languages: Record<string, string> = {
-  js: "javascript",
-  jsx: "javascript",
-  mjs: "javascript",
-  cjs: "javascript",
-  ts: "typescript",
-  tsx: "typescript",
-  json: "json",
-  css: "css",
-  html: "xml",
-  vue: "xml",
-  svg: "xml",
-  sh: "bash",
-  bash: "bash",
-  py: "python",
-  sql: "sql",
-  yml: "yaml",
-  yaml: "yaml",
-};
+const languages = new Map<string, string>(
+  Object.entries({
+    js: "javascript",
+    jsx: "javascript",
+    mjs: "javascript",
+    cjs: "javascript",
+    ts: "typescript",
+    tsx: "typescript",
+    json: "json",
+    css: "css",
+    html: "xml",
+    vue: "xml",
+    svg: "xml",
+    sh: "bash",
+    bash: "bash",
+    py: "python",
+    sql: "sql",
+    yml: "yaml",
+    yaml: "yaml",
+  })
+);
 function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -52,7 +54,7 @@ function escapeHtml(value: string): string {
 }
 export function highlightedCode(source: string, filename: string = ""): string {
   const extension = filename.split(".").at(-1)?.toLowerCase() ?? "";
-  const language = languages[extension] ?? (hljs.getLanguage(filename) ? filename : "");
+  const language = languages.get(extension) ?? (hljs.getLanguage(filename) ? filename : "");
   return language && source.length <= 500_000
     ? hljs.highlight(source, { language, ignoreIllegals: true }).value
     : escapeHtml(source);
@@ -72,9 +74,25 @@ export function renderMarkdown(source: string, baseUrl?: string, allowImages = f
   const fragment = DOMPurify.sanitize(html, {
     USE_PROFILES: { html: true },
     RETURN_DOM_FRAGMENT: true,
-    FORBID_TAGS: ["form", "button", "textarea", "select", "style", "iframe"],
+    FORBID_TAGS: [
+      "form",
+      "button",
+      "textarea",
+      "select",
+      "style",
+      "iframe",
+      "video",
+      "audio",
+      "source",
+      "track",
+      "picture",
+    ],
     FORBID_ATTR: ["style", "srcset"],
   });
+  for (const element of fragment.querySelectorAll("[class]")) {
+    if (!(element.matches("pre > code") && /^language-[\w-]+$/.test(element.className)))
+      element.removeAttribute("class");
+  }
   for (const input of fragment.querySelectorAll("input")) {
     if (input.type !== "checkbox") input.remove();
     else {

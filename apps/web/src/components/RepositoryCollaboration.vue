@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onUnmounted, ref, watch } from "vue";
+import { createTwoFilesPatch } from "diff";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import type {
+  Actor,
   CheckRun,
   GitComparison,
   AgentSession,
+  RepositoryBranch,
   Comment,
   Discussion,
   Issue,
@@ -81,13 +84,18 @@ watch(
   },
   { immediate: true }
 );
+const branches = ref<RepositoryBranch[]>([]);
 const wikiHistory = ref<WikiPageSummary[]>([]);
+const viewedRevision = ref<WikiPage | null>(null);
 const wikiEditing = ref(false);
 const wikiDraft = ref({ title: "", content: "" });
 const diff = ref<GitComparison | null>(null);
 const mergeError = ref("");
 const loading = ref(false);
-const error = ref("");
+const loadError = ref("");
+const actionError = ref("");
+const actionConflict = ref(false);
+const actionNotice = ref<HTMLElement | null>(null);
 const notFound = ref(false);
 const showForm = ref(false);
 const editMode = ref(false);
@@ -103,6 +111,7 @@ const form = ref<{
   category: Discussion["category"];
   slug: string;
   headSessionId: string;
+  draft: boolean;
 }>({
   title: "",
   body: "",
@@ -112,6 +121,7 @@ const form = ref<{
   category: "general",
   slug: "",
   headSessionId: "",
+  draft: false,
 });
 function applyCommunityTemplate(value: { title: string; body: string }) {
   if (!form.value.title.trim()) form.value.title = value.title;
@@ -200,6 +210,41 @@ const pullIsOpen = computed(() => {
 });
 const canCreate = computed(() => Boolean(sessionState.user) && !props.repository.archived);
 const showEditActions = computed(() => props.repository.canWrite && !props.repository.archived);
+function ownedByViewer(actor: Actor): boolean {
+  return actor.kind === "user" && actor.id === sessionState.user?.id;
+}
+const canEditItem = computed(() => {
+  if (props.repository.archived) return false;
+  if (props.repository.canWrite) return true;
+  const current = item.value;
+  return (
+    props.section === "issues" &&
+    props.repository.visibility === "public" &&
+    current !== null &&
+    "actor" in current &&
+    ownedByViewer(current.actor)
+  );
+});
+function canModifyComment(comment: Comment): boolean {
+  return !props.repository.archived && (props.repository.canWrite || ownedByViewer(comment.actor));
+}
+const viewedRevisionUnchanged = computed(() => {
+  const current = item.value;
+  const viewed = viewedRevision.value;
+  return Boolean(viewed && current && "content" in current && viewed.content === current.content);
+});
+const viewedRevisionPatch = computed(() => {
+  const current = item.value;
+  const viewed = viewedRevision.value;
+  if (!viewed || !current || !("content" in current)) return "";
+  return createTwoFilesPatch(
+    `r${viewed.revision}`,
+    `r${current.revision}`,
+    viewed.content,
+    current.content
+  );
+});
+const headBranchFromSession = computed(() => form.value.headSessionId !== "");
 const resource = computed<"issues" | "pull-requests" | "discussions">(() =>
   props.section === "issues"
     ? "issues"
@@ -271,7 +316,10 @@ function startWikiPage() {
 async function load() {
   const version = ++loadVersion;
   loading.value = true;
-  error.value = "";
+  loadError.value = "";
+  actionError.value = "";
+  actionConflict.value = false;
+  viewedRevision.value = null;
   notFound.value = false;
   item.value = null;
   listTruncated.value = false;
@@ -375,12 +423,12 @@ async function load() {
         listTruncated.value = page.truncated;
       }
     } else {
-      error.value = t("unknownSection");
+      loadError.value = t("unknownSection");
     }
   } catch (cause) {
     if (version !== loadVersion) return;
     if (cause instanceof ApiError && cause.status === 404 && isDetail.value) notFound.value = true;
-    else error.value = userMessage(cause);
+    else loadError.value = userMessage(cause);
   } finally {
     if (version === loadVersion) loading.value = false;
   }
@@ -395,6 +443,7 @@ function resetForm() {
     category: "general",
     slug: "",
     headSessionId: "",
+    draft: false,
   };
 }
 async function submitCreate() {
@@ -418,6 +467,7 @@ async function submitCreate() {
         headRef: form.value.headRef,
         baseRef: form.value.baseRef,
         headSessionId: form.value.headSessionId || null,
+        draft: form.value.draft,
       });
       await goTo(created.number);
     } else if (props.section === "discussions") {
@@ -443,164 +493,156 @@ async function submitCreate() {
     saving.value = false;
   }
 }
-async function saveItem() {
-  if (!detailNumber.value) return;
+async function runAction(action: () => Promise<void>) {
   saving.value = true;
-  error.value = "";
+  actionError.value = "";
+  actionConflict.value = false;
   try {
+    await action();
+  } catch (cause) {
+    actionError.value = userMessage(cause);
+    actionConflict.value = cause instanceof ApiError && cause.code === "conflict";
+    await nextTick();
+    actionNotice.value?.scrollIntoView({ block: "nearest" });
+  } finally {
+    saving.value = false;
+  }
+}
+function labelList(value: string): string[] {
+  return value
+    .split(",")
+    .map((label) => label.trim())
+    .filter(Boolean);
+}
+function saveItem() {
+  if (!detailNumber.value) return Promise.resolve();
+  const number = detailNumber.value;
+  return runAction(async () => {
     if (props.section === "issues")
-      item.value = await api.updateIssue(props.repository.id, detailNumber.value, {
+      item.value = await api.updateIssue(props.repository.id, number, {
         title: editDraft.value.title,
         body: editDraft.value.body,
-        labels: editDraft.value.labels
-          .split(",")
-          .map((value) => value.trim())
-          .filter(Boolean),
+        ...(props.repository.canWrite ? { labels: labelList(editDraft.value.labels) } : {}),
       });
     else if (props.section === "pulls")
-      item.value = await api.updatePullRequest(props.repository.id, detailNumber.value, {
+      item.value = await api.updatePullRequest(props.repository.id, number, {
         title: editDraft.value.title,
         body: editDraft.value.body,
         draft: editDraft.value.draft,
       });
     else if (props.section === "discussions")
-      item.value = await api.updateDiscussion(props.repository.id, detailNumber.value, {
+      item.value = await api.updateDiscussion(props.repository.id, number, {
         title: editDraft.value.title,
         body: editDraft.value.body,
       });
     editMode.value = false;
-  } catch (cause) {
-    error.value = userMessage(cause);
-  } finally {
-    saving.value = false;
-  }
+  });
 }
-async function updateState(state: "open" | "closed") {
-  if (!detailNumber.value) return;
-  saving.value = true;
-  error.value = "";
-  try {
+function updateState(state: "open" | "closed") {
+  if (!detailNumber.value) return Promise.resolve();
+  const number = detailNumber.value;
+  return runAction(async () => {
     if (props.section === "issues")
-      item.value = await api.updateIssue(props.repository.id, detailNumber.value, { state });
+      item.value = await api.updateIssue(props.repository.id, number, { state });
     else if (props.section === "pulls")
-      item.value = await api.updatePullRequest(props.repository.id, detailNumber.value, { state });
-    else
-      item.value = await api.updateDiscussion(props.repository.id, detailNumber.value, { state });
-  } catch (cause) {
-    error.value = userMessage(cause);
-  } finally {
-    saving.value = false;
-  }
+      item.value = await api.updatePullRequest(props.repository.id, number, { state });
+    else item.value = await api.updateDiscussion(props.repository.id, number, { state });
+  });
 }
-async function postComment() {
-  if (!detailNumber.value || !commentBody.value.trim()) return;
-  saving.value = true;
-  error.value = "";
-  try {
+function postComment() {
+  if (!detailNumber.value || !commentBody.value.trim()) return Promise.resolve();
+  const number = detailNumber.value;
+  return runAction(async () => {
     if (editCommentId.value)
       await api.updateComment(
         props.repository.id,
         resource.value,
-        detailNumber.value,
+        number,
         editCommentId.value,
         commentBody.value
       );
-    else
-      await api.createComment(
-        props.repository.id,
-        resource.value,
-        detailNumber.value,
-        commentBody.value
-      );
+    else await api.createComment(props.repository.id, resource.value, number, commentBody.value);
     commentBody.value = "";
     editCommentId.value = "";
-    const page = await api.comments(props.repository.id, resource.value, detailNumber.value);
+    const page = await api.comments(props.repository.id, resource.value, number);
     comments.value = page.items;
     listTruncated.value = page.truncated;
-  } catch (cause) {
-    error.value = userMessage(cause);
-  } finally {
-    saving.value = false;
-  }
+  });
 }
 function startEditComment(comment: Comment) {
   editCommentId.value = comment.id;
   commentBody.value = comment.body;
 }
-async function removeComment(comment: Comment) {
-  try {
+function removeComment(comment: Comment) {
+  return runAction(async () => {
     await api.deleteComment(props.repository.id, resource.value, detailNumber.value, comment.id);
     comments.value = comments.value.filter((row) => row.id !== comment.id);
-  } catch (cause) {
-    error.value = userMessage(cause);
-  }
+    if (discussionItem.value?.answerCommentId === comment.id)
+      item.value = await api.discussion(props.repository.id, detailNumber.value);
+  });
 }
-async function saveWiki() {
+function saveWiki() {
   const current = item.value;
-  if (!current || !("revision" in current)) return;
-  saving.value = true;
-  try {
+  if (!current || !("revision" in current)) return Promise.resolve();
+  return runAction(async () => {
     item.value = await api.updateWikiPage(props.repository.id, wikiSlug.value, {
       ...wikiDraft.value,
       expectedRevision: current.revision,
     });
     wikiEditing.value = false;
     await load();
-  } catch (cause) {
-    error.value = userMessage(cause);
-  } finally {
-    saving.value = false;
-  }
+  });
 }
-async function restoreWiki(summary: WikiPageSummary) {
+function restoreWiki(summary: WikiPageSummary) {
   const current = item.value;
-  if (!current || !("revision" in current)) return;
-  saving.value = true;
-  try {
-    const page = await api.wikiRevision(props.repository.id, wikiSlug.value, summary.revision);
-    item.value = await api.updateWikiPage(props.repository.id, wikiSlug.value, {
-      title: page.title,
-      content: page.content,
-      expectedRevision: current.revision,
-    });
+  if (!current || !("revision" in current)) return Promise.resolve();
+  return runAction(async () => {
+    item.value = await api.restoreWikiRevision(
+      props.repository.id,
+      wikiSlug.value,
+      summary.revision,
+      current.revision
+    );
     await load();
-  } catch (cause) {
-    error.value = userMessage(cause);
-  } finally {
-    saving.value = false;
-  }
+  });
 }
-async function addReview() {
-  if (!detailNumber.value || !diff.value) return;
-  saving.value = true;
-  try {
-    await api.createReview(props.repository.id, detailNumber.value, {
-      commitOid: diff.value.headOid,
+function viewRevision(summary: WikiPageSummary) {
+  if (viewedRevision.value?.revision === summary.revision) {
+    viewedRevision.value = null;
+    return Promise.resolve();
+  }
+  return runAction(async () => {
+    viewedRevision.value = await api.wikiRevision(
+      props.repository.id,
+      wikiSlug.value,
+      summary.revision
+    );
+  });
+}
+function addReview() {
+  if (!detailNumber.value || !diff.value) return Promise.resolve();
+  const number = detailNumber.value;
+  const headOid = diff.value.headOid;
+  return runAction(async () => {
+    await api.createReview(props.repository.id, number, {
+      commitOid: headOid,
       state: reviewForm.value.state,
       body: reviewForm.value.body,
     });
-    reviews.value = await api.reviews(props.repository.id, detailNumber.value);
+    reviews.value = await api.reviews(props.repository.id, number);
     reviewForm.value.body = "";
-  } catch (cause) {
-    error.value = userMessage(cause);
-  } finally {
-    saving.value = false;
-  }
+  });
 }
-async function addCheck() {
-  if (!detailNumber.value) return;
-  saving.value = true;
-  try {
-    await api.createCheck(props.repository.id, detailNumber.value, {
+function addCheck() {
+  if (!detailNumber.value) return Promise.resolve();
+  const number = detailNumber.value;
+  return runAction(async () => {
+    await api.createCheck(props.repository.id, number, {
       ...checkForm.value,
       conclusion: checkForm.value.status === "completed" ? checkForm.value.conclusion : null,
     });
-    checks.value = await api.checks(props.repository.id, detailNumber.value);
-  } catch (cause) {
-    error.value = userMessage(cause);
-  } finally {
-    saving.value = false;
-  }
+    checks.value = await api.checks(props.repository.id, number);
+  });
 }
 async function mergePull() {
   if (!detailNumber.value || !diff.value) return;
@@ -621,17 +663,20 @@ async function mergePull() {
     saving.value = false;
   }
 }
-async function markAnswer(comment: Comment | null) {
-  if (!detailNumber.value) return;
-  saving.value = true;
-  try {
-    item.value = await api.updateDiscussion(props.repository.id, detailNumber.value, {
+function markAnswer(comment: Comment | null) {
+  if (!detailNumber.value) return Promise.resolve();
+  const number = detailNumber.value;
+  return runAction(async () => {
+    item.value = await api.updateDiscussion(props.repository.id, number, {
       answerCommentId: comment?.id ?? null,
     });
+  });
+}
+async function loadBranches() {
+  try {
+    branches.value = await api.repositoryBranches(props.repository.id);
   } catch (cause) {
-    error.value = userMessage(cause);
-  } finally {
-    saving.value = false;
+    formError.value = userMessage(cause);
   }
 }
 function toggleAnswer(comment: Comment) {
@@ -678,6 +723,34 @@ onUnmounted(() => {
   window.clearTimeout(checkTimer);
 });
 watch(
+  () => [showForm.value, props.section, props.repository.id],
+  () => {
+    if (showForm.value && props.section === "pulls") void loadBranches();
+  }
+);
+function routeQuery(name: string): string {
+  const value = route.query[name];
+  return typeof value === "string" ? value : "";
+}
+watch(
+  () => [
+    props.section,
+    route.query.new,
+    route.query.base,
+    route.query.head,
+    route.query.headSessionId,
+  ],
+  () => {
+    if (props.section !== "pulls" || routeQuery("new") !== "1" || !canCreate.value) return;
+    resetForm();
+    form.value.baseRef = routeQuery("base") || props.repository.defaultBranch;
+    form.value.headRef = routeQuery("head");
+    form.value.headSessionId = routeQuery("headSessionId");
+    showForm.value = true;
+  },
+  { immediate: true }
+);
+watch(
   () => [props.repository.id, props.section, route.fullPath],
   () => {
     void load();
@@ -688,11 +761,21 @@ watch(
 
 <template>
   <section class="collab-section">
-    <NoticeBar v-if="!loading && !error && listTruncated" intent="warning">{{
+    <NoticeBar v-if="!loading && !loadError && listTruncated" intent="warning">{{
       t("listTruncated")
     }}</NoticeBar>
-    <div v-if="loading || error || notFound" class="box">
-      <StatusState :loading="loading" :error="error" :empty="notFound" @retry="load"
+    <div v-if="actionError && !loading && !loadError" ref="actionNotice">
+      <NoticeBar intent="error"
+        >{{ actionError
+        }}<template v-if="actionConflict" #actions
+          ><FluentButton type="button" size="small" @click="load">{{
+            t("reloadLatest")
+          }}</FluentButton></template
+        ></NoticeBar
+      >
+    </div>
+    <div v-if="loading || loadError || notFound" class="box">
+      <StatusState :loading="loading" :error="loadError" :empty="notFound" @retry="load"
         ><template #empty>{{ t("resourceNotFound") }}</template></StatusState
       >
     </div>
@@ -776,8 +859,23 @@ watch(
           }}</TextField>
         </template>
         <template v-if="section === 'pulls'">
-          <TextField v-model="form.headRef" required>{{ t("headBranch") }}</TextField>
-          <TextField v-model="form.baseRef" required>{{ t("baseBranch") }}</TextField>
+          <TextField v-if="headBranchFromSession" v-model="form.headRef" required>{{
+            t("headBranch")
+          }}</TextField>
+          <SelectField v-else v-model="form.headRef" :label="t('headBranch')" required>
+            <option value="" disabled>{{ t("chooseBranch") }}</option>
+            <option v-for="branch in branches" :key="branch.name" :value="branch.name">
+              {{ branch.name }}
+            </option>
+          </SelectField>
+          <SelectField v-model="form.baseRef" :label="t('baseBranch')" required>
+            <option v-for="branch in branches" :key="branch.name" :value="branch.name">
+              {{ branch.name }}
+            </option>
+          </SelectField>
+          <FluentCheckbox id="create-draft" v-model="form.draft">{{
+            t("draftPull")
+          }}</FluentCheckbox>
           <SelectField
             v-if="repository.agentsEnabled"
             v-model="form.headSessionId"
@@ -988,7 +1086,7 @@ watch(
           </div>
         </div>
         <div
-          v-if="showEditActions && 'state' in item && item.state !== 'merged'"
+          v-if="canEditItem && 'state' in item && item.state !== 'merged'"
           class="detail-actions"
         >
           <FluentButton type="button" @click="editMode = !editMode">
@@ -1027,7 +1125,7 @@ watch(
         <form v-if="editMode" class="form-stack inline-form item-edit" @submit.prevent="saveItem">
           <TextField v-model="editDraft.title" required>{{ t("issueTitle") }}</TextField>
           <TextAreaField v-model="editDraft.body" rows="6" :label="t('issueBody')" />
-          <template v-if="section === 'issues'">
+          <template v-if="section === 'issues' && repository.canWrite">
             <TextField v-model="editDraft.labels" :placeholder="t('commaSeparated')">{{
               t("labels")
             }}</TextField>
@@ -1095,6 +1193,20 @@ watch(
             <strong>r{{ revision.revision }} · {{ revision.title }}</strong
             ><small>{{ revision.updatedBy }} · {{ d(revision.updatedAt, "long") }}</small
             ><FluentButton
+              v-if="!isCurrentRevision(revision.revision)"
+              type="button"
+              size="small"
+              :disabled="saving"
+              :aria-pressed="viewedRevision?.revision === revision.revision"
+              @click="viewRevision(revision)"
+            >
+              {{
+                viewedRevision?.revision === revision.revision
+                  ? t("hideRevision")
+                  : t("viewRevision")
+              }}
+            </FluentButton>
+            <FluentButton
               v-if="showEditActions"
               type="button"
               size="small"
@@ -1104,6 +1216,21 @@ watch(
               {{ t("restoreRevision") }}
             </FluentButton>
           </div>
+          <section
+            v-if="viewedRevision"
+            class="wiki-revision-view"
+            :aria-label="t('revisionContent')"
+          >
+            <p class="eyebrow">r{{ viewedRevision.revision }} · {{ viewedRevision.title }}</p>
+            <MarkdownContent class="body-content" :source="viewedRevision.content" />
+            <p class="eyebrow">{{ t("revisionChanges") }}</p>
+            <p v-if="viewedRevisionUnchanged" class="muted">{{ t("revisionNoChanges") }}</p>
+            <DiffViewer
+              v-else
+              :patch="viewedRevisionPatch"
+              :path="`${wikiSlug} r${viewedRevision.revision}`"
+            />
+          </section>
         </div>
       </article>
       <aside
@@ -1182,10 +1309,13 @@ watch(
           {{ diff.baseOid.slice(0, 8) }}…{{ diff.headOid.slice(0, 8) }} · {{ diff.commits.length }}
           {{ t("commits") }}
         </p>
+        <NoticeBar v-if="diff.truncated" intent="warning">{{ t("comparisonTruncated") }}</NoticeBar>
         <div v-for="change in diff.files" :key="change.path" class="changed-file">
           <strong>{{ change.type }} · {{ change.path }}</strong>
-          <DiffViewer v-if="change.patch" :patch="change.patch" />
-          <span v-else class="muted">{{ t("binaryPreviewUnavailable") }}</span>
+          <DiffViewer v-if="change.patch" :patch="change.patch" :path="change.path" />
+          <span v-else class="muted">{{
+            change.binary ? t("binaryPreviewUnavailable") : t("diffTooLarge")
+          }}</span>
         </div>
         <div v-if="showEditActions && pullIsOpen" class="merge-actions">
           <SelectField v-model="mergeMethod" :label="t('repoMergeMethod')">
@@ -1355,7 +1485,7 @@ watch(
             }}</StatusBadge
             ><small>{{ d(comment.createdAt, "long") }}</small
             ><FluentButton
-              v-if="showEditActions"
+              v-if="canModifyComment(comment)"
               type="button"
               tone="subtle"
               size="small"
@@ -1363,10 +1493,11 @@ watch(
             >
               {{ t("edit") }}</FluentButton
             ><FluentButton
-              v-if="showEditActions"
+              v-if="canModifyComment(comment)"
               type="button"
               tone="subtle"
               size="small"
+              :disabled="saving"
               @click="removeComment(comment)"
             >
               {{ t("delete") }}</FluentButton

@@ -20,6 +20,7 @@ import type {
   AgentWebhookSettings,
 } from "../../../../packages/contracts/src/agents";
 import type {
+  Actor,
   Agent,
   AgentSession,
   Assignee,
@@ -97,6 +98,7 @@ export type {
   RepositoryBranch,
 } from "../../../../packages/contracts/src/repository-controls";
 export type {
+  Actor,
   Agent,
   AgentSession,
   Assignee,
@@ -614,6 +616,16 @@ export const api = {
   wikiRevision: (repositoryId: string, slug: string, revision: number) =>
     request<WikiPage>(
       repositoryPath(repositoryId, `wiki/${encodeURIComponent(slug)}/revisions/${revision}`)
+    ),
+  restoreWikiRevision: (
+    repositoryId: string,
+    slug: string,
+    revision: number,
+    expectedRevision: number
+  ) =>
+    request<WikiPage>(
+      repositoryPath(repositoryId, `wiki/${encodeURIComponent(slug)}/restore/${revision}`),
+      { method: "POST", body: JSON.stringify({ expectedRevision }) }
     ),
   updateWikiPage: (
     repositoryId: string,

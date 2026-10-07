@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import { parsePatch } from "diff";
-const props = defineProps<{ patch: string }>();
+const props = defineProps<{ patch: string; path?: string }>();
+const { t } = useI18n();
 interface DiffLine {
   oldNumber: number | null;
   newNumber: number | null;
@@ -42,7 +44,14 @@ const hunks = computed(() => {
 </script>
 <template>
   <div class="diff-viewer diff-preview">
-    <table v-if="hunks.length">
+    <table v-if="hunks.length" :aria-label="path">
+      <thead class="visually-hidden">
+        <tr>
+          <th scope="col">{{ t("diffOldLine") }}</th>
+          <th scope="col">{{ t("diffNewLine") }}</th>
+          <th scope="col">{{ t("diffChange") }}</th>
+        </tr>
+      </thead>
       <tbody v-for="(hunk, index) in hunks" :key="index">
         <tr class="diff-hunk">
           <td></td>
