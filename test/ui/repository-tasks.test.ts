@@ -240,6 +240,35 @@ describe("task detail", () => {
     mounted.unmount();
   });
 
+  it("asks before cancelling a document edit that has unsaved changes", async () => {
+    vi.spyOn(api, "task").mockResolvedValue(detail());
+    vi.spyOn(api, "assigneeCandidates").mockResolvedValue([]);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const mounted = await mountTasks("/_verify/tasks/1");
+
+    const panel = control(mounted.root, ".doc-panel");
+    findButton(panel, "Edit").click();
+    await settle();
+    findButton(panel, "Cancel").click();
+    await settle();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(panel.querySelector(".doc-editor")).toBeNull();
+
+    findButton(panel, "Edit").click();
+    await settle();
+    fill(control(panel, "textarea"), "Unsaved plan");
+    findButton(panel, "Cancel").click();
+    await settle();
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(fieldValue(control(panel, "textarea"))).toBe("Unsaved plan");
+
+    confirm.mockReturnValue(true);
+    findButton(panel, "Cancel").click();
+    await settle();
+    expect(panel.querySelector(".doc-editor")).toBeNull();
+    mounted.unmount();
+  });
+
   it("opens an earlier revision read only and offers it as a draft", async () => {
     vi.spyOn(api, "task").mockResolvedValue(detail());
     vi.spyOn(api, "assigneeCandidates").mockResolvedValue([]);

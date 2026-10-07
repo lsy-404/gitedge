@@ -34,7 +34,7 @@ export const taskDocumentKinds = [
 export const taskTypePattern = /^[A-Za-z]{2,24}$/;
 export const gitOidPattern = /^[0-9a-f]{40}$/;
 
-export type BadgeTone = "neutral" | "success" | "danger" | "brand" | "warning";
+export type BadgeTone = "neutral" | "success" | "danger" | "brand" | "warning" | "done";
 
 export function taskStatusTone(status: TaskStatus): BadgeTone {
   switch (status) {

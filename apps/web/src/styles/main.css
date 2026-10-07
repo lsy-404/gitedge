@@ -552,6 +552,11 @@ pre {
   background: var(--warning-subtle);
   border-color: var(--warning-border);
 }
+.badge-done {
+  color: var(--done-fg);
+  background: var(--done-subtle);
+  border-color: var(--done-border);
+}
 .badge-brand {
   color: var(--accent-fg);
   background: var(--accent-subtle);
@@ -617,8 +622,12 @@ pre {
   border-bottom: 1px solid var(--border-default);
   font-weight: var(--font-weight-semibold);
 }
-.box-header h2 {
+.box-header h2,
+.box-header h3 {
   font-size: var(--font-size-body);
+}
+.box-header > .header-action {
+  margin-left: auto;
 }
 .box-form {
   padding: var(--space-4);
@@ -693,6 +702,73 @@ a.box-row:focus-visible {
 }
 .back-link {
   display: inline-block;
+}
+.tab-list {
+  display: flex;
+  gap: var(--space-1);
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+  box-shadow: inset 0 -1px var(--border-default);
+}
+.tab-list > .tab {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 0;
+  padding: var(--space-2) var(--space-3);
+  color: var(--fg-muted);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  box-shadow: none;
+  font-weight: var(--font-weight-medium);
+  line-height: 24px;
+  white-space: nowrap;
+}
+.tab-list > .tab:hover {
+  color: var(--fg-default);
+  background: var(--bg-subtle);
+}
+.tab-list > .tab:is([aria-selected="true"], [aria-pressed="true"]) {
+  color: var(--fg-default);
+  border-bottom-color: var(--accent-strong);
+  font-weight: var(--font-weight-semibold);
+}
+.tab-list > .tab:focus-visible {
+  outline-offset: -2px;
+}
+.tab-count {
+  min-width: 20px;
+  padding: 0 var(--space-2);
+  color: var(--fg-secondary);
+  background: var(--control-bg-hover);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-meta);
+  font-weight: var(--font-weight-medium);
+  line-height: 20px;
+  text-align: center;
+}
+.progress-bar {
+  width: min(240px, 40%);
+  height: var(--space-2);
+  flex: none;
+  appearance: none;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full);
+  background: var(--control-bg-hover);
+  overflow: hidden;
+}
+.progress-bar::-webkit-progress-bar {
+  background: var(--control-bg-hover);
+}
+.progress-bar::-webkit-progress-value {
+  background: var(--accent-strong);
+}
+.progress-bar::-moz-progress-bar {
+  background: var(--accent-strong);
 }
 .visually-hidden,
 .ref-picker > .field-label {

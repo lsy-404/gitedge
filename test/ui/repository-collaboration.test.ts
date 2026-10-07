@@ -268,8 +268,8 @@ describe("RepositoryCollaboration rendered workflows", () => {
     const mounted = await mountSection("/_verify/issues", "issues");
 
     expect(mounted.root.querySelectorAll(".item-link")).toHaveLength(1);
-    expect(mounted.root.querySelectorAll(".filter-count")[0]?.textContent).toBe("1");
-    expect(mounted.root.querySelectorAll(".filter-count")[1]?.textContent).toBe("1");
+    expect(mounted.root.querySelectorAll(".filter-button .tab-count")[0]?.textContent).toBe("1");
+    expect(mounted.root.querySelectorAll(".filter-button .tab-count")[1]?.textContent).toBe("1");
 
     mounted.root.querySelectorAll<HTMLElement>(".filter-button")[1]?.click();
     await settle();

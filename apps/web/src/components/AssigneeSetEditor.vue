@@ -3,6 +3,7 @@ import { computed, ref, useId } from "vue";
 import { useI18n } from "vue-i18n";
 import type { Assignee, AssigneeCandidate, AssigneeRef } from "../lib/api";
 import { assigneeKey, assigneeRef, parseAssigneeKey } from "../lib/tasks";
+import AppIcon from "./AppIcon.vue";
 import SelectField from "./SelectField.vue";
 import StatusBadge from "./StatusBadge.vue";
 
@@ -65,11 +66,12 @@ function remove(target: Assignee) {
           type="button"
           tone="subtle"
           size="small"
+          icon-only
           :disabled="saving"
           :aria-label="t('assigneeRemove', { name: entry.name })"
           @click="remove(entry)"
-          >×</FluentButton
-        >
+          ><AppIcon name="close" :size="12"
+        /></FluentButton>
       </li>
     </ul>
     <p v-else class="muted assignee-empty">{{ emptyText }}</p>
@@ -114,14 +116,14 @@ function remove(target: Assignee) {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: 32px;
+  min-height: var(--control-height);
 }
 .assignee-name {
   min-width: 0;
   overflow-wrap: anywhere;
   font-weight: var(--font-weight-semibold);
 }
-.assignee-list FluentButton {
+.assignee-list .fluent-button {
   margin-left: auto;
 }
 .assignee-empty {

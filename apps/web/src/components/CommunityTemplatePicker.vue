@@ -174,7 +174,7 @@ watch(() => [props.repositoryId, props.refName, props.kind], load, { immediate: 
 <style scoped>
 .community-template-picker {
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
   min-width: 0;
 }
 .community-template-picker h3,
@@ -182,52 +182,50 @@ watch(() => [props.repositoryId, props.refName, props.kind], load, { immediate: 
 .template-choice-heading p {
   margin: 0;
 }
-.template-picker-hint,
-.template-choice-heading p {
-  font-size: 13px;
-}
 .template-choice-list {
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
   margin: 0;
   padding: 0;
   list-style: none;
 }
 .template-choice-list li {
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
   min-width: 0;
-  padding: 16px;
+  padding: var(--space-4);
+  background: var(--bg-raised);
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
 }
 .template-choice-heading {
   display: flex;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--space-4);
   align-items: flex-start;
 }
 .template-choice-heading > div {
   display: grid;
-  gap: 6px;
+  gap: var(--space-1);
   min-width: 0;
 }
 .template-source {
+  font-size: var(--font-size-meta);
   overflow-wrap: anywhere;
 }
 .template-limit {
   margin: 0;
   color: var(--warning-fg);
-  font-size: 13px;
+  font-size: var(--font-size-meta);
 }
 .template-preview {
   max-height: 50vh;
   overflow: auto;
-  padding-top: 12px;
-  border-top: 1px solid var(--border-default);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-muted);
 }
 .template-preview summary {
-  margin-bottom: 12px;
+  margin-bottom: var(--space-3);
   color: var(--fg-muted);
   cursor: pointer;
 }

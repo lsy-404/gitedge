@@ -67,6 +67,9 @@ const text: Array<[string, string]> = [
   ["danger-fg", "danger-subtle"],
   ["info-fg", "info-subtle"],
   ["done-fg", "done-subtle"],
+  ["fg-secondary", "control-bg-hover"],
+  ["fg-secondary", "bg-subtle"],
+  ["fg-secondary", "bg-selected"],
 ];
 const graphics: Array<[string, string]> = [
   ["focus-ring", "bg-canvas"],
@@ -80,6 +83,8 @@ const graphics: Array<[string, string]> = [
   ["border-strong", "bg-canvas"],
   ["border-strong", "bg-overlay"],
   ["border-strong", "control-bg"],
+  ["accent-strong", "control-bg-hover"],
+  ["accent-strong", "bg-selected"],
 ];
 
 describe("design tokens", () => {

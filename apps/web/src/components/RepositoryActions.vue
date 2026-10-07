@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { FluentButton } from "@platform-kit/fluent/vue";
 import type { ActionRun, ActionRunSummary, ActionWorkflowFile, GitRef } from "../lib/api";
 import { ApiError, api, errorMessage } from "../lib/api";
+import NoticeBar from "./NoticeBar.vue";
 import ConfirmButton from "./ConfirmButton.vue";
 import SelectField from "./SelectField.vue";
 import StatusBadge from "./StatusBadge.vue";
@@ -285,79 +286,96 @@ onUnmounted(() => clearInterval(pollingTimer));
     <StatusState v-else-if="error && !runs.length" :loading="false" :error="error" @retry="load" />
 
     <div v-else class="actions-layout">
-      <div v-if="error" class="actions-load-error" role="alert">
-        <p>{{ error }}</p>
-        <FluentButton type="button" @click="load">{{ t("actionsRefresh") }}</FluentButton>
-      </div>
-      <p v-if="actionsNetworkEnabled === false" class="actions-warning actions-network-notice">
-        {{ t("actionsNetworkDisabled") }}
-      </p>
-      <section class="actions-panel" :aria-label="t('actionsWorkflows')">
-        <div class="actions-toolbar">
-          <SelectField
-            v-model="selectedRef"
-            :label="t('actionsRef')"
-            :disabled="loading || !selectableRefs.length"
+      <NoticeBar v-if="error" class="actions-load-error" intent="error">
+        {{ error }}
+        <template #actions>
+          <FluentButton type="button" @click="load">{{ t("actionsRefresh") }}</FluentButton>
+        </template>
+      </NoticeBar>
+      <NoticeBar
+        v-if="actionsNetworkEnabled === false"
+        class="actions-network-notice"
+        intent="warning"
+        >{{ t("actionsNetworkDisabled") }}</NoticeBar
+      >
+      <section class="box actions-panel" :aria-label="t('actionsWorkflows')">
+        <header class="box-header">
+          <h3>{{ t("actionsWorkflows") }}</h3>
+        </header>
+        <div class="actions-panel-body">
+          <div class="actions-toolbar">
+            <SelectField
+              v-model="selectedRef"
+              :label="t('actionsRef')"
+              :disabled="loading || !selectableRefs.length"
+            >
+              <option value="" disabled>{{ t("actionsNoBranches") }}</option>
+              <option v-for="item in branchRefs" :key="item.name" :value="selectionRef(item.name)">
+                {{ refLabel(item.name) }}
+              </option>
+              <option v-for="item in tagRefs" :key="item.name" :value="selectionRef(item.name)">
+                {{ item.name }}
+              </option>
+            </SelectField>
+            <SelectField
+              v-model="selectedWorkflowPath"
+              :label="t('actionsWorkflow')"
+              :disabled="loading || workflowLoading || !workflows.length"
+            >
+              <option value="" disabled>{{ t("actionsChooseWorkflow") }}</option>
+              <option v-for="workflow in workflows" :key="workflow.path" :value="workflow.path">
+                {{ workflow.name }}
+              </option>
+            </SelectField>
+            <FluentButton
+              type="button"
+              tone="primary"
+              :disabled="saving || loading || workflowLoading || !canDispatch"
+              @click="startRun"
+              >{{ saving ? t("loading") : t("actionsDispatch") }}</FluentButton
+            >
+          </div>
+          <p v-if="!selectableRefs.length" class="actions-empty">{{ t("actionsNoBranches") }}</p>
+          <p
+            v-else-if="!workflows.length && !loading && !workflowLoading && !error"
+            class="actions-empty"
           >
-            <option value="" disabled>{{ t("actionsNoBranches") }}</option>
-            <option v-for="item in branchRefs" :key="item.name" :value="selectionRef(item.name)">
-              {{ refLabel(item.name) }}
-            </option>
-            <option v-for="item in tagRefs" :key="item.name" :value="selectionRef(item.name)">
-              {{ item.name }}
-            </option>
-          </SelectField>
-          <SelectField
-            v-model="selectedWorkflowPath"
-            :label="t('actionsWorkflow')"
-            :disabled="loading || workflowLoading || !workflows.length"
+            {{ t("actionsNoWorkflows") }}
+          </p>
+          <p v-if="chosenWorkflow" class="actions-muted">
+            {{ t("actionsTriggers", { triggers: chosenWorkflow.triggers.join(", ") || "-" }) }}
+          </p>
+          <NoticeBar v-if="chosenWorkflow && !chosenWorkflow.supported" intent="warning">{{
+            t("actionsUnsupported", { reason: chosenWorkflow.unsupportedReason })
+          }}</NoticeBar>
+          <p
+            v-else-if="chosenWorkflow && !chosenWorkflow.triggers.includes('workflow_dispatch')"
+            class="actions-muted"
           >
-            <option value="" disabled>{{ t("actionsChooseWorkflow") }}</option>
-            <option v-for="workflow in workflows" :key="workflow.path" :value="workflow.path">
-              {{ workflow.name }}
-            </option>
-          </SelectField>
-          <FluentButton
-            type="button"
-            tone="primary"
-            :disabled="saving || loading || workflowLoading || !canDispatch"
-            @click="startRun"
-            >{{ saving ? t("loading") : t("actionsDispatch") }}</FluentButton
-          >
+            {{ t("actionsPushOnly") }}
+          </p>
+          <NoticeBar v-if="runError" class="actions-error" intent="error">{{ runError }}</NoticeBar>
+          <p v-if="workflowOid" class="actions-oid">
+            {{ t("actionsCommit") }} <code>{{ workflowOid }}</code>
+          </p>
         </div>
-        <p v-if="!selectableRefs.length" class="actions-empty">{{ t("actionsNoBranches") }}</p>
-        <p
-          v-else-if="!workflows.length && !loading && !workflowLoading && !error"
-          class="actions-empty"
-        >
-          {{ t("actionsNoWorkflows") }}
-        </p>
-        <p v-if="chosenWorkflow" class="actions-muted">
-          {{ t("actionsTriggers", { triggers: chosenWorkflow.triggers.join(", ") || "-" }) }}
-        </p>
-        <p v-if="chosenWorkflow && !chosenWorkflow.supported" class="actions-warning">
-          {{ t("actionsUnsupported", { reason: chosenWorkflow.unsupportedReason }) }}
-        </p>
-        <p
-          v-else-if="chosenWorkflow && !chosenWorkflow.triggers.includes('workflow_dispatch')"
-          class="actions-muted"
-        >
-          {{ t("actionsPushOnly") }}
-        </p>
-        <p v-if="runError" class="actions-error" role="alert">{{ runError }}</p>
-        <p v-if="workflowOid" class="actions-oid">
-          {{ t("actionsCommit") }} <code>{{ workflowOid }}</code>
-        </p>
       </section>
 
-      <section class="actions-panel" :aria-label="t('actionsRuns')">
-        <div class="actions-section-heading">
+      <section class="box actions-panel" :aria-label="t('actionsRuns')">
+        <header class="box-header">
           <h3>{{ t("actionsRuns") }}</h3>
-          <FluentButton type="button" :disabled="pollPending" @click="refreshRuns">{{
-            t("actionsRefresh")
-          }}</FluentButton>
-        </div>
-        <p v-if="!runs.length" class="actions-empty">{{ t("actionsNoRuns") }}</p>
+          <FluentButton
+            class="header-action"
+            type="button"
+            size="small"
+            :disabled="pollPending"
+            @click="refreshRuns"
+            >{{ t("actionsRefresh") }}</FluentButton
+          >
+        </header>
+        <p v-if="!runs.length" class="actions-empty actions-panel-body">
+          {{ t("actionsNoRuns") }}
+        </p>
         <ol v-else class="actions-run-list">
           <li v-for="run in runs" :key="run.id">
             <button
@@ -378,10 +396,10 @@ onUnmounted(() => clearInterval(pollingTimer));
 
       <section
         v-if="selectedRun"
-        class="actions-panel actions-run-detail"
+        class="box actions-panel actions-run-detail"
         :aria-label="t('actionsLogs')"
       >
-        <div class="actions-section-heading">
+        <header class="box-header actions-run-header">
           <div>
             <h3>{{ selectedRun.workflowName }}</h3>
             <code>{{ selectedRun.commitOid }}</code>
@@ -394,7 +412,7 @@ onUnmounted(() => clearInterval(pollingTimer));
             :disabled="cancelling"
             @confirm="cancelRun"
           />
-        </div>
+        </header>
         <div v-for="job in selectedRun.jobs" :key="job.id" class="actions-job">
           <h4>{{ job.name }}</h4>
           <article v-for="step in job.steps" :key="step.name" class="actions-step">
@@ -409,9 +427,9 @@ onUnmounted(() => clearInterval(pollingTimer));
               </StatusBadge>
             </header>
             <pre>{{ step.log || t("actionsNoLogs") }}</pre>
-            <p v-if="step.outputTruncated" class="actions-warning">
-              {{ t("actionsOutputTruncated") }}
-            </p>
+            <NoticeBar v-if="step.outputTruncated" intent="warning">{{
+              t("actionsOutputTruncated")
+            }}</NoticeBar>
           </article>
         </div>
       </section>
@@ -422,20 +440,18 @@ onUnmounted(() => clearInterval(pollingTimer));
 <style scoped>
 .repository-actions {
   display: grid;
-  gap: 1rem;
+  gap: var(--space-4);
   min-width: 0;
 }
 .actions-heading,
-.actions-section-heading,
 .actions-toolbar,
 .actions-step > header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
+  gap: var(--space-3);
 }
 .actions-heading h2,
-.actions-section-heading h3,
 .actions-job h4 {
   margin: 0;
 }
@@ -447,120 +463,133 @@ onUnmounted(() => clearInterval(pollingTimer));
 }
 .actions-layout {
   display: grid;
-  gap: 1rem;
-  grid-template-columns: minmax(16rem, 0.85fr) minmax(18rem, 1fr);
+  gap: var(--space-4);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   align-items: start;
 }
 .actions-syntax {
-  margin-top: 0.5rem;
+  margin-top: var(--space-2);
   color: var(--fg-secondary);
 }
 .actions-syntax summary {
   cursor: pointer;
 }
 .actions-syntax ul {
-  margin: 0.4rem 0 0;
-  padding-left: 1.25rem;
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-5);
 }
-.actions-network-notice {
+.actions-network-notice,
+.actions-load-error {
   grid-column: 1 / -1;
 }
 .actions-panel {
   min-width: 0;
-  padding: 1rem;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  background: var(--bg-raised);
+}
+.actions-panel-body {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
 }
 .actions-toolbar {
   align-items: end;
   flex-wrap: wrap;
 }
 .actions-toolbar > * {
-  flex: 1 1 11rem;
+  flex: 1 1 160px;
 }
 .actions-empty,
 .actions-muted,
-.actions-warning,
-.actions-error,
 .actions-oid {
-  margin: 0.75rem 0 0;
-}
-.actions-warning {
-  color: var(--warning-fg);
-}
-.actions-error {
-  color: var(--danger-fg);
+  margin: 0;
 }
 .actions-oid code,
-.actions-section-heading code {
+.actions-run-header code {
   overflow-wrap: anywhere;
 }
 .actions-run-list {
-  display: grid;
-  gap: 0.375rem;
-  margin: 0.75rem 0 0;
+  margin: 0;
   padding: 0;
   list-style: none;
 }
+.actions-run-list li + li {
+  border-top: 1px solid var(--border-muted);
+}
 .actions-run-button {
-  display: grid;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
   width: 100%;
-  gap: 0.2rem;
-  padding: 0.65rem;
+  padding: var(--space-3) var(--space-4);
   text-align: left;
   color: inherit;
   background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  cursor: pointer;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
-.actions-run-button:hover,
-.actions-run-button[aria-current="true"] {
+.actions-run-button:focus-visible {
+  outline-offset: -2px;
+}
+.actions-run-button:hover {
   background: var(--bg-subtle);
-  border-color: var(--border-default);
+}
+.actions-run-button[aria-current="true"] {
+  background: var(--bg-selected);
+  box-shadow: inset 3px 0 var(--accent-strong);
 }
 .actions-run-name {
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 .actions-run-ref {
-  font:
-    0.8rem ui-monospace,
-    monospace;
+  flex-basis: 100%;
+  order: 3;
   color: var(--fg-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-meta);
   overflow-wrap: anywhere;
 }
 .actions-run-button :deep(.badge) {
-  justify-self: start;
+  margin-left: auto;
 }
 .actions-run-detail {
   grid-column: 1 / -1;
+}
+.actions-run-header {
+  justify-content: space-between;
+}
+.actions-run-header > div {
   display: grid;
-  gap: 1rem;
+  min-width: 0;
+}
+.actions-run-header h3 {
+  font-size: var(--font-size-body);
 }
 .actions-job {
   display: grid;
-  gap: 0.65rem;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+.actions-job + .actions-job {
+  border-top: 1px solid var(--border-muted);
 }
 .actions-step {
   min-width: 0;
-  padding-top: 0.65rem;
-  border-top: 1px solid var(--border-default);
 }
 .actions-step > header {
   justify-content: flex-start;
 }
 .actions-step pre {
-  max-height: 22rem;
+  max-height: 360px;
   overflow: auto;
-  margin: 0.5rem 0 0;
-  padding: 0.75rem;
+  margin: var(--space-2) 0 0;
+  padding: var(--space-3);
   color: var(--fg-default);
   background: var(--bg-subtle);
+  border: 1px solid var(--border-muted);
   border-radius: var(--radius-md);
-  font:
-    0.82rem/1.5 ui-monospace,
-    monospace;
+  font-size: var(--font-size-meta);
+  line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -568,10 +597,9 @@ onUnmounted(() => clearInterval(pollingTimer));
   .actions-layout {
     grid-template-columns: minmax(0, 1fr);
   }
-  .actions-run-detail {
-    grid-column: auto;
-  }
-  .actions-network-notice {
+  .actions-run-detail,
+  .actions-network-notice,
+  .actions-load-error {
     grid-column: auto;
   }
   .actions-toolbar {
