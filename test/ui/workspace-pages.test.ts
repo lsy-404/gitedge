@@ -228,6 +228,76 @@ describe("header menus", () => {
   });
 });
 
+describe("create dialogs close on cancel", () => {
+  async function expectCancelClears(path: string, mocks: () => void) {
+    mocks();
+    const mounted = await mount(path);
+    const dialog = controlOf<HTMLDialogElement>(mounted.root, "dialog[open]");
+    dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
+    await settle();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await settle();
+    expect(mounted.root.querySelector("dialog[open]")).toBeNull();
+    expect(router.currentRoute.value.query.new).toBeUndefined();
+    mounted.unmount();
+  }
+
+  it("closes the dashboard repository dialog", async () => {
+    await expectCancelClears("/dashboard?new=1", () => {
+      vi.spyOn(api, "repositories").mockResolvedValue([repository]);
+      vi.spyOn(api, "organizations").mockResolvedValue([]);
+    });
+  });
+
+  it("closes the organization dialog", async () => {
+    await expectCancelClears("/organizations?new=1", () => {
+      vi.spyOn(api, "organizations").mockResolvedValue([organization]);
+    });
+  });
+
+  it("closes the agent dialog", async () => {
+    await expectCancelClears("/settings/agents?new=1", () => {
+      vi.spyOn(api, "agents").mockResolvedValue([agent]);
+      vi.spyOn(api, "agentSessions").mockResolvedValue([]);
+      vi.spyOn(api, "repositories").mockResolvedValue([repository]);
+    });
+  });
+});
+
+describe("agent webhook settings", () => {
+  it("keeps the form and error visible when a test fails, and disables test while pending", async () => {
+    vi.spyOn(api, "agentWebhook").mockResolvedValue({
+      url: "",
+      events: [],
+      enabled: true,
+    } as Awaited<ReturnType<typeof api.agentWebhook>>);
+    vi.spyOn(api, "agentWebhookDeliveries").mockResolvedValue([]);
+    let reject: (cause: unknown) => void = () => undefined;
+    vi.spyOn(api, "testAgentWebhook").mockReturnValue(
+      new Promise((_, fail) => {
+        reject = fail;
+      })
+    );
+    const mounted = await mount("/settings/agents/agent-1/webhook");
+
+    const testButton = Array.from(mounted.root.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Send test event")
+    );
+    if (!testButton) throw new Error("Missing test button");
+    testButton.click();
+    await settle();
+    expect(testButton.disabled).toBe(true);
+
+    reject(new ApiError(500, "boom"));
+    await settle();
+    expect(mounted.root.querySelector("form")).not.toBeNull();
+    expect(mounted.root.querySelector('[role="alert"]')).not.toBeNull();
+    expect(testButton.disabled).toBe(false);
+
+    mounted.unmount();
+  });
+});
+
 describe("dashboard partial failure", () => {
   it("keeps repositories visible when organizations fail", async () => {
     vi.spyOn(api, "repositories").mockResolvedValue([repository]);
@@ -235,6 +305,9 @@ describe("dashboard partial failure", () => {
     const mounted = await mount("/dashboard");
 
     expect(mounted.root.textContent).toContain("octocat / sample");
+    const panel = controlOf(mounted.root, ".dashboard-organizations");
+    expect(panel.querySelector(".state-error")).not.toBeNull();
+    expect(panel.textContent).toContain("Retry");
 
     mounted.unmount();
   });

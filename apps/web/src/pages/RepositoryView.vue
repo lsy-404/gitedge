@@ -161,6 +161,7 @@ async function loadSessions() {
     return;
   sessionsLoading.value = true;
   sessionsError.value = "";
+  revokeError.value = "";
   try {
     const result = await api.repositorySessions(repository.value.id);
     if (version === sessionVersion) sessions.value = result;
@@ -329,7 +330,7 @@ watch(
                   <th>{{ t("permission") }}</th>
                   <th>{{ t("expiresAt") }}</th>
                   <th>
-                    <span class="sr-only">{{ t("agentSessionActions") }}</span>
+                    <span class="visually-hidden">{{ t("agentSessionActions") }}</span>
                   </th>
                 </tr>
               </thead>

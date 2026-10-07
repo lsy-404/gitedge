@@ -25,6 +25,7 @@ const testing = ref(false);
 const retryingId = ref<string | null>(null);
 let loadVersion = 0;
 const error = ref("");
+const loadError = ref("");
 const notice = ref("");
 const eventOptions: AgentWebhookEvent[] = [
   "agent.assigned",
@@ -49,7 +50,7 @@ function eventLabel(event: AgentWebhookEvent) {
 async function load() {
   const version = ++loadVersion;
   loading.value = true;
-  error.value = "";
+  loadError.value = "";
   try {
     const [saved, rows] = await Promise.all([
       api.agentWebhook(agentId.value),
@@ -62,13 +63,20 @@ async function load() {
     deliveries.value = rows;
   } catch (cause) {
     if (version !== loadVersion) return;
-    error.value = errorMessage(cause, t);
+    loadError.value = errorMessage(cause, t);
   } finally {
     if (version === loadVersion) loading.value = false;
   }
 }
 async function loadDeliveries() {
-  deliveries.value = await api.agentWebhookDeliveries(agentId.value);
+  const id = agentId.value;
+  const version = loadVersion;
+  try {
+    const rows = await api.agentWebhookDeliveries(id);
+    if (id === agentId.value && version === loadVersion) deliveries.value = rows;
+  } catch (cause) {
+    if (id === agentId.value && version === loadVersion) error.value = errorMessage(cause, t);
+  }
 }
 async function save(rotateSecret = false) {
   saving.value = true;
@@ -95,12 +103,12 @@ async function test() {
   try {
     await api.testAgentWebhook(agentId.value);
     notice.value = t("agentWebhookTestSent");
-    await loadDeliveries();
   } catch (cause) {
     error.value = errorMessage(cause, t);
   } finally {
     testing.value = false;
   }
+  await loadDeliveries();
 }
 async function retry(delivery: AgentWebhookDelivery) {
   retryingId.value = delivery.id;
@@ -108,12 +116,12 @@ async function retry(delivery: AgentWebhookDelivery) {
   notice.value = "";
   try {
     await api.retryAgentWebhookDelivery(agentId.value, delivery.id);
-    await loadDeliveries();
   } catch (cause) {
     error.value = errorMessage(cause, t);
   } finally {
     retryingId.value = null;
   }
+  await loadDeliveries();
 }
 watch(agentId, () => void load(), { immediate: true });
 </script>
@@ -125,9 +133,9 @@ watch(agentId, () => void load(), { immediate: true });
       <h1>{{ t("agentWebhook") }}</h1>
       <p class="muted">{{ t("agentWebhookDescription") }}</p>
       <StatusState
-        v-if="loading || (error && !settings.url)"
+        v-if="loading || loadError"
         :loading="loading"
-        :error="error"
+        :error="loadError"
         :empty="false"
         @retry="load"
       />

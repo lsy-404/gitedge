@@ -21,8 +21,7 @@
 }
 .workspace-sidebar-heading,
 .workspace-panel-heading,
-.workspace-page-heading,
-.workspace-modal-heading {
+.workspace-page-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -333,36 +332,6 @@
 .icon-button:hover {
   border-color: var(--workspace-border);
   color: var(--workspace-text);
-}
-.workspace-modal-backdrop {
-  position: fixed;
-  z-index: 50;
-  inset: 0;
-  display: grid;
-  place-items: start center;
-  padding: 12vh 16px 32px;
-  overflow-y: auto;
-  background: rgb(0 0 0 / 58%);
-}
-.workspace-modal {
-  display: grid;
-  gap: 18px;
-  width: min(520px, 100%);
-  padding: 20px;
-  border: 1px solid var(--workspace-border);
-  border-radius: 9px;
-  background: var(--workspace-panel);
-  box-shadow: 0 18px 60px rgb(0 0 0 / 35%);
-}
-.workspace-modal-heading {
-  padding-bottom: 14px;
-  border-bottom: 1px solid var(--workspace-border);
-}
-.workspace-modal-heading h2 {
-  font-size: 18px;
-}
-.workspace-modal > .muted {
-  font-size: 13px;
 }
 .sr-only {
   position: absolute;

@@ -95,6 +95,14 @@ async function load() {
   if (!selectedAgent.value && agentResult.value[0]) selectedAgent.value = agentResult.value[0].id;
   else await loadSessions();
 }
+async function reloadRepositories() {
+  repositoriesError.value = "";
+  try {
+    repositories.value = await api.repositories();
+  } catch (cause) {
+    repositoriesError.value = errorMessage(cause, t);
+  }
+}
 async function loadSessions() {
   const requestVersion = sessionsRequestVersion.value + 1;
   sessionsRequestVersion.value = requestVersion;
@@ -168,9 +176,14 @@ async function saveProfile(agent: Agent) {
   try {
     const updated = await api.updateAgent(agent.id, { ...profileForm.value });
     agents.value = agents.value.map((row) => (row.id === updated.id ? updated : row));
-    profileNotice.value = t("agentProfileSaved");
+    if (agent.id === selectedAgent.value) {
+      resetProfileForm(updated);
+      profileNotice.value = t("agentProfileSaved");
+    }
   } catch (cause) {
-    profileError.value = errorMessage(cause, t, { 409: "agentHandleInUse" });
+    if (agent.id === selectedAgent.value) {
+      profileError.value = errorMessage(cause, t, { 409: "agentHandleInUse" });
+    }
   } finally {
     profileSaving.value = false;
   }
@@ -322,7 +335,14 @@ sessionClockTimer = window.setInterval(() => {
           </button>
         </div>
         <NoticeBar v-if="actionError" intent="error">{{ actionError }}</NoticeBar>
-        <NoticeBar v-if="repositoriesError" intent="warning">{{ repositoriesError }}</NoticeBar>
+        <NoticeBar v-if="repositoriesError" intent="warning">
+          {{ repositoriesError }}
+          <template #actions>
+            <FluentButton size="small" type="button" @click="reloadRepositories">{{
+              t("retry")
+            }}</FluentButton>
+          </template>
+        </NoticeBar>
         <div class="agent-layout">
           <nav class="box agent-list" :aria-label="t('yourAgents')">
             <div class="box-header agent-list-header">
