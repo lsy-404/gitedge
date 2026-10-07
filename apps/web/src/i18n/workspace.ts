@@ -43,6 +43,8 @@ export default {
     yourRole: "你的角色",
     addMemberHint: "按 GitEdge 用户名或账户邮箱添加成员。",
     orContinueWithPassword: "或使用账户密码",
+    passwordHint: "至少 12 个字符。",
+    identifierHint: "3 到 63 个字符，只能包含字母、数字和连字符，且以字母或数字开头。",
     agentEmptyHint: "创建智能体后，可以按仓库为它签发独立 session。",
     agentCreateHint: "智能体可拥有多个受限 session，每个 session 都有独立凭证。",
     agentSessionsHint: "每个 session 都绑定仓库、分支、权限与到期时间。",
@@ -96,6 +98,9 @@ export default {
     yourRole: "Your role",
     addMemberHint: "Add a member by their GitEdge username or account email.",
     orContinueWithPassword: "Or continue with your password",
+    passwordHint: "At least 12 characters.",
+    identifierHint:
+      "3 to 63 characters: letters, numbers and hyphens, starting with a letter or number.",
     agentEmptyHint: "Create an agent to issue it separate sessions scoped to repositories.",
     agentCreateHint: "An agent can have multiple scoped sessions, each with its own credentials.",
     agentSessionsHint: "Each session is bound to a repository, branch, permission, and expiry.",

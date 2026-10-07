@@ -116,15 +116,17 @@ watch(() => props.repositoryId, load, { immediate: true });
 </script>
 
 <template>
-  <section class="repository-collaborators settings-card">
-    <h3>{{ t("repoSettingsCollaborators") }}</h3>
-    <p class="collaborator-intro">{{ t("collaboratorIntro") }}</p>
+  <section class="box repository-collaborators" aria-labelledby="collaborators-title">
+    <header class="box-header">
+      <h3 id="collaborators-title">{{ t("repoSettingsCollaborators") }}</h3>
+    </header>
+    <p class="box-row settings-hint">{{ t("collaboratorIntro") }}</p>
     <StatusState v-if="loading || error" :loading="loading" :error="error" @retry="load" />
     <template v-else>
-      <p v-if="!collaborators.length" class="collaborator-empty">{{ t("collaboratorEmpty") }}</p>
-      <ul v-else class="collaborator-list">
-        <li v-for="item in collaborators" :key="item.id" class="collaborator-row">
-          <div class="collaborator-copy">
+      <p v-if="!collaborators.length" class="settings-empty">{{ t("collaboratorEmpty") }}</p>
+      <ul v-else class="settings-list">
+        <li v-for="item in collaborators" :key="item.id" class="box-row collaborator-row">
+          <div class="settings-item-copy">
             <strong>{{ item.identifier }}</strong>
             <small v-if="item.inherited">{{ t("collaboratorInherited") }}</small>
           </div>
@@ -146,7 +148,7 @@ watch(() => props.repositoryId, load, { immediate: true });
         </li>
       </ul>
 
-      <div class="collaborator-form" @keydown.enter.stop.prevent>
+      <div class="box-form collaborator-form" @keydown.enter.stop.prevent>
         <FluentField
           v-model="identifier"
           :label="t('collaboratorIdentifier')"
@@ -169,53 +171,33 @@ watch(() => props.repositoryId, load, { immediate: true });
         </FluentButton>
       </div>
     </template>
-    <NoticeBar v-if="saveError" intent="error">{{ saveError }}</NoticeBar>
-    <NoticeBar v-if="notice" intent="success">{{ notice }}</NoticeBar>
-    <NoticeBar v-if="revocationIncomplete" intent="warning">{{
-      t("revocationIncomplete")
-    }}</NoticeBar>
+    <div v-if="saveError || notice || revocationIncomplete" class="box-form form-stack">
+      <NoticeBar v-if="saveError" intent="error">{{ saveError }}</NoticeBar>
+      <NoticeBar v-if="notice" intent="success">{{ notice }}</NoticeBar>
+      <NoticeBar v-if="revocationIncomplete" intent="warning">{{
+        t("revocationIncomplete")
+      }}</NoticeBar>
+    </div>
   </section>
 </template>
 
 <style scoped>
-.collaborator-intro,
-.collaborator-empty {
-  margin: 14px 20px;
-  color: var(--fg-muted);
-  font-size: 13px;
-}
-.collaborator-list {
-  display: grid;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
 .collaborator-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(150px, 220px) auto;
-  gap: 12px;
+  gap: var(--space-3);
   align-items: center;
-  padding: 14px 20px;
-  border-top: 1px solid var(--border-default);
 }
-.collaborator-copy {
-  display: grid;
-  gap: 4px;
-}
-.collaborator-copy small {
+.settings-item-copy small {
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: var(--font-size-meta);
 }
 .collaborator-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(150px, 220px) auto;
-  gap: 12px;
+  gap: var(--space-3);
   align-items: end;
-  padding: 20px;
-  border-top: 1px solid var(--border-default);
-}
-.repository-collaborators :deep(.notice-bar) {
-  margin: 12px 20px;
+  border-top: 1px solid var(--border-muted);
 }
 @media (max-width: 760px) {
   .collaborator-row,

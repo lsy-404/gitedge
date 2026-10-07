@@ -19,6 +19,7 @@ import NoticeBar from "./NoticeBar.vue";
 import StatusState from "./StatusState.vue";
 import BranchProtectionSettings from "./BranchProtectionSettings.vue";
 import RepositoryCollaborators from "./RepositoryCollaborators.vue";
+import "../styles/settings.css";
 
 type RepositoryDraft = Omit<RepositorySettings, "canManage">;
 type SettingsSection =
@@ -294,6 +295,7 @@ watch(() => props.repository.id, load, { immediate: true });
             v-for="[key] in sections"
             :key="key"
             type="button"
+            class="settings-nav-item"
             :aria-current="activeSection === key ? 'page' : undefined"
             @click="activeSection = key"
           >
@@ -304,11 +306,13 @@ watch(() => props.repository.id, load, { immediate: true });
         <div class="settings-main">
           <section
             v-if="activeSection === 'general'"
-            class="settings-card"
+            class="box"
             aria-labelledby="settings-general-title"
           >
-            <h3 id="settings-general-title">{{ sectionName("general") }}</h3>
-            <div class="settings-row">
+            <header class="box-header">
+              <h3 id="settings-general-title">{{ sectionName("general") }}</h3>
+            </header>
+            <div class="box-row settings-row">
               <div class="row-copy">
                 <label for="repository-name">{{ t("repoSettingsName") }}</label>
                 <p>{{ t("repoSettingsNameHint") }}</p>
@@ -321,7 +325,7 @@ watch(() => props.repository.id, load, { immediate: true });
                 @update:model-value="setName"
               />
             </div>
-            <div class="settings-row">
+            <div class="box-row settings-row">
               <div class="row-copy">
                 <span>{{ t("repoSettingsDescription") }}</span>
               </div>
@@ -332,7 +336,7 @@ watch(() => props.repository.id, load, { immediate: true });
                 @update:model-value="draft.description = $event"
               />
             </div>
-            <div class="settings-row">
+            <div class="box-row settings-row">
               <div class="row-copy">
                 <span>{{ t("repoSettingsVisibility") }}</span>
               </div>
@@ -347,7 +351,7 @@ watch(() => props.repository.id, load, { immediate: true });
                 "
               />
             </div>
-            <div class="settings-row">
+            <div class="box-row settings-row">
               <div class="row-copy">
                 <span>{{ t("repoSettingsDefaultBranch") }}</span>
                 <p>{{ t("repoSettingsDefaultBranchHint") }}</p>
@@ -371,12 +375,14 @@ watch(() => props.repository.id, load, { immediate: true });
 
           <section
             v-else-if="activeSection === 'features'"
-            class="settings-card"
+            class="box"
             aria-labelledby="settings-features-title"
           >
-            <h3 id="settings-features-title">{{ sectionName("features") }}</h3>
-            <p class="card-intro">{{ t("repoSettingsFeaturesIntro") }}</p>
-            <div class="settings-row">
+            <header class="box-header">
+              <h3 id="settings-features-title">{{ sectionName("features") }}</h3>
+            </header>
+            <p class="box-row settings-hint">{{ t("repoSettingsFeaturesIntro") }}</p>
+            <div class="box-row settings-row">
               <div class="row-copy">
                 <span>{{ t("repoSettingsIssues") }}</span>
                 <p>{{ t("repoSettingsIssuesHint") }}</p>
@@ -387,7 +393,7 @@ watch(() => props.repository.id, load, { immediate: true });
                 :disabled="!canManage"
               />
             </div>
-            <div class="settings-row">
+            <div class="box-row settings-row">
               <div class="row-copy">
                 <span>{{ t("repoSettingsPulls") }}</span>
                 <p>{{ t("repoSettingsPullsHint") }}</p>
@@ -398,7 +404,7 @@ watch(() => props.repository.id, load, { immediate: true });
                 :disabled="!canManage"
               />
             </div>
-            <div class="settings-row">
+            <div class="box-row settings-row">
               <div class="row-copy">
                 <span>{{ t("repoSettingsDiscussions") }}</span>
                 <p>{{ t("repoSettingsDiscussionsHint") }}</p>
@@ -409,7 +415,7 @@ watch(() => props.repository.id, load, { immediate: true });
                 :disabled="!canManage"
               />
             </div>
-            <div class="settings-row">
+            <div class="box-row settings-row">
               <div class="row-copy">
                 <span>{{ t("repoSettingsWiki") }}</span>
                 <p>{{ t("repoSettingsWikiHint") }}</p>
@@ -420,7 +426,11 @@ watch(() => props.repository.id, load, { immediate: true });
                 :disabled="!canManage"
               />
             </div>
-            <div v-for="[key, label, hint] in featureSwitches" :key="key" class="settings-row">
+            <div
+              v-for="[key, label, hint] in featureSwitches"
+              :key="key"
+              class="box-row settings-row"
+            >
               <div class="row-copy">
                 <span>{{ t(label) }}</span>
                 <p>{{ t(hint) }}</p>
@@ -431,11 +441,13 @@ watch(() => props.repository.id, load, { immediate: true });
 
           <section
             v-else-if="activeSection === 'merge'"
-            class="settings-card"
+            class="box"
             aria-labelledby="settings-merge-title"
           >
-            <h3 id="settings-merge-title">{{ sectionName("merge") }}</h3>
-            <div class="settings-row">
+            <header class="box-header">
+              <h3 id="settings-merge-title">{{ sectionName("merge") }}</h3>
+            </header>
+            <div class="box-row settings-row">
               <div class="row-copy">
                 <span>{{ t("repoSettingsRequiredApprovals") }}</span>
                 <p>{{ t("repoSettingsRequiredApprovalsHint") }}</p>
@@ -449,7 +461,7 @@ watch(() => props.repository.id, load, { immediate: true });
                 @update:model-value="setApprovals"
               />
             </div>
-            <div class="settings-row">
+            <div class="box-row settings-row">
               <div class="row-copy">
                 <span>{{ t("repoSettingsPassingChecks") }}</span>
                 <p>{{ t("repoSettingsPassingChecksHint") }}</p>
@@ -460,16 +472,22 @@ watch(() => props.repository.id, load, { immediate: true });
                 :disabled="!canManage"
               />
             </div>
-            <div v-for="[key, label] in mergeMethodSwitches" :key="key" class="settings-row">
+            <div
+              v-for="[key, label] in mergeMethodSwitches"
+              :key="key"
+              class="box-row settings-row"
+            >
               <div class="row-copy">
                 <span>{{ t(label) }}</span>
                 <p v-if="key === 'deleteBranchOnMerge'">{{ t("repoSettingsDeleteBranchHint") }}</p>
               </div>
               <FluentSwitch v-model="draft[key]" :label="t(label)" :disabled="!canManage" />
             </div>
-            <NoticeBar v-if="!mergeMethodEnabled" intent="warning">
-              {{ t("repoSettingsMergeMethodRequired") }}
-            </NoticeBar>
+            <div v-if="!mergeMethodEnabled" class="box-form">
+              <NoticeBar intent="warning">
+                {{ t("repoSettingsMergeMethodRequired") }}
+              </NoticeBar>
+            </div>
           </section>
 
           <BranchProtectionSettings
@@ -485,11 +503,13 @@ watch(() => props.repository.id, load, { immediate: true });
 
           <section
             v-else-if="activeSection === 'agents'"
-            class="settings-card"
+            class="box"
             aria-labelledby="settings-agents-title"
           >
-            <h3 id="settings-agents-title">{{ sectionName("agents") }}</h3>
-            <div class="settings-row">
+            <header class="box-header">
+              <h3 id="settings-agents-title">{{ sectionName("agents") }}</h3>
+            </header>
+            <div class="box-row settings-row">
               <div class="row-copy">
                 <span>{{ t("repoSettingsMemoryVisibility") }}</span>
                 <p>{{ t("repoSettingsMemoryVisibilityHint") }}</p>
@@ -505,10 +525,10 @@ watch(() => props.repository.id, load, { immediate: true });
                 "
               />
             </div>
-            <p v-if="!publicMemoryAllowed" class="private-note">
+            <p v-if="!publicMemoryAllowed" class="box-row settings-hint">
               {{ t("repoSettingsMemoryPrivateNote") }}
             </p>
-            <div class="settings-row">
+            <div class="box-row settings-row">
               <div class="row-copy">
                 <span>{{ t("repoSettingsAgentPolicy") }}</span>
                 <p>{{ t("repoSettingsAgentPolicyHint") }}</p>
@@ -526,13 +546,11 @@ watch(() => props.repository.id, load, { immediate: true });
             </div>
           </section>
 
-          <section
-            v-else
-            class="settings-card archive-card"
-            aria-labelledby="settings-archive-title"
-          >
-            <h3 id="settings-archive-title">{{ sectionName("archive") }}</h3>
-            <div class="settings-row">
+          <section v-else class="box box-danger" aria-labelledby="settings-archive-title">
+            <header class="box-header">
+              <h3 id="settings-archive-title">{{ sectionName("archive") }}</h3>
+            </header>
+            <div class="box-row settings-row">
               <div class="row-copy">
                 <strong>{{ t("repoSettingsArchiveTitle") }}</strong>
                 <p>{{ t("repoSettingsArchiveHint") }}</p>
@@ -543,9 +561,9 @@ watch(() => props.repository.id, load, { immediate: true });
                 :disabled="!canManage"
               />
             </div>
-            <NoticeBar v-if="draft.archived" intent="warning">{{
-              t("repoSettingsArchived")
-            }}</NoticeBar>
+            <div v-if="draft.archived" class="box-form">
+              <NoticeBar intent="warning">{{ t("repoSettingsArchived") }}</NoticeBar>
+            </div>
           </section>
 
           <NoticeBar v-if="branchesError && activeSection !== 'general'" intent="warning">{{
@@ -558,7 +576,7 @@ watch(() => props.repository.id, load, { immediate: true });
           <NoticeBar v-if="revocationIncomplete" intent="warning">{{
             t("revocationIncomplete")
           }}</NoticeBar>
-          <div class="settings-actions">
+          <div class="form-actions">
             <ConfirmButton
               v-if="archivingNow"
               ref="archiveConfirm"
@@ -604,141 +622,40 @@ watch(() => props.repository.id, load, { immediate: true });
 }
 .settings-layout {
   display: grid;
-  gap: 24px;
+  gap: var(--space-5);
   max-width: 1100px;
   margin: 0 auto;
 }
-.settings-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-.settings-header h2,
-.settings-card h3 {
-  margin: 0;
-  color: var(--fg-default);
-}
-.settings-header p,
-.settings-card p {
-  margin: 6px 0 0;
-  color: var(--fg-muted);
-  font-size: 12px;
-}
 .settings-body {
   display: grid;
-  grid-template-columns: minmax(180px, 230px) minmax(0, 1fr);
-  gap: 24px;
+  grid-template-columns: minmax(180px, 224px) minmax(0, 1fr);
+  gap: var(--space-8);
   align-items: start;
 }
 .settings-nav {
   position: sticky;
-  top: 16px;
-  display: grid;
-  gap: 4px;
-  padding: 6px;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
-  background: var(--bg-raised);
-}
-.settings-nav button {
-  min-height: 38px;
-  padding: 8px 12px;
-  border: 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--fg-default);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.settings-nav button:hover {
-  background: var(--control-bg-hover);
-}
-.settings-nav button[aria-current="page"] {
-  background: var(--bg-selected);
-  color: var(--accent-fg);
-  font-weight: 600;
+  top: var(--space-4);
 }
 .settings-main {
   display: grid;
-  gap: 16px;
+  gap: var(--space-4);
   min-width: 0;
-}
-.settings-card {
-  overflow: hidden;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
-  background: var(--bg-raised);
-  color: var(--fg-default);
-}
-.settings-card h3 {
-  padding: 18px 20px;
-  border-bottom: 1px solid var(--border-default);
-  font-size: 18px;
-}
-.settings-card .card-intro {
-  padding: 0 20px;
-}
-.settings-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 40%);
-  gap: 24px;
-  align-items: center;
-  min-width: 0;
-  padding: 18px 20px;
-  border-bottom: 1px solid var(--border-default);
-}
-.settings-row:last-child {
-  border-bottom: 0;
-}
-.row-copy {
-  min-width: 0;
-}
-.row-copy > span,
-.row-copy > strong,
-.row-copy > label {
-  color: var(--fg-default);
-  font-size: 14px;
-  font-weight: 600;
-}
-.settings-row > fluent-field,
-.settings-row > fluent-text-area,
-.settings-row > .fluent-select {
-  width: 100%;
-  min-width: 0;
-}
-.private-note {
-  padding: 0 20px 16px;
 }
 .branch-error {
   display: grid;
   justify-items: start;
-  gap: 6px;
+  gap: var(--space-2);
 }
-.archive-card {
-  border-color: var(--danger-fg);
-}
-.settings-actions {
-  display: flex;
-  justify-content: flex-end;
-  padding: 4px 0 8px;
+.branch-error p {
+  color: var(--danger-fg);
 }
 @media (max-width: 760px) {
   .settings-body {
     grid-template-columns: minmax(0, 1fr);
-    gap: 16px;
+    gap: var(--space-4);
   }
   .settings-nav {
     position: static;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .settings-header {
-    display: grid;
-  }
-  .settings-row {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 12px;
   }
 }
 </style>

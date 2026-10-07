@@ -14,13 +14,14 @@ import { api, errorMessage } from "../lib/api";
 import ConfirmButton from "./ConfirmButton.vue";
 import NoticeBar from "./NoticeBar.vue";
 import StatusBadge from "./StatusBadge.vue";
+import StatusState from "./StatusState.vue";
 
 interface OneTimeCredential {
   token: string;
   expiresAt: number;
 }
 
-const { t, locale, d } = useI18n();
+const { t, d } = useI18n();
 const credentials = ref<GitCredential[]>([]);
 const repositories = ref<Repository[]>([]);
 const repositoryId = ref("");
@@ -42,11 +43,6 @@ let secretRequestVersion = 0;
 
 const selectedRepository = computed(
   () => repositories.value.find((repository) => repository.id === repositoryId.value) ?? null
-);
-const archivedRepositoryNotice = computed(() =>
-  locale.value.startsWith("zh")
-    ? "已归档仓库只能创建只读凭证。"
-    : "Archived repositories can only use read-only credentials."
 );
 const repositoryOptions = computed<readonly FluentSelectOption[]>(() =>
   repositories.value.map((repository) => ({
@@ -185,18 +181,20 @@ onUnmounted(dispose);
 </script>
 
 <template>
-  <section class="preference-panel">
-    <div class="settings-section-heading">
-      <h2 class="settings-page-title">{{ t("settingsCredentials") }}</h2>
+  <section class="settings-panel">
+    <header class="settings-header">
+      <div>
+        <h2>{{ t("settingsCredentials") }}</h2>
+        <p>{{ t("settingsTokenDescription") }}</p>
+      </div>
       <FluentButton type="button" tone="subtle" :busy="loading" @click="load">
         {{ t("refresh") }}
       </FluentButton>
-    </div>
-    <p class="muted">{{ t("settingsTokenDescription") }}</p>
+    </header>
     <NoticeBar v-if="loadingError" intent="error">{{ loadingError }}</NoticeBar>
     <NoticeBar v-if="actionError" intent="error">{{ actionError }}</NoticeBar>
 
-    <div v-if="oneTimeCredential" class="settings-surface form-stack" aria-live="polite">
+    <div v-if="oneTimeCredential" class="box box-form form-stack" aria-live="polite">
       <NoticeBar intent="success">{{ t("settingsTokenOnce") }}</NoticeBar>
       <FluentField
         :model-value="oneTimeCredential.token"
@@ -204,7 +202,7 @@ onUnmounted(dispose);
         readonly
         type="text"
       />
-      <p class="muted">{{ t("settingsTokenInstructions") }}</p>
+      <p class="field-hint">{{ t("settingsTokenInstructions") }}</p>
       <pre class="settings-code">Authorization: Bearer &lt;token&gt;</pre>
       <div class="settings-actions">
         <FluentButton type="button" tone="secondary" @click="copyCredential">
@@ -216,57 +214,70 @@ onUnmounted(dispose);
       </div>
     </div>
 
-    <form class="settings-surface form-stack" @submit.prevent="createCredential">
-      <FluentField
-        v-model="credentialName"
-        :label="t('settingsTokenName')"
-        :disabled="loading || !repositories.length"
-        type="text"
-      />
-      <p v-if="!repositories.length && !loading" class="muted">
-        {{ t("settingsTokenRepoMissing") }}
-      </p>
-      <FluentSelect
-        v-model="repositoryId"
-        :label="t('settingsTokenRepo')"
-        :options="repositoryOptions"
-        :disabled="loading || !repositories.length"
-      />
-      <p v-if="selectedRepository?.archived" class="muted">{{ archivedRepositoryNotice }}</p>
-      <FluentSelect
-        v-model="permission"
-        :label="t('settingsTokenPermission')"
-        :options="permissionOptions"
-        :disabled="loading || !repositories.length"
-      />
-      <FluentSelect
-        v-model="ttlSeconds"
-        :label="t('settingsTokenExpiry')"
-        :options="expiryOptions"
-        :disabled="loading"
-      />
-      <div class="settings-actions">
-        <FluentButton type="submit" tone="primary" :busy="creating" :disabled="!canCreate">
-          {{ t("settingsCreateToken") }}
-        </FluentButton>
+    <form class="box" aria-labelledby="credential-create-title" @submit.prevent="createCredential">
+      <header class="box-header">
+        <h3 id="credential-create-title">{{ t("settingsCreateToken") }}</h3>
+      </header>
+      <div class="box-form form-stack">
+        <FluentField
+          v-model="credentialName"
+          :label="t('settingsTokenName')"
+          :disabled="loading || !repositories.length"
+          type="text"
+        />
+        <p v-if="!repositories.length && !loading" class="field-hint">
+          {{ t("settingsTokenRepoMissing") }}
+        </p>
+        <FluentSelect
+          v-model="repositoryId"
+          :label="t('settingsTokenRepo')"
+          :options="repositoryOptions"
+          :disabled="loading || !repositories.length"
+        />
+        <p v-if="selectedRepository?.archived" class="field-hint">
+          {{ t("settingsTokenArchivedNote") }}
+        </p>
+        <FluentSelect
+          v-model="permission"
+          :label="t('settingsTokenPermission')"
+          :options="permissionOptions"
+          :disabled="loading || !repositories.length"
+        />
+        <FluentSelect
+          v-model="ttlSeconds"
+          :label="t('settingsTokenExpiry')"
+          :options="expiryOptions"
+          :disabled="loading"
+        />
+        <div class="form-actions">
+          <FluentButton type="submit" tone="primary" :busy="creating" :disabled="!canCreate">
+            {{ t("settingsCreateToken") }}
+          </FluentButton>
+        </div>
       </div>
     </form>
 
-    <div v-if="loading" class="state" role="status">{{ t("loading") }}</div>
-    <div v-else-if="!loadingError && !credentials.length" class="settings-surface muted">
-      {{ t("settingsNoTokens") }}
-    </div>
-    <div v-else class="credential-list">
-      <article v-for="credential in credentials" :key="credential.id" class="settings-surface">
-        <div class="credential-row">
-          <div>
-            <h3>{{ credential.name }}</h3>
-            <p class="muted">{{ repositoryLabel(credential) }}</p>
-            <p class="muted">
-              {{ credential.permission === "read" ? t("readToken") : t("writeToken") }} ·
-              {{ t("settingsTokenExpiry") }}: {{ d(credential.expiresAt, "long") }}
-            </p>
-            <StatusBadge :tone="statusTone(credential)">{{ statusLabel(credential) }}</StatusBadge>
+    <div v-if="loading" class="box"><StatusState :loading="true" /></div>
+    <section v-else-if="!loadingError" class="box" aria-labelledby="credential-list-title">
+      <header class="box-header">
+        <h3 id="credential-list-title">{{ t("settingsTokenList") }}</h3>
+        <StatusBadge>{{ credentials.length }}</StatusBadge>
+      </header>
+      <p v-if="!credentials.length" class="settings-empty">{{ t("settingsNoTokens") }}</p>
+      <ul v-else class="settings-list">
+        <li v-for="credential in credentials" :key="credential.id" class="box-row settings-item">
+          <div class="settings-item-copy">
+            <div class="row-title">
+              {{ credential.name }}
+              <StatusBadge :tone="statusTone(credential)">{{
+                statusLabel(credential)
+              }}</StatusBadge>
+            </div>
+            <div class="row-meta">
+              <span>{{ repositoryLabel(credential) }}</span>
+              <span>{{ credential.permission === "read" ? t("readToken") : t("writeToken") }}</span>
+              <span>{{ t("settingsTokenExpiry") }}: {{ d(credential.expiresAt, "long") }}</span>
+            </div>
           </div>
           <div class="settings-actions">
             <ConfirmButton
@@ -278,8 +289,8 @@ onUnmounted(dispose);
               @confirm="revokeCredential(credential)"
             />
           </div>
-        </div>
-      </article>
-    </div>
+        </li>
+      </ul>
+    </section>
   </section>
 </template>

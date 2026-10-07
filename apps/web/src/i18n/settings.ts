@@ -31,6 +31,11 @@ export const settingsMessages = {
     settingsLineWrap: "代码自动换行",
     settingsLineWrapHint: "长代码行在查看器中自动换行。",
     settingsSavedNotice: "设置已保存。",
+    settingsInterfaceGroup: "界面",
+    settingsCodeGroup: "代码查看器",
+    settingsTokenList: "已有凭证",
+    settingsKeyList: "已登记的密钥",
+    settingsTokenArchivedNote: "已归档仓库只能创建只读凭证。",
     settingsTokenDescription:
       "为单个仓库创建有期限的 HTTPS 访问凭证，供 Git CLI 或 Git 客户端使用。",
     settingsTokenName: "凭证名称",
@@ -137,6 +142,11 @@ export const settingsMessages = {
     settingsLineWrap: "Wrap code lines",
     settingsLineWrapHint: "Wrap long lines in the code viewer.",
     settingsSavedNotice: "Settings saved.",
+    settingsInterfaceGroup: "Interface",
+    settingsCodeGroup: "Code viewer",
+    settingsTokenList: "Existing credentials",
+    settingsKeyList: "Registered keys",
+    settingsTokenArchivedNote: "Archived repositories can only use read-only credentials.",
     settingsTokenDescription:
       "Create expiring HTTPS credentials scoped to one repository for Git CLI or a Git client.",
     settingsTokenName: "Credential name",

@@ -361,7 +361,7 @@ describe("agent settings", () => {
       description: "Does chores",
       profilePublic: false,
     });
-    expect(mounted.root.querySelector(".agent-summary h2")?.textContent).toBe("Renamed");
+    expect(mounted.root.querySelector("#agent-summary-title")?.textContent).toBe("Renamed");
 
     mounted.unmount();
   });

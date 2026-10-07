@@ -55,36 +55,34 @@ onMounted(load);
 </script>
 
 <template>
-  <section class="preference-panel">
-    <div class="settings-section-heading">
+  <section class="settings-panel">
+    <header class="settings-header">
       <div>
-        <h2 class="settings-page-title">{{ t("settingsSessions") }}</h2>
-        <p class="muted">{{ t("settingsSessionDescription") }}</p>
+        <h2>{{ t("settingsSessions") }}</h2>
+        <p>{{ t("settingsSessionDescription") }}</p>
       </div>
       <FluentButton type="button" tone="subtle" :busy="loading" @click="load">
         {{ t("refresh") }}
       </FluentButton>
-    </div>
+    </header>
     <NoticeBar v-if="loadingError" intent="error">{{ loadingError }}</NoticeBar>
     <NoticeBar v-if="actionError" intent="error">{{ actionError }}</NoticeBar>
-    <StatusState v-if="loading" :loading="true" />
-    <div v-else-if="!loadingError && !sessions.length" class="settings-surface muted">
-      {{ t("empty") }}
-    </div>
-    <div v-else class="credential-list">
-      <article v-for="session in sessions" :key="session.id" class="settings-surface">
-        <div class="credential-row">
-          <div>
-            <h3>{{ t("settingsOtherSession") }}</h3>
-            <p class="muted">
-              {{ t("settingsSessionCreated") }} · {{ d(session.createdAt, "long") }}
-            </p>
-            <p class="muted">
-              {{ t("settingsSessionExpires") }} · {{ d(session.expiresAt, "long") }}
-            </p>
-            <StatusBadge :tone="session.isCurrent ? 'brand' : 'neutral'">
-              {{ session.isCurrent ? t("settingsCurrentSession") : t("settingsOtherSession") }}
-            </StatusBadge>
+    <div v-if="loading" class="box"><StatusState :loading="true" /></div>
+    <section v-else-if="!loadingError" class="box" :aria-label="t('settingsSessions')">
+      <p v-if="!sessions.length" class="settings-empty">{{ t("empty") }}</p>
+      <ul v-else class="settings-list">
+        <li v-for="session in sessions" :key="session.id" class="box-row settings-item">
+          <div class="settings-item-copy">
+            <div class="row-title">
+              {{ t("settingsOtherSession") }}
+              <StatusBadge v-if="session.isCurrent" tone="brand">{{
+                t("settingsCurrentSession")
+              }}</StatusBadge>
+            </div>
+            <div class="row-meta">
+              <span>{{ t("settingsSessionCreated") }} · {{ d(session.createdAt, "long") }}</span>
+              <span>{{ t("settingsSessionExpires") }} · {{ d(session.expiresAt, "long") }}</span>
+            </div>
           </div>
           <div class="settings-actions">
             <ConfirmButton
@@ -97,8 +95,8 @@ onMounted(load);
               @confirm="signOut(session)"
             />
           </div>
-        </div>
-      </article>
-    </div>
+        </li>
+      </ul>
+    </section>
   </section>
 </template>

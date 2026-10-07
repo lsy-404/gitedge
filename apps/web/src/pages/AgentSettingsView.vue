@@ -21,7 +21,8 @@ import TextAreaField from "../components/TextAreaField.vue";
 import NoticeBar from "../components/NoticeBar.vue";
 import AppIcon from "../components/AppIcon.vue";
 import { useRoute, useRouter } from "vue-router";
-import "../styles/workspace.css";
+import SettingsSidebar from "../components/SettingsSidebar.vue";
+import "../styles/settings.css";
 
 const permissions = ["read", "write"] as const;
 const { t, d } = useI18n();
@@ -307,33 +308,27 @@ sessionClockTimer = window.setInterval(() => {
 </script>
 
 <template>
-  <section class="workspace-page settings-page agent-settings-page">
-    <aside class="settings-sidebar">
-      <h1>{{ t("settings") }}</h1>
-      <p class="settings-sidebar-label">{{ t("personalSettings") }}</p>
-      <nav :aria-label="t('settingsNavigation')">
-        <RouterLink class="workspace-nav-item" to="/settings/account"
-          ><AppIcon name="person" />{{ t("account") }}</RouterLink
-        >
-        <RouterLink class="workspace-nav-item is-selected" to="/settings/agents"
-          ><AppIcon name="agent" />{{ t("agents") }}</RouterLink
-        >
-      </nav>
-    </aside>
+  <section class="settings-page agent-settings-page">
+    <SettingsSidebar active="agents" />
     <div class="settings-content">
-      <h2 class="settings-page-title">{{ t("agents") }}</h2>
+      <header class="settings-header">
+        <div>
+          <h2>{{ t("agents") }}</h2>
+          <p>{{ t("multipleAgents") }}</p>
+        </div>
+        <button
+          v-if="!loading && !loadError"
+          class="btn btn-primary"
+          type="button"
+          @click="openAgentForm"
+        >
+          <AppIcon name="plus" />{{ t("createAgent") }}
+        </button>
+      </header>
       <div v-if="loading || loadError" class="box">
         <StatusState :loading="loading" :error="loadError" :empty="false" @retry="load" />
       </div>
       <template v-else>
-        <div class="agents-page-heading">
-          <div>
-            <p class="muted">{{ t("multipleAgents") }}</p>
-          </div>
-          <button class="btn btn-primary" type="button" @click="openAgentForm">
-            <AppIcon name="plus" />{{ t("createAgent") }}
-          </button>
-        </div>
         <NoticeBar v-if="actionError" intent="error">{{ actionError }}</NoticeBar>
         <NoticeBar v-if="repositoriesError" intent="warning">
           {{ repositoriesError }}
@@ -343,76 +338,71 @@ sessionClockTimer = window.setInterval(() => {
             }}</FluentButton>
           </template>
         </NoticeBar>
-        <div class="agent-layout">
+        <div class="agent-layout" :class="{ 'is-single': !agents.length }">
           <nav class="box agent-list" :aria-label="t('yourAgents')">
-            <div class="box-header agent-list-header">
+            <div class="box-header">
               <span>{{ t("yourAgents") }}</span
-              ><StatusBadge>{{ agents.length }}</StatusBadge>
+              ><StatusBadge class="box-header-end">{{ agents.length }}</StatusBadge>
             </div>
-            <FluentButton
+            <button
               v-for="agent in agents"
               :key="agent.id"
               type="button"
               class="agent-choice"
-              :tone="selectedAgent === agent.id ? 'secondary' : 'subtle'"
               :aria-pressed="selectedAgent === agent.id"
               @click="selectedAgent = agent.id"
             >
-              <span class="agent-choice-text">
-                <strong>{{ agent.name }}</strong>
-                <small>{{
-                  agent.disabledAt ? t("disabled") : agent.description || t("noDescription")
-                }}</small>
-              </span>
-            </FluentButton>
-            <div v-if="!agents.length" class="agent-empty">
-              <AppIcon name="agent" :size="22" /><strong>{{ t("noAgents") }}</strong
-              ><span class="muted">{{ t("agentEmptyHint") }}</span
+              <strong>{{ agent.name }}</strong>
+              <small>{{
+                agent.disabledAt ? t("disabled") : agent.description || t("noDescription")
+              }}</small>
+            </button>
+            <div v-if="!agents.length" class="settings-empty">
+              <AppIcon name="agent" :size="24" /><strong>{{ t("noAgents") }}</strong
+              ><span>{{ t("agentEmptyHint") }}</span
               ><button class="btn btn-sm" type="button" @click="openAgentForm">
                 {{ t("createAgent") }}
               </button>
             </div>
           </nav>
           <div v-if="currentAgent" class="agent-detail">
-            <section class="settings-card agent-summary">
-              <div class="panel-heading">
-                <div>
-                  <h2>{{ currentAgent.name }}</h2>
-                  <p class="muted">{{ currentAgent.description || t("noDescription") }}</p>
-                  <RouterLink :to="currentAgent.profilePath">{{
-                    currentAgent.profilePath
-                  }}</RouterLink>
-                  <RouterLink :to="`/settings/agents/${currentAgent.id}/webhook`">{{
-                    t("agentWebhook")
-                  }}</RouterLink>
-                </div>
-                <FluentButton
-                  v-if="!currentAgent.disabledAt"
-                  class="btn btn-danger btn-sm"
-                  type="button"
-                  :disabled="saving"
-                  @click="disableAgent(currentAgent)"
+            <section class="box" aria-labelledby="agent-summary-title">
+              <header class="box-header">
+                <h3 id="agent-summary-title">{{ currentAgent.name }}</h3>
+                <StatusBadge v-if="currentAgent.disabledAt" tone="warning">{{
+                  t("disabled")
+                }}</StatusBadge>
+                <RouterLink
+                  class="btn btn-sm box-header-end"
+                  :to="`/settings/agents/${currentAgent.id}/webhook`"
+                  >{{ t("agentWebhook") }}</RouterLink
                 >
-                  {{ t("disableAgent") }}
-                </FluentButton>
+              </header>
+              <div class="box-row">
+                <div class="settings-item-copy">
+                  <p>{{ currentAgent.description || t("noDescription") }}</p>
+                  <div class="row-meta">
+                    <RouterLink :to="currentAgent.profilePath">{{
+                      currentAgent.profilePath
+                    }}</RouterLink>
+                    <span>{{ t("createdAt") }} {{ d(currentAgent.createdAt, "long") }}</span>
+                  </div>
+                </div>
               </div>
-              <small class="muted"
-                >{{ t("createdAt") }} {{ d(currentAgent.createdAt, "long") }}</small
-              >
               <form
                 v-if="!currentAgent.disabledAt"
-                class="form-stack agent-profile-form"
+                class="box-form form-stack agent-profile-form"
                 @submit.prevent="saveProfile(currentAgent)"
               >
-                <h3>{{ t("agentProfile") }}</h3>
+                <h4>{{ t("agentProfile") }}</h4>
                 <TextField
                   v-model="profileForm.handle"
                   required
                   maxlength="40"
                   pattern="[a-z0-9](?:[a-z0-9\-]*[a-z0-9])?"
+                  :hint="t('agentHandleHint')"
                   >{{ t("agentHandle") }}</TextField
                 >
-                <small class="muted">{{ t("agentHandleHint") }}</small>
                 <TextField v-model="profileForm.name" required maxlength="80">{{
                   t("agentName")
                 }}</TextField>
@@ -437,73 +427,88 @@ sessionClockTimer = window.setInterval(() => {
                 </div>
               </form>
             </section>
-            <section class="settings-section agent-sessions-section">
-              <div class="agent-section-heading">
-                <div>
-                  <h3>{{ t("sessions") }}</h3>
-                  <p class="muted">{{ t("agentSessionsHint") }}</p>
-                </div>
+            <section class="box" aria-labelledby="agent-sessions-title">
+              <header class="box-header">
+                <h3 id="agent-sessions-title">{{ t("sessions") }}</h3>
                 <button
                   v-if="!currentAgent.disabledAt"
-                  class="btn btn-primary btn-sm"
+                  class="btn btn-primary btn-sm box-header-end"
                   type="button"
                   :disabled="!repositories.length"
                   @click="openSessionForm"
                 >
                   <AppIcon name="plus" />{{ t("createAgentSession") }}
                 </button>
-              </div>
-              <section class="settings-card">
-                <StatusState
-                  v-if="sessionsError"
-                  :error="sessionsError"
-                  :empty="false"
-                  @retry="loadSessions"
-                />
-                <StatusState v-else-if="sessionsLoading" :loading="true" :empty="false" />
-                <template v-else>
-                  <div
-                    v-for="session in sessions"
-                    :key="session.id"
-                    class="settings-card-row session-row"
-                  >
-                    <div class="session-workspace-icon"><AppIcon name="repo" /></div>
-                    <div class="grow">
-                      <div class="row-title">{{ session.workspaceName }}</div>
-                      <div class="row-meta">
-                        <span
-                          >{{
-                            repositories.find((repo) => repo.id === session.repositoryId)?.slug ||
-                            session.repositoryId
-                          }}
-                          · {{ session.baseRef }} ·
-                          {{ t(session.permission === "read" ? "readOnly" : "writeAccess") }}</span
-                        >
-                        <span>{{ t("expiresAt") }} {{ d(session.expiresAt, "long") }}</span>
-                      </div>
+              </header>
+              <p class="box-row settings-hint">{{ t("agentSessionsHint") }}</p>
+              <StatusState
+                v-if="sessionsError"
+                :error="sessionsError"
+                :empty="false"
+                @retry="loadSessions"
+              />
+              <StatusState v-else-if="sessionsLoading" :loading="true" :empty="false" />
+              <template v-else>
+                <div v-for="session in sessions" :key="session.id" class="box-row settings-item">
+                  <div class="session-workspace-icon"><AppIcon name="repo" /></div>
+                  <div class="settings-item-copy">
+                    <div class="row-title">{{ session.workspaceName }}</div>
+                    <div class="row-meta">
+                      <span
+                        >{{
+                          repositories.find((repo) => repo.id === session.repositoryId)?.slug ||
+                          session.repositoryId
+                        }}
+                        · {{ session.baseRef }} ·
+                        {{ t(session.permission === "read" ? "readOnly" : "writeAccess") }}</span
+                      >
+                      <span>{{ t("expiresAt") }} {{ d(session.expiresAt, "long") }}</span>
                     </div>
-                    <StatusBadge :tone="sessionExpired(session) ? 'warning' : 'neutral'">{{
-                      sessionStatus(session)
-                    }}</StatusBadge>
-                    <button
-                      v-if="session.status === 'active' && !sessionExpired(session)"
-                      class="btn btn-sm"
-                      type="button"
-                      :disabled="saving"
-                      @click="revoke(session)"
-                    >
-                      {{ t("revokeSession") }}
-                    </button>
                   </div>
-                  <div v-if="!sessions.length" class="settings-empty-state">
-                    <strong>{{ t("noSessions") }}</strong
-                    ><span>{{ t("noSessionsHint") }}</span>
-                  </div>
-                </template>
-              </section>
+                  <StatusBadge :tone="sessionExpired(session) ? 'warning' : 'neutral'">{{
+                    sessionStatus(session)
+                  }}</StatusBadge>
+                  <button
+                    v-if="session.status === 'active' && !sessionExpired(session)"
+                    class="btn btn-sm"
+                    type="button"
+                    :disabled="saving"
+                    @click="revoke(session)"
+                  >
+                    {{ t("revokeSession") }}
+                  </button>
+                </div>
+                <div v-if="!sessions.length" class="settings-empty">
+                  <strong>{{ t("noSessions") }}</strong
+                  ><span>{{ t("noSessionsHint") }}</span>
+                </div>
+              </template>
+            </section>
+            <section
+              v-if="!currentAgent.disabledAt"
+              class="box box-danger"
+              aria-labelledby="agent-danger-title"
+            >
+              <header class="box-header">
+                <h3 id="agent-danger-title">{{ t("dangerZone") }}</h3>
+              </header>
+              <div class="box-row settings-item">
+                <div class="settings-item-copy">
+                  <strong>{{ t("disableAgent") }}</strong>
+                  <span class="settings-hint">{{ t("agentDisableHint") }}</span>
+                </div>
+                <FluentButton
+                  class="btn btn-danger btn-sm"
+                  type="button"
+                  :disabled="saving"
+                  @click="disableAgent(currentAgent)"
+                >
+                  {{ t("disableAgent") }}
+                </FluentButton>
+              </div>
             </section>
           </div>
-          <div v-else class="box state">{{ t("selectAgent") }}</div>
+          <div v-else-if="agents.length" class="box state">{{ t("selectAgent") }}</div>
         </div>
         <FluentDialog
           v-model:open="credentialDialogOpen"
@@ -556,9 +561,9 @@ sessionClockTimer = window.setInterval(() => {
               v-model="agentForm.handle"
               maxlength="40"
               pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
+              :hint="t('agentHandleHint')"
               >{{ t("agentHandle") }}</TextField
             >
-            <small class="muted">{{ t("agentHandleHint") }}</small>
             <TextField v-model="agentForm.name" required maxlength="80">{{
               t("agentName")
             }}</TextField>
@@ -629,45 +634,72 @@ sessionClockTimer = window.setInterval(() => {
 </template>
 
 <style scoped>
-.agent-form,
-.session-form {
-  margin-bottom: var(--space-4);
-}
 .agent-layout {
   display: grid;
-  grid-template-columns: minmax(190px, 0.7fr) minmax(0, 1.5fr);
+  grid-template-columns: minmax(200px, 0.7fr) minmax(0, 1.6fr);
   gap: var(--space-4);
+}
+.agent-layout.is-single {
+  grid-template-columns: minmax(0, 1fr);
 }
 .agent-detail {
   display: grid;
   gap: var(--space-4);
+  min-width: 0;
 }
 .agent-list {
   align-self: start;
 }
 .agent-choice {
-  display: flex;
-  width: 100%;
-  justify-content: flex-start;
-  height: auto;
-  padding-block: var(--space-2);
-  text-align: left;
-}
-.agent-choice-text {
+  position: relative;
   display: grid;
   gap: var(--space-1);
+  width: 100%;
+  min-height: calc(var(--space-8) + var(--space-4));
+  padding: var(--space-2) var(--space-4);
+  color: var(--fg-default);
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--border-muted);
+  font: inherit;
+  text-align: left;
+}
+.agent-choice:hover {
+  background: var(--bg-subtle);
+}
+.agent-choice[aria-pressed="true"] {
+  background: var(--bg-selected);
+}
+.agent-choice[aria-pressed="true"]::before {
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  width: var(--space-1);
+  background: var(--accent-strong);
+  content: "";
+}
+.agent-choice strong,
+.agent-choice small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-choice strong {
+  font-weight: var(--font-weight-medium);
 }
 .agent-choice small {
   color: var(--fg-muted);
+  font-size: var(--font-size-meta);
 }
-.panel-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-.session-row {
-  align-items: center;
+.session-workspace-icon {
+  display: grid;
+  width: var(--control-height);
+  height: var(--control-height);
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  color: var(--fg-muted);
 }
 .credential-card {
   display: grid;
@@ -694,9 +726,9 @@ sessionClockTimer = window.setInterval(() => {
   background: var(--bg-subtle);
   font: var(--font-size-meta) / 1.6 var(--font-mono);
 }
-@media (max-width: 700px) {
+@media (max-width: 760px) {
   .agent-layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

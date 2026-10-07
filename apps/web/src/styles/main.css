@@ -420,6 +420,12 @@ textarea.fluent-field__input {
   font-weight: var(--font-weight-semibold);
   line-height: 20px;
 }
+.field-hint {
+  color: var(--fg-muted);
+  font-size: var(--font-size-meta);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--space-4);
+}
 .text-field > input,
 .textarea-field > textarea {
   width: 100%;

@@ -103,97 +103,102 @@ function setTabSize(value: string) {
 onMounted(load);
 </script>
 <template>
-  <section class="preference-panel">
-    <h2 class="settings-page-title">
-      {{ t(props.section === "profile" ? "settingsProfile" : "settingsPreferences") }}
-    </h2>
-    <p class="muted">
-      {{
-        t(
-          props.section === "profile"
-            ? "settingsProfileDescription"
-            : "settingsPreferenceDescription"
-        )
-      }}
-    </p>
+  <section class="settings-panel">
+    <header class="settings-header">
+      <div>
+        <h2>{{ t(props.section === "profile" ? "settingsProfile" : "settingsPreferences") }}</h2>
+        <p>
+          {{
+            t(
+              props.section === "profile"
+                ? "settingsProfileDescription"
+                : "settingsPreferenceDescription"
+            )
+          }}
+        </p>
+      </div>
+    </header>
     <StatusState v-if="loading" :loading="true" />
     <NoticeBar v-if="error" intent="error">{{ error }}</NoticeBar>
     <NoticeBar v-if="saved && !dirty" intent="success">{{ t("settingsSavedNotice") }}</NoticeBar>
-    <form v-if="profile" class="settings-form-grid" @submit.prevent="save">
-      <template v-if="section === 'profile'">
-        <div class="settings-surface form-stack">
-          <FluentField
-            v-model="profile.identifier"
-            :label="t('settingsUsername')"
-            required
-            minlength="3"
-            maxlength="63"
-            autocomplete="username"
-          />
-          <p class="muted">{{ t("settingsRenameNotice") }}</p>
-          <FluentField
-            v-model="profile.displayName"
-            :label="t('settingsDisplayName')"
-            required
-            maxlength="100"
-          />
-          <FluentTextArea
-            v-model="profile.bio"
-            :label="t('settingsBio')"
-            maxlength="500"
-            rows="4"
-          />
-          <FluentField v-model="profile.location" :label="t('settingsLocation')" maxlength="100" />
-          <FluentField
-            v-model="profile.website"
-            :label="t('settingsWebsite')"
-            type="url"
-            placeholder="https://"
-            maxlength="255"
-          />
-        </div>
-      </template>
+    <form v-if="profile" class="settings-panel" @submit.prevent="save">
+      <div v-if="section === 'profile'" class="box box-form form-stack">
+        <FluentField
+          v-model="profile.identifier"
+          :label="t('settingsUsername')"
+          required
+          minlength="3"
+          maxlength="63"
+          autocomplete="username"
+        />
+        <p class="field-hint">{{ t("settingsRenameNotice") }}</p>
+        <FluentField
+          v-model="profile.displayName"
+          :label="t('settingsDisplayName')"
+          required
+          maxlength="100"
+        />
+        <FluentTextArea v-model="profile.bio" :label="t('settingsBio')" maxlength="500" rows="4" />
+        <FluentField v-model="profile.location" :label="t('settingsLocation')" maxlength="100" />
+        <FluentField
+          v-model="profile.website"
+          :label="t('settingsWebsite')"
+          type="url"
+          placeholder="https://"
+          maxlength="255"
+        />
+      </div>
       <template v-else>
-        <div class="settings-surface form-stack">
-          <FluentSelect
-            :model-value="profile.preferences.theme"
-            :label="t('settingsTheme')"
-            :options="themeOptions"
-            @update:model-value="setTheme"
-          />
-          <FluentSelect
-            :model-value="profile.preferences.locale"
-            :label="t('settingsLanguage')"
-            :options="languageOptions"
-            @update:model-value="setLocale"
-          />
-          <FluentSelect
-            :model-value="profile.preferences.density"
-            :label="t('settingsDensity')"
-            :options="densityOptions"
-            @update:model-value="setDensity"
-          />
-        </div>
-        <div class="settings-surface form-stack">
-          <FluentSelect
-            :model-value="String(profile.preferences.tabSize)"
-            :label="t('settingsTabSize')"
-            :options="tabOptions"
-            @update:model-value="setTabSize"
-          />
-          <div class="preference-row">
-            <div>
+        <section class="box" aria-labelledby="settings-interface-title">
+          <header class="box-header">
+            <h3 id="settings-interface-title">{{ t("settingsInterfaceGroup") }}</h3>
+          </header>
+          <div class="box-form form-stack">
+            <FluentSelect
+              :model-value="profile.preferences.theme"
+              :label="t('settingsTheme')"
+              :options="themeOptions"
+              @update:model-value="setTheme"
+            />
+            <FluentSelect
+              :model-value="profile.preferences.locale"
+              :label="t('settingsLanguage')"
+              :options="languageOptions"
+              @update:model-value="setLocale"
+            />
+            <FluentSelect
+              :model-value="profile.preferences.density"
+              :label="t('settingsDensity')"
+              :options="densityOptions"
+              @update:model-value="setDensity"
+            />
+          </div>
+        </section>
+        <section class="box" aria-labelledby="settings-code-title">
+          <header class="box-header">
+            <h3 id="settings-code-title">{{ t("settingsCodeGroup") }}</h3>
+          </header>
+          <div class="box-form form-stack">
+            <FluentSelect
+              :model-value="String(profile.preferences.tabSize)"
+              :label="t('settingsTabSize')"
+              :options="tabOptions"
+              @update:model-value="setTabSize"
+            />
+          </div>
+          <div class="box-row settings-row">
+            <div class="row-copy">
               <strong>{{ t("settingsLineWrap") }}</strong>
-              <p class="muted">{{ t("settingsLineWrapHint") }}</p>
+              <p>{{ t("settingsLineWrapHint") }}</p>
             </div>
             <FluentSwitch
               v-model="profile.preferences.lineWrap"
               :aria-label="t('settingsLineWrap')"
             />
           </div>
-        </div>
+        </section>
       </template>
-      <div class="settings-actions">
+      <div class="form-actions">
         <FluentButton type="submit" tone="primary" :busy="saving" :disabled="!dirty">{{
           t("save")
         }}</FluentButton>

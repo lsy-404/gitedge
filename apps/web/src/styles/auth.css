@@ -1,0 +1,82 @@
+/* Sign-in and registration: a centered brand mark, one card, one footer link. */
+.auth-page {
+  display: grid;
+  justify-items: center;
+  width: min(360px, calc(100% - var(--space-8)));
+  margin: var(--space-8) auto 0;
+  color: var(--fg-default);
+}
+.auth-brand {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+.auth-brand h1 {
+  text-align: center;
+}
+.auth-card {
+  display: grid;
+  gap: var(--space-4);
+  width: 100%;
+  padding: var(--space-5);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--bg-subtle);
+}
+.auth-provider-list {
+  display: grid;
+  gap: var(--space-2);
+}
+.auth-provider-choice,
+.auth-submit {
+  width: 100%;
+  min-height: calc(var(--control-height) + var(--space-2));
+}
+.auth-provider-choice {
+  justify-content: flex-start;
+  gap: var(--space-3);
+}
+.auth-provider-choice strong {
+  flex: 1;
+  font-weight: var(--font-weight-medium);
+  text-align: center;
+}
+.provider-mark {
+  display: grid;
+  width: var(--space-6);
+  height: var(--space-6);
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: var(--radius-full);
+}
+.github-mark {
+  color: var(--bg-canvas);
+  background: var(--fg-default);
+}
+.oidc-mark {
+  color: var(--accent-fg);
+  background: var(--accent-subtle);
+}
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--fg-muted);
+  font-size: var(--font-size-meta);
+}
+.auth-divider::before,
+.auth-divider::after {
+  height: 1px;
+  flex: 1;
+  background: var(--border-default);
+  content: "";
+}
+.auth-page-footer {
+  width: 100%;
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  text-align: center;
+}
