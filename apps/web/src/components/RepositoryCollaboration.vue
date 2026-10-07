@@ -1645,6 +1645,8 @@ code {
   margin-top: var(--space-4);
 }
 .changed-file {
+  display: grid;
+  gap: var(--space-2);
   border-top: 1px solid var(--border-default);
   padding: var(--space-3) 0;
 }

@@ -193,13 +193,19 @@ const compareHead = computed({
     void router.replace({ query: { ...route.query, head: value } });
   },
 });
+const compareRefsAreBranches = computed(() => {
+  const names = new Set(shortRefs(branchRefs.value).map((item) => item.shortName));
+  const headIsFreeText = Boolean(route.query.headSessionId);
+  return names.has(compareBase.value) && (headIsFreeText || names.has(compareHead.value));
+});
 const canOpenPull = computed(
   () =>
     props.repository.pullsEnabled &&
     !props.repository.archived &&
     sessionState.user !== null &&
     (comparison.value?.commits.length ?? 0) > 0 &&
-    compareBase.value !== compareHead.value
+    compareBase.value !== compareHead.value &&
+    compareRefsAreBranches.value
 );
 const openPullLocation = computed(() => {
   const headSessionId = route.query.headSessionId?.toString();
@@ -938,7 +944,11 @@ git push gitedge --tags</code></pre>
         <div class="box-header">
           <AppIcon name="commit" />
           <h2>{{ t("commitGraph") }}</h2>
-          <StatusBadge><AppIcon name="branch" :size="12" />{{ refName }}</StatusBadge>
+          <StatusBadge class="graph-ref" :title="refName"
+            ><AppIcon name="branch" :size="12" /><span class="graph-ref-name">{{
+              refName
+            }}</span></StatusBadge
+          >
           <span v-if="graph?.truncated" class="graph-note muted">{{
             t("graphTruncated", { count: graph.commits.length })
           }}</span>
@@ -1176,6 +1186,14 @@ git push gitedge --tags</code></pre>
 .graph-panel .box-header h2 {
   white-space: nowrap;
 }
+.graph-ref {
+  min-width: 0;
+  max-width: 100%;
+}
+.graph-ref-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .graph-note {
   margin-left: auto;
   font-size: var(--font-size-meta);
@@ -1195,10 +1213,6 @@ git push gitedge --tags</code></pre>
   cursor: pointer;
   stroke: var(--bg-raised);
   stroke-width: 2;
-}
-.graph-scroll svg circle:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
 }
 .commit-row {
   padding: var(--space-2) var(--space-4) var(--space-2)

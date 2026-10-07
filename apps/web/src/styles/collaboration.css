@@ -555,12 +555,10 @@ section.collab-section:has(> .pull-tabs) > .checks-panel {
   grid-column: 1 / -1;
 }
 .changed-file > strong {
-  display: block;
-  padding: 10px 12px;
-  background: var(--bg-subtle);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md) var(--radius-md) 0 0;
-  font: 12px var(--font-mono);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-meta);
 }
 @media (max-width: 760px) {
   section.collab-section:has(> .detail-titlebar) {

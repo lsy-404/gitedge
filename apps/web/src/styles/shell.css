@@ -424,9 +424,7 @@ details.user-menu {
   color: var(--fg-muted);
 }
 .repository-title {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-1);
+  display: block;
   min-width: 0;
   font-size: var(--font-size-section);
   font-weight: var(--font-weight-semibold);
