@@ -16,6 +16,7 @@ import {
   mountAt,
   repository,
   settle,
+  confirmClick,
   submit,
   task,
   taskDocument,
@@ -381,8 +382,7 @@ describe("task detail", () => {
     expect(attachSpy).toHaveBeenCalledWith("repo-1", 1, { kind: "issue", number: 3 });
     expect(linkCard.textContent).toContain("#3 Track memory");
 
-    findByLabel(linkCard, "Unlink #8").click();
-    await settle();
+    await confirmClick(findByLabel(linkCard, "Unlink #8"));
     expect(detachSpy).toHaveBeenCalledWith("repo-1", 1, "pull_request", 8);
     expect(linkCard.textContent).not.toContain("Memory PR");
     mounted.unmount();

@@ -31,9 +31,35 @@ const progress = ref<Progress[]>([]);
 const result = ref<DeployResult | null>(null);
 const step = ref<"read" | "authorize" | "review" | "result">("read");
 
-onBeforeUnmount(() => {
+function endSession(): void {
   void api.endDeploySession(props.repository.id, refName.value).catch(() => undefined);
-});
+}
+
+onBeforeUnmount(endSession);
+
+function isStalePlan(cause: unknown): boolean {
+  return (
+    cause instanceof ApiError &&
+    (cause.code === "manifest_changed" || cause.code === "source_changed")
+  );
+}
+
+function requireReread(cause: unknown): void {
+  endSession();
+  plan.value = null;
+  token.value = "";
+  accounts.value = [];
+  accountId.value = "";
+  accountConfirmed.value = false;
+  sessionNonce.value = "";
+  resourceAvailability.value = {};
+  resourceCheckFailed.value = false;
+  progress.value = [];
+  result.value = null;
+  accepted.value = false;
+  step.value = "read";
+  error.value = failureMessage(cause);
+}
 
 function failureMessage(cause: unknown): string {
   const fallback = errorMessage(cause, t, {}, "deployWizard.error");
@@ -82,7 +108,8 @@ async function startSession() {
     } else step.value = "review";
   } catch (cause) {
     token.value = "";
-    error.value = failureMessage(cause);
+    if (isStalePlan(cause)) requireReread(cause);
+    else error.value = failureMessage(cause);
   } finally {
     loading.value = false;
   }
@@ -101,7 +128,8 @@ async function chooseAccount() {
     step.value = "review";
     await loadResources();
   } catch (cause) {
-    error.value = failureMessage(cause);
+    if (isStalePlan(cause)) requireReread(cause);
+    else error.value = failureMessage(cause);
   } finally {
     loading.value = false;
   }
@@ -117,8 +145,9 @@ async function loadResources() {
     resourceAvailability.value = Object.fromEntries(
       data.resources.map((item) => [item.id, item.exists])
     );
-  } catch {
-    resourceCheckFailed.value = true;
+  } catch (cause) {
+    if (isStalePlan(cause)) requireReread(cause);
+    else resourceCheckFailed.value = true;
   }
 }
 
@@ -143,7 +172,8 @@ async function runStep<T>(id: DeployStepId): Promise<T | null> {
     return data;
   } catch (cause) {
     progressStep.state = "failed";
-    error.value = failureMessage(cause);
+    if (isStalePlan(cause)) requireReread(cause);
+    else error.value = failureMessage(cause);
     return null;
   }
 }
@@ -363,11 +393,17 @@ const migrationPaths = computed(
     <div v-if="progress.length" class="deploy-progress" aria-live="polite" aria-atomic="false">
       <h3>{{ t("deployWizard.progress") }}</h3>
       <ol>
-        <li v-for="item in progress" :key="item.id" :data-state="item.state">
+        <li
+          v-for="item in progress"
+          :key="item.id"
+          :data-state="item.state"
+          :aria-current="item.state === 'running' ? 'step' : undefined"
+        >
           <span aria-hidden="true">{{
             item.state === "done" ? "✓" : item.state === "failed" ? "!" : "…"
           }}</span>
           {{ stepLabel(item.id) }}
+          <span class="visually-hidden">: {{ t(`deployWizard.state.${item.state}`) }}</span>
         </li>
       </ol>
     </div>

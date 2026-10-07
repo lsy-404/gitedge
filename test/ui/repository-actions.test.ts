@@ -3,7 +3,16 @@ import { h } from "vue";
 import RepositoryActions from "../../apps/web/src/components/RepositoryActions.vue";
 import { i18n } from "../../apps/web/src/i18n";
 import { api, type ActionRun } from "../../apps/web/src/lib/api";
-import { control, fill, findButton, isDisabled, mountAt, settle, unmountAll } from "./task-support";
+import {
+  confirmClick,
+  control,
+  fill,
+  findButton,
+  isDisabled,
+  mountAt,
+  settle,
+  unmountAll,
+} from "./task-support";
 
 vi.mock("../../apps/web/src/components/AppIcon.vue", () => ({ default: { template: "<span />" } }));
 
@@ -98,8 +107,7 @@ describe("RepositoryActions", () => {
     });
     expect(api.actionWorkflows).toHaveBeenCalledWith("repo-1", "main", "a".repeat(40));
     expect(mounted.root.textContent).toContain("still working");
-    findButton(mounted.root, "Cancel run").click();
-    await settle();
+    await confirmClick(findButton(mounted.root, "Cancel run"));
 
     expect(cancel).toHaveBeenCalledWith("run-1");
     expect(mounted.root.textContent).toContain("process stopped");

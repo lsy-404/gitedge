@@ -2,7 +2,7 @@ import {
   BranchProtectionInputSchema,
   PutRepositoryCollaboratorSchema,
 } from "../../../packages/contracts/src/repository-controls";
-import type { TrustedUser } from "../../../packages/contracts/src/index";
+import type { CollaboratorRemoval, TrustedUser } from "../../../packages/contracts/src/index";
 import { branchRules } from "../../../src/worker/common/branch-protection";
 import { repositoryRole } from "../../../src/worker/common/repositories";
 import { createLogger } from "../../../src/worker/common/logger";
@@ -145,7 +145,8 @@ export async function repositoryControls(
       const stillHasAccess = (await repositoryRole(env.DB, repo.id, id)) !== null;
       const revoked =
         stillHasAccess || (await revokeAgentSessions(env, { repositoryId: repo.id, userId: id }));
-      return json({ data: { deleted: true, revocationIncomplete: !revoked } });
+      const removal: CollaboratorRemoval = { deleted: true, revocationIncomplete: !revoked };
+      return json({ data: removal });
     }
   }
   return error(405, "method_not_allowed", "Method is not allowed.");

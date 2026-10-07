@@ -464,7 +464,7 @@ type QueueActionResult =
   | {
       readonly ok: false;
       readonly status: number;
-      readonly code: "conflict" | "internal_error";
+      readonly code: "conflict" | "run_limit" | "internal_error";
       readonly message: string;
     };
 
@@ -519,7 +519,7 @@ async function queueActionRun(
     return {
       ok: false,
       status: 429,
-      code: "conflict",
+      code: "run_limit",
       message: "This repository has reached its limit of six runs per hour.",
     };
   }

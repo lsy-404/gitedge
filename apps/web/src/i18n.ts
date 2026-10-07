@@ -149,6 +149,7 @@ const messages = {
     deploy: "部署",
     deployWizard: {
       title: "部署到 Cloudflare",
+      state: { pending: "等待中", running: "进行中", done: "已完成", failed: "失败" },
       intro: "从仓库指定版本读取 gitedge.deploy.json，在输入凭据前审阅部署计划。",
       ref: "分支或提交",
       chooseRef: "分支或提交 SHA",
@@ -553,6 +554,7 @@ const messages = {
     deploy: "Deploy",
     deployWizard: {
       title: "Deploy to Cloudflare",
+      state: { pending: "Pending", running: "In progress", done: "Done", failed: "Failed" },
       intro:
         "Read gitedge.deploy.json from the selected repository ref and review the plan before entering credentials.",
       ref: "Branch or commit",

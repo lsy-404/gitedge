@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, ref, useTemplateRef, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import {
@@ -13,6 +13,8 @@ import {
 import type { Repository, RepositorySettings } from "../lib/api";
 import { ApiError, api, errorMessage } from "../lib/api";
 import { oneOf } from "../ui/formEvents";
+import { useUnsavedGuard } from "../lib/unsavedGuard";
+import ConfirmButton from "./ConfirmButton.vue";
 import NoticeBar from "./NoticeBar.vue";
 import StatusState from "./StatusState.vue";
 import BranchProtectionSettings from "./BranchProtectionSettings.vue";
@@ -111,6 +113,7 @@ const branchesError = ref("");
 const saving = ref(false);
 const saveError = ref("");
 const saved = ref(false);
+const revocationIncomplete = ref(false);
 let loadVersion = 0;
 
 const dirty = computed(
@@ -120,6 +123,11 @@ const dirty = computed(
     editableFields.some((field) => draft.value?.[field] !== settings.value?.[field])
 );
 const canManage = computed(() => settings.value?.canManage === true);
+const archiveConfirm = useTemplateRef<InstanceType<typeof ConfirmButton>>("archiveConfirm");
+const archivingNow = computed(
+  () => draft.value?.archived === true && settings.value?.archived === false
+);
+useUnsavedGuard(dirty, { keepsForm: (to) => to.path === route.path });
 const mergeMethodEnabled = computed(
   () =>
     draft.value !== null &&
@@ -219,19 +227,22 @@ function setName(value: string) {
 }
 
 async function save() {
-  if (!draft.value || !settings.value || !canManage.value) return;
+  if (!draft.value || !settings.value || !canManage.value || !mergeMethodEnabled.value) return;
   saving.value = true;
   saveError.value = "";
   saved.value = false;
+  revocationIncomplete.value = false;
   try {
     const payload: RepositoryDraft = { ...draft.value };
     const result = await api.updateRepositorySettings(props.repository.id, payload);
     const renamed = result.slug !== props.repository.slug;
     const owner = props.repository.owner;
-    settings.value = result;
-    draft.value = editable(result);
+    const { revocationIncomplete: incomplete, ...applied } = result;
+    settings.value = applied;
+    draft.value = editable(applied);
     saved.value = true;
-    emit("updated", result);
+    revocationIncomplete.value = incomplete === true;
+    emit("updated", applied);
     if (renamed) {
       await router.replace({
         path: `/${encodeURIComponent(owner)}/${encodeURIComponent(result.slug)}/settings`,
@@ -250,6 +261,14 @@ async function save() {
   }
 }
 
+function submit() {
+  if (archivingNow.value) {
+    void archiveConfirm.value?.arm();
+    return;
+  }
+  void save();
+}
+
 function sectionName(section: SettingsSection): string {
   return t(sections.find(([key]) => key === section)?.[1] ?? "repoSettingsGeneral");
 }
@@ -260,7 +279,7 @@ watch(() => props.repository.id, load, { immediate: true });
 <template>
   <section class="repository-settings">
     <StatusState v-if="loading || error" :loading="loading" :error="error" @retry="load" />
-    <form v-else-if="settings && draft" class="settings-layout" @submit.prevent="save">
+    <form v-else-if="settings && draft" class="settings-layout" @submit.prevent="submit">
       <header class="settings-header">
         <div>
           <h2>{{ t("repositorySettingsTitle") }}</h2>
@@ -536,8 +555,22 @@ watch(() => props.repository.id, load, { immediate: true });
           <NoticeBar v-else-if="saved && !dirty" intent="success">{{
             t("settingsSaved")
           }}</NoticeBar>
+          <NoticeBar v-if="revocationIncomplete" intent="warning">{{
+            t("revocationIncomplete")
+          }}</NoticeBar>
           <div class="settings-actions">
+            <ConfirmButton
+              v-if="archivingNow"
+              ref="archiveConfirm"
+              tone="primary"
+              :label="t('save')"
+              :prompt="t('confirmArchiveRepository')"
+              :disabled="!canManage || saving || !dirty || !mergeMethodEnabled"
+              :busy="saving"
+              @confirm="save"
+            />
             <FluentButton
+              v-else
               type="submit"
               tone="primary"
               :disabled="!canManage || saving || !dirty || !mergeMethodEnabled"

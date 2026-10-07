@@ -6,6 +6,7 @@ import { i18n } from "../../apps/web/src/i18n";
 import { ssoAuthorizationUrl } from "../../apps/web/src/lib/api";
 import { clearSession, sessionState, setSession } from "../../apps/web/src/lib/session";
 import { fluentUi } from "../../apps/web/src/ui/fluent";
+import { confirmClick } from "./task-support";
 
 const providers = [
   { id: "acme-oidc", label: "Acme", protocol: "oidc" },
@@ -162,8 +163,9 @@ describe("OIDC and SAML account flows", () => {
     expect(mounted.root.textContent).toContain("GitHub");
     expect(mounted.root.querySelectorAll(".sso-provider")).toHaveLength(1);
 
-    mounted.root.querySelector<HTMLButtonElement>(".sso-identity .fluent-button")?.click();
-    await settle();
+    await confirmClick(
+      mounted.root.querySelector<HTMLButtonElement>(".sso-identity .fluent-button")
+    );
     expect(mounted.root.querySelector('[role="alert"]')?.textContent).toContain(
       "Keep another sign-in method before unlinking."
     );
@@ -238,8 +240,9 @@ describe("OIDC and SAML account flows", () => {
     const mounted = await mountRoute("/settings/account?section=connections");
     await settle();
 
-    mounted.root.querySelectorAll<HTMLButtonElement>(".sso-identity .fluent-button")[1]?.click();
-    await settle();
+    await confirmClick(
+      mounted.root.querySelectorAll<HTMLButtonElement>(".sso-identity .fluent-button")[1]
+    );
 
     expect(sessionState.user).toBeNull();
     expect(router.currentRoute.value.fullPath).toBe("/login?error=sso_logout_unavailable");

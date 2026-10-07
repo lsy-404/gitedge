@@ -7,6 +7,7 @@ import type {
   SigningKeyChallenge,
 } from "../../../../packages/contracts/src/signatures";
 import { api, errorMessage } from "../lib/api";
+import ConfirmButton from "./ConfirmButton.vue";
 import NoticeBar from "./NoticeBar.vue";
 import StatusState from "./StatusState.vue";
 const { t, d } = useI18n();
@@ -63,6 +64,7 @@ async function finish() {
   }
 }
 async function revoke(key: SigningKey) {
+  if (busy.value) return;
   busy.value = true;
   error.value = "";
   try {
@@ -106,9 +108,13 @@ onMounted(load);
             {{ d(key.createdAt, "short") }}
           </p>
         </div>
-        <FluentButton v-if="!key.revokedAt" tone="danger" :disabled="busy" @click="revoke(key)">{{
-          t("settingsRevoke")
-        }}</FluentButton>
+        <ConfirmButton
+          v-if="!key.revokedAt"
+          :label="t('settingsRevoke')"
+          :prompt="t('confirmRevokeSigningKey')"
+          :disabled="busy"
+          @confirm="revoke(key)"
+        />
       </article>
     </div>
     <FluentButton v-if="!showForm" tone="primary" @click="showForm = true">{{

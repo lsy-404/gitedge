@@ -15,6 +15,7 @@ import {
   FluentTextArea,
   type FluentSelectOption,
 } from "@platform-kit/fluent/vue";
+import ConfirmButton from "./ConfirmButton.vue";
 import NoticeBar from "./NoticeBar.vue";
 import StatusState from "./StatusState.vue";
 
@@ -203,12 +204,13 @@ watch(
               @click="edit(rule)"
               >{{ t("branchRuleEdit") }}</FluentButton
             >
-            <FluentButton
-              type="button"
+            <ConfirmButton
+              tone="secondary"
+              :label="deletingId === rule.id ? t('loading') : t('branchRuleDelete')"
+              :prompt="t('confirmRemoveRule')"
               :disabled="!canManage || saving || Boolean(deletingId)"
-              @click="remove(rule)"
-              >{{ deletingId === rule.id ? t("loading") : t("branchRuleDelete") }}</FluentButton
-            >
+              @confirm="remove(rule)"
+            />
           </div>
         </li>
       </ul>

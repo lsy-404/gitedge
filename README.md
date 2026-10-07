@@ -72,7 +72,7 @@ Repository settings independently enable collaboration areas, agents, deployment
 
 `node test/e2e/repository-controls.mjs` creates a nonempty verification repository and checks online edits, stale SHA rejection, protected native pushes, squash/rebase, signed-commit requirements, redirects and community defaults.
 
-Container Actions are optional. Workflows under `.github/workflows/*.yml` support literal `name`, `on.workflow_dispatch`, `on.push`, up to three jobs and ten script steps per job. A step accepts `name`, `run`, `shell` (`sh` or `bash`), `working-directory` and literal `env`. `uses`, expressions, matrices, custom images and trigger filters are rejected with a reason. Each run has a 120-second limit, 16 KiB log budget, and an input limit of 128 regular files / 4 MiB. The default network policy is off; repositories are limited to six runs per hour. Local development disables container startup; actual container execution is verified separately on Cloudflare.
+Container Actions are optional. Workflows under `.github/workflows/*.yml` support literal `name` and triggers written as `on: push`, `on: [push, workflow_dispatch]` or the `on.push` / `on.workflow_dispatch` mapping form, up to three jobs and ten script steps per job. A step accepts `name`, `run`, `shell` (`sh` or `bash`), `working-directory` and literal `env`. `uses`, expressions, matrices, custom images and trigger filters are rejected with a reason. Each run has a 120-second limit, 16 KiB log budget, and an input limit of 128 regular files / 4 MiB. The default network policy is off; repositories are limited to six runs per hour. Local development disables container startup; actual container execution is verified separately on Cloudflare.
 
 ```yaml
 name: Verify

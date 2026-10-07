@@ -9,6 +9,7 @@ import {
   FluentSelect,
   type FluentSelectOption,
 } from "@platform-kit/fluent/vue";
+import ConfirmButton from "./ConfirmButton.vue";
 import NoticeBar from "./NoticeBar.vue";
 import StatusState from "./StatusState.vue";
 import { oneOf } from "../ui/formEvents";
@@ -22,6 +23,7 @@ const saveError = ref("");
 const notice = ref("");
 const saving = ref(false);
 const removingId = ref("");
+const revocationIncomplete = ref(false);
 const identifier = ref("");
 const role = ref<RepositoryRole>("read");
 const roleValues = ["read", "write", "admin"] as const;
@@ -97,10 +99,12 @@ async function remove(item: RepositoryCollaborator): Promise<void> {
   removingId.value = item.id;
   saveError.value = "";
   notice.value = "";
+  revocationIncomplete.value = false;
   try {
-    await api.deleteRepositoryCollaborator(props.repositoryId, item.id);
+    const result = await api.deleteRepositoryCollaborator(props.repositoryId, item.id);
     collaborators.value = collaborators.value.filter((entry) => entry.id !== item.id);
     notice.value = t("collaboratorDeleted");
+    revocationIncomplete.value = result.revocationIncomplete === true;
   } catch {
     saveError.value = t("collaboratorDeleteError");
   } finally {
@@ -131,13 +135,14 @@ watch(() => props.repositoryId, load, { immediate: true });
             :disabled="!canManage || item.inherited || saving"
             @update:model-value="updateRole(item, $event)"
           />
-          <FluentButton
-            type="button"
+          <ConfirmButton
+            tone="secondary"
+            :label="removingId === item.id ? t('loading') : t('collaboratorRemove')"
+            :accessible-name="`${t('collaboratorRemove')} · ${item.identifier}`"
+            :prompt="t('confirmRemoveCollaborator')"
             :disabled="!canManage || item.inherited || saving || Boolean(removingId)"
-            @click="remove(item)"
-          >
-            {{ removingId === item.id ? t("loading") : t("collaboratorRemove") }}
-          </FluentButton>
+            @confirm="remove(item)"
+          />
         </li>
       </ul>
 
@@ -166,6 +171,9 @@ watch(() => props.repositoryId, load, { immediate: true });
     </template>
     <NoticeBar v-if="saveError" intent="error">{{ saveError }}</NoticeBar>
     <NoticeBar v-if="notice" intent="success">{{ notice }}</NoticeBar>
+    <NoticeBar v-if="revocationIncomplete" intent="warning">{{
+      t("revocationIncomplete")
+    }}</NoticeBar>
   </section>
 </template>
 

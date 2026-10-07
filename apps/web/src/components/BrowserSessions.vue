@@ -6,6 +6,7 @@ import { FluentButton } from "@platform-kit/fluent/vue";
 import type { BrowserSession } from "../../../../packages/contracts/src/credentials";
 import { api, errorMessage } from "../lib/api";
 import { clearSession } from "../lib/session";
+import ConfirmButton from "./ConfirmButton.vue";
 import NoticeBar from "./NoticeBar.vue";
 import StatusBadge from "./StatusBadge.vue";
 import StatusState from "./StatusState.vue";
@@ -31,6 +32,7 @@ async function load(): Promise<void> {
 }
 
 async function signOut(session: BrowserSession): Promise<void> {
+  if (revokingId.value) return;
   revokingId.value = session.id;
   actionError.value = "";
   try {
@@ -85,15 +87,15 @@ onMounted(load);
             </StatusBadge>
           </div>
           <div class="settings-actions">
-            <FluentButton
-              type="button"
-              tone="danger"
+            <ConfirmButton
+              :label="t('settingsSessionSignOut')"
+              :prompt="
+                session.isCurrent ? t('confirmSignOutCurrentSession') : t('confirmSignOutSession')
+              "
               :busy="revokingId === session.id"
               :disabled="Boolean(revokingId)"
-              @click="signOut(session)"
-            >
-              {{ t("settingsSessionSignOut") }}
-            </FluentButton>
+              @confirm="signOut(session)"
+            />
           </div>
         </div>
       </article>

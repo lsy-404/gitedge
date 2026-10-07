@@ -12,6 +12,7 @@ import type { AccountProfile } from "../../../../packages/contracts/src/account"
 import { api, errorMessage } from "../lib/api";
 import { applyAccountPreferences, accountProfileState } from "../lib/preferences";
 import { refreshSession } from "../lib/session";
+import { useUnsavedGuard } from "../lib/unsavedGuard";
 import NoticeBar from "./NoticeBar.vue";
 import StatusState from "./StatusState.vue";
 const props = defineProps<{ section: "profile" | "preferences" }>();
@@ -25,6 +26,12 @@ const profile = ref<AccountProfile | null>(null),
 const dirty = computed(
   () => profile.value !== null && JSON.stringify(profile.value) !== initial.value
 );
+useUnsavedGuard(dirty, {
+  keepsForm: (to) =>
+    to.query.section === undefined ||
+    to.query.section === "profile" ||
+    to.query.section === "preferences",
+});
 const themeOptions = computed(() =>
   ["system", "light", "dark"].map((value) => ({
     value,

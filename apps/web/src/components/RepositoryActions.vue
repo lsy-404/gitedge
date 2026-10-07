@@ -2,7 +2,8 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { FluentButton } from "@platform-kit/fluent/vue";
 import type { ActionRun, ActionRunSummary, ActionWorkflowFile, GitRef } from "../lib/api";
-import { api } from "../lib/api";
+import { ApiError, api, errorMessage } from "../lib/api";
+import ConfirmButton from "./ConfirmButton.vue";
 import SelectField from "./SelectField.vue";
 import StatusBadge from "./StatusBadge.vue";
 import StatusState from "./StatusState.vue";
@@ -23,8 +24,10 @@ const { t } = useI18n();
 const loading = ref(false);
 const workflowLoading = ref(false);
 const saving = ref(false);
+const cancelling = ref(false);
 const error = ref("");
 const runError = ref("");
+let pollOwnsError = false;
 const workflows = ref<ActionWorkflowFile[]>([]);
 const refs = ref<GitRef[]>([]);
 const workflowOid = ref("");
@@ -120,6 +123,7 @@ async function loadWorkflows(): Promise<void> {
   }
   workflowLoading.value = true;
   error.value = "";
+  pollOwnsError = false;
   try {
     const result = await api.actionWorkflows(props.repositoryId, selected, oid);
     if (epoch !== workflowEpoch || selected !== selectedRef.value) return;
@@ -138,15 +142,17 @@ async function loadWorkflows(): Promise<void> {
 async function loadRuns(): Promise<void> {
   runs.value = await api.actionRuns(props.repositoryId);
   if (!selectedRunId.value && runs.value[0]) selectedRunId.value = runs.value[0].id;
-  if (selectedRunId.value) {
-    const exists = runs.value.some((run) => run.id === selectedRunId.value);
-    if (exists) selectedRun.value = await api.actionRun(selectedRunId.value);
+  const runId = selectedRunId.value;
+  if (runId && runs.value.some((run) => run.id === runId)) {
+    const detail = await api.actionRun(runId);
+    if (runId === selectedRunId.value) selectedRun.value = detail;
   }
 }
 
 async function load(): Promise<void> {
   loading.value = true;
   error.value = "";
+  pollOwnsError = false;
   try {
     await Promise.all([loadRefs(), loadRuns()]);
     await loadWorkflows();
@@ -162,8 +168,13 @@ async function refreshRuns(): Promise<void> {
   pollPending = true;
   try {
     await loadRuns();
+    if (pollOwnsError) {
+      error.value = "";
+      pollOwnsError = false;
+    }
   } catch {
     error.value = t("actionsLoadError");
+    pollOwnsError = true;
   } finally {
     pollPending = false;
   }
@@ -188,9 +199,13 @@ async function startRun(): Promise<void> {
     });
     selectedRunId.value = run.id;
     runs.value = [run, ...runs.value.filter((item) => item.id !== run.id)];
-    selectedRun.value = await api.actionRun(run.id);
-  } catch {
-    runError.value = t("actionsRunError");
+    const detail = await api.actionRun(run.id);
+    if (run.id === selectedRunId.value) selectedRun.value = detail;
+  } catch (cause) {
+    runError.value =
+      cause instanceof ApiError && cause.status === 429 && cause.code === "run_limit"
+        ? t("actionsRunLimit")
+        : errorMessage(cause, t, {}, "actionsRunError");
   } finally {
     saving.value = false;
   }
@@ -200,20 +215,29 @@ async function openRun(runId: string): Promise<void> {
   selectedRunId.value = runId;
   selectedRun.value = null;
   try {
-    selectedRun.value = await api.actionRun(runId);
+    const detail = await api.actionRun(runId);
+    if (runId === selectedRunId.value) selectedRun.value = detail;
   } catch {
-    error.value = t("actionsLoadError");
+    if (runId === selectedRunId.value) {
+      error.value = t("actionsLoadError");
+      pollOwnsError = false;
+    }
   }
 }
 
 async function cancelRun(): Promise<void> {
-  if (!selectedRun.value) return;
+  if (!selectedRun.value || cancelling.value) return;
+  const runId = selectedRun.value.id;
+  cancelling.value = true;
   runError.value = "";
   try {
-    selectedRun.value = await api.cancelActionRun(selectedRun.value.id);
+    const cancelled = await api.cancelActionRun(runId);
+    if (runId === selectedRunId.value) selectedRun.value = cancelled;
     await refreshRuns();
   } catch {
     runError.value = t("actionsCancelError");
+  } finally {
+    cancelling.value = false;
   }
 }
 
@@ -230,7 +254,7 @@ watch(selectedRef, async (next, previous) => {
 onMounted(() => {
   void load();
   pollingTimer = window.setInterval(() => {
-    if (activeRuns.value && !pollPending) void refreshRuns();
+    if (activeRuns.value && !pollPending && !document.hidden) void refreshRuns();
   }, 2500);
 });
 
@@ -243,6 +267,14 @@ onUnmounted(() => clearInterval(pollingTimer));
       <div>
         <h2 id="actions-title">{{ t("actionsTitle") }}</h2>
         <p>{{ t("actionsIntro") }}</p>
+        <details class="actions-syntax">
+          <summary>{{ t("actionsSyntaxTitle") }}</summary>
+          <ul>
+            <li>{{ t("actionsSyntaxTriggers") }}</li>
+            <li>{{ t("actionsSyntaxSteps") }}</li>
+            <li>{{ t("actionsSyntaxLimits") }}</li>
+          </ul>
+        </details>
       </div>
       <FluentButton type="button" :disabled="loading" @click="load">{{
         t("actionsRefresh")
@@ -260,7 +292,7 @@ onUnmounted(() => clearInterval(pollingTimer));
       <p v-if="actionsNetworkEnabled === false" class="actions-warning actions-network-notice">
         {{ t("actionsNetworkDisabled") }}
       </p>
-      <section class="actions-panel" aria-label="Workflows">
+      <section class="actions-panel" :aria-label="t('actionsWorkflows')">
         <div class="actions-toolbar">
           <SelectField
             v-model="selectedRef"
@@ -299,6 +331,9 @@ onUnmounted(() => clearInterval(pollingTimer));
           class="actions-empty"
         >
           {{ t("actionsNoWorkflows") }}
+        </p>
+        <p v-if="chosenWorkflow" class="actions-muted">
+          {{ t("actionsTriggers", { triggers: chosenWorkflow.triggers.join(", ") || "-" }) }}
         </p>
         <p v-if="chosenWorkflow && !chosenWorkflow.supported" class="actions-warning">
           {{ t("actionsUnsupported", { reason: chosenWorkflow.unsupportedReason }) }}
@@ -351,13 +386,14 @@ onUnmounted(() => clearInterval(pollingTimer));
             <h3>{{ selectedRun.workflowName }}</h3>
             <code>{{ selectedRun.commitOid }}</code>
           </div>
-          <FluentButton
+          <ConfirmButton
             v-if="canWrite && selectedRunActive"
-            type="button"
             tone="secondary"
-            @click="cancelRun"
-            >{{ t("actionsCancel") }}</FluentButton
-          >
+            :label="cancelling ? t('actionsCancelling') : t('actionsCancel')"
+            :prompt="t('confirmCancelRun')"
+            :disabled="cancelling"
+            @confirm="cancelRun"
+          />
         </div>
         <div v-for="job in selectedRun.jobs" :key="job.id" class="actions-job">
           <h4>{{ job.name }}</h4>
@@ -414,6 +450,17 @@ onUnmounted(() => clearInterval(pollingTimer));
   gap: 1rem;
   grid-template-columns: minmax(16rem, 0.85fr) minmax(18rem, 1fr);
   align-items: start;
+}
+.actions-syntax {
+  margin-top: 0.5rem;
+  color: var(--colorNeutralForeground2, #656d76);
+}
+.actions-syntax summary {
+  cursor: pointer;
+}
+.actions-syntax ul {
+  margin: 0.4rem 0 0;
+  padding-left: 1.25rem;
 }
 .actions-network-notice {
   grid-column: 1 / -1;
