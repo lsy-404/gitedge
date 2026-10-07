@@ -29,4 +29,18 @@ describe("repository Markdown", () => {
     expect(html).toContain('href="https://git.example/owner/repo/blob/docs/guide.md?ref=feature"');
     expect(highlightedCode("<script>", "unknown")).toBe("&lt;script&gt;");
   });
+  it("does not throw for prototype-named languages", () => {
+    expect(highlightedCode("<a>", "a.constructor")).toBe("&lt;a&gt;");
+    expect(highlightedCode("<a>", "a.__proto__")).toBe("&lt;a&gt;");
+    expect(renderMarkdown("```constructor\nx\n```")).toContain("<code");
+  });
+  it("strips media tags and classes but keeps highlighting in image mode", () => {
+    const html = renderMarkdown(
+      '<video src="x" poster="y" autoplay></video><audio src="z"></audio><picture><source srcset="s"></picture><div class="overlay">hi</div>\n\n```js\nconst a = 1;\n```',
+      undefined,
+      true
+    );
+    expect(html).not.toMatch(/<video|<audio|<source|<picture|overlay/);
+    expect(html).toContain("hljs-keyword");
+  });
 });
