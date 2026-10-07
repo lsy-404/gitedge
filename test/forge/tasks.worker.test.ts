@@ -16,6 +16,8 @@ const MERGE_OID = "c".repeat(40);
 const BASE_OID = "a".repeat(40);
 
 const artifacts = new FixtureArtifacts();
+let compareHead: string | null = "6".repeat(40);
+let compareFails = false;
 
 /** Commit lookups hit the real Git worker over fixture Artifacts; merges are stubbed. */
 const forgeEnv: Parameters<typeof forge.fetch>[1] = {
@@ -23,6 +25,14 @@ const forgeEnv: Parameters<typeof forge.fetch>[1] = {
   ARTIFACTS: artifacts,
   GIT: {
     async fetch(request: Request) {
+      if (request.method === "GET" && new URL(request.url).pathname.endsWith("/pull-head"))
+        return compareHead
+          ? Response.json({ data: { oid: compareHead } })
+          : Response.json({ error: { code: "not_found" } }, { status: 404 });
+      if (request.method === "GET" && new URL(request.url).pathname.endsWith("/compare"))
+        return compareFails
+          ? Response.json({ error: { code: "resource_limit" } }, { status: 413 })
+          : Response.json({ data: { headOid: compareHead } });
       if (request.method === "GET" && new URL(request.url).pathname.endsWith("/refs"))
         return Response.json({ data: [{ name: "refs/heads/main", oid: BASE_OID }] });
       if (request.method === "GET") return git.fetch(request, forgeEnv);
@@ -968,6 +978,7 @@ describe("Assignments", () => {
       ).status
     ).toBe(200);
     const head = "3".repeat(40);
+    compareHead = head;
     const approval = await call(
       `/repositories/r1/pull-requests/${pull}/reviews`,
       "POST",
@@ -1005,6 +1016,7 @@ describe("Assignments", () => {
   it("does not count a pull request author's own approval", async () => {
     const pull = await createPull("Independent review");
     const head = "6".repeat(40);
+    compareHead = head;
     await call("/repositories/r1/settings", "PATCH", alice, {
       requiredApprovals: 1,
       requirePassingChecks: false,
@@ -1034,6 +1046,7 @@ describe("Assignments", () => {
     const pull = await createPull("Configured merge gates");
     const head = "6".repeat(40);
     const otherHead = "7".repeat(40);
+    compareHead = otherHead;
     const merge = () =>
       call(`/repositories/r1/pull-requests/${pull}/merge`, "POST", alice, {
         expectedBaseOid: "4".repeat(40),
@@ -1049,15 +1062,16 @@ describe("Assignments", () => {
         commitOid: otherHead,
       });
       expect((await merge()).status).toBe(409);
-      await call(`/repositories/r1/pull-requests/${pull}/reviews`, "POST", bob, {
-        state: "approved",
-        commitOid: head,
-      });
       await call(`/repositories/r1/pull-requests/${pull}/checks`, "POST", bob, {
         name: "old commit success",
         commitOid: otherHead,
         status: "completed",
         conclusion: "success",
+      });
+      compareHead = head;
+      await call(`/repositories/r1/pull-requests/${pull}/reviews`, "POST", bob, {
+        state: "approved",
+        commitOid: head,
       });
       expect((await merge()).status).toBe(409);
       await call(`/repositories/r1/pull-requests/${pull}/checks`, "POST", bob, {
@@ -1099,6 +1113,111 @@ describe("Assignments", () => {
       }
     } finally {
       await call("/repositories/r1/settings", "PATCH", alice, { memoryVisibility: "members" });
+    }
+  });
+});
+
+describe("Merge policy enforcement", () => {
+  const BASE = "4".repeat(40);
+
+  async function addRule(input: Record<string, unknown>): Promise<string> {
+    const response = await call("/repositories/r1/branch-rules", "POST", alice, input);
+    expect(response.status).toBe(201);
+    return (await data(response)).id;
+  }
+  async function removeRule(id: string): Promise<void> {
+    expect((await call(`/repositories/r1/branch-rules/${id}`, "DELETE", alice)).status).toBe(200);
+  }
+  async function postCheck(
+    pull: number,
+    who: [string, string],
+    name: string,
+    head: string,
+    session?: unknown
+  ): Promise<void> {
+    const response = await call(
+      `/repositories/r1/pull-requests/${pull}/checks`,
+      "POST",
+      who,
+      { name, commitOid: head, status: "completed", conclusion: "success" },
+      session
+    );
+    expect(response.status).toBe(201);
+  }
+  const merge = (pull: number, head: string, method?: "merge" | "squash" | "rebase") =>
+    call(`/repositories/r1/pull-requests/${pull}/merge`, "POST", alice, {
+      expectedBaseOid: BASE,
+      expectedHeadOid: head,
+      ...(method ? { method } : {}),
+    });
+
+  it("does not let a pull request author or its agent session satisfy a required check", async () => {
+    const head = "a".repeat(40);
+    compareHead = head;
+    const ruleId = await addRule({ pattern: "main", requiredStatusChecks: ["ci/build"] });
+    try {
+      const created = await call(
+        "/repositories/r1/pull-requests",
+        "POST",
+        bob,
+        { title: "Agent authored", baseRef: "main", headRef: "agents/s1", headSessionId: "s1" },
+        writeSession
+      );
+      expect(created.status).toBe(201);
+      const agentPull = (await data(created)).number;
+      await postCheck(agentPull, bob, "ci/build", head, writeSession);
+      const blocked = await merge(agentPull, head);
+      expect(blocked.status).toBe(409);
+      expect(await blocked.json()).toMatchObject({ error: { code: "required_checks_missing" } });
+      await postCheck(agentPull, bob, "ci/build", head);
+      expect((await merge(agentPull, head)).status).toBe(200);
+
+      const humanPull = await createPull("Human authored");
+      await postCheck(humanPull, alice, "ci/build", head);
+      expect((await merge(humanPull, head)).status).toBe(409);
+      await postCheck(humanPull, bob, "ci/build", head);
+      expect((await merge(humanPull, head)).status).toBe(200);
+    } finally {
+      await removeRule(ruleId);
+    }
+  });
+
+  it("rejects merges into a locked branch and with a disabled merge method", async () => {
+    const head = "b".repeat(40);
+    compareHead = head;
+    const pull = await createPull("Locked target");
+    const lockId = await addRule({ pattern: "main", locked: true });
+    try {
+      const locked = await merge(pull, head);
+      expect(locked.status).toBe(403);
+      expect(await locked.json()).toMatchObject({ error: { code: "protected_branch" } });
+    } finally {
+      await removeRule(lockId);
+    }
+    await call("/repositories/r1/settings", "PATCH", alice, { allowSquashMerge: false });
+    try {
+      const disabled = await merge(pull, head, "squash");
+      expect(disabled.status).toBe(403);
+      expect(await disabled.json()).toMatchObject({ error: { code: "merge_method_disabled" } });
+    } finally {
+      await call("/repositories/r1/settings", "PATCH", alice, { allowSquashMerge: true });
+    }
+  });
+
+  it("requires every named status check to pass on the head commit", async () => {
+    const head = "c".repeat(40);
+    compareHead = head;
+    const pull = await createPull("Named checks");
+    const ruleId = await addRule({ pattern: "main", requiredStatusChecks: ["ci"] });
+    try {
+      await postCheck(pull, bob, "lint", head);
+      const missing = await merge(pull, head);
+      expect(missing.status).toBe(409);
+      expect(await missing.json()).toMatchObject({ error: { code: "required_checks_missing" } });
+      await postCheck(pull, bob, "ci", head);
+      expect((await merge(pull, head)).status).toBe(200);
+    } finally {
+      await removeRule(ruleId);
     }
   });
 });

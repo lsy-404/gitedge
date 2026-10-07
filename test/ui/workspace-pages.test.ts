@@ -29,8 +29,6 @@ const repository: Repository = {
   owner: "octocat",
   name: "sample",
   slug: "sample",
-  artifactName: "octocat/sample",
-  remote: "https://git.example/octocat/sample.git",
   description: "A sample project",
   visibility: "private",
   defaultBranch: "main",

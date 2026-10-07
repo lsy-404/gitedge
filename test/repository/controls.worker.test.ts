@@ -325,3 +325,54 @@ describe("Repository control authorization and rename invariants", () => {
     ).toBe(400);
   });
 });
+
+describe("Branch protection rules", () => {
+  const rulesPath = () => `/repositories/${repositoryId}/branch-rules`;
+  const createdRule = z.object({ data: z.object({ id: z.string() }) });
+  const ruleList = async () =>
+    z
+      .object({ data: z.array(z.object({ id: z.string() })) })
+      .parse(await (await call(rulesPath())).json()).data;
+
+  it("caps a repository at fifty rules", async () => {
+    const created: string[] = [];
+    try {
+      const existing = (await ruleList()).length;
+      for (let index = existing; index < 50; index++) {
+        const response = await call(rulesPath(), "POST", "owner", { pattern: `cap-${index}` });
+        expect(response.status).toBe(201);
+        created.push(createdRule.parse(await response.json()).data.id);
+      }
+      const rejected = await call(rulesPath(), "POST", "owner", { pattern: "cap-over" });
+      expect(rejected.status).toBe(409);
+      expect(await rejected.json()).toMatchObject({ error: { code: "rule_limit" } });
+    } finally {
+      for (const id of created) await call(`${rulesPath()}/${id}`, "DELETE", "owner");
+    }
+  });
+
+  it("refuses Git merges into a locked branch", async () => {
+    const created = await call(rulesPath(), "POST", "owner", {
+      pattern: "locked-target",
+      locked: true,
+    });
+    expect(created.status).toBe(201);
+    const id = createdRule.parse(await created.json()).data.id;
+    try {
+      const merged = await gitCall("merge", "POST", {
+        pullRequestId: "pull-1",
+        leaseAt: 1,
+        baseRef: "locked-target",
+        headRef: "topic",
+        expectedBaseOid: "a".repeat(40),
+        expectedHeadOid: "b".repeat(40),
+        author: { name: "Owner", email: "owner@example.test" },
+        message: "Merge topic",
+      });
+      expect(merged.status).toBe(403);
+      expect(await merged.json()).toMatchObject({ error: { code: "protected_branch" } });
+    } finally {
+      await call(`${rulesPath()}/${id}`, "DELETE", "owner");
+    }
+  });
+});

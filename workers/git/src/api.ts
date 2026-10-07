@@ -86,10 +86,12 @@ export async function handleGitApi(
   const session = sessionId ? await resolveWorkspace(env, access, sessionId) : null;
   if (sessionId && !session) return fail(404, "not_found", "Session workspace was not found.");
   const resource = parts[2];
-  const proposalComparison = resource === "compare" && url.searchParams.has("headSessionId");
+  const proposalComparison =
+    (resource === "compare" || resource === "pull-head") && url.searchParams.has("headSessionId");
   // Commit lookups answer whether the repository itself holds a commit, never a private fork.
   const repositoryScoped =
     proposalComparison ||
+    resource === "pull-head" ||
     resource === "commit" ||
     resource === "signature" ||
     resource === "snapshot";
@@ -438,6 +440,19 @@ export async function handleGitApi(
       sessions: sessions.length,
     });
     return json(graph);
+  }
+  if (resource === "pull-head") {
+    const headSessionId = url.searchParams.get("headSessionId");
+    const head = url.searchParams.get("head") ?? "HEAD";
+    const headSession = headSessionId
+      ? await resolveWorkspace(env, access, headSessionId, head)
+      : null;
+    if (headSessionId && !headSession) return fail(404, "not_found", "Head session was not found.");
+    using headRepo = await env.ARTIFACTS.get(
+      headSession?.workspaceName ?? access.repository.artifactName
+    );
+    const commit = await resolveCommit(headRepo, head);
+    return commit ? json({ oid: commit.hash }) : fail(404, "not_found", "Head ref was not found.");
   }
   if (resource === "compare") {
     const headSessionId = url.searchParams.get("headSessionId");

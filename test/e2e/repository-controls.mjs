@@ -58,6 +58,11 @@ const flags = {
 const report = { identifier };
 try {
   await api("/api/auth/register", "POST", { identifier, password }, 201);
+  const ownerCookie = cookie;
+  const reviewer = `${identifier}-rv`;
+  await api("/api/auth/register", "POST", { identifier: reviewer, password }, 201);
+  const reviewerCookie = cookie;
+  cookie = ownerCookie;
   const repo = await api(
     "/api/forge/repositories",
     "POST",
@@ -65,7 +70,6 @@ try {
     201
   );
   report.repositoryId = repo.id;
-  report.artifactName = repo.artifactName;
   const root = `/api/git/repositories/${repo.id}`;
   const forge = `/api/forge/repositories/${repo.id}`;
   const branches = () => api(root + "/branches");
@@ -142,18 +146,24 @@ try {
     { expectedBaseOid: main, expectedHeadOid: feature },
     409
   );
+  const verifyCheck = {
+    name: "verify",
+    commitOid: feature,
+    status: "completed",
+    conclusion: "success",
+    summary: "Exact commit validated",
+  };
+  await api(forge + `/pull-requests/${pr.number}/checks`, "POST", verifyCheck, 201);
   await api(
-    forge + `/pull-requests/${pr.number}/checks`,
+    forge + `/pull-requests/${pr.number}/merge`,
     "POST",
-    {
-      name: "verify",
-      commitOid: feature,
-      status: "completed",
-      conclusion: "success",
-      summary: "Exact commit validated",
-    },
-    201
+    { expectedBaseOid: main, expectedHeadOid: feature },
+    409
   );
+  await api(forge + "/collaborators", "PUT", { identifier: reviewer, role: "write" });
+  cookie = reviewerCookie;
+  await api(forge + `/pull-requests/${pr.number}/checks`, "POST", verifyCheck, 201);
+  cookie = ownerCookie;
   const merged = await api(forge + `/pull-requests/${pr.number}/merge`, "POST", {
     expectedBaseOid: main,
     expectedHeadOid: feature,

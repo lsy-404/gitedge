@@ -300,23 +300,26 @@ describe("task detail", () => {
     });
     vi.spyOn(api, "task").mockImplementation(async () => current);
     vi.spyOn(api, "assigneeCandidates").mockResolvedValue([]);
-    vi.spyOn(api, "issues").mockResolvedValue([
-      {
-        id: "i1",
-        number: 3,
-        title: "Track memory",
-        body: "",
-        state: "open",
-        author: "example-user",
-        actor: human,
-        labels: [],
-        assignees: [],
-        reviewers: [],
-        createdAt: 1,
-        updatedAt: 1,
-      },
-    ]);
-    vi.spyOn(api, "pulls").mockResolvedValue([]);
+    vi.spyOn(api, "issues").mockResolvedValue({
+      items: [
+        {
+          id: "i1",
+          number: 3,
+          title: "Track memory",
+          body: "",
+          state: "open",
+          author: "example-user",
+          actor: human,
+          labels: [],
+          assignees: [],
+          reviewers: [],
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+      truncated: false,
+    });
+    vi.spyOn(api, "pulls").mockResolvedValue({ items: [], truncated: false });
     const bindSpy = vi.spyOn(api, "bindTaskCommit").mockImplementation(async () => {
       current = detail({ ...current, commits: [bound, merged] });
       return bound;

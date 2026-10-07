@@ -27,8 +27,6 @@ const repository: Repository = {
   owner: "acme",
   name: "project",
   slug: "project",
-  artifactName: "acme/project",
-  remote: "https://git.example/acme/project.git",
   description: "A test repository",
   visibility: "public",
   defaultBranch: "main",
@@ -254,16 +252,19 @@ afterEach(async () => {
 
 describe("RepositoryCollaboration rendered workflows", () => {
   it("filters loaded issues by state and search text with real state counts", async () => {
-    vi.spyOn(api, "issues").mockResolvedValue([
-      issue({ number: 7, title: "Parser regression", labels: ["bug"] }),
-      issue({
-        id: "issue-2",
-        number: 8,
-        title: "Document setup",
-        state: "closed",
-        labels: ["docs"],
-      }),
-    ]);
+    vi.spyOn(api, "issues").mockResolvedValue({
+      items: [
+        issue({ number: 7, title: "Parser regression", labels: ["bug"] }),
+        issue({
+          id: "issue-2",
+          number: 8,
+          title: "Document setup",
+          state: "closed",
+          labels: ["docs"],
+        }),
+      ],
+      truncated: false,
+    });
     const mounted = await mountSection("/_verify/issues", "issues");
 
     expect(mounted.root.querySelectorAll(".item-link")).toHaveLength(1);
@@ -283,29 +284,32 @@ describe("RepositoryCollaboration rendered workflows", () => {
   });
 
   it("filters issues by the signed-in assignee and author, and sorts recent activity", async () => {
-    vi.spyOn(api, "issues").mockResolvedValue([
-      issue({
-        number: 7,
-        title: "Assigned to me",
-        actor: { kind: "agent", id: "agent-1", name: "Build agent" },
-        assignees: [{ kind: "user", id: "user-1", name: "user@example.test" }],
-        updatedAt: 20,
-      }),
-      issue({
-        number: 8,
-        title: "Created by me",
-        assignees: [{ kind: "user", id: "user-2", name: "another-user" }],
-        updatedAt: 100,
-      }),
-      issue({
-        id: "issue-3",
-        number: 9,
-        title: "Another issue",
-        actor: { kind: "agent", id: "agent-2", name: "Review agent" },
-        assignees: [],
-        updatedAt: 40,
-      }),
-    ]);
+    vi.spyOn(api, "issues").mockResolvedValue({
+      items: [
+        issue({
+          number: 7,
+          title: "Assigned to me",
+          actor: { kind: "agent", id: "agent-1", name: "Build agent" },
+          assignees: [{ kind: "user", id: "user-1", name: "user@example.test" }],
+          updatedAt: 20,
+        }),
+        issue({
+          number: 8,
+          title: "Created by me",
+          assignees: [{ kind: "user", id: "user-2", name: "another-user" }],
+          updatedAt: 100,
+        }),
+        issue({
+          id: "issue-3",
+          number: 9,
+          title: "Another issue",
+          actor: { kind: "agent", id: "agent-2", name: "Review agent" },
+          assignees: [],
+          updatedAt: 40,
+        }),
+      ],
+      truncated: false,
+    });
     const mounted = await mountSection("/_verify/issues", "issues");
     const railButtons = mounted.root.querySelectorAll<HTMLElement>(".issue-rail button");
 
@@ -325,12 +329,26 @@ describe("RepositoryCollaboration rendered workflows", () => {
     mounted.unmount();
   });
 
+  it("warns when a list is truncated and clears the warning in other sections", async () => {
+    vi.spyOn(api, "repository").mockResolvedValue(repository);
+    vi.spyOn(api, "issues").mockResolvedValue({ items: [issue()], truncated: true });
+    const mounted = await mountSection("/_verify/issues", "issues");
+    expect(mounted.root.textContent).toContain(
+      "This list exceeds 500 entries; only part of it is shown"
+    );
+    mounted.unmount();
+    vi.spyOn(api, "issues").mockResolvedValue({ items: [issue()], truncated: false });
+    const complete = await mountSection("/_verify/issues", "issues");
+    expect(complete.root.textContent).not.toContain("This list exceeds 500 entries");
+    complete.unmount();
+  });
+
   it("creates an issue with labels, edits it, comments, and closes it", async () => {
     const initial = issue();
     let latest = initial;
     let comments: Comment[] = [];
     vi.spyOn(api, "repository").mockResolvedValue(repository);
-    const issuesSpy = vi.spyOn(api, "issues").mockResolvedValue([]);
+    const issuesSpy = vi.spyOn(api, "issues").mockResolvedValue({ items: [], truncated: false });
     const createIssueSpy = vi.spyOn(api, "createIssue").mockImplementation(async (_id, payload) => {
       latest = issue({
         number: 7,
@@ -347,7 +365,9 @@ describe("RepositoryCollaboration rendered workflows", () => {
         latest = issue({ ...latest, ...patch });
         return latest;
       });
-    const commentsSpy = vi.spyOn(api, "comments").mockImplementation(async () => comments);
+    const commentsSpy = vi
+      .spyOn(api, "comments")
+      .mockImplementation(async () => ({ items: comments, truncated: false }));
     const createCommentSpy = vi
       .spyOn(api, "createComment")
       .mockImplementation(async (_id, _resource, _number, body) => {
@@ -459,7 +479,7 @@ describe("RepositoryCollaboration rendered workflows", () => {
     vi.spyOn(api, "pull").mockImplementation(async () =>
       vi.mocked(api.mergePull).mock.calls.length ? mergedPull : openPull
     );
-    vi.spyOn(api, "comments").mockResolvedValue([]);
+    vi.spyOn(api, "comments").mockResolvedValue({ items: [], truncated: false });
     vi.spyOn(api, "reviews").mockImplementation(async () => reviews);
     vi.spyOn(api, "checks").mockImplementation(async () => checks);
     vi.spyOn(api, "pullDiff").mockResolvedValue(comparison);
@@ -572,7 +592,7 @@ describe("RepositoryCollaboration rendered workflows", () => {
     const answer = comment({ id: "answer-9", body: "Use the stable branch API." });
     let current = discussion();
     vi.spyOn(api, "discussion").mockImplementation(async () => current);
-    vi.spyOn(api, "comments").mockResolvedValue([answer]);
+    vi.spyOn(api, "comments").mockResolvedValue({ items: [answer], truncated: false });
     const updateDiscussionSpy = vi
       .spyOn(api, "updateDiscussion")
       .mockImplementation(async (_id, _number, patch) => {
@@ -605,8 +625,18 @@ describe("RepositoryCollaboration rendered workflows", () => {
     let history = [original, current];
     let updates = 0;
     vi.spyOn(api, "wikiPage").mockImplementation(async () => current);
-    vi.spyOn(api, "wikiHistory").mockImplementation(async () => history);
-    vi.spyOn(api, "wiki").mockResolvedValue([current]);
+    vi.spyOn(api, "wikiHistory").mockImplementation(async () => ({
+      items: history,
+      truncated: false,
+    }));
+    vi.spyOn(api, "wiki").mockResolvedValue({ items: [current], truncated: false });
+    const wikiRevisionSpy = vi
+      .spyOn(api, "wikiRevision")
+      .mockImplementation(async (_id, _slug, revision) => {
+        const found = history.find((entry) => entry.revision === revision);
+        if (!found) throw new ApiError(404, "Wiki revision was not found");
+        return found;
+      });
     const updateWikiSpy = vi
       .spyOn(api, "updateWikiPage")
       .mockImplementation(async (_id, _slug, patch) => {
@@ -669,6 +699,7 @@ describe("RepositoryCollaboration rendered workflows", () => {
     if (!firstHistoryRow) throw new Error("Wiki revision history was not rendered.");
     firstHistoryRow.querySelector<HTMLButtonElement>(".fluent-button")?.click();
     await settle();
+    expect(wikiRevisionSpy).toHaveBeenCalledWith("repo-1", "guide", 1);
     expect(updateWikiSpy).toHaveBeenLastCalledWith("repo-1", "guide", {
       title: "Guide v1",
       content: "Original docs",
@@ -680,7 +711,7 @@ describe("RepositoryCollaboration rendered workflows", () => {
   });
   it("keeps PR creation available when repository agents are disabled", async () => {
     const sessions = vi.spyOn(api, "repositorySessions");
-    vi.spyOn(api, "pulls").mockResolvedValue([]);
+    vi.spyOn(api, "pulls").mockResolvedValue({ items: [], truncated: false });
     repository.agentsEnabled = false;
     try {
       const mounted = await mountSection("/_verify/pulls", "pulls");
@@ -696,7 +727,7 @@ describe("RepositoryCollaboration rendered workflows", () => {
   it("refreshes late CI results without reloading the PR draft", async () => {
     vi.spyOn(document, "hidden", "get").mockReturnValue(false);
     const pullSpy = vi.spyOn(api, "pull").mockResolvedValue(pull());
-    vi.spyOn(api, "comments").mockResolvedValue([]);
+    vi.spyOn(api, "comments").mockResolvedValue({ items: [], truncated: false });
     vi.spyOn(api, "reviews").mockResolvedValue([]);
     vi.spyOn(api, "pullDiff").mockResolvedValue({
       baseOid: "a".repeat(40),
@@ -729,7 +760,7 @@ describe("RepositoryCollaboration rendered workflows", () => {
     expect(mounted.root.textContent).toContain("Completed");
   }, 10000);
   it("applies repository issue templates only to empty draft fields", async () => {
-    vi.spyOn(api, "issues").mockResolvedValue([]);
+    vi.spyOn(api, "issues").mockResolvedValue({ items: [], truncated: false });
     vi.mocked(api.repositoryCommunity).mockResolvedValue({
       files: [],
       pullRequestTemplate: null,

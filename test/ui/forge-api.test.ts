@@ -14,8 +14,6 @@ describe("GitEdge forge API client", () => {
             owner: "example-owner",
             name: "project",
             slug: "project",
-            artifactName: "example-owner/project",
-            remote: "https://git.example/example-owner/project.git",
             description: "",
             visibility: "public",
             defaultBranch: "main",

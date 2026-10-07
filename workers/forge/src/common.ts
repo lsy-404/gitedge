@@ -122,8 +122,6 @@ export function repoResponse(row: RepositoryRow, canWrite = false) {
     owner: row.owner,
     name: row.slug,
     slug: row.slug,
-    artifactName: row.artifact_name ?? "",
-    remote: row.remote ?? "",
     defaultBranch: row.default_branch ?? "main",
     visibility: row.visibility,
     description: row.description,

@@ -10,8 +10,6 @@ const repository = {
   owner: "example",
   name: "sample",
   slug: "sample",
-  artifactName: "example/sample",
-  remote: "https://git.example/example/sample.git",
   description: "",
   visibility: "private" as const,
   defaultBranch: "main",

@@ -92,7 +92,6 @@ try {
     201
   );
   report.repositoryId = repo.id;
-  report.artifactName = repo.artifactName;
   const git = `/api/git/repositories/${repo.id}`,
     forge = `/api/forge/repositories/${repo.id}`,
     actions = `/api/actions/repositories/${repo.id}`;
