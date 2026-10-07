@@ -155,6 +155,7 @@ const cloneToggle = ref<HTMLElement | null>(null);
 const codeRoot = ref<HTMLElement | null>(null);
 const fileSearchInput = ref<HTMLInputElement | null>(null);
 const copied = ref(false);
+const copyFailed = ref(false);
 let copiedTimer: number | undefined;
 const hasMoreGraph = computed(
   () => Boolean(graph.value?.truncated) && graphLimit.value < graphMaxLimit
@@ -296,7 +297,7 @@ async function loadMore() {
   } catch (cause) {
     if (version === requestVersion) moreError.value = errorMessage(cause, t);
   } finally {
-    if (version === requestVersion) loadingMore.value = false;
+    loadingMore.value = false;
   }
 }
 function openNewFile() {
@@ -379,13 +380,14 @@ function handleCommitKeydown(event: KeyboardEvent, oid: string) {
 }
 async function copyText(text: string) {
   clearTimeout(copiedTimer);
+  copyFailed.value = false;
   try {
     await navigator.clipboard.writeText(text);
     copied.value = true;
     copiedTimer = window.setTimeout(() => (copied.value = false), 2000);
   } catch {
     copied.value = false;
-    error.value = t("apiError");
+    copyFailed.value = true;
   }
 }
 function copyCloneUrl() {
@@ -663,6 +665,7 @@ onUnmounted(() => {
     <span class="visually-hidden" role="status" aria-live="polite">{{
       copied ? t("copied") : ""
     }}</span>
+    <p v-if="copyFailed" class="muted" role="alert">{{ t("copyFailed") }}</p>
     <div v-if="token" class="token-once box box-form">
       <div>
         <strong>{{ t(tokenExpired ? "tokenExpired" : "tokenShownOnce") }}</strong>

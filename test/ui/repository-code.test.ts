@@ -5,12 +5,13 @@ import { i18n } from "../../apps/web/src/i18n";
 import { router } from "../../apps/web/src/router";
 import { clearSession, setSession } from "../../apps/web/src/lib/session";
 import { fluentUi } from "../../apps/web/src/ui/fluent";
+import type { Repository } from "../../packages/contracts/src/forge";
 import type {
   RepositoryBranch,
   RepositoryRole,
 } from "../../packages/contracts/src/repository-controls";
 
-const repository = {
+const repository: Repository = {
   id: "repo-1",
   namespaceId: "namespace-1",
   owner: "example",
@@ -22,7 +23,7 @@ const repository = {
   createdAt: 1,
   updatedAt: 1,
   canWrite: false,
-  viewerRole: null as RepositoryRole | null,
+  viewerRole: null,
   archived: false,
   issuesEnabled: true,
   pullsEnabled: true,
@@ -46,6 +47,12 @@ const commitOid = "a".repeat(40);
 const createdCommitOid = "b".repeat(40);
 const nativeShowModal = HTMLDialogElement.prototype.showModal;
 const nativeDialogClose = HTMLDialogElement.prototype.close;
+
+function editorRoot(root: HTMLElement) {
+  const editor = root.querySelector<HTMLElement>(".file-editor");
+  if (!editor) throw new Error("File editor was not rendered.");
+  return editor;
+}
 
 async function settle() {
   for (let index = 0; index < 5; index += 1) {
@@ -897,7 +904,8 @@ describe("repository Code view interactions", () => {
     );
     const mounted = await mountCode("/example/sample/commits?ref=main", "commits");
     expect(mounted.root.querySelectorAll(".commit-row")).toHaveLength(2);
-    const more = button(mounted.root, "Load more")!;
+    const more = button(mounted.root, "Load more");
+    if (!more) throw new Error("Load more button was not rendered.");
     more.click();
     more.click();
     await settle();
@@ -957,15 +965,80 @@ describe("repository Code view interactions", () => {
     if (!textarea) throw new Error("File editor did not open.");
     fill(textarea, "changed");
     await settle();
-    button(mounted.root.querySelector<HTMLElement>(".file-editor")!, "Cancel")?.click();
+    button(editorRoot(mounted.root), "Cancel")?.click();
     await settle();
 
     expect(confirm).toHaveBeenCalledOnce();
     expect(mounted.root.querySelector(".file-editor")).not.toBeNull();
     confirm.mockReturnValue(true);
-    button(mounted.root.querySelector<HTMLElement>(".file-editor")!, "Cancel")?.click();
+    button(editorRoot(mounted.root), "Cancel")?.click();
     await settle();
     expect(mounted.root.querySelector(".file-editor")).toBeNull();
+    mounted.unmount();
+  });
+
+  it("keeps the page mounted when copying fails", async () => {
+    i18n.global.locale.value = "en";
+    mockCodeApi();
+    const writeText = vi.fn(async () => {
+      throw new Error("denied");
+    });
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    const mounted = await mountCode("/example/sample", "code");
+    button(mounted.root, "Code")?.click();
+    await settle();
+    mounted.root.querySelector<HTMLElement>(".clone-url fluent-button, .clone-url button")?.click();
+    await settle();
+
+    expect(mounted.root.querySelector("[role=alert]")?.textContent).toContain("Could not copy");
+    expect(mounted.root.querySelector(".clone-url")).not.toBeNull();
+    expect(mounted.root.querySelector(".state-error")).toBeNull();
+    mounted.unmount();
+  });
+
+  it("re-enables Load more after changing ref mid-request", async () => {
+    i18n.global.locale.value = "en";
+    const pending: Array<() => void> = [];
+    const commit = (index: number) => ({
+      oid: index.toString(16).padStart(40, "0"),
+      message: `commit ${index}`,
+      parents: [],
+      author: { name: "A", email: "a@example.test", timestamp: 1 },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(String(input), "https://gitedge.test");
+        if (url.pathname.endsWith("/refs"))
+          return jsonResponse([
+            { name: "refs/heads/main", oid: commitOid },
+            { name: "refs/heads/dev", oid: commitOid },
+          ]);
+        if (url.pathname.endsWith("/commits")) return jsonResponse([commit(1)]);
+        if (url.pathname.endsWith("/graph")) {
+          const body = {
+            commits: [commit(1), commit(2)],
+            refs: [],
+            sessions: [],
+            truncated: true,
+          };
+          if (url.searchParams.get("limit") === "100") return jsonResponse(body);
+          return new Promise<Response>((resolve) =>
+            pending.push(() => resolve(jsonResponse(body)))
+          );
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      })
+    );
+    const mounted = await mountCode("/example/sample/commits?ref=main", "commits");
+    button(mounted.root, "Load more")?.click();
+    await settle();
+    expect(pending).toHaveLength(1);
+    await router.push("/example/sample/commits?ref=dev");
+    await settle();
+    pending[0]?.();
+    await settle();
+    expect(button(mounted.root, "Load more")?.hasAttribute("disabled")).toBe(false);
     mounted.unmount();
   });
 });

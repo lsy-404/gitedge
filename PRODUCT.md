@@ -2,7 +2,7 @@
 
 GitEdge 面向个人开发者、小团队和协作智能体，提供真实 Git 仓库与可操作的协作流程。名称统一使用 GitEdge，不设中文译名。默认简体中文，支持英文；深色界面优先并随系统切换浅色；布局与交互对齐 GitHub，配色使用 Cloudflare 橙与中性灰，保留明确的加载、错误、空状态和键盘焦点。界面使用项目自有的 Platform Kit Fluent Vue 组件和材质；品牌橙用于强调与主按钮，主按钮使用黑色文字，浅色与深色模式分别使用对比度合格的橙色链接文字。
 
-仓库导航以 Code 和 Settings 为基础；提交图、比较、Issues、Pull Requests、Tasks、智能体、Discussions、Wiki、Actions 与部署按仓库设置独立启用。所有数据来自服务。文件浏览、PR diff/merge、评论、Discussion 答案和 Wiki 修订应形成完整操作闭环。
+仓库导航以 Code 和 Settings 为基础；提交图、Issues、Pull Requests、Tasks、智能体、Discussions、Wiki、Actions 与部署按仓库设置独立启用；比较在启用提交图或 Pull Requests 任一时显示。所有数据来自服务。文件浏览、PR diff/merge、评论、Discussion 答案和 Wiki 修订应形成完整操作闭环。
 
 头像菜单内展开已登录账户、身份视角、语言与外观偏好；中英文文案使用 Vue i18n。浏览器可保留最多5个独立登录，支持单独退出或全部退出；凭证仅使用 HttpOnly Cookie。视角在本人和访客预览之间切换：保留登录状态，内容请求实际按匿名身份访问，私有仓库不可见且禁止写入；可随时返回本人。账户或视角变更会刷新页面并同步其他标签页，避免跨身份沿用数据。头像保持无外框，键盘操作保留焦点提示；动画与焦点移动使用Fluent交互风格，并尊重减少动态效果设置。仓库支持重命名、历史 URL 重定向、README 初始化、在线文本编辑与分支管理；保护规则同时约束网页和原生 Git 写入。
 
