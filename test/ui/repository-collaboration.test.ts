@@ -612,10 +612,6 @@ describe("RepositoryCollaboration rendered workflows", () => {
       "The pull request or branches changed."
     );
 
-    findButton(mounted.root, "Retry").click();
-    await settle();
-    mounted.root.querySelectorAll<HTMLElement>(".pull-tabs button")[1]?.click();
-    await settle();
     findButton(mounted.root, "Merge pull request").click();
     await settle();
     expect(mergeSpy).toHaveBeenLastCalledWith("repo-1", 12, {
@@ -679,7 +675,7 @@ describe("RepositoryCollaboration rendered workflows", () => {
             content: "Remote latest",
           });
           history = [...history, current];
-          throw new ApiError(409, "Wiki revision changed");
+          throw new ApiError(409, "Wiki page revision has changed.", "conflict");
         }
         current = page({
           revision: updates + 2,
@@ -699,9 +695,10 @@ describe("RepositoryCollaboration rendered workflows", () => {
     fill(control(wikiEdit, "textarea"), "Draft based on stale page");
     submit(wikiEdit);
     await settle();
-    expect(mounted.root.querySelector('[role="alert"]')?.textContent).toContain(
-      "The content changed. Refresh and try again."
-    );
+    const wikiAlert = mounted.root.querySelector('[role="alert"]')?.textContent ?? "";
+    expect(wikiAlert).toContain("The content changed. Refresh and try again.");
+    expect(wikiAlert).not.toContain("pull request");
+    expect(wikiAlert).not.toContain("Wiki page revision");
 
     findButton(mounted.root, "Retry").click();
     await settle();

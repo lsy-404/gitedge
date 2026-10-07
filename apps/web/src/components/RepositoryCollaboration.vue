@@ -82,6 +82,7 @@ const wikiHistory = ref<WikiPage[]>([]);
 const wikiEditing = ref(false);
 const wikiDraft = ref({ title: "", content: "" });
 const diff = ref<GitComparison | null>(null);
+const mergeError = ref("");
 const loading = ref(false);
 const error = ref("");
 const notFound = ref(false);
@@ -239,9 +240,12 @@ const mergePolicyCodes = [
   "merge_method_disabled",
 ] as const;
 function userMessage(cause: unknown): string {
+  return errorMessage(cause, t);
+}
+function mergeFailureMessage(cause: unknown, reloaded: boolean): string {
   if (cause instanceof ApiError) {
-    if (cause.code === "merge_changed") return t("mergeStateChanged");
-    if (cause.code === "conflict") return `${t("mergeStateChanged")} ${cause.message}`;
+    if (reloaded && (cause.code === "merge_changed" || cause.code === "conflict"))
+      return t("mergeStateChanged");
     const policyCode = mergePolicyCodes.find((code) => code === cause.code);
     if (policyCode) return t(`mergeError_${policyCode}`);
   }
@@ -574,6 +578,7 @@ async function addCheck() {
 async function mergePull() {
   if (!detailNumber.value || !diff.value) return;
   saving.value = true;
+  mergeError.value = "";
   try {
     item.value = await api.mergePull(props.repository.id, detailNumber.value, {
       expectedBaseOid: diff.value.baseOid,
@@ -582,8 +587,9 @@ async function mergePull() {
     });
     await load();
   } catch (cause) {
-    if (cause instanceof ApiError && cause.status === 409) await load();
-    error.value = userMessage(cause);
+    const reloaded = cause instanceof ApiError && cause.status === 409;
+    if (reloaded) await load();
+    mergeError.value = mergeFailureMessage(cause, reloaded);
   } finally {
     saving.value = false;
   }
@@ -1178,6 +1184,7 @@ watch(
             {{ t("mergePull") }}</FluentButton
           ><span class="muted">{{ t("mergeUsesCurrentHeads") }}</span>
           <span class="muted">{{ t("repoMergePolicyHint") }}</span>
+          <p v-if="mergeError" class="workspace-form-error" role="alert">{{ mergeError }}</p>
         </div>
       </section>
       <section

@@ -136,9 +136,12 @@ describe("Cloudflare deployment wizard", () => {
           { status: 200 }
         );
       if (action === "migrate" && migrationAttempts++ === 0)
-        return new Response(JSON.stringify({ error: { message: "Migration service busy" } }), {
-          status: 503,
-        });
+        return new Response(
+          JSON.stringify({ error: { code: "unavailable", message: "Migration service busy" } }),
+          {
+            status: 503,
+          }
+        );
       if (action === "deploy")
         return new Response(
           JSON.stringify({
@@ -195,6 +198,10 @@ describe("Cloudflare deployment wizard", () => {
 
     expect(mounted.root.querySelector("[role='alert']")).not.toBeNull();
     expect(mounted.root.textContent).not.toContain("Unexpected token");
+    expect(mounted.root.textContent).not.toContain("Bad gateway");
+    expect(mounted.root.querySelector("[role='alert']")?.textContent).toContain(
+      i18n.global.t("deployWizard.error")
+    );
     mounted.unmount();
   });
 

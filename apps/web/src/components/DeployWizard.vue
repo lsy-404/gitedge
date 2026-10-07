@@ -37,7 +37,7 @@ onBeforeUnmount(() => {
 
 function failureMessage(cause: unknown): string {
   const fallback = errorMessage(cause, t, {}, "deployWizard.error");
-  return cause instanceof ApiError && cause.message
+  return cause instanceof ApiError && cause.code !== null && cause.message
     ? t("deployWizard.errorDetail", { message: fallback, detail: cause.message })
     : fallback;
 }

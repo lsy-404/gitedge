@@ -68,8 +68,9 @@ describe("session refresh failures", () => {
       .spyOn(globalThis, "fetch")
       .mockResolvedValue(new Response(JSON.stringify({ data: {} }), { status: 200 }));
     await api.issues("repo-1");
-    const headers = fetchMock.mock.calls[0][1]?.headers as Record<string, string>;
-    expect(headers["X-GitEdge-Expected-User"]).toBe("user-1");
+    expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get("X-GitEdge-Expected-User")).toBe(
+      "user-1"
+    );
   });
 });
 

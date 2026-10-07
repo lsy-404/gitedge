@@ -99,8 +99,13 @@ describe("locale message syntax", () => {
 
   it("has no message that is never referenced", () => {
     const corpus = nonMessageSources.map(([, source]) => source).join("\n");
+    const generated = new Set(
+      Object.entries(dynamicKeys).flatMap(([prefix, values]) =>
+        values.map((value) => `${prefix}${value}`)
+      )
+    );
     const unused = Object.keys(flat.en).filter((key) => {
-      if (Object.keys(dynamicKeys).some((prefix) => key.startsWith(prefix))) return false;
+      if (generated.has(key)) return false;
       return !new RegExp(`["'\`]${key.replaceAll(".", "\\.")}["'\`]`).test(corpus);
     });
     expect(unused).toEqual([]);
