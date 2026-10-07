@@ -258,7 +258,11 @@ onUnmounted(dispose);
     </form>
 
     <div v-if="loading" class="box"><StatusState :loading="true" /></div>
-    <section v-else-if="!loadingError" class="box" aria-labelledby="credential-list-title">
+    <section
+      v-else-if="!loadingError || credentials.length"
+      class="box"
+      aria-labelledby="credential-list-title"
+    >
       <header class="box-header">
         <h3 id="credential-list-title">{{ t("settingsTokenList") }}</h3>
         <StatusBadge>{{ credentials.length }}</StatusBadge>

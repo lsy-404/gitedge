@@ -182,7 +182,7 @@ watch(
           <NoticeBar v-if="revocationIncomplete" intent="warning">{{
             t("revocationIncomplete")
           }}</NoticeBar>
-          <div v-if="!members.length" class="settings-empty-state">
+          <div v-if="!members.length" class="settings-empty">
             {{ t("organizationEmptyMembers") }}
           </div>
         </section>

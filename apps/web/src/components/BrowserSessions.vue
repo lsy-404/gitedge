@@ -68,7 +68,11 @@ onMounted(load);
     <NoticeBar v-if="loadingError" intent="error">{{ loadingError }}</NoticeBar>
     <NoticeBar v-if="actionError" intent="error">{{ actionError }}</NoticeBar>
     <div v-if="loading" class="box"><StatusState :loading="true" /></div>
-    <section v-else-if="!loadingError" class="box" :aria-label="t('settingsSessions')">
+    <section
+      v-else-if="!loadingError || sessions.length"
+      class="box"
+      :aria-label="t('settingsSessions')"
+    >
       <p v-if="!sessions.length" class="settings-empty">{{ t("empty") }}</p>
       <ul v-else class="settings-list">
         <li v-for="session in sessions" :key="session.id" class="box-row settings-item">

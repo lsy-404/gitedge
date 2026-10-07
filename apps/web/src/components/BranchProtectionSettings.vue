@@ -166,7 +166,7 @@ watch(
     <header class="box-header">
       <h3 id="branch-rules-title">{{ t("repoSettingsBranchRules") }}</h3>
     </header>
-    <p class="box-row settings-hint">{{ t("branchRulesIntro") }}</p>
+    <p class="box-row field-hint">{{ t("branchRulesIntro") }}</p>
     <StatusState v-if="loading || error" :loading="loading" :error="error" @retry="load" />
     <template v-else>
       <p v-if="!rules.length" class="settings-empty">{{ t("branchRuleEmpty") }}</p>
@@ -300,10 +300,6 @@ watch(
 </template>
 
 <style scoped>
-.settings-item-copy small {
-  color: var(--fg-muted);
-  font-size: var(--font-size-meta);
-}
 .branch-rule-form {
   border-top: 1px solid var(--border-muted);
 }

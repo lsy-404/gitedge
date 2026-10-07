@@ -120,7 +120,7 @@ watch(() => props.repositoryId, load, { immediate: true });
     <header class="box-header">
       <h3 id="collaborators-title">{{ t("repoSettingsCollaborators") }}</h3>
     </header>
-    <p class="box-row settings-hint">{{ t("collaboratorIntro") }}</p>
+    <p class="box-row field-hint">{{ t("collaboratorIntro") }}</p>
     <StatusState v-if="loading || error" :loading="loading" :error="error" @retry="load" />
     <template v-else>
       <p v-if="!collaborators.length" class="settings-empty">{{ t("collaboratorEmpty") }}</p>
@@ -187,10 +187,6 @@ watch(() => props.repositoryId, load, { immediate: true });
   grid-template-columns: minmax(0, 1fr) minmax(150px, 220px) auto;
   gap: var(--space-3);
   align-items: center;
-}
-.settings-item-copy small {
-  color: var(--fg-muted);
-  font-size: var(--font-size-meta);
 }
 .collaborator-form {
   display: grid;

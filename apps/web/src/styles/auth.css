@@ -36,9 +36,12 @@
 .auth-provider-choice {
   justify-content: flex-start;
   gap: var(--space-3);
+  white-space: normal;
 }
 .auth-provider-choice strong {
   flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-weight: var(--font-weight-medium);
   text-align: center;
 }

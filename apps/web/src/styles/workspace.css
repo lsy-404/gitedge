@@ -389,19 +389,6 @@
   border-radius: 50%;
   color: var(--fg-muted);
 }
-.settings-empty-state {
-  display: grid;
-  justify-items: center;
-  gap: 9px;
-  padding: 28px 20px;
-  color: var(--fg-muted);
-  text-align: center;
-  font-size: 12px;
-}
-.settings-empty-state strong {
-  color: var(--fg-default);
-  font-size: 13px;
-}
 .workspace-form-error {
   color: var(--danger-fg);
   font-size: 12px;

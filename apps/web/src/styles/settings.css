@@ -102,8 +102,13 @@
   justify-self: start;
 }
 
-.box-header h3 {
+.box-header h3,
+.box-form h4 {
   font-size: var(--font-size-body);
+}
+.settings-item-copy small {
+  color: var(--fg-muted);
+  font-size: var(--font-size-meta);
 }
 .box-header-end {
   margin-inline-start: auto;
@@ -138,28 +143,11 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.settings-hint {
-  color: var(--fg-muted);
-  font-size: var(--font-size-meta);
-}
 .settings-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
-}
-.settings-empty {
-  display: grid;
-  justify-items: center;
-  gap: var(--space-1);
-  padding: var(--space-6) var(--space-4);
-  color: var(--fg-muted);
-  font-size: var(--font-size-meta);
-  text-align: center;
-}
-.settings-empty strong {
-  color: var(--fg-default);
-  font-size: var(--font-size-body);
 }
 .settings-code {
   margin: 0;

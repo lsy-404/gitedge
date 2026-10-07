@@ -66,6 +66,7 @@ const graphics: Array<[string, string]> = [
   ["focus-ring", "bg-subtle"],
   ["focus-ring", "bg-overlay"],
   ["accent-strong", "bg-canvas"],
+  ["accent-strong", "bg-selected"],
   ["border-strong", "bg-canvas"],
   ["border-strong", "bg-overlay"],
   ["border-strong", "control-bg"],

@@ -424,7 +424,20 @@ textarea.fluent-field__input {
   color: var(--fg-muted);
   font-size: var(--font-size-meta);
   font-weight: var(--font-weight-regular);
-  line-height: var(--space-4);
+  line-height: var(--line-height-body);
+}
+.settings-empty {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-1);
+  padding: var(--space-6) var(--space-4);
+  color: var(--fg-muted);
+  font-size: var(--font-size-meta);
+  text-align: center;
+}
+.settings-empty strong {
+  color: var(--fg-default);
+  font-size: var(--font-size-body);
 }
 .text-field > input,
 .textarea-field > textarea {

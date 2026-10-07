@@ -10,6 +10,7 @@ import {
   type CreatedAgentSession,
   type Repository,
 } from "../lib/api";
+import ConfirmButton from "../components/ConfirmButton.vue";
 import SelectField from "../components/SelectField.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import StatusState from "../components/StatusState.vue";
@@ -440,7 +441,7 @@ sessionClockTimer = window.setInterval(() => {
                   <AppIcon name="plus" />{{ t("createAgentSession") }}
                 </button>
               </header>
-              <p class="box-row settings-hint">{{ t("agentSessionsHint") }}</p>
+              <p class="box-row field-hint">{{ t("agentSessionsHint") }}</p>
               <StatusState
                 v-if="sessionsError"
                 :error="sessionsError"
@@ -495,16 +496,15 @@ sessionClockTimer = window.setInterval(() => {
               <div class="box-row settings-item">
                 <div class="settings-item-copy">
                   <strong>{{ t("disableAgent") }}</strong>
-                  <span class="settings-hint">{{ t("agentDisableHint") }}</span>
+                  <span class="field-hint">{{ t("agentDisableHint") }}</span>
                 </div>
-                <FluentButton
-                  class="btn btn-danger btn-sm"
-                  type="button"
+                <ConfirmButton
+                  :label="t('disableAgent')"
+                  :accessible-name="`${t('disableAgent')} · ${currentAgent.handle}`"
+                  :prompt="t('confirmDisableAgent')"
                   :disabled="saving"
-                  @click="disableAgent(currentAgent)"
-                >
-                  {{ t("disableAgent") }}
-                </FluentButton>
+                  @confirm="disableAgent(currentAgent)"
+                />
               </div>
             </section>
           </div>
@@ -660,9 +660,11 @@ sessionClockTimer = window.setInterval(() => {
   color: var(--fg-default);
   background: transparent;
   border: 0;
-  border-top: 1px solid var(--border-muted);
   font: inherit;
   text-align: left;
+}
+.agent-choice + .agent-choice {
+  border-top: 1px solid var(--border-muted);
 }
 .agent-choice:hover {
   background: var(--bg-subtle);

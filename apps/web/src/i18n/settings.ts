@@ -89,6 +89,7 @@ export const settingsMessages = {
     settingsSignatureUnavailable:
       "无法读取签名，请稍后重试。大型提交可在本地用 git verify-commit 验证。",
     confirmAction: "确认",
+    confirmDisableAgent: "停用此智能体？停用后无法恢复，其凭证与会话将失效。",
     confirmRevokeCredential: "撤销此凭证？使用它的 Git 客户端将立即失效。",
     confirmRevokeSigningKey: "撤销此签名密钥？此操作无法撤销。",
     confirmSignOutSession: "结束此会话？该设备将退出登录。",
@@ -203,6 +204,8 @@ export const settingsMessages = {
     settingsSignatureUnavailable:
       "The signature could not be read. Retry later, or use git verify-commit locally for large commits.",
     confirmAction: "Confirm",
+    confirmDisableAgent:
+      "Disable this agent? This cannot be undone, and its credentials and sessions stop working.",
     confirmRevokeCredential:
       "Revoke this credential? Git clients using it stop working immediately.",
     confirmRevokeSigningKey: "Revoke this signing key? This cannot be undone.",

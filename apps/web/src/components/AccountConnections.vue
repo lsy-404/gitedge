@@ -176,7 +176,7 @@ onMounted(load);
       <div v-else class="box-row">
         <div class="settings-item-copy">
           <strong>{{ t("noExternalIdentity") }}</strong>
-          <span class="settings-hint">{{ t("noExternalIdentityHint") }}</span>
+          <span class="field-hint">{{ t("noExternalIdentityHint") }}</span>
         </div>
       </div>
     </section>
@@ -194,7 +194,7 @@ onMounted(load);
           >{{ t("refresh") }}</FluentButton
         >
       </header>
-      <div class="box-row settings-hint sso-hints">
+      <div class="box-row field-hint sso-hints">
         <p>{{ t("ssoIdentitiesHint") }}</p>
         <p>{{ t("ssoFederatedLogoutHint") }}</p>
       </div>

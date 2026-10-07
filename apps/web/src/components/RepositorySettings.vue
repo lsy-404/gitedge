@@ -381,7 +381,7 @@ watch(() => props.repository.id, load, { immediate: true });
             <header class="box-header">
               <h3 id="settings-features-title">{{ sectionName("features") }}</h3>
             </header>
-            <p class="box-row settings-hint">{{ t("repoSettingsFeaturesIntro") }}</p>
+            <p class="box-row field-hint">{{ t("repoSettingsFeaturesIntro") }}</p>
             <div class="box-row settings-row">
               <div class="row-copy">
                 <span>{{ t("repoSettingsIssues") }}</span>
@@ -525,7 +525,7 @@ watch(() => props.repository.id, load, { immediate: true });
                 "
               />
             </div>
-            <p v-if="!publicMemoryAllowed" class="box-row settings-hint">
+            <p v-if="!publicMemoryAllowed" class="box-row field-hint">
               {{ t("repoSettingsMemoryPrivateNote") }}
             </p>
             <div class="box-row settings-row">
