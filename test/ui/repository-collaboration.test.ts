@@ -609,7 +609,7 @@ describe("RepositoryCollaboration rendered workflows", () => {
       },
     ];
     vi.spyOn(api, "pull").mockResolvedValue(openPull);
-    vi.spyOn(api, "comments").mockResolvedValue([]);
+    vi.spyOn(api, "comments").mockResolvedValue({ items: [], truncated: false });
     vi.spyOn(api, "reviews").mockResolvedValue([]);
     vi.spyOn(api, "checks").mockResolvedValue([]);
     const diffSpy = vi

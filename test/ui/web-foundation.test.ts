@@ -66,7 +66,9 @@ describe("session refresh failures", () => {
     expect(sessionState.view).toBe("account");
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
-      .mockResolvedValue(new Response(JSON.stringify({ data: {} }), { status: 200 }));
+      .mockResolvedValue(
+        new Response(JSON.stringify({ data: [], truncated: false }), { status: 200 })
+      );
     await api.issues("repo-1");
     expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get("X-GitEdge-Expected-User")).toBe(
       "user-1"
