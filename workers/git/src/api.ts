@@ -113,6 +113,8 @@ export async function handleGitApi(
       return fail(409, "repository_archived", "Archived repositories are read-only.");
     if (resource === "edit" && access.repository.onlineEditingEnabled === 0)
       return fail(404, "feature_disabled", "Online editing is disabled.");
+    if (session && !userSession && session.userId !== access.user.id)
+      return fail(404, "not_found", "Session workspace was not found.");
     const value = await readJsonLimited(request, 2_100_000);
     const edit =
       resource === "edit" && request.method === "POST"
@@ -172,7 +174,13 @@ export async function handleGitApi(
     };
     try {
       if (edit?.success) {
-        const result = await editRepositoryFile(repo, edit.data, access.user, beforeWrite);
+        const result = await editRepositoryFile(
+          repo,
+          edit.data,
+          access.user,
+          beforeWrite,
+          env.LOG_LEVEL
+        );
         await written(result.branch, result.oid);
         logger.info("git:file-committed", { branch: result.branch, oid: result.oid });
         return json(result, 201);
@@ -183,14 +191,21 @@ export async function handleGitApi(
           create.data.name,
           create.data.source,
           create.data.expectedOid,
-          beforeWrite
+          beforeWrite,
+          env.LOG_LEVEL
         );
         await written(result.name, result.oid);
         logger.info("git:branch-created", { branch: result.name });
         return json(result, 201);
       }
       if (remove?.success) {
-        await deleteRepositoryBranch(repo, remove.data.name, remove.data.expectedOid, beforeWrite);
+        await deleteRepositoryBranch(
+          repo,
+          remove.data.name,
+          remove.data.expectedOid,
+          beforeWrite,
+          env.LOG_LEVEL
+        );
         logger.info("git:branch-deleted", { branch: remove.data.name });
         return json({ deleted: true });
       }
@@ -238,44 +253,50 @@ export async function handleGitApi(
         .first<{ oid: string }>();
       if (receipt) return json({ oid: receipt.oid });
     }
-    const result = await mergeArtifacts(repo, headRepo, input.data, {
-      requireLinearHistory: rules.some((rule) => rule.requireLinearHistory),
-      requireSignedCommits: rules.some((rule) => rule.requireSignedCommits),
-      verifySignature: async (payload, signature) =>
-        (await verifyCommitSignature(env.DB, payload, signature)).status === "valid",
-      beforePush: async (oid) => {
-        const latest = await resolveGitAccess(request, env, repositoryId);
-        const latestRules = matchingBranchRules(
-          await branchRules(env.DB, repositoryId),
-          input.data.baseRef
-        );
-        if (
-          latest instanceof Response ||
-          !latest?.repository.canWrite ||
-          latest.repository.archived ||
-          JSON.stringify(latestRules) !== JSON.stringify(rules)
-        )
-          throw new GitWriteConflict("Repository access or branch rules changed during merge.");
-        if (!env.FORGE) throw new Error("Merge authorization service is unavailable.");
-        const headers = trustedHeaders(access.user ?? undefined);
-        headers.set("Content-Type", "application/json");
-        const authorization = await env.FORGE.fetch(
-          new Request("https://forge.internal/internal/merge-authorization", {
-            method: "POST",
-            headers,
-            body: JSON.stringify(input.data),
-          })
-        );
-        await authorization.body?.cancel();
-        if (!authorization.ok)
-          throw new GitWriteConflict("Merge authorization changed; reload before retrying.");
-        await env.DB.prepare(
-          "INSERT OR IGNORE INTO git_merge_receipts(operation_key,oid,repository_id,created_at) VALUES(?,?,?,?)"
-        )
-          .bind(operationKey, oid, repositoryId, Date.now())
-          .run();
+    const result = await mergeArtifacts(
+      repo,
+      headRepo,
+      input.data,
+      {
+        requireLinearHistory: rules.some((rule) => rule.requireLinearHistory),
+        requireSignedCommits: rules.some((rule) => rule.requireSignedCommits),
+        verifySignature: async (payload, signature) =>
+          (await verifyCommitSignature(env.DB, payload, signature)).status === "valid",
+        beforePush: async (oid) => {
+          const latest = await resolveGitAccess(request, env, repositoryId);
+          const latestRules = matchingBranchRules(
+            await branchRules(env.DB, repositoryId),
+            input.data.baseRef
+          );
+          if (
+            latest instanceof Response ||
+            !latest?.repository.canWrite ||
+            latest.repository.archived ||
+            JSON.stringify(latestRules) !== JSON.stringify(rules)
+          )
+            throw new GitWriteConflict("Repository access or branch rules changed during merge.");
+          if (!env.FORGE) throw new Error("Merge authorization service is unavailable.");
+          const headers = trustedHeaders(access.user ?? undefined);
+          headers.set("Content-Type", "application/json");
+          const authorization = await env.FORGE.fetch(
+            new Request("https://forge.internal/internal/merge-authorization", {
+              method: "POST",
+              headers,
+              body: JSON.stringify(input.data),
+            })
+          );
+          await authorization.body?.cancel();
+          if (!authorization.ok)
+            throw new GitWriteConflict("Merge authorization changed; reload before retrying.");
+          await env.DB.prepare(
+            "INSERT OR IGNORE INTO git_merge_receipts(operation_key,oid,repository_id,created_at) VALUES(?,?,?,?)"
+          )
+            .bind(operationKey, oid, repositoryId, Date.now())
+            .run();
+        },
       },
-    });
+      env.LOG_LEVEL
+    );
     if (!result.ok) {
       logger.warn("artifacts:merge-rejected", { reason: result.reason });
       return fail(

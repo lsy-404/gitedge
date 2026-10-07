@@ -73,25 +73,29 @@ export async function resolveGitAccess(
   return { repository, user };
 }
 
+export interface WorkspaceSession extends AgentSession {
+  userId: string;
+}
+
 export async function resolveWorkspace(
   env: GitEnv,
   access: GitRepositoryAccess,
   sessionId?: string | null,
   publicHeadRef?: string
-): Promise<AgentSession | null> {
+): Promise<WorkspaceSession | null> {
   if (!sessionId) return null;
   const row = await env.DB.prepare(
-    "SELECT s.id, s.agent_id AS agentId, a.name AS agentName, s.repository_id AS repositoryId, s.workspace_name AS workspaceName, s.remote, s.base_ref AS baseRef, s.base_oid AS baseOid, s.permission, s.status, s.created_at AS createdAt, s.expires_at AS expiresAt FROM auth_agent_sessions s JOIN auth_agents a ON a.id = s.agent_id WHERE s.id = ? AND s.repository_id = ?"
+    "SELECT s.id, s.agent_id AS agentId, s.user_id AS userId, a.name AS agentName, s.repository_id AS repositoryId, s.workspace_name AS workspaceName, s.remote, s.base_ref AS baseRef, s.base_oid AS baseOid, s.permission, s.status, s.created_at AS createdAt, s.expires_at AS expiresAt FROM auth_agent_sessions s JOIN auth_agents a ON a.id = s.agent_id WHERE s.id = ? AND s.repository_id = ?"
   )
     .bind(sessionId, access.repository.id)
-    .first<AgentSession>();
+    .first<WorkspaceSession>();
   if (!row) return null;
   const ownWorkspace = !access.user?.agentSession || access.user.agentSession.id === sessionId;
   if (access.user?.agentSession?.id !== row.id && (!access.repository.canWrite || !ownWorkspace)) {
     // A published PR grants access to its head only, never to the entire private fork.
     if (!publicHeadRef) return null;
     const publicPull = await env.DB.prepare(
-      "SELECT id FROM forge_pull_requests WHERE repository_id = ? AND head_session_id = ? AND (head_ref = ? OR (state = 'merged' AND merge_head_oid = ?))"
+      "SELECT id FROM forge_pull_requests WHERE repository_id = ? AND head_session_id = ? AND ((state = 'open' AND head_ref = ?) OR (state = 'merged' AND merge_head_oid = ?))"
     )
       .bind(access.repository.id, sessionId, publicHeadRef, publicHeadRef)
       .first<{ id: string }>();
