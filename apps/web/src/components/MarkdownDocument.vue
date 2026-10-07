@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, ref, useId } from "vue";
 import { useI18n } from "vue-i18n";
+import { useRoute } from "vue-router";
 import type { DocumentRevisionSummary } from "../lib/api";
 import { ApiError, errorMessage } from "../lib/api";
 import { revisionActorLabel, revisionActorTone, type DocumentView } from "../lib/tasks";
+import { useUnsavedGuard } from "../lib/unsavedGuard";
 import MarkdownContent from "./MarkdownContent.vue";
 import NoticeBar from "./NoticeBar.vue";
 import StatusBadge from "./StatusBadge.vue";
@@ -42,6 +44,9 @@ const historyLoading = ref(false);
 const historyError = ref("");
 const viewing = ref<DocumentView | null>(null);
 const shown = computed(() => viewing.value ?? props.document);
+const route = useRoute();
+const dirty = computed(() => editing.value && draft.value !== props.document.content);
+const { confirmDiscard } = useUnsavedGuard(dirty, { keepsForm: (to) => to.path === route.path });
 
 function startEdit(content: string = props.document.content) {
   draft.value = content;
@@ -54,6 +59,7 @@ function startEdit(content: string = props.document.content) {
 }
 
 function cancelEdit() {
+  if (!confirmDiscard()) return;
   editing.value = false;
   error.value = "";
   conflict.value = false;

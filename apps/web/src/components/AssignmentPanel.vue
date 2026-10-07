@@ -180,14 +180,15 @@ watch(() => [props.repository.id, props.item.number, canEdit.value], load);
 .assignment-panel {
   display: grid;
   gap: var(--space-3);
-  margin-top: var(--space-4);
-  padding-top: var(--space-4);
-  border-top: 1px solid var(--border-default);
 }
 .assignment-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: var(--space-4) var(--space-5);
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+}
+.assignment-grid > * + * {
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-default);
 }
 .task-select {
   display: grid;
@@ -199,7 +200,7 @@ watch(() => [props.repository.id, props.item.number, canEdit.value], load);
   margin: 0;
 }
 .task-current {
-  min-height: 32px;
+  min-height: var(--control-height);
   overflow-wrap: anywhere;
   font-weight: var(--font-weight-semibold);
 }

@@ -118,81 +118,88 @@ watch(() => [props.repositoryId, props.refName], load, { immediate: true });
 <style scoped>
 .repository-community {
   display: grid;
-  gap: 16px;
+  gap: var(--space-4);
   min-width: 0;
 }
-.repository-community h2 {
-  margin: 0;
-}
+.repository-community h2,
 .community-empty {
   margin: 0;
 }
 .community-readme {
-  display: grid;
-  gap: 12px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
   max-height: 70vh;
   overflow: auto;
-  padding: 16px;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
+}
+.community-readme > :not(.community-readme-heading) {
+  margin: var(--space-4);
 }
 .community-readme-heading {
+  position: sticky;
+  top: 0;
   display: flex;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-3);
   align-items: center;
-  padding-bottom: 10px;
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-subtle);
   border-bottom: 1px solid var(--border-default);
 }
 .community-readme-heading h3 {
   margin: 0;
-}
-.community-readme .community-truncated {
-  margin: 0;
+  font-size: var(--font-size-body);
 }
 .community-file-list {
   display: grid;
   margin: 0;
   padding: 0;
+  background: var(--bg-raised);
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   list-style: none;
   overflow: hidden;
 }
 .community-file + .community-file {
-  border-top: 1px solid var(--border-default);
+  border-top: 1px solid var(--border-muted);
 }
 .community-file summary {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 14px;
+  gap: var(--space-2) var(--space-3);
   align-items: baseline;
-  padding: 12px 16px;
+  padding: var(--space-3) var(--space-4);
   cursor: pointer;
+}
+.community-file summary:hover {
   background: var(--bg-subtle);
 }
+.community-file[open] summary {
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border-default);
+}
 .community-file summary span {
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 .community-file summary small {
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: var(--font-size-meta);
 }
 .community-inherited {
   margin-left: auto;
 }
 .community-file-content {
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
   max-height: 70vh;
   overflow: auto;
-  padding: 16px;
+  padding: var(--space-4);
 }
 .community-truncated {
   margin: 0;
 }
 .community-source {
   justify-self: start;
-  font-size: 13px;
+  font-size: var(--font-size-meta);
 }
 </style>

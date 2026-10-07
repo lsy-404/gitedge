@@ -216,20 +216,12 @@ watch(
 
       <div class="tasks-toolbar">
         <div class="view-switch" role="group" :aria-label="t('taskViews')">
-          <FluentButton
-            type="button"
-            :tone="view === 'list' ? 'primary' : 'secondary'"
-            :aria-pressed="view === 'list'"
-            @click="setView('list')"
-            >{{ t("taskViewList") }}</FluentButton
-          >
-          <FluentButton
-            type="button"
-            :tone="view === 'table' ? 'primary' : 'secondary'"
-            :aria-pressed="view === 'table'"
-            @click="setView('table')"
-            >{{ t("taskViewTable") }}</FluentButton
-          >
+          <FluentButton type="button" :aria-pressed="view === 'list'" @click="setView('list')">{{
+            t("taskViewList")
+          }}</FluentButton>
+          <FluentButton type="button" :aria-pressed="view === 'table'" @click="setView('table')">{{
+            t("taskViewTable")
+          }}</FluentButton>
         </div>
         <SelectField
           v-if="view === 'list'"
@@ -296,7 +288,7 @@ watch(
           class="box-row item-link task-row"
           :to="`/${repository.owner}/${repository.name}/tasks/${task.number}`"
         >
-          <AppIcon class="state-icon" name="target" :size="18" />
+          <AppIcon class="state-icon" name="target" />
           <div class="grow">
             <div class="row-title">
               <span class="number">#{{ task.number }}</span>
@@ -307,7 +299,7 @@ watch(
             </div>
             <div class="task-progress">
               <progress
-                class="bar"
+                class="progress-bar"
                 max="100"
                 :value="progressPercent(task)"
                 :aria-label="t('taskProgress')"
@@ -388,25 +380,6 @@ watch(
   margin-top: var(--space-2);
   font-size: var(--font-size-meta);
 }
-.bar {
-  width: min(240px, 40%);
-  height: 8px;
-  flex: none;
-  appearance: none;
-  border: 0;
-  border-radius: var(--radius-full);
-  background: var(--border-default);
-  overflow: hidden;
-}
-.bar::-webkit-progress-bar {
-  background: var(--border-default);
-}
-.bar::-webkit-progress-value {
-  background: var(--accent-emphasis);
-}
-.bar::-moz-progress-bar {
-  background: var(--accent-emphasis);
-}
 .table-head {
   display: flex;
   align-items: flex-start;
@@ -424,7 +397,7 @@ watch(
   .new-task {
     margin-left: 0;
   }
-  .bar {
+  .task-progress .progress-bar {
     width: 100%;
     flex: 1;
   }

@@ -1,7 +1,7 @@
 <script setup lang="ts">
-withDefaults(defineProps<{ tone?: "neutral" | "success" | "danger" | "brand" | "warning" }>(), {
-  tone: "neutral",
-});
+import type { BadgeTone } from "../lib/tasks";
+
+withDefaults(defineProps<{ tone?: BadgeTone }>(), { tone: "neutral" });
 </script>
 <template>
   <span class="badge" :class="`badge-${tone}`"><slot /></span>

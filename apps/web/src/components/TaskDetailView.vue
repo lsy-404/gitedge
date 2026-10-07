@@ -440,7 +440,7 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
           <p class="eyebrow">{{ t("taskProgress") }}</p>
           <div class="task-progress">
             <progress
-              class="bar"
+              class="progress-bar"
               max="100"
               :value="progress.percent ?? 0"
               :aria-label="t('taskProgress')"
@@ -454,12 +454,17 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
       </article>
 
       <section class="box box-form doc-card" :aria-label="t('taskDocuments')">
-        <div ref="documentTablist" class="doc-tabs" role="tablist" :aria-label="t('taskDocuments')">
+        <div
+          ref="documentTablist"
+          class="doc-tabs tab-list"
+          role="tablist"
+          :aria-label="t('taskDocuments')"
+        >
           <button
             v-for="kind in taskDocumentKinds"
             :id="`doc-tab-${kind}`"
             :key="kind"
-            class="doc-tab"
+            class="tab"
             type="button"
             role="tab"
             :aria-selected="activeDocument === kind"
@@ -504,19 +509,24 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
         </div>
       </section>
 
-      <section class="box box-form links-card" :aria-label="t('taskLinks')">
-        <div class="section-head">
+      <section class="box links-card" :aria-label="t('taskLinks')">
+        <header class="box-header">
           <h3>{{ t("taskLinks") }}</h3>
           <FluentButton
             v-if="canEdit"
+            class="header-action"
             type="button"
             size="small"
             :aria-expanded="showLinkForm"
             @click="openLinkForm"
             ><AppIcon name="plus" />{{ t("taskLinkAttach") }}</FluentButton
           >
-        </div>
-        <form v-if="showLinkForm" class="form-stack inline-form" @submit.prevent="attachLink">
+        </header>
+        <form
+          v-if="showLinkForm"
+          class="box-form form-stack inline-form"
+          @submit.prevent="attachLink"
+        >
           <SelectField v-if="linkOptions.length" v-model="linkChoice" :label="t('taskLinkSelect')">
             <option value="">{{ t("taskLinkPick") }}</option>
             <option
@@ -539,7 +549,7 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
           </div>
         </form>
         <ul v-if="task.links.length" class="plain-list">
-          <li v-for="link in task.links" :key="`${link.kind}:${link.number}`">
+          <li v-for="link in task.links" :key="`${link.kind}:${link.number}`" class="box-row">
             <AppIcon :name="link.kind === 'issue' ? 'issue' : 'pr'" />
             <AppLink :to="linkPath(link)">#{{ link.number }} {{ link.title }}</AppLink>
             <StatusBadge :tone="linkTone(link.state)">{{ t(link.state) }}</StatusBadge>
@@ -555,24 +565,25 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
             />
           </li>
         </ul>
-        <p v-else class="muted">{{ t("taskLinksEmpty") }}</p>
+        <p v-else class="box-row muted">{{ t("taskLinksEmpty") }}</p>
       </section>
 
-      <section class="box box-form commits-card" :aria-label="t('taskCommits')">
-        <div class="section-head">
+      <section class="box commits-card" :aria-label="t('taskCommits')">
+        <header class="box-header">
           <h3>{{ t("taskCommits") }}</h3>
           <FluentButton
             v-if="canEdit"
+            class="header-action"
             type="button"
             size="small"
             :aria-expanded="showCommitForm"
             @click="showCommitForm = !showCommitForm"
             ><AppIcon name="plus" />{{ t("taskCommitBind") }}</FluentButton
           >
-        </div>
+        </header>
         <form
           v-if="showCommitForm"
-          class="form-stack inline-form commit-form"
+          class="box-form form-stack inline-form commit-form"
           @submit.prevent="bindCommit"
         >
           <TextField v-model="commitForm.oid" required>{{ t("commitOid") }}</TextField>
@@ -585,7 +596,7 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
           </div>
         </form>
         <ul v-if="task.commits.length" class="plain-list commit-list">
-          <li v-for="commit in task.commits" :key="commit.oid">
+          <li v-for="commit in task.commits" :key="commit.oid" class="box-row">
             <RouterLink
               class="commit-oid"
               :to="{
@@ -615,7 +626,7 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
             >
           </li>
         </ul>
-        <p v-else class="muted">{{ t("taskCommitsEmpty") }}</p>
+        <p v-else class="box-row muted">{{ t("taskCommitsEmpty") }}</p>
       </section>
     </template>
   </section>
@@ -634,7 +645,6 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
   gap: var(--space-4);
 }
 .task-heading h2 {
-  margin: 0;
   font-size: var(--font-size-title);
   line-height: var(--line-height-title);
   overflow-wrap: anywhere;
@@ -670,7 +680,6 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
 .body-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  line-height: 1.7;
 }
 .task-progress {
   display: flex;
@@ -678,61 +687,8 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
   gap: var(--space-3);
   font-size: var(--font-size-meta);
 }
-.bar {
-  width: min(320px, 60%);
-  height: 8px;
-  flex: none;
-  appearance: none;
-  border: 0;
-  border-radius: var(--radius-full);
-  background: var(--border-default);
-  overflow: hidden;
-}
-.bar::-webkit-progress-bar {
-  background: var(--border-default);
-}
-.bar::-webkit-progress-value {
-  background: var(--accent-emphasis);
-}
-.bar::-moz-progress-bar {
-  background: var(--accent-emphasis);
-}
 .doc-tabs {
-  display: flex;
-  max-width: 100%;
-  overflow-x: auto;
-  scrollbar-width: none;
   margin-bottom: var(--space-4);
-  border-bottom: 1px solid var(--border-default);
-}
-.doc-tab {
-  flex: none;
-  padding: 10px 14px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  color: var(--fg-muted);
-  background: transparent;
-  font: inherit;
-  cursor: pointer;
-}
-.doc-tab[aria-selected="true"] {
-  border-bottom-color: var(--accent-strong);
-  color: var(--fg-default);
-  font-weight: 600;
-}
-.doc-tab:focus-visible {
-  outline: 2px solid var(--accent-fg);
-  outline-offset: -2px;
-}
-.section-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  margin-bottom: var(--space-3);
-}
-.section-head h3 {
-  margin: 0;
 }
 .plain-list {
   display: grid;
@@ -741,16 +697,9 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
   list-style: none;
 }
 .plain-list li {
-  display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: var(--space-3);
   min-height: 44px;
-  padding: var(--space-1) 0;
-  border-bottom: 1px solid var(--border-default);
-}
-.plain-list li:last-child {
-  border-bottom: 0;
 }
 .plain-list li .fluent-button {
   margin-left: auto;
@@ -769,7 +718,7 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
   order: 5;
 }
 .inline-form {
-  margin-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border-muted);
 }
 @media (max-width: 640px) {
   .task-heading {
@@ -779,7 +728,10 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
     font-size: var(--font-size-section);
     line-height: var(--line-height-section);
   }
-  .bar {
+  .task-progress {
+    flex-wrap: wrap;
+  }
+  .task-progress .progress-bar {
     width: 100%;
     flex: 1;
   }

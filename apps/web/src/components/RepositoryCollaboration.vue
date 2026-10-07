@@ -21,7 +21,7 @@ import type {
 import { ApiError, api, errorMessage } from "../lib/api";
 import { sessionState } from "../lib/session";
 import { oneOf } from "../ui/formEvents";
-import AppIcon from "./AppIcon.vue";
+import AppIcon, { type IconName } from "./AppIcon.vue";
 import AppLink from "./AppLink.vue";
 import AssignmentPanel from "./AssignmentPanel.vue";
 import FormActions from "./FormActions.vue";
@@ -142,7 +142,9 @@ const queryText = ref("");
 const stateFilter = ref<"open" | "closed" | "all">("open");
 const categoryFilter = ref<"all" | Discussion["category"]>("all");
 const issueView = ref<"all" | "assigned" | "created" | "recent">("all");
-const detailTab = ref<"conversation" | "files" | "checks">("conversation");
+type DetailTab = "conversation" | "files" | "checks";
+const detailTab = ref<DetailTab>("conversation");
+const pullTablist = ref<HTMLElement | null>(null);
 const commentPreview = ref(false);
 const wikiPreview = ref(false);
 const collectionRows = computed<(Issue | PullRequest | Discussion)[]>(() =>
@@ -252,11 +254,117 @@ const resource = computed<"issues" | "pull-requests" | "discussions">(() =>
       ? "pull-requests"
       : "discussions"
 );
+const hasSidebar = computed(
+  () => props.section === "wiki" || props.section !== "pulls" || detailTab.value === "conversation"
+);
+const pullTabs = computed(() => [
+  {
+    key: "conversation" as const,
+    icon: "discussion" as const,
+    label: t("conversation"),
+    count: comments.value.length + 1,
+  },
+  {
+    key: "files" as const,
+    icon: "diff" as const,
+    label: t("filesChanged"),
+    count: diff.value?.files.length ?? 0,
+  },
+  {
+    key: "checks" as const,
+    icon: "checkCircle" as const,
+    label: t("checks"),
+    count: checks.value.length,
+  },
+]);
+interface MergeStatusRow {
+  key: string;
+  icon: IconName;
+  tone: MarkTone | "muted" | "warning";
+  text: string;
+}
+/** Reviews and checks bound to the current head, summarized next to the merge controls. */
+const mergeStatusRows = computed<MergeStatusRow[]>(() => {
+  const head = diff.value?.headOid ?? "";
+  const verdicts = new Map<string, Review["state"]>();
+  for (const review of [...reviews.value].sort((a, b) => a.createdAt - b.createdAt))
+    if (review.commitOid === head && review.state !== "commented")
+      verdicts.set(`${review.actor.kind}:${review.actor.id}`, review.state);
+  const approvals = [...verdicts.values()].filter((state) => state === "approved").length;
+  const rows: MergeStatusRow[] = [];
+  if (verdicts.size > approvals)
+    rows.push({ key: "reviews", icon: "alert", tone: "danger", text: t("mergeReviewsChanges") });
+  else if (approvals)
+    rows.push({
+      key: "reviews",
+      icon: "checkCircle",
+      tone: "success",
+      text: t("mergeReviewsApproved", { count: approvals }),
+    });
+  else rows.push({ key: "reviews", icon: "circle", tone: "muted", text: t("mergeReviewsNone") });
+  const current = checks.value.filter((check) => check.commitOid === head);
+  const pending = current.filter((check) => check.status !== "completed").length;
+  const failing = current.filter(
+    (check) =>
+      check.status === "completed" &&
+      (check.conclusion === "failure" || check.conclusion === "cancelled")
+  ).length;
+  if (!current.length)
+    rows.push({ key: "checks", icon: "circle", tone: "muted", text: t("mergeChecksNone") });
+  else if (failing)
+    rows.push({
+      key: "checks",
+      icon: "alert",
+      tone: "danger",
+      text: t("mergeChecksFailing", { count: failing }),
+    });
+  else if (pending)
+    rows.push({
+      key: "checks",
+      icon: "clock",
+      tone: "warning",
+      text: t("mergeChecksPending", { count: pending }),
+    });
+  else
+    rows.push({
+      key: "checks",
+      icon: "checkCircle",
+      tone: "success",
+      text: t("mergeChecksPassed", { count: current.length }),
+    });
+  return rows;
+});
 let loadVersion = 0;
 
-function stateTone(state: Issue["state"] | PullRequest["state"]): "success" | "danger" | "brand" {
-  if (state === "open") return "success";
-  return state === "merged" ? "brand" : "danger";
+type MarkTone = "success" | "done" | "danger";
+interface Mark {
+  icon: IconName;
+  tone: MarkTone;
+}
+function stateMark(value: Issue | PullRequest | Discussion): Mark {
+  if ("headRef" in value) {
+    if (value.state === "merged") return { icon: "gitMerge", tone: "done" };
+    return { icon: "pr", tone: value.state === "open" ? "success" : "danger" };
+  }
+  if ("category" in value)
+    return { icon: "discussion", tone: value.state === "open" ? "success" : "done" };
+  return value.state === "open"
+    ? { icon: "issue", tone: "success" }
+    : { icon: "checkCircle", tone: "done" };
+}
+function reviewMark(state: Review["state"]): { icon: IconName; tone: MarkTone | "muted" } {
+  if (state === "approved") return { icon: "checkCircle", tone: "success" };
+  if (state === "changes_requested") return { icon: "alert", tone: "danger" };
+  return { icon: "discussion", tone: "muted" };
+}
+function checkMark(check: CheckRun): { icon: IconName; tone: MarkTone | "muted" | "warning" } {
+  if (check.status !== "completed") return { icon: "clock", tone: "warning" };
+  if (check.conclusion === "success") return { icon: "checkCircle", tone: "success" };
+  if (check.conclusion === "neutral") return { icon: "circle", tone: "muted" };
+  return { icon: "alert", tone: "danger" };
+}
+function initial(name: string): string {
+  return name.slice(0, 1).toUpperCase();
 }
 function isCurrentRevision(revision: number): boolean {
   const current = item.value;
@@ -692,6 +800,18 @@ function checkConclusionLabel(conclusion: CheckRun["conclusion"]): string {
       ? t(`actionsConclusion_${conclusion}`)
       : t("pending");
 }
+async function focusPullTab(index: number) {
+  const tab = pullTabs.value[index];
+  if (!tab) return;
+  detailTab.value = tab.key;
+  await nextTick();
+  pullTablist.value?.querySelector<HTMLButtonElement>(`#pull-tab-${tab.key}`)?.focus();
+}
+function movePullTab(offset: number) {
+  const count = pullTabs.value.length;
+  const current = pullTabs.value.findIndex((tab) => tab.key === detailTab.value);
+  return focusPullTab((current + offset + count) % count);
+}
 let checkTimer: number | undefined;
 let checkPollEpoch = 0;
 watch(
@@ -779,7 +899,7 @@ watch(
         ><template #empty>{{ t("resourceNotFound") }}</template></StatusState
       >
     </div>
-    <template v-else-if="!isDetail">
+    <div v-else-if="!isDetail" class="collab-layout" :class="{ 'has-rail': section === 'issues' }">
       <aside v-if="section === 'issues'" class="issue-rail" :aria-label="t('issues')">
         <button type="button" :aria-pressed="issueView === 'all'" @click="issueView = 'all'">
           <AppIcon name="issue" />{{ t("issues") }}<span>{{ baseIssues.length }}</span>
@@ -804,280 +924,305 @@ watch(
           <AppIcon name="clock" />{{ t("recentActivity") }}<span>{{ baseIssues.length }}</span>
         </button>
       </aside>
-      <div class="section-actions">
-        <h1>
-          {{
-            section === "issues"
-              ? t("issues")
-              : section === "pulls"
-                ? t("pulls")
-                : section === "discussions"
-                  ? t("discussions")
-                  : t("wiki")
-          }}
-        </h1>
-        <FluentButton
-          v-if="canCreate && (section !== 'wiki' || repository.canWrite)"
-          type="button"
-          tone="primary"
-          @click="showForm = !showForm"
-        >
-          <AppIcon name="plus" />
-          {{
-            section === "issues"
-              ? t("createIssue")
-              : section === "pulls"
-                ? t("createPull")
-                : section === "discussions"
-                  ? t("createDiscussion")
-                  : t("createWiki")
-          }}
-        </FluentButton>
-      </div>
-      <form
-        v-if="showForm"
-        class="box box-form form-stack create-form"
-        @submit.prevent="submitCreate"
-      >
-        <template v-if="section === 'issues' || section === 'pulls'">
-          <CommunityTemplatePicker
-            :repository-id="repository.id"
-            :ref-name="repository.defaultBranch"
-            :kind="section === 'issues' ? 'issue' : 'pull-request'"
-            @select="applyCommunityTemplate"
-          />
-          <p class="muted">{{ t("communityTemplatePreservesDraft") }}</p>
-        </template>
-        <TextField v-model="form.title" required>{{ t("issueTitle") }}</TextField>
-        <TextField v-if="section === 'wiki'" v-model="form.slug" required>{{
-          t("slug")
-        }}</TextField>
-        <TextAreaField v-model="form.body" rows="5" :label="t('issueBody')" />
-        <template v-if="section === 'issues'">
-          <TextField v-model="form.labels" :placeholder="t('commaSeparated')">{{
-            t("labels")
-          }}</TextField>
-        </template>
-        <template v-if="section === 'pulls'">
-          <TextField v-if="headBranchFromSession" v-model="form.headRef" required>{{
-            t("headBranch")
-          }}</TextField>
-          <SelectField v-else v-model="form.headRef" :label="t('headBranch')" required>
-            <option value="" disabled>{{ t("chooseBranch") }}</option>
-            <option v-for="branch in branches" :key="branch.name" :value="branch.name">
-              {{ branch.name }}
-            </option>
-          </SelectField>
-          <SelectField v-model="form.baseRef" :label="t('baseBranch')" required>
-            <option v-for="branch in branches" :key="branch.name" :value="branch.name">
-              {{ branch.name }}
-            </option>
-          </SelectField>
-          <FluentCheckbox id="create-draft" v-model="form.draft">{{
-            t("draftPull")
-          }}</FluentCheckbox>
-          <SelectField
-            v-if="repository.agentsEnabled"
-            v-model="form.headSessionId"
-            :label="t('sessionFork')"
-          >
-            <option value="">{{ t("noSessionFork") }}</option>
-            <option
-              v-for="session in agentSessions.filter((value) => value.status === 'active')"
-              :key="session.id"
-              :value="session.id"
-            >
-              {{ session.agentName }} / {{ session.workspaceName }}
-            </option>
-          </SelectField>
-        </template>
-        <SelectField
-          v-if="section === 'discussions'"
-          :model-value="form.category"
-          :label="t('category')"
-          @update:model-value="form.category = oneOf(discussionCategories, $event, 'general')"
-        >
-          <option value="general">{{ t("categoryGeneral") }}</option>
-          <option value="ideas">{{ t("categoryIdeas") }}</option>
-          <option value="q-and-a">{{ t("categoryQa") }}</option>
-          <option value="announcements">{{ t("categoryAnnouncements") }}</option>
-        </SelectField>
-        <FormActions :saving="saving" :error="formError" @cancel="showForm = false" />
-      </form>
-      <label v-if="section !== 'wiki'" class="search-field list-search"
-        ><AppIcon name="search" /><input
-          v-model="queryText"
-          type="search"
-          :placeholder="t('searchItems')"
-          :aria-label="t('searchItems')"
-      /></label>
-      <div v-if="section !== 'wiki'" class="list-toolbar box">
-        <div class="list-filters" role="group" :aria-label="t('filterItems')">
-          <button
-            v-for="state in ['open', 'closed', 'all'] as const"
-            :key="state"
+      <div class="collab-main">
+        <div class="section-actions">
+          <h1>
+            {{
+              section === "issues"
+                ? t("issues")
+                : section === "pulls"
+                  ? t("pulls")
+                  : section === "discussions"
+                    ? t("discussions")
+                    : t("wiki")
+            }}
+          </h1>
+          <FluentButton
+            v-if="canCreate && (section !== 'wiki' || repository.canWrite)"
             type="button"
-            class="filter-button"
-            :aria-pressed="stateFilter === state"
-            @click="stateFilter = state"
+            tone="primary"
+            @click="showForm = !showForm"
           >
-            <AppIcon :name="state === 'open' ? 'issue' : state === 'closed' ? 'check' : 'filter'" />
-            {{ t(state === "all" ? "allItems" : state) }}
-            <span class="filter-count">{{
-              state === "open" ? openCount : state === "closed" ? closedCount : totalCount
-            }}</span>
-          </button>
+            <AppIcon name="plus" />
+            {{
+              section === "issues"
+                ? t("createIssue")
+                : section === "pulls"
+                  ? t("createPull")
+                  : section === "discussions"
+                    ? t("createDiscussion")
+                    : t("createWiki")
+            }}
+          </FluentButton>
+        </div>
+        <form
+          v-if="showForm"
+          class="box box-form form-stack create-form"
+          @submit.prevent="submitCreate"
+        >
+          <template v-if="section === 'issues' || section === 'pulls'">
+            <CommunityTemplatePicker
+              :repository-id="repository.id"
+              :ref-name="repository.defaultBranch"
+              :kind="section === 'issues' ? 'issue' : 'pull-request'"
+              @select="applyCommunityTemplate"
+            />
+            <p class="muted">{{ t("communityTemplatePreservesDraft") }}</p>
+          </template>
+          <TextField v-model="form.title" required>{{ t("issueTitle") }}</TextField>
+          <TextField v-if="section === 'wiki'" v-model="form.slug" required>{{
+            t("slug")
+          }}</TextField>
+          <TextAreaField v-model="form.body" rows="5" :label="t('issueBody')" />
+          <template v-if="section === 'issues'">
+            <TextField v-model="form.labels" :placeholder="t('commaSeparated')">{{
+              t("labels")
+            }}</TextField>
+          </template>
+          <template v-if="section === 'pulls'">
+            <TextField v-if="headBranchFromSession" v-model="form.headRef" required>{{
+              t("headBranch")
+            }}</TextField>
+            <SelectField v-else v-model="form.headRef" :label="t('headBranch')" required>
+              <option value="" disabled>{{ t("chooseBranch") }}</option>
+              <option v-for="branch in branches" :key="branch.name" :value="branch.name">
+                {{ branch.name }}
+              </option>
+            </SelectField>
+            <SelectField v-model="form.baseRef" :label="t('baseBranch')" required>
+              <option v-for="branch in branches" :key="branch.name" :value="branch.name">
+                {{ branch.name }}
+              </option>
+            </SelectField>
+            <FluentCheckbox id="create-draft" v-model="form.draft">{{
+              t("draftPull")
+            }}</FluentCheckbox>
+            <SelectField
+              v-if="repository.agentsEnabled"
+              v-model="form.headSessionId"
+              :label="t('sessionFork')"
+            >
+              <option value="">{{ t("noSessionFork") }}</option>
+              <option
+                v-for="session in agentSessions.filter((value) => value.status === 'active')"
+                :key="session.id"
+                :value="session.id"
+              >
+                {{ session.agentName }} / {{ session.workspaceName }}
+              </option>
+            </SelectField>
+          </template>
           <SelectField
             v-if="section === 'discussions'"
-            v-model="categoryFilter"
+            :model-value="form.category"
             :label="t('category')"
+            @update:model-value="form.category = oneOf(discussionCategories, $event, 'general')"
           >
-            <option value="all">{{ t("allCategories") }}</option>
             <option value="general">{{ t("categoryGeneral") }}</option>
             <option value="ideas">{{ t("categoryIdeas") }}</option>
             <option value="q-and-a">{{ t("categoryQa") }}</option>
             <option value="announcements">{{ t("categoryAnnouncements") }}</option>
           </SelectField>
+          <FormActions :saving="saving" :error="formError" @cancel="showForm = false" />
+        </form>
+        <label v-if="section !== 'wiki'" class="search-field list-search"
+          ><AppIcon name="search" /><input
+            v-model="queryText"
+            type="search"
+            :placeholder="t('searchItems')"
+            :aria-label="t('searchItems')"
+        /></label>
+        <div class="box list-box">
+          <div v-if="section !== 'wiki'" class="box-header list-toolbar">
+            <div class="list-filters" role="group" :aria-label="t('filterItems')">
+              <button
+                v-for="state in ['open', 'closed', 'all'] as const"
+                :key="state"
+                type="button"
+                class="filter-button"
+                :aria-pressed="stateFilter === state"
+                @click="stateFilter = state"
+              >
+                <AppIcon
+                  :name="state === 'open' ? 'issue' : state === 'closed' ? 'check' : 'filter'"
+                />
+                {{ t(state === "all" ? "allItems" : state) }}
+                <span class="tab-count">{{
+                  state === "open" ? openCount : state === "closed" ? closedCount : totalCount
+                }}</span>
+              </button>
+            </div>
+            <SelectField
+              v-if="section === 'discussions'"
+              v-model="categoryFilter"
+              :label="t('category')"
+            >
+              <option value="all">{{ t("allCategories") }}</option>
+              <option value="general">{{ t("categoryGeneral") }}</option>
+              <option value="ideas">{{ t("categoryIdeas") }}</option>
+              <option value="q-and-a">{{ t("categoryQa") }}</option>
+              <option value="announcements">{{ t("categoryAnnouncements") }}</option>
+            </SelectField>
+          </div>
+          <template v-if="section === 'issues'">
+            <RouterLink
+              v-for="row in filteredIssues"
+              :key="row.number"
+              class="box-row item-link"
+              :to="`/${repository.owner}/${repository.name}/issues/${row.number}`"
+              ><AppIcon
+                class="state-icon"
+                :class="`state-${stateMark(row).tone}`"
+                :name="stateMark(row).icon"
+              />
+              <span class="collab-row-content"
+                ><span class="collab-row-title"
+                  ><strong>{{ row.title }}</strong
+                  ><StatusBadge
+                    v-for="label in row.labels"
+                    :key="label"
+                    :tone="
+                      label === 'bug' ? 'danger' : label === 'enhancement' ? 'brand' : 'neutral'
+                    "
+                    >{{ label }}</StatusBadge
+                  ></span
+                ><span class="collab-row-meta"
+                  >#{{ row.number }} · {{ t("openedBy", { author: actorName(row) }) }} ·
+                  {{ d(row.createdAt, "short") }}</span
+                ></span
+              ></RouterLink
+            >
+            <div v-if="!issues.length" class="empty-onboarding">
+              <AppIcon name="issue" />
+              <h3>{{ t("noIssuesTitle") }}</h3>
+              <p>{{ t("noIssuesBody") }}</p>
+              <button
+                v-if="canCreate"
+                class="btn btn-primary"
+                type="button"
+                @click="showForm = true"
+              >
+                {{ t("createIssue") }}
+              </button>
+            </div>
+            <p v-else-if="!filteredIssues.length" class="state">{{ t("noMatchingItems") }}</p>
+          </template>
+          <template v-else-if="section === 'pulls'">
+            <RouterLink
+              v-for="row in filteredPulls"
+              :key="row.number"
+              class="box-row item-link"
+              :to="`/${repository.owner}/${repository.name}/pulls/${row.number}`"
+              ><AppIcon
+                class="state-icon"
+                :class="`state-${stateMark(row).tone}`"
+                :name="stateMark(row).icon"
+              />
+              <span class="collab-row-content"
+                ><span class="collab-row-title"
+                  ><strong>{{ row.title }}</strong
+                  ><StatusBadge v-if="row.draft">{{ t("draftPull") }}</StatusBadge
+                  ><StatusBadge v-if="row.headSessionId" tone="brand">{{
+                    t("agentSession")
+                  }}</StatusBadge></span
+                ><span class="collab-row-meta"
+                  >#{{ row.number }} · {{ t("openedBy", { author: actorName(row) }) }} ·
+                  {{ row.headRef }} → {{ row.baseRef }}</span
+                ></span
+              ></RouterLink
+            >
+            <div v-if="!pulls.length" class="empty-onboarding">
+              <AppIcon name="pr" />
+              <h3>{{ t("noPullsTitle") }}</h3>
+              <p>{{ t("noPullsBody") }}</p>
+              <button
+                v-if="canCreate"
+                class="btn btn-primary"
+                type="button"
+                @click="showForm = true"
+              >
+                {{ t("createPull") }}
+              </button>
+            </div>
+            <p v-else-if="!filteredPulls.length" class="state">{{ t("noMatchingItems") }}</p>
+          </template>
+          <template v-else-if="section === 'discussions'">
+            <RouterLink
+              v-for="row in filteredDiscussions"
+              :key="row.number"
+              class="box-row item-link"
+              :to="`/${repository.owner}/${repository.name}/discussions/${row.number}`"
+              ><AppIcon class="state-icon" name="discussion" /><span class="collab-row-content"
+                ><span class="collab-row-title"
+                  ><strong>{{ row.title }}</strong
+                  ><StatusBadge v-if="row.answerCommentId" tone="success">{{
+                    t("answered")
+                  }}</StatusBadge></span
+                ><span class="collab-row-meta"
+                  >#{{ row.number }} · {{ actorName(row) }} · {{ t(`category${row.category}`) }} ·
+                  {{ d(row.createdAt, "short") }}</span
+                ></span
+              ></RouterLink
+            >
+            <div v-if="!discussions.length" class="empty-onboarding">
+              <AppIcon name="discussion" />
+              <h3>{{ t("noDiscussionsTitle") }}</h3>
+              <p>{{ t("noDiscussionsBody") }}</p>
+              <button
+                v-if="canCreate"
+                class="btn btn-primary"
+                type="button"
+                @click="showForm = true"
+              >
+                {{ t("createDiscussion") }}
+              </button>
+            </div>
+            <p v-else-if="!filteredDiscussions.length" class="state">
+              {{ t("noMatchingItems") }}
+            </p>
+          </template>
+          <template v-else-if="section === 'wiki'">
+            <RouterLink
+              v-for="page in pages"
+              :key="page.slug"
+              class="box-row item-link wiki-row"
+              :to="`/${repository.owner}/${repository.name}/wiki/${encodeURIComponent(page.slug)}`"
+              ><strong>{{ page.title }}</strong
+              ><code class="oid">{{ page.slug }}</code
+              ><small>r{{ page.revision }} · {{ page.updatedBy }}</small></RouterLink
+            >
+            <div v-if="!pages.length" class="empty-onboarding">
+              <AppIcon name="wiki" />
+              <h3>{{ t("noWikiTitle") }}</h3>
+              <p>{{ t("noWikiBody") }}</p>
+              <button
+                v-if="repository.canWrite"
+                class="btn btn-primary"
+                type="button"
+                @click="showForm = true"
+              >
+                {{ t("createWiki") }}
+              </button>
+            </div>
+          </template>
         </div>
       </div>
-      <div v-if="section === 'issues'" class="box">
-        <RouterLink
-          v-for="row in filteredIssues"
-          :key="row.number"
-          class="box-row item-link"
-          :to="`/${repository.owner}/${repository.name}/issues/${row.number}`"
-          ><AppIcon
-            :name="row.state === 'open' ? 'issue' : 'checkCircle'"
-            :class="row.state === 'open' ? 'state-open' : 'state-closed'"
-          />
-          <span class="collab-row-content"
-            ><span class="collab-row-title"
-              ><strong>{{ row.title }}</strong
-              ><StatusBadge
-                v-for="label in row.labels"
-                :key="label"
-                :tone="label === 'bug' ? 'danger' : label === 'enhancement' ? 'brand' : 'neutral'"
-                >{{ label }}</StatusBadge
-              ></span
-            ><span class="collab-row-meta"
-              >#{{ row.number }} · {{ t("openedBy", { author: actorName(row) }) }} ·
-              {{ d(row.createdAt, "short") }}</span
-            ></span
-          ></RouterLink
-        >
-        <div v-if="!issues.length" class="empty-onboarding">
-          <AppIcon name="issue" />
-          <h3>{{ t("noIssuesTitle") }}</h3>
-          <p>{{ t("noIssuesBody") }}</p>
-          <button v-if="canCreate" class="btn btn-primary" type="button" @click="showForm = true">
-            {{ t("createIssue") }}
-          </button>
-        </div>
-        <p v-else-if="!filteredIssues.length" class="state">{{ t("noMatchingItems") }}</p>
-      </div>
-      <div v-else-if="section === 'pulls'" class="box">
-        <RouterLink
-          v-for="row in filteredPulls"
-          :key="row.number"
-          class="box-row item-link"
-          :to="`/${repository.owner}/${repository.name}/pulls/${row.number}`"
-          ><AppIcon
-            :name="row.state === 'merged' ? 'gitMerge' : 'pr'"
-            :class="row.state === 'open' ? 'state-open' : 'state-closed'"
-          />
-          <span class="collab-row-content"
-            ><span class="collab-row-title"
-              ><strong>{{ row.title }}</strong
-              ><StatusBadge v-if="row.draft">{{ t("draftPull") }}</StatusBadge
-              ><StatusBadge v-if="row.headSessionId" tone="brand">{{
-                t("agentSession")
-              }}</StatusBadge></span
-            ><span class="collab-row-meta"
-              >#{{ row.number }} · {{ t("openedBy", { author: actorName(row) }) }} ·
-              {{ row.headRef }} → {{ row.baseRef }}</span
-            ></span
-          ></RouterLink
-        >
-        <div v-if="!pulls.length" class="empty-onboarding">
-          <AppIcon name="pr" />
-          <h3>{{ t("noPullsTitle") }}</h3>
-          <p>{{ t("noPullsBody") }}</p>
-          <button v-if="canCreate" class="btn btn-primary" type="button" @click="showForm = true">
-            {{ t("createPull") }}
-          </button>
-        </div>
-        <p v-else-if="!filteredPulls.length" class="state">{{ t("noMatchingItems") }}</p>
-      </div>
-      <div v-else-if="section === 'discussions'" class="box">
-        <RouterLink
-          v-for="row in filteredDiscussions"
-          :key="row.number"
-          class="box-row item-link"
-          :to="`/${repository.owner}/${repository.name}/discussions/${row.number}`"
-          ><AppIcon name="discussion" /><span class="collab-row-content"
-            ><span class="collab-row-title"
-              ><strong>{{ row.title }}</strong
-              ><StatusBadge v-if="row.answerCommentId" tone="success">{{
-                t("answered")
-              }}</StatusBadge></span
-            ><span class="collab-row-meta"
-              >#{{ row.number }} · {{ actorName(row) }} · {{ t(`category${row.category}`) }} ·
-              {{ d(row.createdAt, "short") }}</span
-            ></span
-          ></RouterLink
-        >
-        <div v-if="!discussions.length" class="empty-onboarding">
-          <AppIcon name="discussion" />
-          <h3>{{ t("noDiscussionsTitle") }}</h3>
-          <p>{{ t("noDiscussionsBody") }}</p>
-          <button v-if="canCreate" class="btn btn-primary" type="button" @click="showForm = true">
-            {{ t("createDiscussion") }}
-          </button>
-        </div>
-        <p v-else-if="!filteredDiscussions.length" class="state">{{ t("noMatchingItems") }}</p>
-      </div>
-      <div v-else-if="section === 'wiki'" class="box">
-        <RouterLink
-          v-for="page in pages"
-          :key="page.slug"
-          class="box-row item-link"
-          :to="`/${repository.owner}/${repository.name}/wiki/${encodeURIComponent(page.slug)}`"
-          ><strong>{{ page.title }}</strong
-          ><code>{{ page.slug }}</code
-          ><small>r{{ page.revision }} · {{ page.updatedBy }}</small></RouterLink
-        >
-        <div v-if="!pages.length" class="empty-onboarding">
-          <AppIcon name="wiki" />
-          <h3>{{ t("noWikiTitle") }}</h3>
-          <p>{{ t("noWikiBody") }}</p>
-          <button
-            v-if="repository.canWrite"
-            class="btn btn-primary"
-            type="button"
-            @click="showForm = true"
-          >
-            {{ t("createWiki") }}
-          </button>
-        </div>
-      </div>
-    </template>
-    <template v-else-if="item">
+    </div>
+    <div v-else-if="item" class="collab-detail">
       <AppLink class="back-link" :to="`/${repository.owner}/${repository.name}/${section}`"
         >← {{ t(section === "wiki" ? "wiki" : section) }}</AppLink
       >
-      <header class="detail-titlebar detail-heading box">
-        <div>
+      <header class="detail-titlebar">
+        <div class="detail-title">
           <h2>
             {{ item.title }}
             <span v-if="detailNumber" class="detail-number">#{{ detailNumber }}</span>
           </h2>
           <div class="detail-state-row">
-            <StatusBadge v-if="'state' in item" :tone="stateTone(item.state)"
-              ><AppIcon :name="item.state === 'open' ? 'issue' : 'checkCircle'" />{{
-                itemStatus(item)
-              }}</StatusBadge
+            <StatusBadge v-if="'state' in item" :tone="stateMark(item).tone"
+              ><AppIcon :name="stateMark(item).icon" />{{ itemStatus(item) }}</StatusBadge
             ><StatusBadge v-else>{{ itemStatus(item) }}</StatusBadge>
-            <code v-if="'mergedOid' in item && item.mergedOid"
+            <code v-if="'mergedOid' in item && item.mergedOid" class="oid"
               >{{ t("mergedCommit") }} {{ item.mergedOid.slice(0, 8) }}</code
             ><span class="muted"
               >{{ t("openedBy", { author: actorName(item) }) }} ·
@@ -1108,581 +1253,596 @@ watch(
           </FluentButton>
         </div>
       </header>
-      <article
-        v-if="section !== 'pulls' || detailTab === 'conversation'"
-        class="box box-form detail-card"
+      <div
+        v-if="section === 'pulls'"
+        ref="pullTablist"
+        class="pull-tabs tab-list"
+        role="tablist"
+        :aria-label="t('pullRequestSections')"
       >
-        <div v-if="'actor' in item" class="actor-line">
-          <span class="avatar avatar-sm">{{ actorName(item).slice(0, 2).toUpperCase() }}</span
-          ><strong>{{ actorName(item) }}</strong> · {{ d(itemCreatedAt(item), "long")
-          }}<StatusBadge v-if="item.actor.kind === 'agent'" tone="brand">{{
-            t("agentAuthored")
-          }}</StatusBadge>
-        </div>
-        <p v-else-if="'author' in item" class="actor-line">
-          {{ item.author }} · {{ d(itemCreatedAt(item), "long") }}
-        </p>
-        <form v-if="editMode" class="form-stack inline-form item-edit" @submit.prevent="saveItem">
-          <TextField v-model="editDraft.title" required>{{ t("issueTitle") }}</TextField>
-          <TextAreaField v-model="editDraft.body" rows="6" :label="t('issueBody')" />
-          <template v-if="section === 'issues' && repository.canWrite">
-            <TextField v-model="editDraft.labels" :placeholder="t('commaSeparated')">{{
-              t("labels")
-            }}</TextField>
-          </template>
-          <FluentCheckbox v-if="section === 'pulls'" id="edit-draft" v-model="editDraft.draft">
-            {{ t("draftPull") }}
-          </FluentCheckbox>
-          <div class="form-actions">
-            <FluentButton type="submit" tone="primary" :disabled="saving">{{
-              t("save")
-            }}</FluentButton>
-          </div>
-        </form>
-        <MarkdownContent
-          v-else
-          class="body-content"
-          :source="'content' in item ? item.content : item.body"
-        />
-        <div v-if="'headRef' in item && (item.headSessionId || item.mergedOid)" class="pull-meta">
-          <StatusBadge v-if="item.headSessionId" tone="brand"
-            >{{ t("sessionFork") }} · {{ item.headSessionId }}</StatusBadge
-          ><StatusBadge v-if="item.mergedOid" tone="success"
-            >{{ t("mergedCommit") }} {{ item.mergedOid.slice(0, 8) }}</StatusBadge
+        <button
+          v-for="tab in pullTabs"
+          :id="`pull-tab-${tab.key}`"
+          :key="tab.key"
+          class="tab"
+          type="button"
+          role="tab"
+          aria-controls="pull-panel"
+          :aria-selected="detailTab === tab.key"
+          :tabindex="detailTab === tab.key ? 0 : -1"
+          @click="detailTab = tab.key"
+          @keydown.left.prevent="movePullTab(-1)"
+          @keydown.right.prevent="movePullTab(1)"
+          @keydown.home.prevent="focusPullTab(0)"
+          @keydown.end.prevent="focusPullTab(pullTabs.length - 1)"
+        >
+          <AppIcon :name="tab.icon" />{{ tab.label }}
+          <span class="tab-count">{{ tab.count }}</span>
+        </button>
+      </div>
+      <div
+        id="pull-panel"
+        class="detail-layout"
+        :class="{ 'has-sidebar': hasSidebar }"
+        :role="section === 'pulls' ? 'tabpanel' : undefined"
+        :aria-labelledby="section === 'pulls' ? `pull-tab-${detailTab}` : undefined"
+      >
+        <div class="detail-main">
+          <article
+            v-if="section !== 'pulls' || detailTab === 'conversation'"
+            class="detail-card timeline-entry"
+            :class="{ 'is-bare': !('actor' in item) }"
           >
-        </div>
+            <span v-if="'actor' in item" class="avatar" aria-hidden="true">{{
+              initial(item.actor.name)
+            }}</span>
+            <div class="box comment-card">
+              <header v-if="'actor' in item" class="box-header comment-header">
+                <strong>{{ actorName(item) }}</strong>
+                <span class="comment-time">{{ d(itemCreatedAt(item), "long") }}</span>
+                <StatusBadge v-if="item.actor.kind === 'agent'" tone="brand">{{
+                  t("agentAuthored")
+                }}</StatusBadge>
+              </header>
+              <header v-else-if="'author' in item" class="box-header comment-header">
+                <strong>{{ item.author }}</strong>
+                <span class="comment-time">{{ d(itemCreatedAt(item), "long") }}</span>
+              </header>
+              <div class="comment-body">
+                <form v-if="editMode" class="form-stack item-edit" @submit.prevent="saveItem">
+                  <TextField v-model="editDraft.title" required>{{ t("issueTitle") }}</TextField>
+                  <TextAreaField v-model="editDraft.body" rows="6" :label="t('issueBody')" />
+                  <template v-if="section === 'issues' && repository.canWrite">
+                    <TextField v-model="editDraft.labels" :placeholder="t('commaSeparated')">{{
+                      t("labels")
+                    }}</TextField>
+                  </template>
+                  <FluentCheckbox
+                    v-if="section === 'pulls'"
+                    id="edit-draft"
+                    v-model="editDraft.draft"
+                  >
+                    {{ t("draftPull") }}
+                  </FluentCheckbox>
+                  <div class="form-actions">
+                    <FluentButton type="submit" tone="primary" :disabled="saving">{{
+                      t("save")
+                    }}</FluentButton>
+                  </div>
+                </form>
+                <MarkdownContent
+                  v-else
+                  class="body-content"
+                  :source="'content' in item ? item.content : item.body"
+                />
+                <div
+                  v-if="'headRef' in item && (item.headSessionId || item.mergedOid)"
+                  class="pull-meta"
+                >
+                  <StatusBadge v-if="item.headSessionId" tone="brand"
+                    >{{ t("sessionFork") }} · {{ item.headSessionId }}</StatusBadge
+                  ><StatusBadge v-if="item.mergedOid" tone="done"
+                    >{{ t("mergedCommit") }} {{ item.mergedOid.slice(0, 8) }}</StatusBadge
+                  >
+                </div>
 
-        <div v-if="section === 'wiki' && showEditActions" class="wiki-edit-actions">
-          <FluentButton type="button" @click="wikiEditing = !wikiEditing">
-            {{ wikiEditing ? t("cancel") : t("edit") }}
-          </FluentButton>
-          <form v-if="wikiEditing" class="form-stack inline-form" @submit.prevent="saveWiki">
-            <TextField v-model="wikiDraft.title" required>{{ t("issueTitle") }}</TextField>
-            <div class="composer-tabs">
-              <button type="button" :aria-pressed="!wikiPreview" @click="wikiPreview = false">
-                {{ t("write") }}</button
-              ><button type="button" :aria-pressed="wikiPreview" @click="wikiPreview = true">
-                {{ t("preview") }}
-              </button>
+                <div v-if="section === 'wiki' && showEditActions" class="wiki-edit-actions">
+                  <FluentButton type="button" @click="wikiEditing = !wikiEditing">
+                    {{ wikiEditing ? t("cancel") : t("edit") }}
+                  </FluentButton>
+                  <form v-if="wikiEditing" class="form-stack" @submit.prevent="saveWiki">
+                    <TextField v-model="wikiDraft.title" required>{{ t("issueTitle") }}</TextField>
+                    <div class="composer-tabs tab-list">
+                      <button
+                        class="tab"
+                        type="button"
+                        :aria-pressed="!wikiPreview"
+                        @click="wikiPreview = false"
+                      >
+                        {{ t("write") }}</button
+                      ><button
+                        class="tab"
+                        type="button"
+                        :aria-pressed="wikiPreview"
+                        @click="wikiPreview = true"
+                      >
+                        {{ t("preview") }}
+                      </button>
+                    </div>
+                    <TextAreaField
+                      v-if="!wikiPreview"
+                      v-model="wikiDraft.content"
+                      rows="8"
+                      :label="t('issueBody')"
+                    />
+                    <MarkdownContent
+                      v-else
+                      class="composer-preview"
+                      :source="wikiDraft.content || t('nothingToPreview')"
+                    />
+                    <div class="form-actions">
+                      <FluentButton type="submit" tone="primary" :disabled="saving">{{
+                        t("save")
+                      }}</FluentButton>
+                    </div>
+                  </form>
+                </div>
+                <div v-if="section === 'wiki'" class="wiki-history">
+                  <p class="eyebrow">{{ t("revisionHistory") }}</p>
+                  <div
+                    v-for="revision in wikiHistory"
+                    :key="`${revision.slug}-${revision.revision}`"
+                    class="item-row"
+                  >
+                    <strong>r{{ revision.revision }} · {{ revision.title }}</strong
+                    ><small>{{ revision.updatedBy }} · {{ d(revision.updatedAt, "long") }}</small
+                    ><FluentButton
+                      v-if="!isCurrentRevision(revision.revision)"
+                      type="button"
+                      size="small"
+                      :disabled="saving"
+                      :aria-pressed="viewedRevision?.revision === revision.revision"
+                      @click="viewRevision(revision)"
+                    >
+                      {{
+                        viewedRevision?.revision === revision.revision
+                          ? t("hideRevision")
+                          : t("viewRevision")
+                      }}
+                    </FluentButton>
+                    <FluentButton
+                      v-if="showEditActions"
+                      type="button"
+                      size="small"
+                      :disabled="saving || isCurrentRevision(revision.revision)"
+                      @click="restoreWiki(revision)"
+                    >
+                      {{ t("restoreRevision") }}
+                    </FluentButton>
+                  </div>
+                  <section
+                    v-if="viewedRevision"
+                    class="wiki-revision-view"
+                    :aria-label="t('revisionContent')"
+                  >
+                    <p class="eyebrow">
+                      r{{ viewedRevision.revision }} · {{ viewedRevision.title }}
+                    </p>
+                    <MarkdownContent class="body-content" :source="viewedRevision.content" />
+                    <p class="eyebrow">{{ t("revisionChanges") }}</p>
+                    <p v-if="viewedRevisionUnchanged" class="muted">
+                      {{ t("revisionNoChanges") }}
+                    </p>
+                    <DiffViewer
+                      v-else
+                      :patch="viewedRevisionPatch"
+                      :path="`${wikiSlug} r${viewedRevision.revision}`"
+                    />
+                  </section>
+                </div>
+              </div>
             </div>
-            <TextAreaField
-              v-if="!wikiPreview"
-              v-model="wikiDraft.content"
-              rows="8"
-              :label="t('issueBody')"
-            />
-            <MarkdownContent
-              v-else
-              class="composer-preview"
-              :source="wikiDraft.content || t('nothingToPreview')"
-            />
-            <div class="form-actions">
-              <FluentButton type="submit" tone="primary" :disabled="saving">{{
-                t("save")
-              }}</FluentButton>
+          </article>
+
+          <section v-if="section === 'pulls' && detailTab === 'files' && diff" class="pull-review">
+            <div class="box">
+              <header class="box-header">
+                <h3>{{ t("diff") }}</h3>
+                <span class="muted diff-range"
+                  >{{ diff.baseOid.slice(0, 8) }}…{{ diff.headOid.slice(0, 8) }} ·
+                  {{ diff.commits.length }} {{ t("commits") }}</span
+                >
+              </header>
+              <NoticeBar v-if="diff.truncated" intent="warning">{{
+                t("comparisonTruncated")
+              }}</NoticeBar>
             </div>
-          </form>
-        </div>
-        <div v-if="section === 'wiki'" class="wiki-history">
-          <p class="eyebrow">{{ t("revisionHistory") }}</p>
-          <div
-            v-for="revision in wikiHistory"
-            :key="`${revision.slug}-${revision.revision}`"
-            class="item-row"
-          >
-            <strong>r{{ revision.revision }} · {{ revision.title }}</strong
-            ><small>{{ revision.updatedBy }} · {{ d(revision.updatedAt, "long") }}</small
-            ><FluentButton
-              v-if="!isCurrentRevision(revision.revision)"
-              type="button"
-              size="small"
-              :disabled="saving"
-              :aria-pressed="viewedRevision?.revision === revision.revision"
-              @click="viewRevision(revision)"
-            >
-              {{
-                viewedRevision?.revision === revision.revision
-                  ? t("hideRevision")
-                  : t("viewRevision")
-              }}
-            </FluentButton>
-            <FluentButton
-              v-if="showEditActions"
-              type="button"
-              size="small"
-              :disabled="saving || isCurrentRevision(revision.revision)"
-              @click="restoreWiki(revision)"
-            >
-              {{ t("restoreRevision") }}
-            </FluentButton>
-          </div>
+            <div v-for="change in diff.files" :key="change.path" class="box changed-file">
+              <header class="box-header file-header">
+                <code>{{ change.type }} · {{ change.path }}</code>
+              </header>
+              <DiffViewer v-if="change.patch" :patch="change.patch" :path="change.path" />
+              <p v-else class="muted file-note">
+                {{ change.binary ? t("binaryPreviewUnavailable") : t("diffTooLarge") }}
+              </p>
+            </div>
+            <div v-if="showEditActions && pullIsOpen" class="box merge-box">
+              <header class="box-header">
+                <h3>{{ t("mergeBoxTitle") }}</h3>
+              </header>
+              <ul class="merge-status">
+                <li v-for="row in mergeStatusRows" :key="row.key" class="box-row">
+                  <AppIcon class="state-icon" :class="`state-${row.tone}`" :name="row.icon" />
+                  <span>{{ row.text }}</span>
+                </li>
+              </ul>
+              <div class="merge-actions">
+                <SelectField v-model="mergeMethod" :label="t('repoMergeMethod')">
+                  <option v-if="repository.allowMergeCommit" value="merge">
+                    {{ t("repoMergeMethodMerge") }}
+                  </option>
+                  <option v-if="repository.allowSquashMerge" value="squash">
+                    {{ t("repoMergeMethodSquash") }}
+                  </option>
+                  <option v-if="repository.allowRebaseMerge" value="rebase">
+                    {{ t("repoMergeMethodRebase") }}
+                  </option>
+                </SelectField>
+                <FluentButton
+                  type="button"
+                  tone="primary"
+                  :disabled="
+                    saving ||
+                    !diff.headOid ||
+                    (!repository.allowMergeCommit &&
+                      !repository.allowSquashMerge &&
+                      !repository.allowRebaseMerge)
+                  "
+                  @click="mergePull"
+                >
+                  {{ t("mergePull") }}</FluentButton
+                >
+                <div class="merge-hints muted">
+                  <p>{{ t("mergeUsesCurrentHeads") }}</p>
+                  <p>{{ t("repoMergePolicyHint") }}</p>
+                </div>
+                <NoticeBar v-if="mergeError" intent="error">{{ mergeError }}</NoticeBar>
+              </div>
+            </div>
+          </section>
+
           <section
-            v-if="viewedRevision"
-            class="wiki-revision-view"
-            :aria-label="t('revisionContent')"
+            v-if="section === 'pulls' && detailTab === 'conversation'"
+            class="box review-panel"
           >
-            <p class="eyebrow">r{{ viewedRevision.revision }} · {{ viewedRevision.title }}</p>
-            <MarkdownContent class="body-content" :source="viewedRevision.content" />
-            <p class="eyebrow">{{ t("revisionChanges") }}</p>
-            <p v-if="viewedRevisionUnchanged" class="muted">{{ t("revisionNoChanges") }}</p>
-            <DiffViewer
-              v-else
-              :patch="viewedRevisionPatch"
-              :path="`${wikiSlug} r${viewedRevision.revision}`"
-            />
+            <header class="box-header">
+              <h3>{{ t("reviews") }}</h3>
+            </header>
+            <div v-for="review in reviews" :key="review.id" class="box-row review-row">
+              <AppIcon
+                class="state-icon"
+                :class="`state-${reviewMark(review.state).tone}`"
+                :name="reviewMark(review.state).icon"
+              />
+              <div class="grow">
+                <div class="row-line">
+                  <strong>{{ t(`review${review.state}`) }}</strong
+                  ><StatusBadge :tone="review.actor.kind === 'agent' ? 'brand' : 'neutral'"
+                    ><AppIcon
+                      v-if="String(review.actor.kind) === 'ci'"
+                      name="checkCircle"
+                      :size="12"
+                    />{{ actorName(review) }}</StatusBadge
+                  ><code class="oid">{{ review.commitOid.slice(0, 8) }}</code
+                  ><StatusBadge v-if="review.commitOid !== diff?.headOid" tone="warning">{{
+                    t("outdatedReview")
+                  }}</StatusBadge>
+                </div>
+                <p v-if="review.body" class="row-note">{{ review.body }}</p>
+              </div>
+            </div>
+            <p v-if="!reviews.length" class="box-row muted">{{ t("reviewsEmpty") }}</p>
+            <form
+              v-if="canCreate && pullIsOpen"
+              class="box-form form-stack review-form"
+              @submit.prevent="addReview"
+            >
+              <SelectField
+                :model-value="reviewForm.state"
+                :label="t('reviewVerdict')"
+                @update:model-value="reviewForm.state = oneOf(reviewStates, $event, 'commented')"
+              >
+                <option value="commented">{{ t("reviewcommented") }}</option>
+                <option value="approved">{{ t("reviewapproved") }}</option>
+                <option value="changes_requested">{{ t("reviewchanges_requested") }}</option>
+              </SelectField>
+              <TextAreaField
+                v-model="reviewForm.body"
+                :placeholder="t('reviewBody')"
+                rows="2"
+                :label="t('reviewBody')"
+              />
+              <div class="form-actions">
+                <FluentButton type="submit" :disabled="saving">{{
+                  t("submitReview")
+                }}</FluentButton>
+              </div>
+            </form>
+          </section>
+          <section v-if="section === 'pulls' && detailTab === 'checks'" class="box checks-panel">
+            <header class="box-header">
+              <h3>{{ t("checks") }}</h3>
+            </header>
+            <div v-for="check in checks" :key="check.id" class="box-row check-row">
+              <AppIcon
+                class="state-icon"
+                :class="`state-${checkMark(check).tone}`"
+                :name="checkMark(check).icon"
+              />
+              <div class="grow">
+                <div class="row-line">
+                  <strong>{{ check.name }}</strong
+                  ><StatusBadge :tone="check.conclusion === 'success' ? 'success' : 'neutral'"
+                    >{{ checkStatusLabel(check.status) }} ·
+                    {{ checkConclusionLabel(check.conclusion) }}</StatusBadge
+                  ><StatusBadge :tone="check.actor.kind === 'agent' ? 'brand' : 'neutral'"
+                    ><AppIcon
+                      v-if="String(check.actor.kind) === 'ci'"
+                      name="checkCircle"
+                      :size="12"
+                    />{{ actorName(check) }}</StatusBadge
+                  ><code class="oid">{{ check.commitOid.slice(0, 8) }}</code
+                  ><StatusBadge v-if="check.commitOid !== diff?.headOid" tone="warning">{{
+                    t("outdatedCheck")
+                  }}</StatusBadge>
+                </div>
+                <p v-if="check.summary" class="row-note">{{ check.summary }}</p>
+                <a
+                  v-if="check.detailsUrl"
+                  class="row-note"
+                  :href="check.detailsUrl"
+                  target="_blank"
+                  rel="noreferrer"
+                  >{{ t("details") }}</a
+                >
+              </div>
+            </div>
+            <p v-if="!checks.length" class="box-row muted">{{ t("checksEmpty") }}</p>
+            <form
+              v-if="repository.canWrite && pullIsOpen"
+              class="box-form form-stack check-form"
+              @submit.prevent="addCheck"
+            >
+              <TextField v-model="checkForm.name" required>{{ t("checkName") }}</TextField>
+              <TextField v-model="checkForm.commitOid" required>{{ t("commitOid") }}</TextField>
+              <SelectField
+                :model-value="checkForm.status"
+                :label="t('checkStatus')"
+                @update:model-value="checkForm.status = oneOf(checkStatuses, $event, 'completed')"
+              >
+                <option v-for="status in checkStatuses" :key="status" :value="status">
+                  {{ checkStatusLabel(status) }}
+                </option>
+              </SelectField>
+              <SelectField
+                v-if="checkForm.status === 'completed'"
+                :model-value="checkForm.conclusion"
+                :label="t('checkConclusion')"
+                @update:model-value="
+                  checkForm.conclusion = oneOf(checkConclusions, $event, 'success')
+                "
+              >
+                <option
+                  v-for="conclusion in checkConclusions"
+                  :key="conclusion"
+                  :value="conclusion"
+                >
+                  {{ checkConclusionLabel(conclusion) }}
+                </option>
+              </SelectField>
+              <TextAreaField
+                v-model="checkForm.summary"
+                :placeholder="t('summary')"
+                rows="2"
+                :label="t('summary')"
+              />
+              <div class="form-actions">
+                <FluentButton type="submit" :disabled="saving">{{ t("addCheck") }}</FluentButton>
+              </div>
+            </form>
+          </section>
+          <section
+            v-if="section === 'discussions' && discussionItem?.answerCommentId"
+            class="box answer-panel"
+          >
+            <header class="box-header">
+              <AppIcon class="state-success" name="checkCircle" />
+              <h3>{{ t("acceptedAnswer") }}</h3>
+              <FluentButton
+                v-if="showEditActions"
+                class="header-action"
+                type="button"
+                size="small"
+                :disabled="saving"
+                @click="markAnswer(null)"
+              >
+                {{ t("clearAnswer") }}
+              </FluentButton>
+            </header>
+            <p class="comment-body">
+              {{
+                comments.find((comment) => comment.id === discussionItem?.answerCommentId)?.body ||
+                t("answerMarked")
+              }}
+            </p>
+          </section>
+          <section
+            v-if="section !== 'wiki' && (section !== 'pulls' || detailTab === 'conversation')"
+            class="comments-panel"
+          >
+            <h3 class="visually-hidden">{{ t("comments") }}</h3>
+            <div class="timeline">
+              <article
+                v-for="comment in comments"
+                :key="comment.id"
+                class="comment-row timeline-entry"
+              >
+                <span class="avatar" aria-hidden="true">{{ initial(comment.actor.name) }}</span>
+                <div class="box comment-card">
+                  <header class="box-header comment-header">
+                    <strong>{{ actorName(comment) }}</strong
+                    ><StatusBadge v-if="comment.actor.kind === 'agent'" tone="brand">{{
+                      t("agentAuthored")
+                    }}</StatusBadge
+                    ><span class="comment-time">{{ d(comment.createdAt, "long") }}</span>
+                    <span class="comment-actions"
+                      ><FluentButton
+                        v-if="canModifyComment(comment)"
+                        type="button"
+                        tone="subtle"
+                        size="small"
+                        @click="startEditComment(comment)"
+                      >
+                        {{ t("edit") }}</FluentButton
+                      ><FluentButton
+                        v-if="canModifyComment(comment)"
+                        type="button"
+                        tone="subtle"
+                        size="small"
+                        :disabled="saving"
+                        @click="removeComment(comment)"
+                      >
+                        {{ t("delete") }}</FluentButton
+                      ><FluentButton
+                        v-if="section === 'discussions' && showEditActions"
+                        type="button"
+                        tone="subtle"
+                        size="small"
+                        :disabled="saving"
+                        @click="toggleAnswer(comment)"
+                      >
+                        {{
+                          discussionItem?.answerCommentId === comment.id
+                            ? t("clearAnswer")
+                            : t("markAnswer")
+                        }}
+                      </FluentButton></span
+                    >
+                  </header>
+                  <div class="comment-body">
+                    <MarkdownContent class="body-content" :source="comment.body" />
+                  </div>
+                </div>
+              </article>
+              <form v-if="canCreate" class="timeline-entry composer" @submit.prevent="postComment">
+                <span class="avatar" aria-hidden="true">{{
+                  initial(sessionState.user?.identifier ?? "")
+                }}</span>
+                <div class="box comment-card">
+                  <div class="composer-tabs tab-list">
+                    <button
+                      class="tab"
+                      type="button"
+                      :aria-pressed="!commentPreview"
+                      @click="commentPreview = false"
+                    >
+                      {{ t("write") }}</button
+                    ><button
+                      class="tab"
+                      type="button"
+                      :aria-pressed="commentPreview"
+                      @click="commentPreview = true"
+                    >
+                      {{ t("preview") }}
+                    </button>
+                  </div>
+                  <div class="comment-body form-stack">
+                    <TextAreaField
+                      v-if="!commentPreview"
+                      v-model="commentBody"
+                      :placeholder="t('writeComment')"
+                      rows="4"
+                      required
+                      :label="t('writeComment')"
+                    />
+                    <MarkdownContent
+                      v-else
+                      class="composer-preview"
+                      :source="commentBody || t('nothingToPreview')"
+                    />
+                    <div class="form-actions">
+                      <FluentButton type="submit" tone="primary" :disabled="saving">
+                        {{ editCommentId ? t("save") : t("comment") }}
+                      </FluentButton>
+                    </div>
+                  </div>
+                </div>
+              </form>
+              <p v-else class="muted">{{ t("signInToComment") }}</p>
+            </div>
           </section>
         </div>
-      </article>
-      <aside
-        v-if="section !== 'wiki' && (section !== 'pulls' || detailTab === 'conversation')"
-        class="detail-sidebar box"
-      >
-        <section v-if="'labels' in item" class="sidebar-section">
-          <h3>{{ t("labels") }}</h3>
-          <div v-if="item.labels.length" class="sidebar-tags">
-            <StatusBadge v-for="label in item.labels" :key="label">{{ label }}</StatusBadge>
-          </div>
-          <p v-else class="muted">{{ t("noLabels") }}</p>
-        </section>
-        <AssignmentPanel
-          v-if="(section === 'issues' || section === 'pulls') && 'assignees' in item"
-          :repository="repository"
-          :kind="section === 'issues' ? 'issue' : 'pull_request'"
-          :item="item"
-          @updated="item = $event"
-        />
-        <section class="sidebar-section">
-          <h3>{{ t("author") }}</h3>
-          <p class="sidebar-person">
-            <span class="avatar">{{ actorName(item).slice(0, 1).toUpperCase() }}</span
-            >{{ actorName(item) }}
-          </p>
-        </section>
-        <section v-if="'headRef' in item" class="sidebar-section">
-          <h3>{{ t("branches") }}</h3>
-          <code>{{ item.headRef }}</code
-          ><span class="muted">→</span><code>{{ item.baseRef }}</code>
-        </section>
-      </aside>
-      <aside v-if="section === 'wiki'" class="detail-sidebar box wiki-sidebar">
-        <h3>{{ t("pages") }}</h3>
-        <RouterLink
-          v-for="page in pages"
-          :key="page.slug"
-          :to="`/${repository.owner}/${repository.name}/wiki/${encodeURIComponent(page.slug)}`"
-          :aria-current="page.slug === wikiSlug ? 'page' : undefined"
-          >{{ page.title }}</RouterLink
-        ><button v-if="repository.canWrite" class="btn btn-sm" type="button" @click="startWikiPage">
-          {{ t("createWiki") }}
-        </button>
-      </aside>
-      <nav v-if="section === 'pulls'" class="pull-tabs" :aria-label="t('pullRequestSections')">
-        <button
-          type="button"
-          :aria-current="detailTab === 'conversation' ? 'page' : undefined"
-          @click="detailTab = 'conversation'"
+        <aside
+          v-if="hasSidebar && section !== 'wiki'"
+          class="detail-sidebar"
+          :aria-label="t('details')"
         >
-          <AppIcon name="discussion" />{{ t("conversation") }}
-          <span>{{ comments.length + 1 }}</span>
-        </button>
-        <button
-          type="button"
-          :aria-current="detailTab === 'files' ? 'page' : undefined"
-          @click="detailTab = 'files'"
-        >
-          <AppIcon name="diff" />{{ t("filesChanged") }} <span>{{ diff?.files.length ?? 0 }}</span>
-        </button>
-        <button
-          type="button"
-          :aria-current="detailTab === 'checks' ? 'page' : undefined"
-          @click="detailTab = 'checks'"
-        >
-          <AppIcon name="checkCircle" />{{ t("checks") }} <span>{{ checks.length }}</span>
-        </button>
-      </nav>
-      <section
-        v-if="section === 'pulls' && detailTab === 'files' && diff"
-        class="box box-form pull-review"
-      >
-        <p class="eyebrow">{{ t("diff") }}</p>
-        <p class="muted">
-          {{ diff.baseOid.slice(0, 8) }}…{{ diff.headOid.slice(0, 8) }} · {{ diff.commits.length }}
-          {{ t("commits") }}
-        </p>
-        <NoticeBar v-if="diff.truncated" intent="warning">{{ t("comparisonTruncated") }}</NoticeBar>
-        <div v-for="change in diff.files" :key="change.path" class="changed-file">
-          <strong>{{ change.type }} · {{ change.path }}</strong>
-          <DiffViewer v-if="change.patch" :patch="change.patch" :path="change.path" />
-          <span v-else class="muted">{{
-            change.binary ? t("binaryPreviewUnavailable") : t("diffTooLarge")
-          }}</span>
-        </div>
-        <div v-if="showEditActions && pullIsOpen" class="merge-actions">
-          <SelectField v-model="mergeMethod" :label="t('repoMergeMethod')">
-            <option v-if="repository.allowMergeCommit" value="merge">
-              {{ t("repoMergeMethodMerge") }}
-            </option>
-            <option v-if="repository.allowSquashMerge" value="squash">
-              {{ t("repoMergeMethodSquash") }}
-            </option>
-            <option v-if="repository.allowRebaseMerge" value="rebase">
-              {{ t("repoMergeMethodRebase") }}
-            </option>
-          </SelectField>
-          <FluentButton
-            type="button"
-            tone="primary"
-            :disabled="
-              saving ||
-              !diff.headOid ||
-              (!repository.allowMergeCommit &&
-                !repository.allowSquashMerge &&
-                !repository.allowRebaseMerge)
-            "
-            @click="mergePull"
-          >
-            {{ t("mergePull") }}</FluentButton
-          ><span class="muted">{{ t("mergeUsesCurrentHeads") }}</span>
-          <span class="muted">{{ t("repoMergePolicyHint") }}</span>
-          <p v-if="mergeError" class="workspace-form-error" role="alert">{{ mergeError }}</p>
-        </div>
-      </section>
-      <section
-        v-if="section === 'pulls' && detailTab === 'conversation'"
-        class="box box-form review-panel"
-      >
-        <p class="eyebrow">{{ t("reviews") }}</p>
-        <div v-for="review in reviews" :key="review.id" class="item-row">
-          <strong>{{ t(`review${review.state}`) }}</strong
-          ><StatusBadge :tone="review.actor.kind === 'agent' ? 'brand' : 'neutral'"
-            ><AppIcon v-if="String(review.actor.kind) === 'ci'" name="checkCircle" :size="13" />{{
-              actorName(review)
-            }}</StatusBadge
-          ><code>{{ review.commitOid.slice(0, 8) }}</code
-          ><StatusBadge v-if="review.commitOid !== diff?.headOid" tone="warning">{{
-            t("outdatedReview")
-          }}</StatusBadge>
-          <p>{{ review.body }}</p>
-        </div>
-        <form
-          v-if="canCreate && pullIsOpen"
-          class="form-stack inline-form"
-          @submit.prevent="addReview"
-        >
-          <SelectField
-            :model-value="reviewForm.state"
-            :label="t('reviewVerdict')"
-            @update:model-value="reviewForm.state = oneOf(reviewStates, $event, 'commented')"
-          >
-            <option value="commented">{{ t("reviewcommented") }}</option>
-            <option value="approved">{{ t("reviewapproved") }}</option>
-            <option value="changes_requested">{{ t("reviewchanges_requested") }}</option>
-          </SelectField>
-          <TextAreaField
-            v-model="reviewForm.body"
-            :placeholder="t('reviewBody')"
-            rows="2"
-            :label="t('reviewBody')"
+          <section v-if="'labels' in item" class="sidebar-section">
+            <h3>{{ t("labels") }}</h3>
+            <div v-if="item.labels.length" class="sidebar-tags">
+              <StatusBadge v-for="label in item.labels" :key="label">{{ label }}</StatusBadge>
+            </div>
+            <p v-else class="muted">{{ t("noLabels") }}</p>
+          </section>
+          <AssignmentPanel
+            v-if="(section === 'issues' || section === 'pulls') && 'assignees' in item"
+            class="sidebar-section"
+            :repository="repository"
+            :kind="section === 'issues' ? 'issue' : 'pull_request'"
+            :item="item"
+            @updated="item = $event"
           />
-          <div class="form-actions">
-            <FluentButton type="submit" :disabled="saving">{{ t("submitReview") }}</FluentButton>
-          </div>
-        </form>
-      </section>
-      <section
-        v-if="section === 'pulls' && detailTab === 'checks'"
-        class="box box-form checks-panel"
-      >
-        <p class="eyebrow">{{ t("checks") }}</p>
-        <div v-for="check in checks" :key="check.id" class="item-row">
-          <strong>{{ check.name }}</strong
-          ><StatusBadge :tone="check.conclusion === 'success' ? 'success' : 'neutral'"
-            >{{ checkStatusLabel(check.status) }} ·
-            {{ checkConclusionLabel(check.conclusion) }}</StatusBadge
-          ><StatusBadge :tone="check.actor.kind === 'agent' ? 'brand' : 'neutral'"
-            ><AppIcon v-if="String(check.actor.kind) === 'ci'" name="checkCircle" :size="13" />{{
-              actorName(check)
-            }}</StatusBadge
-          ><code>{{ check.commitOid.slice(0, 8) }}</code
-          ><StatusBadge v-if="check.commitOid !== diff?.headOid" tone="warning">{{
-            t("outdatedCheck")
-          }}</StatusBadge>
-          <p>{{ check.summary }}</p>
-          <a v-if="check.detailsUrl" :href="check.detailsUrl" target="_blank" rel="noreferrer">{{
-            t("details")
-          }}</a>
-        </div>
-        <form
-          v-if="repository.canWrite && pullIsOpen"
-          class="form-stack inline-form"
-          @submit.prevent="addCheck"
-        >
-          <TextField v-model="checkForm.name" required>{{ t("checkName") }}</TextField>
-          <TextField v-model="checkForm.commitOid" required>{{ t("commitOid") }}</TextField>
-          <SelectField
-            :model-value="checkForm.status"
-            :label="t('checkStatus')"
-            @update:model-value="checkForm.status = oneOf(checkStatuses, $event, 'completed')"
-          >
-            <option v-for="status in checkStatuses" :key="status" :value="status">
-              {{ checkStatusLabel(status) }}
-            </option>
-          </SelectField>
-          <SelectField
-            v-if="checkForm.status === 'completed'"
-            :model-value="checkForm.conclusion"
-            :label="t('checkConclusion')"
-            @update:model-value="checkForm.conclusion = oneOf(checkConclusions, $event, 'success')"
-          >
-            <option v-for="conclusion in checkConclusions" :key="conclusion" :value="conclusion">
-              {{ checkConclusionLabel(conclusion) }}
-            </option>
-          </SelectField>
-          <TextAreaField
-            v-model="checkForm.summary"
-            :placeholder="t('summary')"
-            rows="2"
-            :label="t('summary')"
-          />
-          <div class="form-actions">
-            <FluentButton type="submit" :disabled="saving">{{ t("addCheck") }}</FluentButton>
-          </div>
-        </form>
-      </section>
-      <section
-        v-if="section === 'discussions' && discussionItem?.answerCommentId"
-        class="box box-form answer-panel"
-      >
-        <div v-if="discussionItem">
-          <p class="eyebrow">{{ t("acceptedAnswer") }}</p>
-          <p v-if="discussionItem?.answerCommentId">
-            {{
-              comments.find((comment) => comment.id === discussionItem?.answerCommentId)?.body ||
-              t("answerMarked")
-            }}
-          </p>
-          <FluentButton
-            v-if="showEditActions && discussionItem.answerCommentId"
-            type="button"
-            :disabled="saving"
-            @click="markAnswer(null)"
-          >
-            {{ t("clearAnswer") }}
-          </FluentButton>
-        </div>
-      </section>
-      <section
-        v-if="section !== 'wiki' && (section !== 'pulls' || detailTab === 'conversation')"
-        class="box box-form comments-panel"
-      >
-        <p class="eyebrow">{{ t("comments") }}</p>
-        <article v-for="comment in comments" :key="comment.id" class="comment-row">
-          <div class="actor-line">
-            <span class="avatar">{{ comment.actor.name.slice(0, 1).toUpperCase() }}</span>
-            <strong>{{ actorName(comment) }}</strong
-            ><StatusBadge v-if="comment.actor.kind === 'agent'" tone="brand">{{
-              t("agentAuthored")
-            }}</StatusBadge
-            ><small>{{ d(comment.createdAt, "long") }}</small
-            ><FluentButton
-              v-if="canModifyComment(comment)"
+          <section class="sidebar-section">
+            <h3>{{ t("author") }}</h3>
+            <p class="sidebar-person">
+              <span class="avatar avatar-sm" aria-hidden="true">{{ initial(actorName(item)) }}</span
+              >{{ actorName(item) }}
+            </p>
+          </section>
+          <section v-if="'headRef' in item" class="sidebar-section">
+            <h3>{{ t("branches") }}</h3>
+            <p class="sidebar-branches">
+              <code class="oid">{{ item.headRef }}</code
+              ><span class="muted">→</span><code class="oid">{{ item.baseRef }}</code>
+            </p>
+          </section>
+        </aside>
+        <aside v-else-if="section === 'wiki'" class="detail-sidebar wiki-sidebar">
+          <section class="sidebar-section">
+            <h3>{{ t("pages") }}</h3>
+            <nav :aria-label="t('pages')">
+              <RouterLink
+                v-for="page in pages"
+                :key="page.slug"
+                :to="`/${repository.owner}/${repository.name}/wiki/${encodeURIComponent(page.slug)}`"
+                :aria-current="page.slug === wikiSlug ? 'page' : undefined"
+                >{{ page.title }}</RouterLink
+              >
+            </nav>
+            <button
+              v-if="repository.canWrite"
+              class="btn btn-sm"
               type="button"
-              tone="subtle"
-              size="small"
-              @click="startEditComment(comment)"
+              @click="startWikiPage"
             >
-              {{ t("edit") }}</FluentButton
-            ><FluentButton
-              v-if="canModifyComment(comment)"
-              type="button"
-              tone="subtle"
-              size="small"
-              :disabled="saving"
-              @click="removeComment(comment)"
-            >
-              {{ t("delete") }}</FluentButton
-            ><FluentButton
-              v-if="section === 'discussions' && showEditActions"
-              type="button"
-              tone="subtle"
-              size="small"
-              :disabled="saving"
-              @click="toggleAnswer(comment)"
-            >
-              {{
-                discussionItem?.answerCommentId === comment.id ? t("clearAnswer") : t("markAnswer")
-              }}
-            </FluentButton>
-          </div>
-          <MarkdownContent class="body-content" :source="comment.body" />
-        </article>
-        <form v-if="canCreate" class="form-stack inline-form" @submit.prevent="postComment">
-          <div class="composer-tabs">
-            <button type="button" :aria-pressed="!commentPreview" @click="commentPreview = false">
-              {{ t("write") }}</button
-            ><button type="button" :aria-pressed="commentPreview" @click="commentPreview = true">
-              {{ t("preview") }}
+              {{ t("createWiki") }}
             </button>
-          </div>
-          <TextAreaField
-            v-if="!commentPreview"
-            v-model="commentBody"
-            :placeholder="t('writeComment')"
-            rows="4"
-            required
-            :label="t('writeComment')"
-          />
-          <MarkdownContent
-            v-else
-            class="composer-preview"
-            :source="commentBody || t('nothingToPreview')"
-          />
-          <div class="form-actions">
-            <FluentButton type="submit" tone="primary" :disabled="saving">
-              {{ editCommentId ? t("save") : t("comment") }}
-            </FluentButton>
-          </div>
-        </form>
-        <p v-else class="muted">{{ t("signInToComment") }}</p>
-      </section>
-    </template>
+          </section>
+        </aside>
+      </div>
+    </div>
   </section>
 </template>
-
-<style scoped>
-.collab-section {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: var(--space-4);
-}
-.section-actions {
-  display: flex;
-  justify-content: flex-end;
-}
-.item-link {
-  flex-wrap: wrap;
-  align-items: center;
-  color: inherit;
-}
-.item-link:hover {
-  text-decoration: none;
-}
-.item-link:hover strong {
-  color: var(--accent-fg);
-}
-.item-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  min-height: 48px;
-  padding: var(--space-2) 0;
-  border-bottom: 1px solid var(--border-default);
-}
-.item-row small,
-.item-link small,
-.actor-line {
-  color: var(--fg-muted);
-}
-.item-row small,
-.item-link small {
-  margin-left: auto;
-}
-.number,
-code {
-  color: var(--accent-fg);
-  font-family: var(--font-mono);
-  font-size: var(--font-size-meta);
-}
-.list-limit-note {
-  padding: var(--space-3);
-  color: var(--fg-muted);
-  font-size: var(--font-size-meta);
-  text-align: center;
-}
-.detail-card {
-  margin-top: var(--space-3);
-}
-.detail-heading {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--space-4);
-  align-items: flex-start;
-}
-.detail-heading h2 {
-  margin: 0 0 var(--space-4);
-  font-size: var(--font-size-title);
-  line-height: var(--line-height-title);
-}
-.detail-actions {
-  display: flex;
-  gap: var(--space-2);
-}
-.actor-line {
-  display: flex;
-  gap: var(--space-3);
-  align-items: center;
-  flex-wrap: wrap;
-  font-size: var(--font-size-meta);
-}
-.body-content {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font: var(--font-size-body) / 1.7 var(--font-sans);
-  margin: var(--space-4) 0;
-}
-.metadata-row,
-.pull-meta {
-  display: flex;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-  align-items: center;
-  padding: var(--space-3) 0;
-}
-.wiki-history,
-.wiki-edit-actions,
-.pull-review {
-  margin-top: var(--space-4);
-}
-.changed-file {
-  border-top: 1px solid var(--border-default);
-  padding: var(--space-3) 0;
-}
-.diff-preview {
-  max-height: 420px;
-  overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  background: var(--bg-subtle);
-  border-radius: var(--radius-md);
-  padding: var(--space-3);
-  font: var(--font-size-meta) / 1.6 var(--font-mono);
-}
-.merge-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding-top: var(--space-3);
-}
-.comment-row {
-  border-bottom: 1px solid var(--border-default);
-  padding: var(--space-3) 0;
-}
-.comment-row .actor-line small {
-  margin-left: auto;
-}
-.inline-form {
-  margin-top: var(--space-3);
-}
-@media (max-width: 640px) {
-  .detail-heading {
-    display: block;
-  }
-  .detail-actions {
-    margin-bottom: var(--space-3);
-  }
-}
-</style>
 
 <style>
 @import "../styles/collaboration.css";

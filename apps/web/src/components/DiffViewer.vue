@@ -43,7 +43,7 @@ const hunks = computed(() => {
 });
 </script>
 <template>
-  <div class="diff-viewer diff-preview">
+  <div class="diff-viewer">
     <table v-if="hunks.length" :aria-label="path">
       <thead class="visually-hidden">
         <tr>
@@ -74,12 +74,12 @@ const hunks = computed(() => {
 </template>
 <style scoped>
 .diff-viewer {
+  flex-basis: 100%;
   width: 100%;
-  max-height: none;
+  max-height: 420px;
   overflow: auto;
   border: 1px solid var(--border-default);
-  border-top: 0;
-  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  border-radius: var(--radius-md);
   background: var(--bg-canvas);
 }
 table {
