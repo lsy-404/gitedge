@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import type { RepositoryCommunity } from "../lib/api";
 import { api } from "../lib/api";
 import { communitySourceUrl, isCommunityTruncated } from "../lib/community";
+import AppIcon from "./AppIcon.vue";
 import MarkdownContent from "./MarkdownContent.vue";
 import NoticeBar from "./NoticeBar.vue";
 import StatusState from "./StatusState.vue";
@@ -68,19 +69,32 @@ watch(() => [props.repositoryId, props.refName], load, { immediate: true });
 
 <template>
   <section class="repository-community" :aria-label="t('communityFiles')">
-    <h2>{{ t("communityFiles") }}</h2>
+    <h2 :class="{ 'visually-hidden': !listedFiles.length }">{{ t("communityFiles") }}</h2>
     <StatusState v-if="loading || error" :loading="loading" :error="error" @retry="load" />
     <template v-else-if="community">
       <NoticeBar v-if="anyTruncated" intent="warning">{{ t("communityTruncated") }}</NoticeBar>
-      <section v-if="readmeFile" class="community-readme">
-        <div class="community-readme-heading">
+      <section v-if="readmeFile" class="community-readme box">
+        <div class="box-header">
+          <AppIcon name="book" />
           <h3>{{ t("communityReadme") }}</h3>
-          <a :href="communitySourceUrl(readmeFile)">{{ t("communitySource") }}</a>
+          <a class="community-source" :href="communitySourceUrl(readmeFile)">{{
+            t("communitySource")
+          }}</a>
         </div>
-        <p v-if="isCommunityTruncated(readmeFile)" class="community-truncated muted">
-          {{ t("communityTruncated") }}
-        </p>
-        <MarkdownContent :source="readmeFile.content" :base-url="communitySourceUrl(readmeFile)" />
+        <div
+          class="community-readme-body"
+          tabindex="0"
+          role="region"
+          :aria-label="t('communityReadme')"
+        >
+          <p v-if="isCommunityTruncated(readmeFile)" class="community-truncated muted">
+            {{ t("communityTruncated") }}
+          </p>
+          <MarkdownContent
+            :source="readmeFile.content"
+            :base-url="communitySourceUrl(readmeFile)"
+          />
+        </div>
       </section>
       <p v-if="!listedFiles.length && !readmeFile" class="community-empty muted">
         {{ t("communityNoFiles") }}
@@ -118,44 +132,37 @@ watch(() => [props.repositoryId, props.refName], load, { immediate: true });
 <style scoped>
 .repository-community {
   display: grid;
-  gap: 16px;
+  gap: var(--space-4);
   min-width: 0;
-}
-.repository-community h2 {
-  margin: 0;
 }
 .community-empty {
   margin: 0;
 }
-.community-readme {
+.community-readme .box-header h3 {
+  font-size: var(--font-size-body);
+}
+.community-readme .community-source {
+  margin-left: auto;
+  font-size: var(--font-size-meta);
+  font-weight: var(--font-weight-regular);
+}
+.community-readme-body {
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
   max-height: 70vh;
+  padding: var(--space-6) var(--space-8);
   overflow: auto;
-  padding: 16px;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
 }
-.community-readme-heading {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: center;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--border-default);
-}
-.community-readme-heading h3 {
-  margin: 0;
-}
-.community-readme .community-truncated {
-  margin: 0;
+.community-readme-body:focus-visible,
+.community-file summary:focus-visible {
+  outline-offset: -2px;
 }
 .community-file-list {
   display: grid;
   margin: 0;
   padding: 0;
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   list-style: none;
   overflow: hidden;
 }
@@ -165,34 +172,38 @@ watch(() => [props.repositoryId, props.refName], load, { immediate: true });
 .community-file summary {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 14px;
+  gap: var(--space-2) var(--space-4);
   align-items: baseline;
-  padding: 12px 16px;
+  padding: var(--space-3) var(--space-4);
   cursor: pointer;
   background: var(--bg-subtle);
 }
 .community-file summary span {
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 .community-file summary small {
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: var(--font-size-meta);
 }
 .community-inherited {
   margin-left: auto;
 }
 .community-file-content {
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
   max-height: 70vh;
+  padding: var(--space-4);
   overflow: auto;
-  padding: 16px;
 }
 .community-truncated {
   margin: 0;
 }
-.community-source {
+.community-file-content .community-source {
   justify-self: start;
-  font-size: 13px;
+}
+@media (max-width: 560px) {
+  .community-readme-body {
+    padding: var(--space-4);
+  }
 }
 </style>

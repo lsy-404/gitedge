@@ -422,52 +422,108 @@ details.user-menu {
   width: 100%;
   margin-top: 0;
 }
-.repository-nav {
-  padding-inline: calc(max(0px, (100% - 1344px) / 2) + var(--space-8) - var(--space-2));
+.repository-header {
   background: var(--bg-subtle);
   border-bottom: 1px solid var(--border-default);
-  scrollbar-width: thin;
-}
-.repository-nav .nav-count {
-  padding: 0 6px;
-  background: var(--control-bg-active);
-  border-radius: var(--radius-full);
-  font-size: var(--font-size-meta);
-  font-weight: var(--font-weight-medium);
-}
-.repository-nav .icon {
-  color: var(--fg-muted);
 }
 .repository-heading {
-  border-bottom: 1px solid var(--border-default);
-}
-.repository-heading-inner {
-  max-width: 1344px;
-  margin: auto;
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  min-height: 72px;
-  padding: var(--space-4) var(--space-8);
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  max-width: 1344px;
+  margin: 0 auto;
+  padding: var(--space-4) var(--space-8) var(--space-3);
 }
-.repository-heading h1 {
+.repository-heading > .icon {
+  color: var(--fg-muted);
+}
+.repository-title {
+  display: block;
+  min-width: 0;
   font-size: var(--font-size-section);
+  font-weight: var(--font-weight-semibold);
   line-height: var(--line-height-section);
   overflow-wrap: anywhere;
 }
-.repository-heading .repo-owner {
+.repository-title .repo-owner,
+.repository-title .repo-separator {
   color: var(--fg-muted);
   font-weight: var(--font-weight-regular);
 }
 .repository-heading-actions {
-  margin-left: auto;
   display: flex;
   gap: var(--space-2);
+  margin-left: auto;
+}
+.repository-heading-actions .btn {
+  text-transform: capitalize;
+}
+.repository-nav {
+  display: flex;
+  gap: var(--space-1);
+  max-width: 1344px;
+  margin: 0 auto;
+  padding: 0 var(--space-6);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.repository-nav a {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: 0 var(--space-2);
+  isolation: isolate;
+  white-space: nowrap;
+  color: var(--fg-default);
+}
+.repository-nav a::before {
+  position: absolute;
+  inset: var(--space-1) 0;
+  z-index: -1;
+  content: "";
+  border-radius: var(--radius-md);
+  transition: background var(--duration-fast) var(--ease-standard);
+}
+.repository-nav a:hover {
+  text-decoration: none;
+}
+.repository-nav a:hover::before {
+  background: var(--control-bg-hover);
+}
+.repository-nav a.selected {
+  font-weight: var(--font-weight-semibold);
+}
+.repository-nav a.selected::after {
+  position: absolute;
+  right: var(--space-1);
+  bottom: 0;
+  left: var(--space-1);
+  height: 2px;
+  content: "";
+  background: var(--accent-strong);
+  border-radius: var(--radius-sm);
+}
+.repository-nav .icon {
+  color: var(--fg-muted);
+}
+.repository-nav .nav-count {
+  min-width: 20px;
+  padding: 0 var(--space-2);
+  color: var(--fg-secondary);
+  background: var(--bg-selected);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-meta);
+  font-weight: var(--font-weight-medium);
+  line-height: 20px;
+  text-align: center;
 }
 .repository-content {
   max-width: 1344px;
   margin: var(--space-6) auto 0;
-  padding: 0 var(--space-8);
+  padding: 0 var(--space-8) var(--space-8);
   min-width: 0;
 }
 .repository-access {
@@ -547,12 +603,12 @@ details.user-menu {
   .header-context {
     gap: var(--space-1);
   }
-  .repository-heading-inner {
-    padding: var(--space-4);
-    flex-wrap: wrap;
+  .repository-heading {
+    padding: var(--space-3) var(--space-4) var(--space-2);
   }
-  .repository-heading .repo-owner {
-    display: none;
+  .repository-title {
+    font-size: var(--font-size-lg);
+    line-height: var(--line-height-body);
   }
   .repository-heading-actions {
     gap: var(--space-1);
@@ -561,11 +617,11 @@ details.user-menu {
     display: none;
   }
   .repository-content {
-    padding: 0 var(--space-4);
+    padding: 0 var(--space-4) var(--space-6);
     margin-top: var(--space-4);
   }
   .repository-nav {
-    padding-inline: var(--space-2);
+    padding: 0 var(--space-2);
   }
   .repo-session-table {
     font-size: var(--font-size-meta);

@@ -7,6 +7,7 @@ import type { Repository } from "../lib/api";
 import AppIcon from "./AppIcon.vue";
 import TextField from "./TextField.vue";
 import StatusBadge from "./StatusBadge.vue";
+import NoticeBar from "./NoticeBar.vue";
 
 const props = defineProps<{
   repository: Repository;
@@ -129,19 +130,32 @@ watch(
     >
     <section v-if="expanded" class="branch-panel box" :aria-label="t('branches')">
       <div class="box-header">
-        <strong>{{ t("branches") }}</strong>
-        <FluentButton type="button" tone="subtle" :disabled="loading" @click="load">
+        <AppIcon name="branch" />
+        <h2>{{ t("branches") }}</h2>
+        <FluentButton
+          type="button"
+          tone="subtle"
+          size="small"
+          class="branch-refresh"
+          :disabled="loading"
+          @click="load"
+        >
           {{ t("refresh") }}
         </FluentButton>
       </div>
       <p v-if="loading" class="muted">{{ t("loading") }}</p>
       <p v-else-if="!branches.length" class="muted">{{ t("codeNoBranchesYet") }}</p>
-      <div v-for="branch in branches" :key="branch.name" class="branch-row">
+      <div
+        v-for="branch in branches"
+        :key="branch.name"
+        class="branch-row"
+        :class="{ selected: branch.name === selectedBranch }"
+      >
         <FluentButton
           type="button"
           tone="subtle"
           class="branch-select"
-          :aria-pressed="branch.name === selectedBranch"
+          :aria-current="branch.name === selectedBranch ? 'true' : undefined"
           @click="emit('select', branch.name)"
         >
           <AppIcon name="branch" /><strong>{{ branch.name }}</strong>
@@ -155,6 +169,7 @@ watch(
         <FluentButton
           type="button"
           tone="subtle"
+          size="small"
           :disabled="branch.isDefault || branch.protected || saving"
           :aria-label="t('codeDeleteBranch', { name: branch.name })"
           @click="pendingDelete = branch"
@@ -170,7 +185,7 @@ watch(
           {{ saving ? t("loading") : t("codeCreateBranch") }}
         </FluentButton>
       </form>
-      <p v-if="error" class="workspace-form-error" role="alert">{{ error }}</p>
+      <NoticeBar v-if="error" intent="error" class="branch-error">{{ error }}</NoticeBar>
     </section>
     <FluentDialog v-model:open="deleteOpen" :label="t('codeConfirmDeleteBranch')">
       <template #title>{{ t("codeConfirmDeleteBranch") }}</template>
@@ -190,25 +205,37 @@ watch(
   position: relative;
 }
 .branch-panel {
-  display: grid;
-  gap: var(--space-2);
   position: absolute;
   z-index: 4;
-  top: calc(100% + var(--space-1));
+  top: calc(100% + var(--space-2));
   left: 0;
   width: min(680px, 90vw);
   max-height: min(70vh, 620px);
   overflow: auto;
-  padding: var(--space-3);
+  background: var(--bg-overlay);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
+}
+.branch-refresh {
+  margin-left: auto;
+}
+.branch-panel > p {
+  padding: var(--space-3) var(--space-4);
 }
 .branch-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--space-2);
+  gap: var(--space-1) var(--space-2);
   align-items: center;
-  padding-block: var(--space-1);
-  border-bottom: 1px solid var(--border-default);
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--border-muted);
+}
+.branch-row.selected {
+  background: var(--bg-selected);
+  box-shadow: inset 3px 0 var(--accent-strong);
+}
+.branch-row.selected .branch-select {
+  font-weight: var(--font-weight-semibold);
 }
 .branch-select {
   justify-content: flex-start;
@@ -219,9 +246,12 @@ watch(
 }
 .branch-select code {
   margin-left: auto;
+  color: var(--fg-muted);
+  font-size: var(--font-size-meta);
 }
 .branch-rules {
   grid-column: 1;
+  padding-left: var(--space-3);
   color: var(--fg-muted);
   font-size: var(--font-size-meta);
 }
@@ -230,7 +260,10 @@ watch(
   grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--space-2);
   align-items: end;
-  padding-top: var(--space-3);
+  padding: var(--space-4);
+}
+.branch-error {
+  margin: 0 var(--space-4) var(--space-4);
 }
 .branch-create small {
   grid-column: 1;
@@ -238,5 +271,14 @@ watch(
 .branch-create :deep(button) {
   grid-column: 2;
   grid-row: 1 / span 2;
+}
+@media (max-width: 560px) {
+  .branch-management {
+    position: static;
+  }
+  .branch-panel {
+    right: 0;
+    width: auto;
+  }
 }
 </style>
