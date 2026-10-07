@@ -94,6 +94,7 @@ const error = ref("");
 const notFound = ref(false);
 const accessDenied = ref(false);
 const counts = ref<Record<string, number>>({});
+const countsTruncated = ref<Record<string, boolean>>({});
 const sessions = ref<AgentSession[]>([]);
 const sessionsLoading = ref(false);
 const sessionsError = ref("");
@@ -106,17 +107,22 @@ async function loadCounts(current: Repository, version: number) {
     current.discussionsEnabled ? api.discussions(current.id) : Promise.resolve(null),
   ]);
   if (version !== loadVersion) return;
-  counts.value = {
-    ...(issues.status === "fulfilled"
-      ? { issues: (issues.value?.items ?? []).filter((item) => item.state === "open").length }
-      : {}),
-    ...(pulls.status === "fulfilled"
-      ? { pulls: (pulls.value?.items ?? []).filter((item) => item.state === "open").length }
-      : {}),
-    ...(discussions.status === "fulfilled" && discussions.value
-      ? { discussions: discussions.value.items.length }
-      : {}),
-  };
+  const next: Record<string, number> = {};
+  const lowerBounds: Record<string, boolean> = {};
+  if (issues.status === "fulfilled" && issues.value) {
+    next.issues = issues.value.items.filter((item) => item.state === "open").length;
+    lowerBounds.issues = issues.value.truncated;
+  }
+  if (pulls.status === "fulfilled" && pulls.value) {
+    next.pulls = pulls.value.items.filter((item) => item.state === "open").length;
+    lowerBounds.pulls = pulls.value.truncated;
+  }
+  if (discussions.status === "fulfilled" && discussions.value) {
+    next.discussions = discussions.value.items.length;
+    lowerBounds.discussions = discussions.value.truncated;
+  }
+  counts.value = next;
+  countsTruncated.value = lowerBounds;
 }
 function refreshCounts() {
   if (repository.value) void loadCounts(repository.value, loadVersion);
@@ -129,6 +135,7 @@ async function load() {
   accessDenied.value = false;
   repository.value = null;
   counts.value = {};
+  countsTruncated.value = {};
   sessions.value = [];
   sessionsLoading.value = false;
   sessionsError.value = "";
@@ -209,9 +216,9 @@ watch(
           :class="{ selected: activeTab === tab.key }"
           :aria-current="activeTab === tab.key ? 'page' : undefined"
           ><AppIcon :name="tab.icon" />{{ t(tab.label)
-          }}<span v-if="counts[tab.key] !== undefined && counts[tab.key] > 0" class="nav-count">{{
-            counts[tab.key]
-          }}</span></RouterLink
+          }}<span v-if="counts[tab.key] !== undefined && counts[tab.key] > 0" class="nav-count"
+            >{{ counts[tab.key] }}{{ countsTruncated[tab.key] ? "+" : "" }}</span
+          ></RouterLink
         >
       </nav>
       <div

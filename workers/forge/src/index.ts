@@ -200,9 +200,14 @@ async function publicRepositoryForOwnerAndSlug(
 
 const MAX_LIST_ROWS = 500;
 
-function boundedList<T>(rows: T[], present: (row: T) => unknown = (row) => row): Response {
+function boundedList<T>(
+  rows: T[],
+  present: (row: T) => unknown = (row) => row,
+  chronological = false
+): Response {
+  const kept = rows.slice(0, MAX_LIST_ROWS);
   return json({
-    data: rows.slice(0, MAX_LIST_ROWS).map(present),
+    data: (chronological ? kept.reverse() : kept).map(present),
     truncated: rows.length > MAX_LIST_ROWS,
   });
 }
@@ -228,12 +233,17 @@ async function pullRequestHeadOid(
   pull: Record<string, unknown>,
   user: TrustedUser
 ): Promise<string | Response> {
-  const response = await env.GIT.fetch(compareRequest(requestUrl, repository, pull, user));
+  const gitUrl = new URL(`/repositories/${repository.id}/pull-head`, requestUrl);
+  gitUrl.searchParams.set("head", String(pull.head_ref));
+  if (pull.head_session_id) gitUrl.searchParams.set("headSessionId", String(pull.head_session_id));
+  const response = await env.GIT.fetch(new Request(gitUrl, { headers: trustedHeaders(user) }));
+  if (response.status === 404)
+    return error(409, "stale_commit", "The pull request head is no longer available.");
   const body: unknown = response.ok ? await response.json().catch(() => null) : null;
   const data = body && typeof body === "object" && "data" in body ? body.data : null;
   const headOid =
-    data && typeof data === "object" && "headOid" in data && typeof data.headOid === "string"
-      ? data.headOid
+    data && typeof data === "object" && "oid" in data && typeof data.oid === "string"
+      ? data.oid
       : null;
   if (!headOid) {
     createLogger(env.LOG_LEVEL, { service: "forge" }).warn("forge:pull-request-head-unresolved", {
@@ -562,11 +572,11 @@ async function publicRepositoryRead(
       .first<{ id: string }>();
     if (!target) return error(404, "not_found", "Resource was not found.");
     const rows = await env.DB.prepare(
-      "SELECT * FROM forge_comments WHERE repository_id = ? AND target_kind = ? AND target_id = ? ORDER BY created_at ASC LIMIT ?"
+      "SELECT * FROM forge_comments WHERE repository_id = ? AND target_kind = ? AND target_id = ? ORDER BY created_at DESC LIMIT ?"
     )
       .bind(repository.id, targetKind, target.id, MAX_LIST_ROWS + 1)
       .all<Record<string, unknown>>();
-    return boundedList(rows.results, (row) => presentForgeRow("comments", row));
+    return boundedList(rows.results, (row) => presentForgeRow("comments", row), true);
   }
   const memory = await memoryTaskRequest(env, request, repository, ANONYMOUS_VIEWER, suffix);
   if (memory) return memory;
@@ -813,11 +823,15 @@ async function featureRequest(
     if (action === "comments" && (request.method === "GET" || request.method === "POST")) {
       if (request.method === "GET") {
         const comments = await env.DB.prepare(
-          "SELECT * FROM forge_comments WHERE repository_id = ? AND target_kind = ? AND target_id = ? ORDER BY created_at ASC LIMIT ?"
+          "SELECT * FROM forge_comments WHERE repository_id = ? AND target_kind = ? AND target_id = ? ORDER BY created_at DESC LIMIT ?"
         )
           .bind(repository.id, targetKind, String(current.id), MAX_LIST_ROWS + 1)
           .all<Record<string, unknown>>();
-        return boundedList(comments.results, (comment) => presentForgeRow("comments", comment));
+        return boundedList(
+          comments.results,
+          (comment) => presentForgeRow("comments", comment),
+          true
+        );
       }
       const denied = requireWrite();
       if (denied) return denied;

@@ -329,6 +329,20 @@ describe("RepositoryCollaboration rendered workflows", () => {
     mounted.unmount();
   });
 
+  it("warns when a list is truncated and clears the warning in other sections", async () => {
+    vi.spyOn(api, "repository").mockResolvedValue(repository);
+    vi.spyOn(api, "issues").mockResolvedValue({ items: [issue()], truncated: true });
+    const mounted = await mountSection("/_verify/issues", "issues");
+    expect(mounted.root.textContent).toContain(
+      "This list exceeds 500 entries; only part of it is shown"
+    );
+    mounted.unmount();
+    vi.spyOn(api, "issues").mockResolvedValue({ items: [issue()], truncated: false });
+    const complete = await mountSection("/_verify/issues", "issues");
+    expect(complete.root.textContent).not.toContain("This list exceeds 500 entries");
+    complete.unmount();
+  });
+
   it("creates an issue with labels, edits it, comments, and closes it", async () => {
     const initial = issue();
     let latest = initial;
@@ -616,11 +630,13 @@ describe("RepositoryCollaboration rendered workflows", () => {
       truncated: false,
     }));
     vi.spyOn(api, "wiki").mockResolvedValue({ items: [current], truncated: false });
-    vi.spyOn(api, "wikiRevision").mockImplementation(async (_id, _slug, revision) => {
-      const found = history.find((entry) => entry.revision === revision);
-      if (!found) throw new ApiError(404, "Wiki revision was not found");
-      return found;
-    });
+    const wikiRevisionSpy = vi
+      .spyOn(api, "wikiRevision")
+      .mockImplementation(async (_id, _slug, revision) => {
+        const found = history.find((entry) => entry.revision === revision);
+        if (!found) throw new ApiError(404, "Wiki revision was not found");
+        return found;
+      });
     const updateWikiSpy = vi
       .spyOn(api, "updateWikiPage")
       .mockImplementation(async (_id, _slug, patch) => {
@@ -683,6 +699,7 @@ describe("RepositoryCollaboration rendered workflows", () => {
     if (!firstHistoryRow) throw new Error("Wiki revision history was not rendered.");
     firstHistoryRow.querySelector<HTMLButtonElement>(".fluent-button")?.click();
     await settle();
+    expect(wikiRevisionSpy).toHaveBeenCalledWith("repo-1", "guide", 1);
     expect(updateWikiSpy).toHaveBeenLastCalledWith("repo-1", "guide", {
       title: "Guide v1",
       content: "Original docs",

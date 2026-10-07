@@ -36,7 +36,8 @@ INSERT INTO forge_pull_requests (id,repository_id,number,author_id,title,body,ba
 const artifacts = new FixtureArtifacts();
 const gitCalls: Array<Record<string, unknown>> = [];
 const gitRequests: Array<{ method: string; url: string }> = [];
-let compareHead = "d".repeat(40);
+let compareHead: string | null = "d".repeat(40);
+let compareFails = false;
 let mergeGate: Promise<void> | null = null;
 let onMergeStarted: (() => void) | null = null;
 const forgeEnv: Parameters<typeof forge.fetch>[1] = {
@@ -45,8 +46,14 @@ const forgeEnv: Parameters<typeof forge.fetch>[1] = {
   GIT: {
     async fetch(request: Request) {
       gitRequests.push({ method: request.method, url: request.url });
+      if (request.method === "GET" && new URL(request.url).pathname.endsWith("/pull-head"))
+        return compareHead
+          ? Response.json({ data: { oid: compareHead } })
+          : Response.json({ error: { code: "not_found" } }, { status: 404 });
       if (request.method === "GET" && new URL(request.url).pathname.endsWith("/compare"))
-        return Response.json({ data: { headOid: compareHead } });
+        return compareFails
+          ? Response.json({ error: { code: "resource_limit" } }, { status: 413 })
+          : Response.json({ data: { headOid: compareHead } });
       const body =
         request.method === "POST" ? ((await request.json()) as Record<string, unknown>) : {};
       gitCalls.push(body);
@@ -720,6 +727,38 @@ describe("Forge list bounds, answers and head pinning", () => {
     }
   });
 
+  it("resolves the head without a full comparison and reports a missing head as stale", async () => {
+    const created = await call("/repositories/r1/pull-requests", "POST", "u1", "alice", {
+      title: "Large history",
+      baseRef: "main",
+      headRef: "large",
+    });
+    const pr = ((await created.json()) as { data: { number: number } }).data;
+    const head = "7".repeat(40);
+    const base = `/repositories/r1/pull-requests/${pr.number}`;
+    compareHead = head;
+    compareFails = true;
+    try {
+      const approved = await call(`${base}/reviews`, "POST", "u2", "bob", {
+        state: "approved",
+        commitOid: head,
+      });
+      expect(approved.status).toBe(201);
+      compareHead = null;
+      const missing = await call(`${base}/checks`, "POST", "u2", "bob", {
+        name: "CI",
+        status: "completed",
+        conclusion: "success",
+        commitOid: head,
+      });
+      expect(missing.status).toBe(409);
+      expect(await missing.json()).toMatchObject({ error: { code: "stale_commit" } });
+    } finally {
+      compareFails = false;
+      compareHead = "d".repeat(40);
+    }
+  });
+
   it("clears the accepted answer when its comment is deleted", async () => {
     const created = await call("/repositories/r1/discussions", "POST", "u1", "alice", {
       title: "Question",
@@ -755,6 +794,32 @@ INSERT INTO forge_issues (id,repository_id,number,author_id,title,body,state,cre
       truncated: boolean;
     };
     expect(small.truncated).toBe(false);
+  });
+
+  it("keeps the newest comments in chronological order when a thread is truncated", async () => {
+    await runSqlScript(
+      env.DB,
+      `INSERT INTO repositories (id,namespace_id,created_by,slug,do_name,visibility,description,created_at,updated_at,artifact_name,remote) VALUES ('r8','n1','u1','thread','repo:r8','public','',1,1,'repo-r8','artifact://repo-r8');
+INSERT INTO forge_counters (repository_id, conversation_number) VALUES ('r8', 1);
+INSERT INTO forge_issues (id,repository_id,number,author_id,title,body,state,created_at,updated_at) VALUES ('thread-issue','r8',1,'u1','Thread','','open',1,1);
+WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 501)
+INSERT INTO forge_comments (id,repository_id,target_kind,target_id,actor_json,author_id,body,created_at,updated_at) SELECT 'tc-' || n,'r8','issue','thread-issue','{"kind":"user","id":"u1","name":"alice"}','u1','Comment ' || n,n,n FROM seq;`
+    );
+    for (const [userId, name] of [
+      ["u1", "alice"],
+      ["u3", "carol"],
+    ]) {
+      const page = (await (
+        await call("/repositories/r8/issues/1/comments", "GET", userId, name)
+      ).json()) as {
+        data: Array<{ body: string }>;
+        truncated: boolean;
+      };
+      expect(page.truncated).toBe(true);
+      expect(page.data).toHaveLength(500);
+      expect(page.data[0]?.body).toBe("Comment 2");
+      expect(page.data.at(-1)?.body).toBe("Comment 501");
+    }
   });
 
   it("hides repository existence from agent sessions outside their repository", async () => {

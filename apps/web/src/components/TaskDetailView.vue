@@ -57,6 +57,7 @@ const draft = ref({ type: "", title: "", motivation: "", description: "" });
 
 const showLinkForm = ref(false);
 const linkOptions = ref<LinkOption[]>([]);
+const linkOptionsTruncated = ref(false);
 const linkChoice = ref("");
 const linkError = ref("");
 const showCommitForm = ref(false);
@@ -219,6 +220,7 @@ function openLinkForm() {
   showLinkForm.value = !showLinkForm.value;
   linkError.value = "";
   linkChoice.value = "";
+  linkOptionsTruncated.value = false;
   if (!showLinkForm.value) return;
   void (async () => {
     try {
@@ -226,6 +228,7 @@ function openLinkForm() {
         api.issues(props.repository.id),
         api.pulls(props.repository.id),
       ]);
+      linkOptionsTruncated.value = issues.truncated || pulls.truncated;
       const linked = new Set(task.value?.links.map((link) => `${link.kind}:${link.number}`));
       linkOptions.value = [
         ...issues.items.map((row: Issue) => ({
@@ -521,6 +524,9 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
             </option>
           </SelectField>
           <p v-else class="muted">{{ t("taskLinkNothing") }}</p>
+          <NoticeBar v-if="linkOptionsTruncated" intent="warning">{{
+            t("listTruncated")
+          }}</NoticeBar>
           <NoticeBar v-if="linkError" intent="error">{{ linkError }}</NoticeBar>
           <div v-if="linkOptions.length" class="form-actions">
             <FluentButton type="submit" tone="primary" :disabled="saving || !linkChoice">{{

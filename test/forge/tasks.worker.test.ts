@@ -16,7 +16,8 @@ const MERGE_OID = "c".repeat(40);
 const BASE_OID = "a".repeat(40);
 
 const artifacts = new FixtureArtifacts();
-let compareHead = "6".repeat(40);
+let compareHead: string | null = "6".repeat(40);
+let compareFails = false;
 
 /** Commit lookups hit the real Git worker over fixture Artifacts; merges are stubbed. */
 const forgeEnv: Parameters<typeof forge.fetch>[1] = {
@@ -24,8 +25,14 @@ const forgeEnv: Parameters<typeof forge.fetch>[1] = {
   ARTIFACTS: artifacts,
   GIT: {
     async fetch(request: Request) {
+      if (request.method === "GET" && new URL(request.url).pathname.endsWith("/pull-head"))
+        return compareHead
+          ? Response.json({ data: { oid: compareHead } })
+          : Response.json({ error: { code: "not_found" } }, { status: 404 });
       if (request.method === "GET" && new URL(request.url).pathname.endsWith("/compare"))
-        return Response.json({ data: { headOid: compareHead } });
+        return compareFails
+          ? Response.json({ error: { code: "resource_limit" } }, { status: 413 })
+          : Response.json({ data: { headOid: compareHead } });
       if (request.method === "GET" && new URL(request.url).pathname.endsWith("/refs"))
         return Response.json({ data: [{ name: "refs/heads/main", oid: BASE_OID }] });
       if (request.method === "GET") return git.fetch(request, forgeEnv);
