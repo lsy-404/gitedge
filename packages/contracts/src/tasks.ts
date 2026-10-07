@@ -122,6 +122,11 @@ export interface TaskTable {
   guidelineVersion: string;
 }
 
+/** Present and true when agent sessions could not all be revoked after the change. */
+export interface RevocationOutcome {
+  revocationIncomplete?: boolean;
+}
+
 export interface RepositorySettings {
   /** Repository display name and URL slug share one canonical value. */
   name: string;
@@ -152,6 +157,8 @@ export interface RepositorySettings {
   /** True when the caller may change the settings. */
   canManage: boolean;
 }
+
+export type RepositorySettingsUpdate = RepositorySettings & RevocationOutcome;
 
 export const PutMemoryIndexInputSchema = z.object({
   content: markdown,

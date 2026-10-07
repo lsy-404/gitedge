@@ -249,13 +249,19 @@ watch(
           type="button"
           tone="primary"
           :aria-expanded="showForm"
+          aria-controls="task-create-form"
           @click="showForm = !showForm"
         >
           <AppIcon name="plus" />{{ t("newTask") }}
         </FluentButton>
       </div>
 
-      <form v-if="showForm" class="box box-form form-stack task-form" @submit.prevent="createTask">
+      <form
+        v-if="showForm"
+        id="task-create-form"
+        class="box box-form form-stack task-form"
+        @submit.prevent="createTask"
+      >
         <TextField v-model="form.type" required>{{ t("taskType") }}</TextField>
         <p class="muted field-hint">{{ t("taskTypeHint") }}</p>
         <TextField v-model="form.title" required>{{ t("taskTitle") }}</TextField>

@@ -28,6 +28,7 @@ import {
 import { oneOf } from "../ui/formEvents";
 import AppIcon from "./AppIcon.vue";
 import AppLink from "./AppLink.vue";
+import ConfirmButton from "./ConfirmButton.vue";
 import MarkdownDocument from "./MarkdownDocument.vue";
 import NoticeBar from "./NoticeBar.vue";
 import SelectField from "./SelectField.vue";
@@ -179,14 +180,19 @@ function submitEdit() {
   );
 }
 
-async function moveDocument(offset: number) {
-  const currentIndex = taskDocumentKinds.indexOf(activeDocument.value);
-  const nextIndex = (currentIndex + offset + taskDocumentKinds.length) % taskDocumentKinds.length;
-  const nextDocument = taskDocumentKinds[nextIndex];
+async function focusDocument(index: number) {
+  const nextDocument = taskDocumentKinds[index];
   if (!nextDocument) return;
   activeDocument.value = nextDocument;
   await nextTick();
   documentTablist.value?.querySelector<HTMLButtonElement>(`#doc-tab-${nextDocument}`)?.focus();
+}
+
+function moveDocument(offset: number) {
+  const currentIndex = taskDocumentKinds.indexOf(activeDocument.value);
+  return focusDocument(
+    (currentIndex + offset + taskDocumentKinds.length) % taskDocumentKinds.length
+  );
 }
 
 function setDocument(kind: TaskDocumentKind, document: DocumentView) {
@@ -462,6 +468,8 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
             @click="activeDocument = kind"
             @keydown.left.prevent="moveDocument(-1)"
             @keydown.right.prevent="moveDocument(1)"
+            @keydown.home.prevent="focusDocument(0)"
+            @keydown.end.prevent="focusDocument(taskDocumentKinds.length - 1)"
           >
             {{ t(`docKind_${kind}`) }}
           </button>
@@ -535,16 +543,16 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
             <AppIcon :name="link.kind === 'issue' ? 'issue' : 'pr'" />
             <AppLink :to="linkPath(link)">#{{ link.number }} {{ link.title }}</AppLink>
             <StatusBadge :tone="linkTone(link.state)">{{ t(link.state) }}</StatusBadge>
-            <FluentButton
+            <ConfirmButton
               v-if="canEdit"
-              type="button"
               size="small"
               tone="subtle"
+              :label="t('taskLinkDetach')"
+              :accessible-name="t('taskLinkDetachLabel', { number: link.number })"
+              :prompt="t('confirmDetachLink')"
               :disabled="saving"
-              :aria-label="t('taskLinkDetachLabel', { number: link.number })"
-              @click="detach(link)"
-              >{{ t("taskLinkDetach") }}</FluentButton
-            >
+              @confirm="detach(link)"
+            />
           </li>
         </ul>
         <p v-else class="muted">{{ t("taskLinksEmpty") }}</p>

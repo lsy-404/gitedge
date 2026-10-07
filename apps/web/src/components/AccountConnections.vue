@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import type { SsoIdentity, SsoProviderSummary } from "../lib/api";
 import { api, errorMessage, ssoAuthorizationUrl } from "../lib/api";
+import ConfirmButton from "./ConfirmButton.vue";
 import NoticeBar from "./NoticeBar.vue";
 import StatusBadge from "./StatusBadge.vue";
 import { clearSession, sessionState } from "../lib/session";
@@ -216,22 +217,24 @@ onMounted(load);
               }}</StatusBadge>
             </div>
             <div class="sso-actions settings-actions">
-              <FluentButton
-                type="button"
+              <ConfirmButton
                 tone="subtle"
+                :label="busyIdentityId === identity.id ? t('loading') : t('ssoUnlink')"
+                :accessible-name="`${t('ssoUnlink')} · ${identity.providerLabel}`"
+                :prompt="t('confirmUnlinkIdentity')"
                 :disabled="loading || busyIdentityId === identity.id"
-                @click="unlink(identity)"
-              >
-                {{ busyIdentityId === identity.id ? t("loading") : t("ssoUnlink") }}
-              </FluentButton>
-              <FluentButton
-                type="button"
-                :aria-label="`${t('ssoFederatedLogout')} · ${identity.providerLabel}`"
+                @confirm="unlink(identity)"
+              />
+              <ConfirmButton
+                tone="secondary"
+                :label="
+                  busyLogoutIdentityId === identity.id ? t('loading') : t('ssoFederatedLogout')
+                "
+                :accessible-name="`${t('ssoFederatedLogout')} · ${identity.providerLabel}`"
+                :prompt="t('confirmFederatedLogout')"
                 :disabled="loading || busyLogoutIdentityId === identity.id"
-                @click="federatedLogout(identity)"
-              >
-                {{ busyLogoutIdentityId === identity.id ? t("loading") : t("ssoFederatedLogout") }}
-              </FluentButton>
+                @confirm="federatedLogout(identity)"
+              />
             </div>
           </div>
         </div>

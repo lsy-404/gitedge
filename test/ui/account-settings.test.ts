@@ -16,6 +16,7 @@ import {
   mountAt,
   repository,
   settle,
+  confirmClick,
   submit,
   unmountAll,
 } from "./task-support";
@@ -132,8 +133,7 @@ describe("Account settings using Platform Kit", () => {
     const mounted = await mountAt("/_verify/account/sessions", "/_verify/account/sessions", () =>
       h(BrowserSessions)
     );
-    findButton(mounted.root, "Sign out session").click();
-    await settle();
+    await confirmClick(findButton(mounted.root, "Sign out session"));
     expect(revoke).toHaveBeenCalledWith("current");
     expect(sessionState.user).toBeNull();
     await vi.waitFor(() => expect(router.currentRoute.value.path).toBe("/login"));

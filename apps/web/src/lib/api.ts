@@ -67,7 +67,9 @@ import type {
   MemoryIndex,
   MemoryVisibility,
   RepositorySettings,
+  RepositorySettingsUpdate,
   RevisionActor,
+  RevocationOutcome,
   Task,
   TaskCommit,
   TaskDetail,
@@ -138,6 +140,7 @@ export type {
   MemoryIndex,
   MemoryVisibility,
   RepositorySettings,
+  RepositorySettingsUpdate,
   RevisionActor,
   Task,
   TaskCommit,
@@ -473,6 +476,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  removeOrganizationMember: async (slug: string, identifier: string): Promise<boolean> => {
+    const envelope = await requestEnvelope<RevocationOutcome>(
+      `/api/forge/organizations/${encodeURIComponent(slug)}/members/${encodeURIComponent(identifier)}`,
+      { method: "DELETE" },
+      true
+    );
+    return envelope?.data.revocationIncomplete === true;
+  },
   refs: (repositoryId: string) => request<GitRef[]>(gitPath(repositoryId, "refs")),
   tree: (repositoryId: string, ref: string, path: string) =>
     request<GitTree>(gitPath(repositoryId, `tree${query({ ref, path })}`)),
@@ -826,7 +837,7 @@ export const api = {
     repositoryId: string,
     payload: Partial<Omit<RepositorySettings, "canManage">>
   ) =>
-    request<RepositorySettings>(repositoryPath(repositoryId, "settings"), {
+    request<RepositorySettingsUpdate>(repositoryPath(repositoryId, "settings"), {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
@@ -864,10 +875,9 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   deleteRepositoryCollaborator: (repositoryId: string, userId: string) =>
-    request(
+    request<{ deleted: boolean; revocationIncomplete: boolean }>(
       repositoryPath(repositoryId, `collaborators/${encodeURIComponent(userId)}`),
-      { method: "DELETE" },
-      true
+      { method: "DELETE" }
     ),
   actionWorkflows: (repositoryId: string, ref: string, oid?: string) =>
     request<{ oid: string; workflows: ActionWorkflowFile[] }>(

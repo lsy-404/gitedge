@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { api, type Organization, type OrganizationMember, errorMessage } from "../lib/api";
 import AppIcon from "../components/AppIcon.vue";
+import ConfirmButton from "../components/ConfirmButton.vue";
 import NoticeBar from "../components/NoticeBar.vue";
 import SelectField from "../components/SelectField.vue";
 import StatusBadge from "../components/StatusBadge.vue";
@@ -14,35 +15,46 @@ import "../styles/workspace.css";
 const route = useRoute();
 const { t } = useI18n();
 const roles = ["member", "owner"] as const;
-const slug = String(route.params.slug);
+const slug = computed(() => String(route.params.slug));
 const organization = ref<Organization | null>(null);
 const members = ref<OrganizationMember[]>([]);
 const loading = ref(true);
 const error = ref("");
 const formError = ref("");
 const saving = ref(false);
+const removingIdentifier = ref("");
+const memberNotice = ref("");
+const revocationIncomplete = ref(false);
+let loadVersion = 0;
 const form = ref<{ identifier: string; role: "owner" | "member" }>({
   identifier: "",
   role: "member",
 });
 async function load() {
+  const version = ++loadVersion;
   loading.value = true;
+  error.value = "";
   try {
-    [organization.value, members.value] = await Promise.all([
-      api.organization(slug),
-      api.organizationMembers(slug),
+    const [org, list] = await Promise.all([
+      api.organization(slug.value),
+      api.organizationMembers(slug.value),
     ]);
+    if (version === loadVersion) {
+      organization.value = org;
+      members.value = list;
+    }
   } catch (cause) {
-    error.value = errorMessage(cause, t);
+    if (version === loadVersion) error.value = errorMessage(cause, t);
   } finally {
-    loading.value = false;
+    if (version === loadVersion) loading.value = false;
   }
 }
 async function addMember() {
+  const target = slug.value;
   saving.value = true;
   formError.value = "";
   try {
-    await api.addOrganizationMember(slug, form.value);
+    await api.addOrganizationMember(target, form.value);
     form.value = { identifier: "", role: "member" };
     await load();
   } catch (cause) {
@@ -51,7 +63,23 @@ async function addMember() {
     saving.value = false;
   }
 }
-onMounted(load);
+async function removeMember(member: OrganizationMember) {
+  const target = slug.value;
+  removingIdentifier.value = member.identifier;
+  formError.value = "";
+  memberNotice.value = "";
+  revocationIncomplete.value = false;
+  try {
+    revocationIncomplete.value = await api.removeOrganizationMember(target, member.identifier);
+    memberNotice.value = t("organizationMemberRemoved");
+    await load();
+  } catch (cause) {
+    formError.value = errorMessage(cause, t, {}, "organizationMemberRemoveError");
+  } finally {
+    removingIdentifier.value = "";
+  }
+}
+watch(slug, load, { immediate: true });
 </script>
 <template>
   <section class="workspace-page organization-page">
@@ -123,7 +151,21 @@ onMounted(load);
             ><StatusBadge :tone="member.role === 'owner' ? 'brand' : 'neutral'">{{
               member.role === "owner" ? t("ownerRole") : t("memberRole")
             }}</StatusBadge>
+            <ConfirmButton
+              v-if="organization?.role === 'owner'"
+              size="small"
+              tone="secondary"
+              :label="removingIdentifier === member.identifier ? t('loading') : t('removeMember')"
+              :accessible-name="`${t('removeMember')} · ${member.identifier}`"
+              :prompt="t('confirmRemoveMember')"
+              :disabled="Boolean(removingIdentifier)"
+              @confirm="removeMember(member)"
+            />
           </div>
+          <NoticeBar v-if="memberNotice" intent="success">{{ memberNotice }}</NoticeBar>
+          <NoticeBar v-if="revocationIncomplete" intent="warning">{{
+            t("revocationIncomplete")
+          }}</NoticeBar>
           <div v-if="!members.length" class="settings-empty-state">
             {{ t("organizationEmptyMembers") }}
           </div>

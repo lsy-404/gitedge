@@ -19,6 +19,7 @@ import {
   mountAt,
   repository,
   settle,
+  confirmClick,
   submit,
   unmountAll,
 } from "./task-support";
@@ -149,8 +150,7 @@ describe("branch protection controls", () => {
       requireSignedCommits: false,
     });
 
-    findButton(mounted.root, "Delete").click();
-    await settle();
+    await confirmClick(findButton(mounted.root, "Delete"));
     expect(remove).toHaveBeenCalledWith(repository.id, rule.id);
     expect(mounted.root.textContent).toContain("Branch protection rule deleted.");
     mounted.unmount();
@@ -195,7 +195,10 @@ describe("repository collaborator controls", () => {
         identifier: payload.identifier,
         role: payload.role,
       }));
-    const remove = vi.spyOn(api, "deleteRepositoryCollaborator").mockResolvedValue();
+    const remove = vi.spyOn(api, "deleteRepositoryCollaborator").mockResolvedValue({
+      deleted: true,
+      revocationIncomplete: false,
+    });
     const mounted = await mountAt("/_verify/collaborators", "/_verify/collaborators", () =>
       h(RepositoryCollaborators, { repositoryId: repository.id, canManage: true })
     );
@@ -224,8 +227,7 @@ describe("repository collaborator controls", () => {
       role: "admin",
     });
 
-    findButton(mounted.root, "Remove").click();
-    await settle();
+    await confirmClick(findButton(mounted.root, "Remove"));
     expect(remove).toHaveBeenCalledWith(repository.id, collaborator.id);
     mounted.unmount();
   });
@@ -269,8 +271,7 @@ describe("repository collaborator controls", () => {
     const directRow = Array.from(
       mounted.root.querySelectorAll<HTMLElement>(".collaborator-row")
     ).find((row) => row.textContent?.includes("another-user"));
-    findButton(directRow ?? mounted.root, "Remove").click();
-    await settle();
+    await confirmClick(findButton(directRow ?? mounted.root, "Remove"));
     expect(remove).toHaveBeenCalledWith(repository.id, direct.id);
     expect(mounted.root.textContent).toContain("Could not remove the repository collaborator");
     mounted.unmount();

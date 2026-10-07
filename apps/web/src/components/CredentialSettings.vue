@@ -11,6 +11,7 @@ import {
 import type { GitCredential } from "../../../../packages/contracts/src/credentials";
 import type { Repository } from "../lib/api";
 import { api, errorMessage } from "../lib/api";
+import ConfirmButton from "./ConfirmButton.vue";
 import NoticeBar from "./NoticeBar.vue";
 import StatusBadge from "./StatusBadge.vue";
 
@@ -267,16 +268,14 @@ onUnmounted(dispose);
             <StatusBadge :tone="statusTone(credential)">{{ statusLabel(credential) }}</StatusBadge>
           </div>
           <div class="settings-actions">
-            <FluentButton
+            <ConfirmButton
               v-if="credential.revokedAt === null && credential.expiresAt > now"
-              type="button"
-              tone="danger"
+              :label="t('settingsRevoke')"
+              :prompt="t('confirmRevokeCredential')"
               :busy="revokingId === credential.id"
               :disabled="Boolean(revokingId)"
-              @click="revokeCredential(credential)"
-            >
-              {{ t("settingsRevoke") }}
-            </FluentButton>
+              @confirm="revokeCredential(credential)"
+            />
           </div>
         </div>
       </article>

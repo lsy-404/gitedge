@@ -76,4 +76,29 @@ describe("parseWorkflow", () => {
       )
     ).toThrow(WorkflowValidationError);
   });
+
+  it.each([
+    ["on: push", "on: push", ["push"]],
+    [
+      "on: [push, workflow_dispatch]",
+      "on: [push, workflow_dispatch]",
+      ["push", "workflow_dispatch"],
+    ],
+  ])("accepts the %s shorthand", (_label, on, triggers) => {
+    const yaml = source.replace(/on:\n {2}workflow_dispatch: \{\}\n {2}push: \{\}/, on);
+    expect(parseWorkflow(".github/workflows/verify.yml", yaml).triggers).toEqual(triggers);
+  });
+
+  it.each([
+    ["unsupported list entry", "on: [push, pull_request]"],
+    ["empty list", "on: []"],
+    ["duplicate entries", "on: [push, push]"],
+    ["scalar list entry", "on: [1]"],
+    ["number", "on: 5"],
+  ])("rejects the on shorthand with %s", (_label, on) => {
+    const yaml = source.replace(/on:\n {2}workflow_dispatch: \{\}\n {2}push: \{\}/, on);
+    expect(() => parseWorkflow(".github/workflows/verify.yml", yaml)).toThrow(
+      WorkflowValidationError
+    );
+  });
 });

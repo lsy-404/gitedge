@@ -83,6 +83,25 @@ export const settingsMessages = {
     settingsSignatureMeaning: "验证依据是已证明所有权的公钥，不依赖提交作者的自由填写文本。",
     settingsSignatureUnavailable:
       "无法读取签名，请稍后重试。大型提交可在本地用 git verify-commit 验证。",
+    confirmAction: "确认",
+    confirmRevokeCredential: "撤销此凭证？使用它的 Git 客户端将立即失效。",
+    confirmRevokeSigningKey: "撤销此签名密钥？此操作无法撤销。",
+    confirmSignOutSession: "结束此会话？该设备将退出登录。",
+    confirmSignOutCurrentSession: "结束当前会话？你将退出登录。",
+    confirmUnlinkIdentity: "解除此登录身份的关联？",
+    confirmFederatedLogout: "退出 GitEdge 并同时退出身份提供方？",
+    confirmRemoveCollaborator: "移除此协作者？其仓库访问权限将被撤销。",
+    confirmRemoveRule: "删除此分支保护规则？",
+    confirmRemoveMember: "移除此组织成员？",
+    confirmDetachLink: "解除此关联？",
+    confirmCancelRun: "取消这个正在运行的工作流？",
+    confirmArchiveRepository: "保存后仓库将归档并变为只读。确定归档？",
+    unsavedChangesConfirm: "有尚未保存的更改，确定离开并放弃吗？",
+    revocationIncomplete:
+      "更改已保存，但部分 Agent 会话未能撤销。请在 Agent 设置中检查并手动撤销。",
+    removeMember: "移除成员",
+    organizationMemberRemoved: "成员已移除。",
+    organizationMemberRemoveError: "无法移除此成员。",
   },
   en: {
     settingsRepositoryArchived:
@@ -173,5 +192,26 @@ export const settingsMessages = {
       "Verification uses a public key with proven ownership, independently of the freely supplied author text.",
     settingsSignatureUnavailable:
       "The signature could not be read. Retry later, or use git verify-commit locally for large commits.",
+    confirmAction: "Confirm",
+    confirmRevokeCredential:
+      "Revoke this credential? Git clients using it stop working immediately.",
+    confirmRevokeSigningKey: "Revoke this signing key? This cannot be undone.",
+    confirmSignOutSession: "End this session? That device will be signed out.",
+    confirmSignOutCurrentSession: "End the current session? You will be signed out.",
+    confirmUnlinkIdentity: "Unlink this sign-in identity?",
+    confirmFederatedLogout: "Sign out of GitEdge and the identity provider?",
+    confirmRemoveCollaborator: "Remove this collaborator? Their repository access is revoked.",
+    confirmRemoveRule: "Delete this branch protection rule?",
+    confirmRemoveMember: "Remove this organization member?",
+    confirmDetachLink: "Remove this link?",
+    confirmCancelRun: "Cancel this running workflow?",
+    confirmArchiveRepository:
+      "Saving will archive the repository and make it read-only. Archive it?",
+    unsavedChangesConfirm: "You have unsaved changes. Leave and discard them?",
+    revocationIncomplete:
+      "Changes were saved, but some agent sessions could not be revoked. Check agent settings and revoke them manually.",
+    removeMember: "Remove member",
+    organizationMemberRemoved: "Member removed.",
+    organizationMemberRemoveError: "Could not remove this member.",
   },
 };

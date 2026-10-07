@@ -102,6 +102,19 @@ export async function settle(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/** Clicks a ConfirmButton trigger, then its inline confirm control. */
+export async function confirmClick(trigger: HTMLElement | null | undefined): Promise<void> {
+  if (!trigger) throw new Error("Missing confirm trigger");
+  const holder = trigger.closest(".confirm-button");
+  if (!holder) throw new Error("Trigger is not a ConfirmButton");
+  trigger.click();
+  await settle();
+  const confirm = holder.querySelector<HTMLElement>("[role='group'] .fluent-button");
+  if (!confirm) throw new Error("Confirmation controls were not shown");
+  confirm.click();
+  await settle();
+}
+
 export function control(root: ParentNode, selector: string): HTMLElement {
   const found = root.querySelector<HTMLElement>(selector);
   if (!found) throw new Error(`Expected control: ${selector}`);

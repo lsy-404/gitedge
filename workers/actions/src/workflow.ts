@@ -68,9 +68,26 @@ function rejectAliases(node: unknown): void {
   }
 }
 
+function triggerKeys(value: unknown): { keys: string[]; config: Record<string, unknown> } {
+  if (typeof value === "string") return { keys: [value], config: { [value]: null } };
+  if (Array.isArray(value)) {
+    if (value.length === 0 || value.some((entry) => typeof entry !== "string")) {
+      throw new WorkflowValidationError("on must list at least one trigger name.");
+    }
+    const keys: string[] = value;
+    if (new Set(keys).size !== keys.length) {
+      throw new WorkflowValidationError("on lists a trigger more than once.");
+    }
+    return { keys, config: Object.fromEntries(keys.map((key) => [key, null])) };
+  }
+  if (!isRecord(value)) {
+    throw new WorkflowValidationError("on must be a trigger name, list or mapping.");
+  }
+  return { keys: Object.keys(value), config: value };
+}
+
 function parseTriggers(value: unknown): Array<"workflow_dispatch" | "push"> {
-  const triggers = record(value, "on");
-  const keys = Object.keys(triggers);
+  const { keys, config: triggers } = triggerKeys(value);
   if (keys.length === 0 || keys.some((key) => key !== "workflow_dispatch" && key !== "push")) {
     throw new WorkflowValidationError("Only workflow_dispatch and push triggers are supported.");
   }

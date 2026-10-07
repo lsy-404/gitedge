@@ -29,6 +29,17 @@ export const actionsMessages = {
     actionsConclusionPending: "等待结果",
     actionsNetworkDisabled: "此仓库的 Actions 网络访问已关闭。",
     actionsPushOnly: "此工作流仅由仓库推送触发，手动运行不可用。",
+    actionsWorkflows: "工作流",
+    actionsSyntaxTitle: "支持的语法",
+    actionsSyntaxTriggers:
+      "触发器：push 与 workflow_dispatch，on 可写作名称、列表或映射；不支持分支、路径等过滤条件。",
+    actionsSyntaxSteps:
+      "步骤：每个步骤必须有 run，可选 name、shell（sh 或 bash）、working-directory 和 env；不支持 uses。",
+    actionsSyntaxLimits:
+      "限制：每个文件 1–3 个作业、每个作业 1–10 个步骤、最大 64 KiB、不支持 {'${{ }}'} 表达式、每小时 6 次运行，默认关闭网络。",
+    actionsTriggers: "触发器：{triggers}",
+    actionsRunLimit: "已达到每小时 6 次运行的上限，请稍后再试。",
+    actionsCancelling: "正在取消…",
   },
   en: {
     actionsTitle: "Actions",
@@ -60,6 +71,17 @@ export const actionsMessages = {
     actionsConclusionPending: "Waiting for result",
     actionsNetworkDisabled: "Actions network access is disabled for this repository.",
     actionsPushOnly: "This workflow runs on repository pushes and cannot be started manually.",
+    actionsWorkflows: "Workflows",
+    actionsSyntaxTitle: "Supported syntax",
+    actionsSyntaxTriggers:
+      "Triggers: push and workflow_dispatch, written as a name, a list or a mapping. Branch and path filters are not supported.",
+    actionsSyntaxSteps:
+      "Steps: each step needs run, with optional name, shell (sh or bash), working-directory and env. uses is not supported.",
+    actionsSyntaxLimits:
+      "Limits: 1-3 jobs per file, 1-10 steps per job, 64 KiB per file, no {'${{ }}'} expressions, 6 runs per hour, and network access off by default.",
+    actionsTriggers: "Triggers: {triggers}",
+    actionsRunLimit: "The limit of 6 runs per hour was reached. Try again later.",
+    actionsCancelling: "Cancelling…",
   },
 };
 
