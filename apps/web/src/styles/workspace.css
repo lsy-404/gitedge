@@ -553,8 +553,8 @@
 }
 .agent-choice {
   position: relative;
-  min-height: 54px;
-  padding: 9px 12px;
+  min-height: 56px;
+  padding: var(--space-2) var(--space-3);
   border: 0;
   border-radius: 0;
   color: var(--fg-default);
@@ -669,9 +669,6 @@
 }
 .organization-list-sidebar {
   align-self: start;
-}
-.organization-list-sidebar .workspace-nav-item + .workspace-nav-item {
-  margin-top: 0;
 }
 .organization-list-sidebar .workspace-search {
   margin-top: var(--space-4);

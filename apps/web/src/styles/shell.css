@@ -194,7 +194,7 @@ details.user-menu {
   justify-content: space-between;
   gap: var(--space-2);
   width: 100%;
-  padding: 6px var(--space-2);
+  padding: var(--space-1) var(--space-2);
   color: var(--fg-default);
   background: none;
   border: 0;
@@ -222,7 +222,7 @@ details.user-menu {
   overflow-y: auto;
 }
 .browser-account-heading {
-  padding: 6px var(--space-2);
+  padding: var(--space-1) var(--space-2);
   color: var(--fg-muted);
   font-size: var(--font-size-meta);
   font-weight: var(--font-weight-semibold);
@@ -254,7 +254,7 @@ details.user-menu {
   justify-content: space-between;
   gap: var(--space-2);
   min-width: 0;
-  padding: 6px var(--space-2);
+  padding: var(--space-1) var(--space-2);
   text-align: left;
 }
 .browser-account-copy {
@@ -276,7 +276,7 @@ details.user-menu {
 .browser-account-status {
   flex-shrink: 0;
 }
-.browser-account-option:not(:disabled):hover,
+.browser-account-option:not(:disabled, [aria-pressed="true"]):hover,
 .browser-account-action:hover,
 .browser-account-remove:not(:disabled):hover {
   background: var(--control-bg-hover);
@@ -301,11 +301,11 @@ details.user-menu {
   align-items: center;
   gap: var(--space-2);
   width: 100%;
-  padding: 6px var(--space-2);
+  padding: var(--space-1) var(--space-2);
   text-align: left;
 }
 .browser-account-state {
-  padding: 6px var(--space-2);
+  padding: var(--space-1) var(--space-2);
 }
 .browser-account-error {
   color: var(--danger-fg);
