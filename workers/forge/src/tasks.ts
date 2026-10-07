@@ -1160,8 +1160,9 @@ async function settingsRequest(
     logger.warn("forge:settings-conflict", { repositoryId: repository.id });
     return error(409, "conflict", "Repository slug already exists.");
   }
-  if (input.agentsEnabled === false)
-    await revokeAgentSessions(env, { repositoryId: repository.id });
+  const revocationIncomplete =
+    input.agentsEnabled === false &&
+    !(await revokeAgentSessions(env, { repositoryId: repository.id }));
   logger.info("forge:settings-updated", {
     repositoryId: repository.id,
     slug,
@@ -1169,7 +1170,11 @@ async function settingsRequest(
     archived: input.archived,
   });
   return json({
-    data: { ...(await repositorySettings(env, repository.id)), canManage: true },
+    data: {
+      ...(await repositorySettings(env, repository.id)),
+      canManage: true,
+      ...(revocationIncomplete ? { revocationIncomplete } : {}),
+    },
   });
 }
 

@@ -1622,7 +1622,7 @@ export default {
               "conflict",
               "Member was not found or is the last organization owner."
             );
-          await revokeAgentSessions(env, {
+          const revoked = await revokeAgentSessions(env, {
             namespaceId: organization.id,
             userId: result.user_id,
           });
@@ -1631,6 +1631,7 @@ export default {
             identifier: memberIdentifier,
             userId: user.id,
           });
+          if (!revoked) return json({ data: { removed: true, revocationIncomplete: true } }, 202);
           return new Response(null, { status: 204 });
         }
       }

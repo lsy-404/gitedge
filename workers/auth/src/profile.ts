@@ -141,7 +141,11 @@ export async function handleAccountProfile(
     );
     await env.DB.batch(statements);
   } catch (cause) {
-    if (cause instanceof Error && cause.message.includes("UNIQUE constraint"))
+    if (
+      cause instanceof Error &&
+      (cause.message.includes("UNIQUE constraint") ||
+        cause.message.includes("namespace slug is retired"))
+    )
       return fail(
         409,
         "conflict",

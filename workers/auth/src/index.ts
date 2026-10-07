@@ -111,11 +111,6 @@ function rateLimited(decision: RateLimitDecision): Response | null {
   );
 }
 
-function loginIdentifier(body: unknown): string | null {
-  if (!body || typeof body !== "object" || !("identifier" in body)) return null;
-  return typeof body.identifier === "string" ? body.identifier.toLowerCase() : null;
-}
-
 function base64ToBytes(value: string): Uint8Array<ArrayBuffer> {
   return Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
 }
@@ -728,10 +723,14 @@ export default {
     }
     if (request.method === "POST" && path === "/login") {
       const body = await readJsonLimited(request);
-      const identifier = loginIdentifier(body);
-      if (identifier) {
+      const parsedLogin = LoginInputSchema.safeParse(body);
+      if (parsedLogin.success) {
         const limited = rateLimited(
-          await consumeRateLimit(env.RATE_LIMITER, `login:${identifier}`, LOGIN_ATTEMPTS_PER_MINUTE)
+          await consumeRateLimit(
+            env.RATE_LIMITER,
+            `login:${parsedLogin.data.identifier.toLowerCase()}`,
+            LOGIN_ATTEMPTS_PER_MINUTE
+          )
         );
         if (limited) {
           logger.warn("auth:login-rate-limited");

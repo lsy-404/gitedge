@@ -6,6 +6,11 @@ export const AgentWebhookEventSchema = z.enum([
   "agent.mentioned",
   "pull_request.updated",
 ]);
+export const RevokeAgentSessionsInputSchema = z.union([
+  z.object({ repositoryId: z.string().min(1), userId: z.string().min(1).optional() }),
+  z.object({ namespaceId: z.string().min(1), userId: z.string().min(1) }),
+]);
+export type RevokeAgentSessionsInput = z.infer<typeof RevokeAgentSessionsInputSchema>;
 export const AgentSchema = z.object({
   id: z.string().min(1),
   owner: z.string().min(1),

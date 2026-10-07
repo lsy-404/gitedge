@@ -8,6 +8,7 @@ import { z } from "zod";
 import {
   CreateAgentInputSchema,
   CreateAgentSessionInputSchema,
+  RevokeAgentSessionsInputSchema,
   sha256Hex,
   type Agent,
   UpdateAgentInputSchema,
@@ -237,7 +238,13 @@ async function loadManagedAgent(
 async function revokeSession(env: AgentAuthEnv, row: AgentSessionRow): Promise<void> {
   {
     using workspace = await env.ARTIFACTS.get(row.workspaceName);
-    await workspace.revokeToken(row.gitTokenId);
+    if (!(await workspace.revokeToken(row.gitTokenId))) {
+      const { tokens } = await workspace.listTokens();
+      const alreadyRevoked = tokens.some(
+        (token) => token.id === row.gitTokenId && token.state === "revoked"
+      );
+      if (!alreadyRevoked) throw new Error("token_not_revoked");
+    }
   }
   await env.DB.prepare("UPDATE auth_agent_sessions SET status = 'revoked' WHERE id = ?")
     .bind(row.id)
@@ -262,10 +269,6 @@ async function revokeSessions(
 }
 
 const REVOKE_BATCH_LIMIT = 100;
-const RevokeAgentSessionsInputSchema = z.union([
-  z.object({ repositoryId: z.string().min(1), userId: z.string().min(1).optional() }),
-  z.object({ namespaceId: z.string().min(1), userId: z.string().min(1) }),
-]);
 
 export async function handleAgentSessionRevocation(
   request: Request,
@@ -433,7 +436,7 @@ export async function handleAgentManagement(
         .bind(Date.now(), agent.id)
         .run();
       const sessions = await env.DB.prepare(
-        sessionSelect + " WHERE s.agent_id = ? AND s.status != 'completed'"
+        sessionSelect + " WHERE s.agent_id = ? AND s.status = 'active'"
       )
         .bind(agent.id)
         .all<AgentSessionRow>();

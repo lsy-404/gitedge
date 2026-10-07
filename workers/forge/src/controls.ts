@@ -142,8 +142,10 @@ export async function repositoryControls(
       if (!deleted)
         return error(404, "not_found", "Collaborator was not found or has inherited access.");
       logger.info("collaborator:removed", { userId: id });
-      await revokeAgentSessions(env, { repositoryId: repo.id, userId: id });
-      return json({ data: { deleted: true } });
+      const stillHasAccess = (await repositoryRole(env.DB, repo.id, id)) !== null;
+      const revoked =
+        stillHasAccess || (await revokeAgentSessions(env, { repositoryId: repo.id, userId: id }));
+      return json({ data: { deleted: true, revocationIncomplete: !revoked } });
     }
   }
   return error(405, "method_not_allowed", "Method is not allowed.");

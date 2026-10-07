@@ -1,4 +1,8 @@
-import type { AgentWebhookEvent, TrustedUser } from "../../../packages/contracts/src/index";
+import type {
+  AgentWebhookEvent,
+  RevokeAgentSessionsInput,
+  TrustedUser,
+} from "../../../packages/contracts/src/index";
 import { createLogger } from "../../../src/worker/common/logger";
 import { repositoryRole } from "../../../src/worker/common/repositories";
 import type { ForgeEnv, RepositoryRow } from "./common";
@@ -36,29 +40,33 @@ export async function agentEvent(
   }
 }
 
-export type AgentSessionRevocationScope =
-  | { readonly repositoryId: string; readonly userId?: string }
-  | { readonly namespaceId: string; readonly userId: string };
+const REVOCATION_ATTEMPTS = 5;
 
+/** Returns true only when Auth confirms no active session remains in scope. */
 export async function revokeAgentSessions(
   env: ForgeEnv,
-  scope: AgentSessionRevocationScope
-): Promise<void> {
-  if (!env.AUTH) return;
+  scope: RevokeAgentSessionsInput
+): Promise<boolean> {
+  if (!env.AUTH) return true;
   const logger = createLogger(env.LOG_LEVEL, { service: "forge" });
-  try {
-    const result = await env.AUTH.fetch(
-      new Request("https://auth.internal/_internal/agent-sessions/revoke", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(scope),
-      })
-    );
-    await result.body?.cancel();
-    if (!result.ok) logger.warn("agent:session-revocation-rejected", { status: result.status });
-  } catch {
-    logger.warn("agent:session-revocation-failed", scope);
+  for (let attempt = 1; attempt <= REVOCATION_ATTEMPTS; attempt += 1) {
+    try {
+      const result = await env.AUTH.fetch(
+        new Request("https://auth.internal/_internal/agent-sessions/revoke", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(scope),
+        })
+      );
+      await result.body?.cancel();
+      if (result.ok) return true;
+      logger.warn("agent:session-revocation-rejected", { status: result.status, attempt });
+    } catch {
+      logger.warn("agent:session-revocation-failed", { attempt });
+    }
   }
+  logger.error("agent:session-revocation-incomplete", scope);
+  return false;
 }
 
 export async function mentionAgents(

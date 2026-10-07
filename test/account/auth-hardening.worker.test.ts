@@ -1,6 +1,8 @@
 import { env } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
 import auth from "../../workers/auth/src/index";
+import forge from "../../workers/forge/src/index";
+import { trustedHeaders } from "../../packages/contracts/src/trust";
 import { rememberBrowserLogin } from "../../workers/auth/src/browser-accounts";
 import { mentionAgents } from "../../workers/forge/src/agent-events";
 import type { RepositoryRow } from "../../workers/forge/src/common";
@@ -57,6 +59,14 @@ function patchProfile(cookie: string, identifier: string): Promise<Response> {
     }),
     baseEnv
   );
+}
+
+async function login(identifier: string) {
+  const response = await post("/login", { identifier, password });
+  expect(response.status).toBe(200);
+  const session = response.headers.getSetCookie().find((v) => v.startsWith("gitedge_session="));
+  if (!session) throw new Error("Expected a session cookie.");
+  return { cookie: session.split(";")[0] };
 }
 
 async function register(identifier: string, headers: Record<string, string> = {}) {
@@ -123,9 +133,32 @@ describe("authentication throttling and body limits", () => {
     expect(created).toBeNull();
   });
 
-  it("rejects an oversized login body as an invalid payload", async () => {
-    const response = await post("/login", JSON.stringify({ identifier: "x".repeat(70_000) }));
+  it("shares one login bucket across padded and re-cased identifiers", async () => {
+    const limited = { ...baseEnv, RATE_LIMITER: countingRateLimiter() };
+    const variants = ["pad-target", " pad-target", "pad-target ", "\tPad-Target", "pad-target\n\n"];
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const response = await post(
+        "/login",
+        { identifier: variants[attempt % variants.length], password },
+        {},
+        limited
+      );
+      expect(response.status).toBe(401);
+    }
+    const blocked = await post("/login", { identifier: "  pad-target   ", password }, {}, limited);
+    expect(blocked.status).toBe(429);
+  });
+
+  it("rejects a login body over the size limit even when its fields are valid", async () => {
+    await register("body-limit-user");
+    const response = await post("/login", {
+      identifier: "body-limit-user",
+      password,
+      padding: "x".repeat(70_000),
+    });
     expect(response.status).toBe(400);
+    const accepted = await post("/login", { identifier: "body-limit-user", password });
+    expect(accepted.status).toBe(200);
   });
 });
 
@@ -275,6 +308,212 @@ describe("agent session revocation", () => {
     const publicRequest = await post("/_internal/agent-sessions/revoke", { repositoryId: "any" });
     expect(publicRequest.status).toBe(404);
     expect((await revoke({})).status).toBe(400);
+  });
+});
+
+describe("forge-triggered agent session revocation", () => {
+  const authBinding = {
+    fetch: (request: Request) => auth.fetch(request, baseEnv),
+  };
+  const forgeEnv = {
+    DB: env.DB,
+    ARTIFACTS: artifacts,
+    GIT: { fetch: async () => new Response(null, { status: 204 }) },
+    AUTH: authBinding,
+    LOG_LEVEL: "error",
+  };
+
+  async function seed(slug: string) {
+    const owner = await register(`${slug}-owner`);
+    const member = await register(`${slug}-member`);
+    const namespace = await env.DB.prepare("SELECT id FROM namespaces WHERE slug = ?")
+      .bind(`${slug}-owner`)
+      .first<{ id: string }>();
+    if (!namespace) throw new Error("Namespace is missing.");
+    const sessions = [] as { repositoryId: string; sessionId: string; source: string }[];
+    const agentId = crypto.randomUUID();
+    await env.DB.prepare(
+      "INSERT INTO auth_agents (id, user_id, name, handle, created_at) VALUES (?, ?, 'Fixture agent', ?, ?)"
+    )
+      .bind(agentId, member.id, `${slug}-bot`, Date.now())
+      .run();
+    for (const name of ["one", "two"]) {
+      const source = await artifacts.create(`repo-${crypto.randomUUID()}`);
+      const repositoryId = crypto.randomUUID();
+      await env.DB.prepare(
+        "INSERT INTO repositories (id, namespace_id, created_by, slug, do_name, artifact_name, remote, default_branch, visibility, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'main', 'private', '', ?, ?)"
+      )
+        .bind(
+          repositoryId,
+          namespace.id,
+          owner.id,
+          name,
+          `repo:${repositoryId}`,
+          source.name,
+          source.remote,
+          Date.now(),
+          Date.now()
+        )
+        .run();
+      using repo = await artifacts.get(source.name);
+      const token = await repo.createToken("write", 3600);
+      const sessionId = crypto.randomUUID();
+      await env.DB.prepare(
+        "INSERT INTO auth_agent_sessions (id, agent_id, user_id, repository_id, token_hash, git_token_id, workspace_name, remote, base_ref, permission, status, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'main', 'write', 'active', ?, ?)"
+      )
+        .bind(
+          sessionId,
+          agentId,
+          member.id,
+          repositoryId,
+          `hash-${sessionId}`,
+          token.id,
+          source.name,
+          source.remote,
+          Date.now(),
+          Date.now() + 3_600_000
+        )
+        .run();
+      sessions.push({ repositoryId, sessionId, source: source.name });
+    }
+    return { owner, member, namespaceId: namespace.id, sessions, agentId };
+  }
+
+  function callForge(
+    path: string,
+    method: string,
+    user: { id: string; identifier: string },
+    body?: unknown,
+    environment: typeof forgeEnv = forgeEnv
+  ): Promise<Response> {
+    const headers = trustedHeaders({ id: user.id, identifier: user.identifier, groupKey: "free" });
+    headers.set("Content-Type", "application/json");
+    return forge.fetch(
+      new Request(`https://forge.test${path}`, {
+        method,
+        headers,
+        body: body === undefined ? undefined : JSON.stringify(body),
+      }),
+      environment
+    );
+  }
+
+  async function status(id: string): Promise<string | undefined> {
+    const row = await env.DB.prepare("SELECT status FROM auth_agent_sessions WHERE id = ?")
+      .bind(id)
+      .first<{ status: string }>();
+    return row?.status;
+  }
+
+  it("revokes a removed collaborator's sessions but keeps them while membership remains", async () => {
+    const seeded = await seed("forge-collab");
+    const target = seeded.sessions[0];
+    await env.DB.prepare(
+      "INSERT INTO repository_collaborators (repository_id, user_id, role, created_at) VALUES (?, ?, 'write', ?)"
+    )
+      .bind(target.repositoryId, seeded.member.id, Date.now())
+      .run();
+    const removed = await callForge(
+      `/repositories/${target.repositoryId}/collaborators/${seeded.member.id}`,
+      "DELETE",
+      seeded.owner
+    );
+    expect(removed.status).toBe(200);
+    expect(await removed.json()).toMatchObject({ data: { revocationIncomplete: false } });
+    expect(await status(target.sessionId)).toBe("revoked");
+    expect(await status(seeded.sessions[1].sessionId)).toBe("active");
+  });
+
+  it("revokes sessions across an organization on member removal except collaborator repositories", async () => {
+    const seeded = await seed("forge-org");
+    await env.DB.prepare("UPDATE namespaces SET kind = 'organization' WHERE id = ?")
+      .bind(seeded.namespaceId)
+      .run();
+    await env.DB.prepare(
+      "INSERT OR IGNORE INTO namespace_memberships (namespace_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?), (?, ?, 'member', ?)"
+    )
+      .bind(
+        seeded.namespaceId,
+        seeded.owner.id,
+        Date.now(),
+        seeded.namespaceId,
+        seeded.member.id,
+        Date.now()
+      )
+      .run();
+    await env.DB.prepare(
+      "INSERT INTO repository_collaborators (repository_id, user_id, role, created_at) VALUES (?, ?, 'write', ?)"
+    )
+      .bind(seeded.sessions[1].repositoryId, seeded.member.id, Date.now())
+      .run();
+    const removed = await callForge(
+      `/organizations/forge-org-owner/members/forge-org-member`,
+      "DELETE",
+      seeded.owner
+    );
+    expect(removed.status).toBe(204);
+    expect(await status(seeded.sessions[0].sessionId)).toBe("revoked");
+    expect(await status(seeded.sessions[1].sessionId)).toBe("active");
+  });
+
+  it("revokes repository sessions when agents are disabled", async () => {
+    const seeded = await seed("forge-agents-off");
+    const target = seeded.sessions[0];
+    const response = await callForge(
+      `/repositories/${target.repositoryId}/settings`,
+      "PATCH",
+      seeded.owner,
+      { agentsEnabled: false }
+    );
+    expect(response.status).toBe(200);
+    expect(await status(target.sessionId)).toBe("revoked");
+    expect(await status(seeded.sessions[1].sessionId)).toBe("active");
+  });
+
+  it("reports incomplete revocation instead of plain success", async () => {
+    const seeded = await seed("forge-incomplete");
+    const target = seeded.sessions[0];
+    await env.DB.prepare(
+      "INSERT INTO repository_collaborators (repository_id, user_id, role, created_at) VALUES (?, ?, 'write', ?)"
+    )
+      .bind(target.repositoryId, seeded.member.id, Date.now())
+      .run();
+    const failingAuth = {
+      fetch: (request: Request) =>
+        auth.fetch(request, { ...baseEnv, ARTIFACTS: new UnreachableArtifacts() }),
+    };
+    const removed = await callForge(
+      `/repositories/${target.repositoryId}/collaborators/${seeded.member.id}`,
+      "DELETE",
+      seeded.owner,
+      undefined,
+      { ...forgeEnv, AUTH: failingAuth }
+    );
+    expect(await removed.json()).toMatchObject({ data: { revocationIncomplete: true } });
+    expect(await status(target.sessionId)).toBe("active");
+  });
+
+  it("returns 503 from agent deletion when one session cannot be revoked", async () => {
+    const seeded = await seed("forge-agent-delete");
+    const failing = {
+      ...baseEnv,
+      ARTIFACTS: new (class extends FixtureArtifacts {
+        override async get(name: string) {
+          if (name === seeded.sessions[0].source) throw new Error("artifacts unavailable");
+          return artifacts.get(name);
+        }
+      })(),
+    };
+    const response = await auth.fetch(
+      new Request(`${origin}/agents/${seeded.agentId}`, {
+        method: "DELETE",
+        headers: { Origin: origin, Cookie: (await login("forge-agent-delete-member")).cookie },
+      }),
+      failing
+    );
+    expect(response.status).toBe(503);
+    expect(await status(seeded.sessions[0].sessionId)).toBe("active");
+    expect(await status(seeded.sessions[1].sessionId)).toBe("revoked");
   });
 });
 
