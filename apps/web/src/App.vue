@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch, watchEffect } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import AppIcon from "./components/AppIcon.vue";
@@ -34,6 +34,8 @@ const repositoryPath = computed(() =>
   route.params.owner && route.params.repo ? `/${route.params.owner}/${route.params.repo}` : ""
 );
 const pageName = computed(() => {
+  if (authPage.value) return route.path === "/register" ? t("registerTitle") : t("signIn");
+  if (route.params.owner && route.params.repo) return `${route.params.owner}/${route.params.repo}`;
   if (route.params.handle) return t("agentProfile");
   if (route.params.owner && !route.params.repo) return String(route.params.owner);
   if (route.path.startsWith("/settings/agents")) return t("agents");
@@ -41,6 +43,18 @@ const pageName = computed(() => {
   if (route.path.startsWith("/organizations")) return t("organizations");
   return t("dashboard");
 });
+const mainRegion = ref<HTMLElement | null>(null);
+watchEffect(() => {
+  document.title = `${pageName.value} · GitEdge`;
+});
+watch(
+  () => route.path,
+  async (path, previous) => {
+    if (path === previous) return;
+    await nextTick();
+    mainRegion.value?.focus({ preventScroll: true });
+  }
+);
 const search = ref("");
 const searchExpanded = ref(false);
 const searchInput = ref<HTMLInputElement | null>(null);
@@ -99,8 +113,19 @@ function keyboard(event: KeyboardEvent) {
     void openSearch();
   }
 }
+const signingOut = ref(false);
 async function signOut() {
-  await api.logout();
+  if (signingOut.value) return;
+  signingOut.value = true;
+  identitySwitchError.value = "";
+  try {
+    await api.logout();
+  } catch {
+    identitySwitchError.value = t("signOutError");
+    return;
+  } finally {
+    signingOut.value = false;
+  }
   notifyBrowserIdentityChanged();
   clearSession();
   closeMenus();
@@ -206,7 +231,10 @@ if (!sessionState.checked) void refreshSession();
           >
             <AppIcon name="menu" />
           </button>
-          <RouterLink class="brand" to="/dashboard" :aria-label="t('brand')"
+          <RouterLink
+            class="brand"
+            :to="guestView ? route.fullPath : '/dashboard'"
+            :aria-label="t('brand')"
             ><img src="/logo.svg" alt="" width="32" height="32" /><span v-if="authPage"
               >GitEdge</span
             ></RouterLink
@@ -371,7 +399,7 @@ if (!sessionState.checked) void refreshSession();
                   </button>
                 </div>
                 <hr />
-                <button v-if="sessionState.user" @click="signOut">
+                <button v-if="sessionState.user" :disabled="signingOut" @click="signOut">
                   <AppIcon name="signOut" />{{ t("signOut") }}
                 </button>
                 <RouterLink
@@ -384,7 +412,11 @@ if (!sessionState.checked) void refreshSession();
             </details>
           </div>
         </div>
-        <nav v-if="!authPage && !repositoryPath" class="global-nav" :aria-label="t('mainNav')">
+        <nav
+          v-if="!authPage && !repositoryPath && !guestView"
+          class="global-nav"
+          :aria-label="t('mainNav')"
+        >
           <RouterLink to="/dashboard"><AppIcon name="repo" />{{ t("repositories") }}</RouterLink
           ><RouterLink to="/organizations"
             ><AppIcon name="organization" />{{ t("organizations") }}</RouterLink
@@ -422,9 +454,11 @@ if (!sessionState.checked) void refreshSession();
           </button>
         </div>
         <nav :aria-label="t('mainNav')">
-          <RouterLink to="/dashboard"><AppIcon name="home" />{{ t("dashboard") }}</RouterLink
-          ><RouterLink to="/dashboard"><AppIcon name="repo" />{{ t("repositories") }}</RouterLink
-          ><RouterLink to="/organizations"
+          <RouterLink v-if="!guestView" to="/dashboard"
+            ><AppIcon name="home" />{{ t("dashboard") }}</RouterLink
+          ><RouterLink v-if="!guestView" to="/dashboard"
+            ><AppIcon name="repo" />{{ t("repositories") }}</RouterLink
+          ><RouterLink v-if="!guestView" to="/organizations"
             ><AppIcon name="organization" />{{ t("organizations") }}</RouterLink
           ><RouterLink v-if="!guestView" to="/settings/agents"
             ><AppIcon name="agent" />{{ t("agents") }}</RouterLink
@@ -436,7 +470,7 @@ if (!sessionState.checked) void refreshSession();
         </nav>
         <p class="drawer-footer">{{ t("edge") }}</p>
       </dialog>
-      <main id="main" tabindex="-1"><RouterView /></main>
+      <main id="main" ref="mainRegion" tabindex="-1"><RouterView /></main>
       <footer class="site-footer">
         <img src="/logo.svg" alt="" width="20" height="20" /><span>GitEdge</span
         ><span>{{ t("edge") }}</span

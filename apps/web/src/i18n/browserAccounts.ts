@@ -5,6 +5,7 @@ const browserAccountMessages = {
     guestView: "访客视角",
     guestViewBanner: "正在以访客身份预览。仅显示公开内容，登录状态已保留。",
     guestViewError: "无法进入访客预览，请重试。",
+    signOutError: "无法退出登录，请重试。",
     addBrowserAccount: "添加账户",
     reactivateAccount: "恢复本人视角",
     noBrowserAccounts: "此浏览器还没有已添加的账户。",
@@ -27,6 +28,7 @@ const browserAccountMessages = {
     guestViewBanner:
       "Previewing as a guest. Only public content is visible; your sign-in is preserved.",
     guestViewError: "Could not start the guest preview. Try again.",
+    signOutError: "Could not sign out. Try again.",
     addBrowserAccount: "Add account",
     reactivateAccount: "Return to my view",
     noBrowserAccounts: "No accounts have been added in this browser.",

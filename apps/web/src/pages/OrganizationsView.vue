@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
-import { api, type Organization } from "../lib/api";
+import { api, type Organization, errorMessage } from "../lib/api";
 import AppIcon from "../components/AppIcon.vue";
 import FormActions from "../components/FormActions.vue";
 import StatusState from "../components/StatusState.vue";
@@ -36,8 +36,8 @@ async function load() {
   error.value = "";
   try {
     organizations.value = await api.organizations();
-  } catch {
-    error.value = t("apiError");
+  } catch (cause) {
+    error.value = errorMessage(cause, t);
   } finally {
     loading.value = false;
   }
@@ -52,8 +52,8 @@ async function create() {
     if (route.query.new)
       await router.replace({ path: route.path, query: { ...route.query, new: undefined } });
     await load();
-  } catch {
-    formError.value = t("apiError");
+  } catch (cause) {
+    formError.value = errorMessage(cause, t, { 409: "nameTaken" });
   } finally {
     saving.value = false;
   }

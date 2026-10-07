@@ -12,9 +12,8 @@ import type {
   TaskLinkKind,
   TaskReference,
 } from "../lib/api";
-import { api } from "../lib/api";
+import { api, errorMessage } from "../lib/api";
 import { sessionState } from "../lib/session";
-import { errorMessage } from "../lib/tasks";
 import AppLink from "./AppLink.vue";
 import AssigneeSetEditor from "./AssigneeSetEditor.vue";
 import NoticeBar from "./NoticeBar.vue";

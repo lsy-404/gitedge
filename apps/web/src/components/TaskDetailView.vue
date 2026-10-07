@@ -12,15 +12,13 @@ import type {
   TaskLink,
   TaskLinkKind,
 } from "../lib/api";
-import { ApiError, api } from "../lib/api";
+import { ApiError, api, errorMessage } from "../lib/api";
 import { sessionState } from "../lib/session";
 import {
   assigneeKey,
-  errorMessage,
   gitOidPattern,
   parseAssigneeKey,
   revisionActorLabel,
-  revisionActorTone,
   taskDocumentKinds,
   taskStatusTone,
   taskStatuses,
@@ -39,7 +37,7 @@ import TextAreaField from "./TextAreaField.vue";
 import TextField from "./TextField.vue";
 
 const props = defineProps<{ repository: Repository; number: number }>();
-const { t } = useI18n();
+const { t, d } = useI18n();
 
 const task = ref<TaskDetail | null>(null);
 const documents = ref<Record<TaskDocumentKind, TaskDocument> | null>(null);
@@ -403,10 +401,8 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
         <div class="actor-line">
           {{ task.actor.name
           }}<template v-if="task.actor.kind === 'agent'"> · {{ t("agent") }}</template> ·
-          {{ new Date(task.createdAt).toLocaleString() }}
-          <span class="muted"
-            >· {{ t("updatedOn", { date: new Date(task.updatedAt).toLocaleString() }) }}</span
-          >
+          {{ d(task.createdAt, "long") }}
+          <span class="muted">· {{ t("updatedOn", { date: d(task.updatedAt, "long") }) }}</span>
         </div>
 
         <form v-if="editing" class="form-stack task-edit" @submit.prevent="submitEdit">
@@ -597,7 +593,7 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
             <small class="muted commit-meta"
               >{{ commit.author }} · {{ commit.ref }} ·
               {{ t("taskCommitBoundBy", { name: revisionActorLabel(commit.boundBy, t) }) }} ·
-              {{ new Date(commit.boundAt).toLocaleString() }}</small
+              {{ d(commit.boundAt, "long") }}</small
             >
             <FluentButton
               v-if="canEdit"

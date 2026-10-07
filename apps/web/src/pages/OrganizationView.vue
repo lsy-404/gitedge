@@ -2,7 +2,7 @@
 import { onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
-import { api, type Organization, type OrganizationMember } from "../lib/api";
+import { api, type Organization, type OrganizationMember, errorMessage } from "../lib/api";
 import AppIcon from "../components/AppIcon.vue";
 import NoticeBar from "../components/NoticeBar.vue";
 import SelectField from "../components/SelectField.vue";
@@ -32,8 +32,8 @@ async function load() {
       api.organization(slug),
       api.organizationMembers(slug),
     ]);
-  } catch {
-    error.value = t("apiError");
+  } catch (cause) {
+    error.value = errorMessage(cause, t);
   } finally {
     loading.value = false;
   }
@@ -45,8 +45,8 @@ async function addMember() {
     await api.addOrganizationMember(slug, form.value);
     form.value = { identifier: "", role: "member" };
     await load();
-  } catch {
-    formError.value = t("apiError");
+  } catch (cause) {
+    formError.value = errorMessage(cause, t);
   } finally {
     saving.value = false;
   }

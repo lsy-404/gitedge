@@ -13,10 +13,10 @@ import type {
   OrganizationMember,
   User,
 } from "../../../../packages/contracts/src/account";
+import type { DeployPlan } from "../../../../packages/contracts/src/deploy";
 import type {
   AgentProfile,
   AgentWebhookDelivery,
-  AgentWebhookEvent,
   AgentWebhookSettings,
 } from "../../../../packages/contracts/src/agents";
 import type {
@@ -84,7 +84,6 @@ import type {
   BranchProtectionRule,
   RepositoryCollaborator,
   RepositoryCommunity,
-  RepositoryCommunityFile,
   RepositoryRole,
 } from "../../../../packages/contracts/src/repository-controls";
 
@@ -155,10 +154,35 @@ export type {
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
-    message: string
+    message: string,
+    public readonly code: string | null = null
   ) {
     super(message);
   }
+}
+
+export type Translate = (key: string, values?: Record<string, string | number>) => string;
+
+/**
+ * Maps a failed request to localized text. `overrides` replaces the generic message for a status
+ * with a message key that explains the failure in the context of the action; `fallbackKey` is used
+ * when the failure carries no status-specific meaning.
+ */
+export function errorMessage(
+  cause: unknown,
+  t: Translate,
+  overrides: Partial<Record<number, string>> = {},
+  fallbackKey = "apiError"
+): string {
+  if (cause instanceof ApiError) {
+    const override = overrides[cause.status];
+    if (override) return t(override);
+    if (cause.status === 403) return t("permissionDenied");
+    if (cause.status === 404) return t("resourceNotFound");
+    if (cause.status === 409) return t("conflictError");
+    if (cause.status === 429) return t("rateLimited");
+  }
+  return t(fallbackKey);
 }
 
 export interface PublicProfile {
@@ -248,6 +272,7 @@ async function requestEnvelope<T>(
   if (!response.ok) {
     const body = await response.text();
     let message = body || response.statusText;
+    let code: string | null = null;
     try {
       const parsed: unknown = JSON.parse(body);
       if (
@@ -260,10 +285,20 @@ async function requestEnvelope<T>(
         typeof parsed.error.message === "string"
       )
         message = parsed.error.message;
+      if (
+        typeof parsed === "object" &&
+        parsed !== null &&
+        "error" in parsed &&
+        typeof parsed.error === "object" &&
+        parsed.error !== null &&
+        "code" in parsed.error &&
+        typeof parsed.error.code === "string"
+      )
+        code = parsed.error.code;
     } catch {
       message = body || response.statusText;
     }
-    throw new ApiError(response.status, message);
+    throw new ApiError(response.status, message, code);
   }
   if (response.status === 204) {
     if (allowNoContent) return;
@@ -283,6 +318,25 @@ function query(values: Record<string, string | number | undefined>): string {
   }
   const value = params.toString();
   return value ? `?${value}` : "";
+}
+
+export interface DeployAccount {
+  id: string;
+  name: string;
+}
+
+export interface DeploySession {
+  accounts: DeployAccount[];
+  nonce: string;
+}
+
+export interface DeployResourceAvailability {
+  id: string;
+  exists: boolean;
+}
+
+function deployPath(name: string, repositoryId: string, ref: string): string {
+  return `/api/deploy/${name}${query({ repositoryId, ref })}`;
 }
 
 function repositoryPath(repositoryId: string, resource: string): string {
@@ -896,4 +950,50 @@ export const api = {
     ),
   repositorySessions: (repositoryId: string) =>
     request<AgentSession[]>(`/api/auth/sessions${query({ repositoryId })}`),
+  deployPlan: (repositoryId: string, ref: string) =>
+    request<DeployPlan>(deployPath("plan", repositoryId, ref)),
+  deploySession: (
+    repositoryId: string,
+    ref: string,
+    payload: { token: string; manifestDigest: string }
+  ) =>
+    request<DeploySession>(deployPath("session", repositoryId, ref), {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  endDeploySession: (repositoryId: string, ref: string) =>
+    request<{ cleared: boolean }>(deployPath("session", repositoryId, ref), { method: "DELETE" }),
+  deployAccount: (
+    repositoryId: string,
+    ref: string,
+    payload: { accountId: string; nonce: string }
+  ) =>
+    request<unknown>(deployPath("account", repositoryId, ref), {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  deployResources: (
+    repositoryId: string,
+    ref: string,
+    payload: { nonce: string; resourceNames: Record<string, string> }
+  ) =>
+    request<{ resources: DeployResourceAvailability[] }>(
+      deployPath("resources", repositoryId, ref),
+      { method: "POST", body: JSON.stringify(payload) }
+    ),
+  deployStep: <T>(
+    step: "provision" | "migrate" | "deploy",
+    repositoryId: string,
+    ref: string,
+    payload: {
+      nonce: string;
+      resourceNames?: Record<string, string>;
+      workerName?: string;
+      confirmDigest?: string;
+    }
+  ) =>
+    request<T>(deployPath(step, repositoryId, ref), {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
 };

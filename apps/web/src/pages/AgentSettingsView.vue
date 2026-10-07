@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import {
   ApiError,
   api,
+  errorMessage,
   type Agent,
   type AgentSession,
   type CreatedAgentSession,
@@ -21,7 +22,7 @@ import { useRoute, useRouter } from "vue-router";
 import "../styles/workspace.css";
 
 const permissions = ["read", "write"] as const;
-const { t } = useI18n();
+const { t, d } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const agents = ref<Agent[]>([]);
@@ -135,20 +136,23 @@ async function createAgent() {
     showAgentForm.value = false;
     if (route.query.new)
       await router.replace({ path: route.path, query: { ...route.query, new: undefined } });
-  } catch {
-    error.value = t("apiError");
+  } catch (cause) {
+    error.value = errorMessage(cause, t);
   } finally {
     saving.value = false;
   }
 }
 async function disableAgent(agent: Agent) {
+  saving.value = true;
   try {
     await api.disableAgent(agent.id);
     agents.value = agents.value.map((row) =>
       row.id === agent.id ? { ...row, disabledAt: Date.now() } : row
     );
-  } catch {
-    error.value = t("apiError");
+  } catch (cause) {
+    error.value = errorMessage(cause, t);
+  } finally {
+    saving.value = false;
   }
 }
 async function createSession() {
@@ -166,21 +170,24 @@ async function createSession() {
     showCreatedCredentials(session);
     sessions.value = [session, ...sessions.value];
     showSessionForm.value = false;
-  } catch {
-    error.value = t("apiError");
+  } catch (cause) {
+    error.value = errorMessage(cause, t);
   } finally {
     saving.value = false;
   }
 }
 async function revoke(session: AgentSession) {
   if (!selectedAgent.value) return;
+  saving.value = true;
   try {
     await api.revokeAgentSession(selectedAgent.value, session.id);
     sessions.value = sessions.value.map((row) =>
       row.id === session.id ? { ...row, status: "revoked" } : row
     );
-  } catch {
-    error.value = t("apiError");
+  } catch (cause) {
+    error.value = errorMessage(cause, t);
+  } finally {
+    saving.value = false;
   }
 }
 function clearCredentials() {
@@ -294,13 +301,14 @@ sessionClockTimer = window.setInterval(() => {
                   v-if="!currentAgent.disabledAt"
                   class="btn btn-danger btn-sm"
                   type="button"
+                  :disabled="saving"
                   @click="disableAgent(currentAgent)"
                 >
                   {{ t("disableAgent") }}
                 </FluentButton>
               </div>
               <small class="muted"
-                >{{ t("createdAt") }} {{ new Date(currentAgent.createdAt).toLocaleString() }}</small
+                >{{ t("createdAt") }} {{ d(currentAgent.createdAt, "long") }}</small
               >
             </section>
             <section class="settings-section agent-sessions-section">
@@ -345,10 +353,7 @@ sessionClockTimer = window.setInterval(() => {
                           · {{ session.baseRef }} ·
                           {{ t(session.permission === "read" ? "readOnly" : "writeAccess") }}</span
                         >
-                        <span
-                          >{{ t("expiresAt") }}
-                          {{ new Date(session.expiresAt).toLocaleString() }}</span
-                        >
+                        <span>{{ t("expiresAt") }} {{ d(session.expiresAt, "long") }}</span>
                       </div>
                     </div>
                     <StatusBadge :tone="sessionExpired(session) ? 'warning' : 'neutral'">{{
@@ -358,6 +363,7 @@ sessionClockTimer = window.setInterval(() => {
                       v-if="session.status === 'active' && !sessionExpired(session)"
                       class="btn btn-sm"
                       type="button"
+                      :disabled="saving"
                       @click="revoke(session)"
                     >
                       {{ t("revokeSession") }}

@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
-import { api, type Organization, type Repository } from "../lib/api";
+import { api, type Organization, type Repository, errorMessage } from "../lib/api";
 import { sessionState } from "../lib/session";
 import FormActions from "../components/FormActions.vue";
 import StatusState from "../components/StatusState.vue";
@@ -16,7 +16,7 @@ import { RepositorySlugSchema } from "../../../../packages/contracts/src/reposit
 import "../styles/workspace.css";
 
 const visibilities = ["private", "public"] as const;
-const { t, locale } = useI18n();
+const { t, d } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const repos = ref<Repository[]>([]);
@@ -48,10 +48,6 @@ const visibleRepos = computed(() => {
 });
 const recentRepos = computed(() => [...repos.value].sort((a, b) => b.updatedAt - a.updatedAt));
 
-function formatUpdatedAt(value: number): string {
-  return new Intl.DateTimeFormat(locale.value, { dateStyle: "medium" }).format(value);
-}
-
 async function load() {
   loading.value = true;
   error.value = "";
@@ -59,8 +55,8 @@ async function load() {
     repos.value = await api.repositories();
     organizations.value = await api.organizations();
     owner.value = owner.value || sessionState.user?.identifier || "";
-  } catch {
-    error.value = t("apiError");
+  } catch (cause) {
+    error.value = errorMessage(cause, t);
   } finally {
     loading.value = false;
   }
@@ -80,8 +76,8 @@ async function createRepository() {
     showForm.value = false;
     await router.replace({ path: route.path, query: { ...route.query, new: undefined } });
     await load();
-  } catch {
-    formError.value = t("apiError");
+  } catch (cause) {
+    formError.value = errorMessage(cause, t, { 409: "nameTaken" });
   } finally {
     saving.value = false;
   }
@@ -243,7 +239,7 @@ onMounted(load);
                       repo.description || t("noDescription")
                     }}</span>
                     <span class="repository-updated">{{
-                      t("updatedOn", { date: formatUpdatedAt(repo.updatedAt) })
+                      t("updatedOn", { date: d(repo.updatedAt, "short") })
                     }}</span>
                   </div>
                 </div>

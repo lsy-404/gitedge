@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import type { SsoIdentity, SsoProviderSummary } from "../lib/api";
-import { api, ssoAuthorizationUrl } from "../lib/api";
+import { api, errorMessage, ssoAuthorizationUrl } from "../lib/api";
 import NoticeBar from "./NoticeBar.vue";
 import StatusBadge from "./StatusBadge.vue";
 import { clearSession, sessionState } from "../lib/session";
@@ -68,10 +68,13 @@ async function link(provider: SsoProviderSummary) {
   try {
     const response = await api.linkSsoIdentity(provider.id, "/settings/account");
     const target = ssoAuthorizationUrl(response.url);
-    if (!target) throw new Error(t("ssoLinkError"));
+    if (!target) {
+      actionError.value = t("ssoLinkError");
+      return;
+    }
     window.location.assign(target.href);
   } catch (cause) {
-    actionError.value = cause instanceof Error ? cause.message : t("ssoLinkError");
+    actionError.value = errorMessage(cause, t, {}, "ssoLinkError");
   } finally {
     busyProviderId.value = "";
   }
@@ -83,11 +86,14 @@ async function unlink(identity: SsoIdentity) {
   notice.value = "";
   try {
     const response = await api.unlinkSsoIdentity(identity.id);
-    if (!response.unlinked) throw new Error(t("ssoUnlinkError"));
+    if (!response.unlinked) {
+      actionError.value = t("ssoUnlinkError");
+      return;
+    }
     identities.value = identities.value.filter((item) => item.id !== identity.id);
     notice.value = t("ssoUnlinked");
   } catch (cause) {
-    actionError.value = cause instanceof Error ? cause.message : t("ssoUnlinkError");
+    actionError.value = errorMessage(cause, t, { 409: "ssoUnlinkLastMethod" }, "ssoUnlinkError");
   } finally {
     busyIdentityId.value = "";
   }
@@ -112,7 +118,7 @@ async function federatedLogout(identity: SsoIdentity) {
         : "/login"
     );
   } catch (cause) {
-    actionError.value = cause instanceof Error ? cause.message : t("ssoLogoutError");
+    actionError.value = errorMessage(cause, t, {}, "ssoLogoutError");
   } finally {
     busyLogoutIdentityId.value = "";
   }

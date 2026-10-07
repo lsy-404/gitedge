@@ -64,9 +64,10 @@ export const router = createRouter({
   ],
 });
 
-router.beforeEach(async (to) => {
+router.beforeEach(async (to, from) => {
   if (!sessionState.checked) await refreshSession();
   if (!to.meta.public && !to.meta.allowAnonymous && !sessionState.user) {
+    if (sessionState.view === "guest" && from.matched.length) return false;
     return { path: "/login", query: { redirect: to.fullPath } };
   }
   if ((to.path === "/login" || to.path === "/register") && sessionState.user) {

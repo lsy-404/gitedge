@@ -10,8 +10,7 @@ import {
 } from "@platform-kit/fluent/vue";
 import type { GitCredential } from "../../../../packages/contracts/src/credentials";
 import type { Repository } from "../lib/api";
-import { api } from "../lib/api";
-import { errorMessage } from "../lib/tasks";
+import { api, errorMessage } from "../lib/api";
 import NoticeBar from "./NoticeBar.vue";
 import StatusBadge from "./StatusBadge.vue";
 
@@ -20,7 +19,7 @@ interface OneTimeCredential {
   expiresAt: number;
 }
 
-const { t, locale } = useI18n();
+const { t, locale, d } = useI18n();
 const credentials = ref<GitCredential[]>([]);
 const repositories = ref<Repository[]>([]);
 const repositoryId = ref("");
@@ -75,12 +74,6 @@ const canCreate = computed(
 watch(selectedRepository, (repository) => {
   if (repository?.archived && permission.value === "write") permission.value = "read";
 });
-
-function formatDate(timestamp: number): string {
-  return new Intl.DateTimeFormat(locale.value, { dateStyle: "medium", timeStyle: "short" }).format(
-    new Date(timestamp)
-  );
-}
 
 function statusLabel(credential: GitCredential): string {
   if (credential.revokedAt !== null) return t("settingsRevoked");
@@ -158,8 +151,8 @@ async function copyCredential(): Promise<void> {
     copied.value = true;
     if (copiedTimer !== undefined) window.clearTimeout(copiedTimer);
     copiedTimer = window.setTimeout(() => (copied.value = false), 2000);
-  } catch {
-    actionError.value = t("apiError");
+  } catch (cause) {
+    actionError.value = errorMessage(cause, t);
   }
 }
 
@@ -269,7 +262,7 @@ onUnmounted(dispose);
             <p class="muted">{{ repositoryLabel(credential) }}</p>
             <p class="muted">
               {{ credential.permission === "read" ? t("readToken") : t("writeToken") }} ·
-              {{ t("settingsTokenExpiry") }}: {{ formatDate(credential.expiresAt) }}
+              {{ t("settingsTokenExpiry") }}: {{ d(credential.expiresAt, "long") }}
             </p>
             <StatusBadge :tone="statusTone(credential)">{{ statusLabel(credential) }}</StatusBadge>
           </div>

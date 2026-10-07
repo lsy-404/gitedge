@@ -3,15 +3,9 @@ import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import type { MemoryIndex, Repository, Task, TaskStatus, TaskTable } from "../lib/api";
-import { ApiError, api } from "../lib/api";
+import { ApiError, api, errorMessage } from "../lib/api";
 import { sessionState } from "../lib/session";
-import {
-  errorMessage,
-  taskStatusTone,
-  taskStatuses,
-  taskTypePattern,
-  type DocumentView,
-} from "../lib/tasks";
+import { taskStatusTone, taskStatuses, taskTypePattern, type DocumentView } from "../lib/tasks";
 import { oneOf } from "../ui/formEvents";
 import AppIcon from "./AppIcon.vue";
 import MarkdownContent from "./MarkdownContent.vue";
@@ -25,7 +19,7 @@ import TextAreaField from "./TextAreaField.vue";
 import TextField from "./TextField.vue";
 
 const props = defineProps<{ repository: Repository }>();
-const { t } = useI18n();
+const { t, d } = useI18n();
 const route = useRoute();
 const router = useRouter();
 
@@ -326,9 +320,7 @@ watch(
               >
               <span v-else>{{ t("taskUnassigned") }}</span>
               <span>{{ t("taskCommitsCount", { count: task.commitCount }) }}</span>
-              <span>{{
-                t("updatedOn", { date: new Date(task.updatedAt).toLocaleDateString() })
-              }}</span>
+              <span>{{ t("updatedOn", { date: d(task.updatedAt, "short") }) }}</span>
             </div>
           </div>
         </RouterLink>

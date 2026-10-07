@@ -9,7 +9,7 @@ import {
   FluentSwitch,
 } from "@platform-kit/fluent/vue";
 import type { AccountProfile } from "../../../../packages/contracts/src/account";
-import { api } from "../lib/api";
+import { api, errorMessage } from "../lib/api";
 import { applyAccountPreferences, accountProfileState } from "../lib/preferences";
 import { refreshSession } from "../lib/session";
 import NoticeBar from "./NoticeBar.vue";
@@ -53,7 +53,7 @@ async function load() {
     profile.value = await api.accountProfile();
     initial.value = JSON.stringify(profile.value);
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : t("apiError");
+    error.value = errorMessage(cause, t);
   } finally {
     loading.value = false;
   }
@@ -71,7 +71,7 @@ async function save() {
     await refreshSession();
     saved.value = true;
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : t("apiError");
+    error.value = errorMessage(cause, t);
   } finally {
     saving.value = false;
   }

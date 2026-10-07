@@ -7,7 +7,7 @@ import NoticeBar from "../components/NoticeBar.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import AppIcon from "../components/AppIcon.vue";
 import { BROWSER_ACCOUNT_LIMIT } from "../../../../packages/contracts/src/browser-accounts";
-import { api, ApiError } from "../lib/api";
+import { api, ApiError, errorMessage } from "../lib/api";
 import type { SsoProviderSummary } from "../lib/api";
 import { setSession, sessionState } from "../lib/session";
 import { notifyBrowserIdentityChanged } from "../lib/browserIdentity";
@@ -94,11 +94,22 @@ async function submit() {
       return;
     }
     await router.push(returnTo.value);
-  } catch (failure) {
-    if (failure instanceof ApiError && failure.status === 429) error.value = t("authRateLimited");
-    else if (failure instanceof ApiError && failure.status === 409 && !register.value)
+  } catch (cause) {
+    if (cause instanceof ApiError && cause.status === 409 && !register.value)
       error.value = t("browserAccountLimit", { limit: BROWSER_ACCOUNT_LIMIT });
-    else error.value = t("apiError");
+    else
+      error.value = errorMessage(
+        cause,
+        t,
+        register.value
+          ? {
+              400: "registerInvalid",
+              403: "registrationDisabled",
+              409: "identifierTaken",
+              429: "authRateLimited",
+            }
+          : { 401: "invalidCredentials", 429: "authRateLimited" }
+      );
   } finally {
     busy.value = false;
   }

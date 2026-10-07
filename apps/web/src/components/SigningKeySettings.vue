@@ -6,10 +6,10 @@ import type {
   SigningKey,
   SigningKeyChallenge,
 } from "../../../../packages/contracts/src/signatures";
-import { api } from "../lib/api";
+import { api, errorMessage } from "../lib/api";
 import NoticeBar from "./NoticeBar.vue";
 import StatusState from "./StatusState.vue";
-const { t } = useI18n();
+const { t, d } = useI18n();
 const keys = ref<SigningKey[]>([]),
   challenge = ref<SigningKeyChallenge | null>(null),
   loading = ref(true),
@@ -24,7 +24,7 @@ async function load() {
   try {
     keys.value = await api.signingKeys();
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : t("apiError");
+    error.value = errorMessage(cause, t);
   } finally {
     loading.value = false;
   }
@@ -39,7 +39,7 @@ async function start() {
       publicKey: publicKey.value,
     });
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : t("apiError");
+    error.value = errorMessage(cause, t);
   } finally {
     busy.value = false;
   }
@@ -57,7 +57,7 @@ async function finish() {
     showForm.value = false;
     await load();
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : t("apiError");
+    error.value = errorMessage(cause, t);
   } finally {
     busy.value = false;
   }
@@ -69,7 +69,7 @@ async function revoke(key: SigningKey) {
     await api.revokeSigningKey(key.id);
     await load();
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : t("apiError");
+    error.value = errorMessage(cause, t);
   } finally {
     busy.value = false;
   }
@@ -103,7 +103,7 @@ onMounted(load);
           </p>
           <p class="muted">
             {{ t(key.revokedAt ? "settingsRevoked" : "settingsRegistered") }} ·
-            {{ new Date(key.createdAt).toLocaleDateString() }}
+            {{ d(key.createdAt, "short") }}
           </p>
         </div>
         <FluentButton v-if="!key.revokedAt" tone="danger" :disabled="busy" @click="revoke(key)">{{

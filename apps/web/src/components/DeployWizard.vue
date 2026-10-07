@@ -2,14 +2,12 @@
 import { computed, onBeforeUnmount, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type { DeployPlan, DeployResult } from "../../../../packages/contracts/src/deploy";
-import { expectedIdentityHeaders, type Repository } from "../lib/api";
+import { ApiError, api, errorMessage, type DeployAccount, type Repository } from "../lib/api";
 import NoticeBar from "./NoticeBar.vue";
 import SelectField from "./SelectField.vue";
 import TextField from "./TextField.vue";
 import StatusBadge from "./StatusBadge.vue";
 
-type Account = { id: string; name: string };
-type ResourceAvailability = { id: string; exists: boolean };
 type DeployStepId = "provision" | "migrate" | "deploy";
 type Progress = { id: DeployStepId; state: "pending" | "running" | "done" | "failed" };
 
@@ -18,11 +16,12 @@ const { t } = useI18n();
 const refName = ref(props.repository.defaultBranch || "HEAD");
 const plan = ref<DeployPlan | null>(null);
 const token = ref("");
-const accounts = ref<Account[]>([]);
+const accounts = ref<DeployAccount[]>([]);
 const accountId = ref("");
 const accountConfirmed = ref(false);
 const sessionNonce = ref("");
 const resourceNames = ref<Record<string, string>>({});
+const resourceCheckFailed = ref(false);
 const resourceAvailability = ref<Record<string, boolean>>({});
 const workerName = ref("");
 const accepted = ref(false);
@@ -31,39 +30,24 @@ const error = ref("");
 const progress = ref<Progress[]>([]);
 const result = ref<DeployResult | null>(null);
 const step = ref<"read" | "authorize" | "review" | "result">("read");
-const endpoint = (name: string) =>
-  `/api/deploy/${name}?repositoryId=${encodeURIComponent(props.repository.id)}&ref=${encodeURIComponent(refName.value)}`;
-
-async function call<T>(name: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(endpoint(name), {
-    ...init,
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...expectedIdentityHeaders(endpoint(name), (init?.method ?? "GET").toUpperCase()),
-      ...init?.headers,
-    },
-  });
-  const data = (await response.json()) as { data?: T; error?: { message?: string } };
-  if (!response.ok) throw new Error(data.error?.message || t("deployWizard.error"));
-  return data.data as T;
-}
 
 onBeforeUnmount(() => {
-  const path = endpoint("session");
-  void fetch(path, {
-    method: "DELETE",
-    credentials: "include",
-    headers: expectedIdentityHeaders(path, "DELETE"),
-  }).catch(() => undefined);
+  void api.endDeploySession(props.repository.id, refName.value).catch(() => undefined);
 });
+
+function failureMessage(cause: unknown): string {
+  const fallback = errorMessage(cause, t, {}, "deployWizard.error");
+  return cause instanceof ApiError && cause.code !== null && cause.message
+    ? t("deployWizard.errorDetail", { message: fallback, detail: cause.message })
+    : fallback;
+}
 
 async function readPlan() {
   loading.value = true;
   error.value = "";
   plan.value = null;
   try {
-    plan.value = await call<DeployPlan>("plan");
+    plan.value = await api.deployPlan(props.repository.id, refName.value);
     workerName.value = plan.value.manifest.worker.name || `${props.repository.name}-worker`;
     resourceNames.value = Object.fromEntries(
       [
@@ -74,7 +58,7 @@ async function readPlan() {
     );
     step.value = "authorize";
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : t("deployWizard.error");
+    error.value = failureMessage(cause);
   } finally {
     loading.value = false;
   }
@@ -85,9 +69,9 @@ async function startSession() {
   loading.value = true;
   error.value = "";
   try {
-    const data = await call<{ accounts: Account[]; nonce: string }>("session", {
-      method: "POST",
-      body: JSON.stringify({ token: token.value, manifestDigest: plan.value.manifestDigest }),
+    const data = await api.deploySession(props.repository.id, refName.value, {
+      token: token.value,
+      manifestDigest: plan.value.manifestDigest,
     });
     sessionNonce.value = data.nonce;
     token.value = "";
@@ -98,7 +82,7 @@ async function startSession() {
     } else step.value = "review";
   } catch (cause) {
     token.value = "";
-    error.value = cause instanceof Error ? cause.message : t("deployWizard.error");
+    error.value = failureMessage(cause);
   } finally {
     loading.value = false;
   }
@@ -109,31 +93,32 @@ async function chooseAccount() {
   loading.value = true;
   error.value = "";
   try {
-    await call("account", {
-      method: "POST",
-      body: JSON.stringify({ accountId: accountId.value, nonce: sessionNonce.value }),
+    await api.deployAccount(props.repository.id, refName.value, {
+      accountId: accountId.value,
+      nonce: sessionNonce.value,
     });
     accountConfirmed.value = true;
     step.value = "review";
     await loadResources();
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : t("deployWizard.error");
+    error.value = failureMessage(cause);
   } finally {
     loading.value = false;
   }
 }
 
 async function loadResources() {
+  resourceCheckFailed.value = false;
   try {
-    const data = await call<{ resources: ResourceAvailability[] }>("resources", {
-      method: "POST",
-      body: JSON.stringify({ nonce: sessionNonce.value, resourceNames: resourceNames.value }),
+    const data = await api.deployResources(props.repository.id, refName.value, {
+      nonce: sessionNonce.value,
+      resourceNames: resourceNames.value,
     });
     resourceAvailability.value = Object.fromEntries(
       data.resources.map((item) => [item.id, item.exists])
     );
   } catch {
-    resourceAvailability.value = {};
+    resourceCheckFailed.value = true;
   }
 }
 
@@ -153,12 +138,12 @@ async function runStep<T>(id: DeployStepId): Promise<T | null> {
             nonce: sessionNonce.value,
           }
         : { nonce: sessionNonce.value, resourceNames: resourceNames.value };
-    const data = await call<T>(id, { method: "POST", body: JSON.stringify(body) });
+    const data = await api.deployStep<T>(id, props.repository.id, refName.value, body);
     progressStep.state = "done";
     return data;
   } catch (cause) {
     progressStep.state = "failed";
-    error.value = cause instanceof Error ? cause.message : t("deployWizard.error");
+    error.value = failureMessage(cause);
     return null;
   }
 }
@@ -348,7 +333,10 @@ const migrationPaths = computed(
               @change="loadResources"
               >{{ resource.kind }} · {{ resource.binding }}</TextField
             >
-            <StatusBadge :tone="resourceAvailability[resource.id] ? 'warning' : 'success'">{{
+            <StatusBadge v-if="resourceCheckFailed" tone="neutral">{{
+              t("deployWizard.availabilityUnknown")
+            }}</StatusBadge>
+            <StatusBadge v-else :tone="resourceAvailability[resource.id] ? 'warning' : 'success'">{{
               resourceAvailability[resource.id]
                 ? t("deployWizard.existing")
                 : t("deployWizard.createNew")

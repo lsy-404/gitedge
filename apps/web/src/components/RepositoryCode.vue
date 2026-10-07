@@ -9,11 +9,10 @@ import type {
   GitGraph,
   GitRef,
   GitTree,
-  GitTreeEntry,
   Repository,
   RepositoryBranch,
 } from "../lib/api";
-import { ApiError, api } from "../lib/api";
+import { api, errorMessage } from "../lib/api";
 import AppIcon from "./AppIcon.vue";
 import AppLink from "./AppLink.vue";
 import SelectField from "./SelectField.vue";
@@ -46,7 +45,7 @@ const props = withDefaults(
   { graphEnabled: true }
 );
 const emit = defineEmits<{ changed: [] }>();
-const { t } = useI18n();
+const { t, d } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const refs = ref<GitRef[]>([]);
@@ -183,12 +182,7 @@ let requestVersion = 0;
 let refsRefreshVersion = 0;
 
 function showError(cause: unknown) {
-  error.value =
-    cause instanceof ApiError && cause.status === 404
-      ? t("resourceNotFound")
-      : cause instanceof ApiError && cause.status === 403
-        ? t("permissionDenied")
-        : t("apiError");
+  error.value = errorMessage(cause, t);
 }
 async function load() {
   const version = ++requestVersion;
@@ -363,11 +357,6 @@ function copyCloneUrl() {
 }
 function copyCloneCommand() {
   void navigator.clipboard.writeText(cloneCommand.value);
-}
-function openTree(path: string, type: "tree" | "blob") {
-  void router.push(
-    repositoryCodeLocation(props.repository.owner, props.repository.name, type, path, refName.value)
-  );
 }
 async function issueToken() {
   tokenBusy.value = true;
@@ -617,7 +606,7 @@ onUnmounted(() => {
     <div v-if="token" class="token-once box box-form">
       <div>
         <strong>{{ t(tokenExpired ? "tokenExpired" : "tokenShownOnce") }}</strong>
-        <p>{{ t("tokenExpiry", { date: new Date(token.expiresAt).toLocaleString() }) }}</p>
+        <p>{{ t("tokenExpiry", { date: d(token.expiresAt, "long") }) }}</p>
       </div>
       <code v-if="!tokenExpired">{{ token.token }}</code>
       <code>{{ cloneUrl }}</code>
@@ -675,7 +664,9 @@ onUnmounted(() => {
         <strong v-else>{{ latestCommit.author.name }}</strong>
         <span class="commit-message">{{ latestCommit.message.split("\n")[0] }}</span
         ><code>{{ latestCommit.oid.slice(0, 7) }}</code
-        ><time>{{ new Date(latestCommit.author.timestamp * 1000).toLocaleDateString() }}</time>
+        ><time :datetime="new Date(latestCommit.author.timestamp * 1000).toISOString()">{{
+          d(latestCommit.author.timestamp * 1000, "short")
+        }}</time>
       </div>
       <div v-if="!isBlob" class="box file-panel">
         <div class="file-table-head">
@@ -932,7 +923,7 @@ onUnmounted(() => {
               ><code>{{ point.commit.oid.slice(0, 8) }}</code>
               <small
                 >{{ point.commit.author.name }} ·
-                {{ new Date(point.commit.author.timestamp * 1000).toLocaleString() }}</small
+                {{ d(point.commit.author.timestamp * 1000, "long") }}</small
               >
             </div>
             <div class="commit-labels">
@@ -976,7 +967,7 @@ onUnmounted(() => {
             <span v-else>{{ session.agentName }} / {{ session.workspaceName }}</span>
             <small
               >{{ sessionPermission(session) }} · {{ sessionStatus(session) }} ·
-              {{ new Date(session.expiresAt).toLocaleString() }}</small
+              {{ d(session.expiresAt, "long") }}</small
             >
             <AppLink
               v-for="forkRef in sessionForkRefs(session.id)"

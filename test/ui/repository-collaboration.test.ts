@@ -588,6 +588,63 @@ describe("RepositoryCollaboration rendered workflows", () => {
     mounted.unmount();
   });
 
+  it("reloads the diff after a stale merge and maps merge policy codes", async () => {
+    const openPull = pull();
+    const diffs: GitComparison[] = [
+      {
+        baseOid: "base-old-oid",
+        headOid: "head-old-oid",
+        mergeBaseOid: "merge-base-oid",
+        commits: [],
+        files: [],
+        truncated: false,
+      },
+      {
+        baseOid: "base-new-oid",
+        headOid: "head-new-oid",
+        mergeBaseOid: "merge-base-oid",
+        commits: [],
+        files: [],
+        truncated: false,
+      },
+    ];
+    vi.spyOn(api, "pull").mockResolvedValue(openPull);
+    vi.spyOn(api, "comments").mockResolvedValue([]);
+    vi.spyOn(api, "reviews").mockResolvedValue([]);
+    vi.spyOn(api, "checks").mockResolvedValue([]);
+    const diffSpy = vi
+      .spyOn(api, "pullDiff")
+      .mockImplementation(async () => diffs[Math.min(diffSpy.mock.calls.length - 1, 1)]);
+    const mergeSpy = vi
+      .spyOn(api, "mergePull")
+      .mockRejectedValueOnce(
+        new ApiError(409, "Git refs changed; reload before retrying.", "conflict")
+      )
+      .mockRejectedValueOnce(new ApiError(409, "Needs approvals.", "approvals_required"));
+    const mounted = await mountSection("/_verify/pulls/12", "pulls");
+    mounted.root.querySelectorAll<HTMLElement>(".pull-tabs button")[1]?.click();
+    await settle();
+
+    findButton(mounted.root, "Merge pull request").click();
+    await settle();
+    expect(diffSpy.mock.calls.length).toBeGreaterThan(1);
+    expect(mounted.root.querySelector('[role="alert"]')?.textContent).toContain(
+      "The pull request or branches changed."
+    );
+
+    findButton(mounted.root, "Merge pull request").click();
+    await settle();
+    expect(mergeSpy).toHaveBeenLastCalledWith("repo-1", 12, {
+      expectedBaseOid: "base-new-oid",
+      expectedHeadOid: "head-new-oid",
+      method: "merge",
+    });
+    expect(mounted.root.querySelector('[role="alert"]')?.textContent).toContain(
+      "needs more human approvals"
+    );
+    mounted.unmount();
+  });
+
   it("marks a discussion comment as the accepted answer", async () => {
     const answer = comment({ id: "answer-9", body: "Use the stable branch API." });
     let current = discussion();
@@ -648,7 +705,7 @@ describe("RepositoryCollaboration rendered workflows", () => {
             content: "Remote latest",
           });
           history = [...history, current];
-          throw new ApiError(409, "Wiki revision changed");
+          throw new ApiError(409, "Wiki page revision has changed.", "conflict");
         }
         current = page({
           revision: updates + 2,
@@ -668,9 +725,10 @@ describe("RepositoryCollaboration rendered workflows", () => {
     fill(control(wikiEdit, "textarea"), "Draft based on stale page");
     submit(wikiEdit);
     await settle();
-    expect(mounted.root.querySelector('[role="alert"]')?.textContent).toContain(
-      "Request failed. Try again later."
-    );
+    const wikiAlert = mounted.root.querySelector('[role="alert"]')?.textContent ?? "";
+    expect(wikiAlert).toContain("The content changed. Refresh and try again.");
+    expect(wikiAlert).not.toContain("pull request");
+    expect(wikiAlert).not.toContain("Wiki page revision");
 
     findButton(mounted.root, "Retry").click();
     await settle();
