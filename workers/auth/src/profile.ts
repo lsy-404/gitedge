@@ -196,14 +196,10 @@ export async function handleWebSessions(
       sessionId: result.id,
       isCurrent,
     });
-    return Response.json(
-      { data: { revoked: true, isCurrent } },
-      {
-        headers: {
-          "Cache-Control": "no-store",
-          ...(isCurrent ? { "Set-Cookie": createSessionCookie("", 0) } : {}),
-        },
-      }
+    return json(
+      { revoked: true, isCurrent },
+      200,
+      isCurrent ? { "Set-Cookie": createSessionCookie("", 0) } : undefined
     );
   }
   return fail(405, "method_not_allowed", "Method is not allowed.");

@@ -10,7 +10,7 @@ import {
 } from "../../../packages/contracts/src/index";
 import type { Logger } from "../../../src/worker/common/logger";
 import { base64UrlToBytes, bytesToBase64Url } from "../../../src/worker/common/encoding";
-import { dataResponse, errorResponse } from "../../../src/worker/common/http";
+import { dataResponse, errorResponse, jsonResponse } from "../../../src/worker/common/http";
 
 const API = "https://api.cloudflare.com/client/v4";
 const MANIFEST_PATH = "gitedge.deploy.json";
@@ -68,16 +68,20 @@ const WorkerScriptSchema = z.object({
     })
     .optional(),
 });
-const CfResultInfoSchema = z.object({
-  cursor: z.string().nullish(),
-  total_pages: z.number().optional(),
-});
+const CfResultInfoSchema = z
+  .object({
+    cursor: z.string().nullish(),
+    total_pages: z.number().optional(),
+  })
+  .catch({});
+const cfEnvelopeSchema = <T>(result: z.ZodType<T>) =>
+  z.object({
+    success: z.boolean(),
+    result,
+    result_info: CfResultInfoSchema.optional(),
+  });
 type CfAccount = z.infer<typeof CfAccountSchema>;
 type CfRawResource = z.infer<typeof CfRawResourceSchema>;
-interface CfEnvelope<T> {
-  result: T;
-  result_info?: z.infer<typeof CfResultInfoSchema>;
-}
 type ResourceKind = "d1" | "r2" | "kv";
 interface ResourceTarget {
   key: string;
@@ -107,22 +111,18 @@ async function activationFailure(
   detail: string
 ): Promise<Response> {
   logger.warn("deploy:workers-dev-activation-failed", { repositoryId, workerName, detail });
-  const serialized = JSON.stringify({
-    error: {
-      code: "activation_failed",
-      message: "Worker upload succeeded, but workers.dev activation failed. Retry activation.",
-      uploadStatus: "upload_succeeded",
-      activationStatus: "activation_failed",
+  return jsonResponse(
+    {
+      error: {
+        code: "activation_failed",
+        message: "Worker upload succeeded, but workers.dev activation failed. Retry activation.",
+        uploadStatus: "upload_succeeded",
+        activationStatus: "activation_failed",
+      },
     },
-  });
-  return new Response(serialized, {
-    status: 502,
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      "Set-Cookie": cookieHeader(await seal(env, session), SESSION_SECONDS),
-      "Cache-Control": "no-store",
-    },
-  });
+    502,
+    { "Set-Cookie": cookieHeader(await seal(env, session), SESSION_SECONDS) }
+  );
 }
 function safeName(value: string): string {
   return value
@@ -366,7 +366,7 @@ async function cfEnvelope<T>(
   path: string,
   resultSchema: z.ZodType<T>,
   init: RequestInit = {}
-): Promise<CfEnvelope<T>> {
+) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20_000);
   try {
@@ -379,13 +379,7 @@ async function cfEnvelope<T>(
     if (!response.ok) throw new Error("Cloudflare API request failed");
     const text = await readTextLimited(response.body, MAX_CF_BODY_BYTES);
     if (text === null) throw new Error("Cloudflare API response exceeded limit");
-    const parsed = z
-      .object({
-        success: z.boolean(),
-        result: resultSchema,
-        result_info: CfResultInfoSchema.optional(),
-      })
-      .safeParse(JSON.parse(text));
+    const parsed = cfEnvelopeSchema(resultSchema).safeParse(JSON.parse(text));
     if (!parsed.success || !parsed.data.success)
       throw new Error("Cloudflare API rejected the request");
     return parsed.data;
@@ -750,7 +744,7 @@ async function handleDeployRequest(
         nonce: session.nonce,
       },
       200,
-      { "Set-Cookie": cookieHeader(sealed, SESSION_SECONDS), "Cache-Control": "no-store" }
+      { "Set-Cookie": cookieHeader(sealed, SESSION_SECONDS) }
     );
   }
   if (request.method === "POST" && parts[0] === "account") {
@@ -796,13 +790,11 @@ async function handleDeployRequest(
     logger.info("deploy:account-selected", { repositoryId, accountId: body.accountId });
     return dataResponse({ accountId: body.accountId }, 200, {
       "Set-Cookie": cookieHeader(await seal(env, session), SESSION_SECONDS),
-      "Cache-Control": "no-store",
     });
   }
   if (request.method === "DELETE" && parts[0] === "session")
     return dataResponse({ cleared: true }, 200, {
       "Set-Cookie": cookieHeader("", 0),
-      "Cache-Control": "no-store",
     });
   const selected = await selectedSession(env, request, user, repositoryId, ref);
   if (selected instanceof Response) return selected;
@@ -836,7 +828,7 @@ async function handleDeployRequest(
         };
       })
     );
-    return dataResponse({ resources: availability }, 200, { "Cache-Control": "no-store" });
+    return dataResponse({ resources: availability });
   }
   if (request.method === "POST" && parts[0] === "provision") {
     const body = await readJsonBody<{ nonce?: unknown; resourceNames?: unknown }>(request);
@@ -876,14 +868,12 @@ async function handleDeployRequest(
           `Could not create or reuse the declared ${target.kind} resource. Retry to continue safely.`,
           {
             "Set-Cookie": cookieHeader(await seal(env, selected.session), SESSION_SECONDS),
-            "Cache-Control": "no-store",
           }
         );
       }
     }
     const envelope = dataResponse({ resources: done }, 200, {
       "Set-Cookie": cookieHeader(await seal(env, selected.session), SESSION_SECONDS),
-      "Cache-Control": "no-store",
     });
     return envelope;
   }
@@ -919,7 +909,6 @@ async function handleDeployRequest(
       200,
       {
         "Set-Cookie": cookieHeader(await seal(env, selected.session), SESSION_SECONDS),
-        "Cache-Control": "no-store",
       }
     );
   }
@@ -1116,13 +1105,10 @@ async function handleDeployRequest(
     });
     return dataResponse(result, 200, {
       "Set-Cookie": cookieHeader("", 0),
-      "Cache-Control": "no-store",
     });
   }
   if (request.method === "POST" && parts[0] === "result") {
-    return dataResponse({ completed: Object.keys(selected.session.completed) }, 200, {
-      "Cache-Control": "no-store",
-    });
+    return dataResponse({ completed: Object.keys(selected.session.completed) });
   }
   return errorResponse(404, "not_found", "Deployment endpoint was not found.");
 }

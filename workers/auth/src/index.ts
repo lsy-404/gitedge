@@ -27,7 +27,7 @@ import {
   handleAgentSessionRevocation,
   handleAgentProfile,
 } from "./agents";
-import { dataResponse, errorResponse } from "../../../src/worker/common/http";
+import { dataResponse, errorResponse, jsonResponse } from "../../../src/worker/common/http";
 import { base64ToBytes, bytesToBase64 } from "../../../src/worker/common/encoding";
 import { readJsonLimited, SMALL_JSON_BYTES } from "../../../src/worker/common/readText";
 import { handleAccountProfile, handleWebSessions } from "./profile";
@@ -764,11 +764,7 @@ export default {
       return dataResponse({ user: result.ok ? result.data : null, view: { kind: "account" } });
     }
     if (request.method === "GET" && path === "/session") {
-      if (browserView)
-        return Response.json(
-          { data: null, view: "guest" },
-          { headers: { "Cache-Control": "no-store" } }
-        );
+      if (browserView) return jsonResponse({ data: null, view: "guest" });
       const authorization = request.headers.get("Authorization");
       if (authorization) {
         const user = authorization.startsWith("Bearer ")

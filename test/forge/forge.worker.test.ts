@@ -966,6 +966,8 @@ describe("Merge authorization binding and closed pull request heads", () => {
       expect(await response.json()).toMatchObject({ error: { code: "merge_changed" } });
     }
     expect((await authorize({ pullRequestId: undefined })).status).toBe(400);
+    expect((await authorize({ repositoryId: undefined })).status).toBe(400);
+    expect((await authorize({ leaseAt: undefined })).status).toBe(400);
   });
 
   it("answers anonymous diff reads of closed session pull requests with 404 and no Git call", async () => {
