@@ -37,16 +37,8 @@ import {
 import { readCommitSignature, verifyCommitSignature } from "./signatures";
 import { compareArtifacts } from "./compare";
 import { GitMergeInputSchema, mergeArtifacts } from "./merge";
+import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 
-export function json(data: unknown, status = 200): Response {
-  return Response.json({ data }, { status, headers: { "Cache-Control": "no-store" } });
-}
-export function fail(status: number, code: string, message: string): Response {
-  return Response.json(
-    { error: { code, message } },
-    { status, headers: { "Cache-Control": "no-store" } }
-  );
-}
 function pageNumber(value: string | null, fallback: number, maximum: number): number {
   const parsed = Number(value);
   return value !== null && Number.isSafeInteger(parsed) && parsed >= 0
@@ -71,12 +63,12 @@ export async function handleGitApi(
   const parts = url.pathname.split("/").filter(Boolean);
   const repositoryId = parts[1];
   if (parts[0] !== "repositories" || !repositoryId || parts.length !== 3)
-    return fail(404, "not_found", "Endpoint was not found.");
+    return errorResponse(404, "not_found", "Endpoint was not found.");
   const access = await resolveGitAccess(request, env, repositoryId);
   if (access instanceof Response) return access;
   if (!access) return repositoryNotFound();
   if (!access.repository.artifactName)
-    return fail(
+    return errorResponse(
       409,
       "repository_storage_unavailable",
       "Repository must be imported into Artifacts before it can be used."
@@ -84,7 +76,8 @@ export async function handleGitApi(
   const userSession = access.user?.agentSession;
   const sessionId = url.searchParams.get("sessionId") ?? userSession?.id;
   const session = sessionId ? await resolveWorkspace(env, access, sessionId) : null;
-  if (sessionId && !session) return fail(404, "not_found", "Session workspace was not found.");
+  if (sessionId && !session)
+    return errorResponse(404, "not_found", "Session workspace was not found.");
   const resource = parts[2];
   const proposalComparison =
     (resource === "compare" || resource === "pull-head") && url.searchParams.has("headSessionId");
@@ -104,19 +97,19 @@ export async function handleGitApi(
   const ref = url.searchParams.get("ref") ?? session?.baseRef ?? access.repository.defaultBranch;
   const path = url.searchParams.get("path") ?? "";
   if (!validPath(path) || ref.length > 255 || !ref.length)
-    return fail(400, "bad_request", "Invalid ref or path.");
+    return errorResponse(400, "bad_request", "Invalid ref or path.");
   logger.debug("artifacts:request", { resource, sessionId: session?.id });
   if (resource === "graph" && access.repository.graphEnabled === 0)
-    return fail(404, "feature_disabled", "Commit graph is disabled.");
+    return errorResponse(404, "feature_disabled", "Commit graph is disabled.");
   if ((resource === "edit" || resource === "branches") && request.method !== "GET") {
     if (!access.user || !access.repository.canWrite || userSession?.permission === "read")
-      return fail(403, "forbidden", "Repository write access is required.");
+      return errorResponse(403, "forbidden", "Repository write access is required.");
     if (access.repository.archived)
-      return fail(409, "repository_archived", "Archived repositories are read-only.");
+      return errorResponse(409, "repository_archived", "Archived repositories are read-only.");
     if (resource === "edit" && access.repository.onlineEditingEnabled === 0)
-      return fail(404, "feature_disabled", "Online editing is disabled.");
+      return errorResponse(404, "feature_disabled", "Online editing is disabled.");
     if (session && !userSession && session.userId !== access.user.id)
-      return fail(404, "not_found", "Session workspace was not found.");
+      return errorResponse(404, "not_found", "Session workspace was not found.");
     const value = await readJsonLimited(request, 2_100_000);
     const edit =
       resource === "edit" && request.method === "POST"
@@ -138,15 +131,15 @@ export async function handleGitApi(
           ? remove.data.name
           : null;
     if (!target || target.startsWith("refs/"))
-      return fail(400, "bad_request", "Invalid Git mutation.");
+      return errorResponse(400, "bad_request", "Invalid Git mutation.");
     if (!session && (await protectedBranch(env.DB, repositoryId, target)))
-      return fail(
+      return errorResponse(
         403,
         "protected_branch",
         "Protected branches require a pull request. Choose a new branch."
       );
     if (remove?.success && remove.data.name === access.repository.defaultBranch)
-      return fail(409, "default_branch", "The default branch cannot be deleted.");
+      return errorResponse(409, "default_branch", "The default branch cannot be deleted.");
     const beforeWrite = async () => {
       const latest = await resolveGitAccess(request, env, repositoryId);
       if (
@@ -185,7 +178,7 @@ export async function handleGitApi(
         );
         await written(result.branch, result.oid);
         logger.info("git:file-committed", { branch: result.branch, oid: result.oid });
-        return json(result, 201);
+        return dataResponse(result, 201);
       }
       if (create?.success) {
         const result = await createRepositoryBranch(
@@ -198,7 +191,7 @@ export async function handleGitApi(
         );
         await written(result.name, result.oid);
         logger.info("git:branch-created", { branch: result.name });
-        return json(result, 201);
+        return dataResponse(result, 201);
       }
       if (remove?.success) {
         await deleteRepositoryBranch(
@@ -209,33 +202,35 @@ export async function handleGitApi(
           env.LOG_LEVEL
         );
         logger.info("git:branch-deleted", { branch: remove.data.name });
-        return json({ deleted: true });
+        return dataResponse({ deleted: true });
       }
     } catch (cause) {
-      if (cause instanceof GitWriteConflict) return fail(409, "refs_changed", cause.message);
-      if (cause instanceof GitWriteInputError) return fail(400, "bad_request", cause.message);
+      if (cause instanceof GitWriteConflict)
+        return errorResponse(409, "refs_changed", cause.message);
+      if (cause instanceof GitWriteInputError)
+        return errorResponse(400, "bad_request", cause.message);
       throw cause;
     }
   }
   if (resource === "merge" && request.method === "POST") {
     if (access.repository.archived)
-      return fail(409, "repository_archived", "Archived repositories are read-only.");
+      return errorResponse(409, "repository_archived", "Archived repositories are read-only.");
     if (!access.user || !access.repository.canWrite || userSession)
-      return fail(403, "forbidden", "A repository member must merge proposals.");
+      return errorResponse(403, "forbidden", "A repository member must merge proposals.");
     const input = GitMergeInputSchema.safeParse(await readJsonLimited(request));
     if (!input.success || !input.data.pullRequestId || !input.data.leaseAt)
-      return fail(400, "bad_request", "Invalid merge request.");
+      return errorResponse(400, "bad_request", "Invalid merge request.");
     const headSession = input.data.headSessionId
       ? await resolveWorkspace(env, access, input.data.headSessionId)
       : null;
     if (input.data.headSessionId && !headSession)
-      return fail(404, "not_found", "Head session was not found.");
+      return errorResponse(404, "not_found", "Head session was not found.");
     using headRepo = await env.ARTIFACTS.get(
       headSession?.workspaceName ?? access.repository.artifactName
     );
     const rules = matchingBranchRules(await branchRules(env.DB, repositoryId), input.data.baseRef);
     if (rules.some((rule) => rule.locked))
-      return fail(403, "protected_branch", "This branch is locked.");
+      return errorResponse(403, "protected_branch", "This branch is locked.");
     const operationKey = await sha256Hex(
       JSON.stringify([
         repositoryId,
@@ -253,7 +248,7 @@ export async function handleGitApi(
       )
         .bind(operationKey, current.hash)
         .first<{ oid: string }>();
-      if (receipt) return json({ oid: receipt.oid });
+      if (receipt) return dataResponse({ oid: receipt.oid });
     }
     const result = await mergeArtifacts(
       repo,
@@ -301,7 +296,7 @@ export async function handleGitApi(
     );
     if (!result.ok) {
       logger.warn("artifacts:merge-rejected", { reason: result.reason });
-      return fail(
+      return errorResponse(
         409,
         result.reason,
         {
@@ -327,17 +322,17 @@ export async function handleGitApi(
     if (ctx) ctx.waitUntil(operation);
     else await operation;
     logger.info("artifacts:merged", { oid: result.oid });
-    return json({ oid: result.oid });
+    return dataResponse({ oid: result.oid });
   }
   if (request.method !== "GET" && request.method !== "HEAD")
-    return fail(405, "method_not_allowed", "Method is not allowed.");
+    return errorResponse(405, "method_not_allowed", "Method is not allowed.");
   if (resource === "community")
-    return json(await repositoryCommunity(env, access.repository, repo, ref));
-  if (resource === "refs") return json(await listArtifactRefs(repo, env.LOG_LEVEL));
+    return dataResponse(await repositoryCommunity(env, access.repository, repo, ref));
+  if (resource === "refs") return dataResponse(await listArtifactRefs(repo, env.LOG_LEVEL));
   if (resource === "branches") {
     const rules = await branchRules(env.DB, repositoryId),
       refs = await listArtifactRefs(repo, env.LOG_LEVEL);
-    return json(
+    return dataResponse(
       refs
         .filter((item) => item.name.startsWith("refs/heads/"))
         .map((item) => {
@@ -356,31 +351,33 @@ export async function handleGitApi(
   if (resource === "snapshot") {
     const oid = url.searchParams.get("oid") ?? (await resolveCommit(repo, ref))?.hash ?? "";
     if (!GitOidSchema.safeParse(oid).success || !(await refContainsCommit(repo, ref, oid)))
-      return fail(404, "not_found", "The selected commit is unavailable.");
-    return json(await repositorySnapshot(repo, oid));
+      return errorResponse(404, "not_found", "The selected commit is unavailable.");
+    return dataResponse(await repositorySnapshot(repo, oid));
   }
   if (resource === "signature") {
     const oid = url.searchParams.get("oid") ?? "";
     const commitRef = url.searchParams.get("ref");
     if (!GitOidSchema.safeParse(oid).success || !commitRef)
-      return fail(400, "bad_request", "Invalid commit oid or ref.");
+      return errorResponse(400, "bad_request", "Invalid commit oid or ref.");
     if (!(await refContainsCommit(repo, commitRef, oid)))
-      return fail(404, "not_found", "Commit was not found in this repository ref.");
-    return json(await readCommitSignature(repo, env.DB, oid, env.LOG_LEVEL));
+      return errorResponse(404, "not_found", "Commit was not found in this repository ref.");
+    return dataResponse(await readCommitSignature(repo, env.DB, oid, env.LOG_LEVEL));
   }
   if (resource === "commit") {
     const oid = url.searchParams.get("oid") ?? "";
     const commitRef = url.searchParams.get("ref");
     if (!GitOidSchema.safeParse(oid).success || !commitRef)
-      return fail(400, "bad_request", "Invalid commit oid or ref.");
+      return errorResponse(400, "bad_request", "Invalid commit oid or ref.");
     const commit = (await refContainsCommit(repo, commitRef, oid))
       ? await repo.readCommit(oid)
       : null;
     logger.debug("artifacts:commit-lookup", { oid, ref: commitRef, found: commit !== null });
-    return commit ? json(commitResponse(commit)) : fail(404, "not_found", "Commit was not found.");
+    return commit
+      ? dataResponse(commitResponse(commit))
+      : errorResponse(404, "not_found", "Commit was not found.");
   }
   if (resource === "commits")
-    return json(
+    return dataResponse(
       (
         await repo.log({
           ref,
@@ -391,11 +388,11 @@ export async function handleGitApi(
     );
   if (resource === "tree") {
     const tree = await readArtifactTree(repo, ref, path);
-    return tree ? json(tree) : fail(404, "not_found", "Directory was not found.");
+    return tree ? dataResponse(tree) : errorResponse(404, "not_found", "Directory was not found.");
   }
   if (resource === "file") {
     const file = path ? await readArtifactFile(repo, ref, path) : null;
-    return file ? json(file) : fail(404, "not_found", "File was not found.");
+    return file ? dataResponse(file) : errorResponse(404, "not_found", "File was not found.");
   }
   if (resource === "raw") {
     const blob = path ? await repo.readFile({ ref, path }) : null;
@@ -409,7 +406,7 @@ export async function handleGitApi(
             "Content-Disposition": "attachment",
           },
         })
-      : fail(404, "not_found", "File was not found.");
+      : errorResponse(404, "not_found", "File was not found.");
   }
   if (resource === "graph") {
     const refs = await listArtifactRefs(repo, env.LOG_LEVEL);
@@ -439,7 +436,7 @@ export async function handleGitApi(
       commits: graph.commits.length,
       sessions: sessions.length,
     });
-    return json(graph);
+    return dataResponse(graph);
   }
   if (resource === "pull-head") {
     const headSessionId = url.searchParams.get("headSessionId");
@@ -447,12 +444,15 @@ export async function handleGitApi(
     const headSession = headSessionId
       ? await resolveWorkspace(env, access, headSessionId, head)
       : null;
-    if (headSessionId && !headSession) return fail(404, "not_found", "Head session was not found.");
+    if (headSessionId && !headSession)
+      return errorResponse(404, "not_found", "Head session was not found.");
     using headRepo = await env.ARTIFACTS.get(
       headSession?.workspaceName ?? access.repository.artifactName
     );
     const commit = await resolveCommit(headRepo, head);
-    return commit ? json({ oid: commit.hash }) : fail(404, "not_found", "Head ref was not found.");
+    return commit
+      ? dataResponse({ oid: commit.hash })
+      : errorResponse(404, "not_found", "Head ref was not found.");
   }
   if (resource === "compare") {
     const headSessionId = url.searchParams.get("headSessionId");
@@ -460,7 +460,8 @@ export async function handleGitApi(
     const headSession = headSessionId
       ? await resolveWorkspace(env, access, headSessionId, head)
       : null;
-    if (headSessionId && !headSession) return fail(404, "not_found", "Head session was not found.");
+    if (headSessionId && !headSession)
+      return errorResponse(404, "not_found", "Head session was not found.");
     using headRepo = await env.ARTIFACTS.get(
       headSession?.workspaceName ?? access.repository.artifactName
     );
@@ -470,7 +471,9 @@ export async function handleGitApi(
       url.searchParams.get("base") ?? access.repository.defaultBranch,
       head
     );
-    return comparison ? json(comparison) : fail(404, "not_found", "Comparison ref was not found.");
+    return comparison
+      ? dataResponse(comparison)
+      : errorResponse(404, "not_found", "Comparison ref was not found.");
   }
-  return fail(404, "not_found", "Endpoint was not found.");
+  return errorResponse(404, "not_found", "Endpoint was not found.");
 }

@@ -1,4 +1,5 @@
-import { dataResponse as json, errorResponse as fail, readJsonLimited as readJson } from "./http";
+import { dataResponse as json, errorResponse as fail } from "../../../src/worker/common/http";
+import { readJsonLimited, SMALL_JSON_BYTES } from "../../../src/worker/common/readText";
 import {
   AccountProfileSchema,
   DefaultAccountPreferences,
@@ -84,7 +85,9 @@ export async function handleAccountProfile(
   if (request.method !== "PATCH") return fail(405, "method_not_allowed", "Method is not allowed.");
   if (request.headers.get("Origin") !== new URL(request.url).origin)
     return fail(403, "forbidden", "Same-origin account management is required.");
-  const parsed = UpdateAccountProfileSchema.safeParse(await readJson(request));
+  const parsed = UpdateAccountProfileSchema.safeParse(
+    await readJsonLimited(request, SMALL_JSON_BYTES)
+  );
   if (!parsed.success) return fail(400, "bad_request", "Invalid account profile payload.");
   if (parsed.data.website) {
     let website: URL;

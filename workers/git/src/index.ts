@@ -1,6 +1,7 @@
 import { GitWriteConflict } from "./write";
 import { createLogger } from "../../../src/worker/common/logger";
-import { handleGitApi, fail } from "./api";
+import { handleGitApi } from "./api";
+import { errorResponse } from "../../../src/worker/common/http";
 import { proxyGitTransport } from "./transport";
 import { GitResourceLimitError } from "./http";
 import type { GitEnv } from "./access";
@@ -13,13 +14,14 @@ export default {
         : await handleGitApi(request, env, ctx);
     } catch (error) {
       const logger = createLogger(env.LOG_LEVEL, { service: "artifacts-git" });
-      if (error instanceof GitWriteConflict) return fail(409, "merge_changed", error.message);
+      if (error instanceof GitWriteConflict)
+        return errorResponse(409, "merge_changed", error.message);
       if (error instanceof GitResourceLimitError) {
         logger.warn("artifacts:operation-limit", {});
-        return fail(413, "operation_limit", error.message);
+        return errorResponse(413, "operation_limit", error.message);
       }
       logger.error("artifacts:operation-failed", {});
-      return fail(503, "service_unavailable", "Artifacts operation failed.");
+      return errorResponse(503, "service_unavailable", "Artifacts operation failed.");
     }
   },
 };

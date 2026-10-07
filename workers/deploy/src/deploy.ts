@@ -3,10 +3,13 @@ import { readTextLimited } from "../../../src/worker/common/readText";
 import { DeployManifestSchema, type DeployManifest } from "../../../packages/contracts/src/deploy";
 import {
   readTrustedUser,
+  sha256Hex,
   trustedHeaders,
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
 import type { Logger } from "../../../src/worker/common/logger";
+import { base64UrlToBytes, bytesToBase64Url } from "../../../src/worker/common/encoding";
+import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 
 const API = "https://api.cloudflare.com/client/v4";
 const MANIFEST_PATH = "gitedge.deploy.json";
@@ -75,17 +78,6 @@ interface WorkerSubdomain {
   url?: string;
 }
 
-function response(data: unknown, status = 200, headers: HeadersInit = {}): Response {
-  return Response.json({ data }, { status, headers });
-}
-function failure(
-  status: number,
-  code: string,
-  message: string,
-  headers: HeadersInit = {}
-): Response {
-  return Response.json({ error: { code, message } }, { status, headers });
-}
 async function activationFailure(
   env: DeployEnv,
   session: DeploymentSession,
@@ -143,16 +135,6 @@ function cookieHeader(value: string, maxAge: number): string {
   // The public prefix keeps this credential away from unrelated Gateway services.
   return `${COOKIE}=${value}; Path=/api/deploy; HttpOnly; Secure; SameSite=Strict; Max-Age=${maxAge}`;
 }
-function base64Url(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-}
-function decodeBase64Url(value: string): Uint8Array {
-  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
-  const binary = atob(normalized + "=".repeat((4 - (normalized.length % 4)) % 4));
-  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
-}
 async function encryptionKey(secret: string): Promise<CryptoKey> {
   if (secret.length < 32) throw new Error("DEPLOY_SESSION_KEY must contain at least 32 characters");
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(secret));
@@ -171,7 +153,7 @@ async function seal(env: DeployEnv, session: DeploymentSession): Promise<string>
   const combined = new Uint8Array(iv.length + ciphertext.byteLength);
   combined.set(iv);
   combined.set(new Uint8Array(ciphertext), iv.length);
-  return base64Url(combined);
+  return bytesToBase64Url(combined);
 }
 async function unseal(
   env: DeployEnv,
@@ -183,7 +165,7 @@ async function unseal(
   const value = cookieValue(request);
   if (!value) return null;
   try {
-    const bytes = decodeBase64Url(value);
+    const bytes = base64UrlToBytes(value);
     const plaintext = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv: bytes.slice(0, 12) },
       await encryptionKey(env.DEPLOY_SESSION_KEY),
@@ -203,12 +185,8 @@ async function unseal(
     return null;
   }
 }
-async function digest(text: string): Promise<string> {
-  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
 async function sourceDigest(text: string): Promise<string> {
-  return (await digest(text)).slice(0, 32);
+  return (await sha256Hex(text)).slice(0, 32);
 }
 function declaredSourcePaths(manifest: DeployManifest): string[] {
   const modules = [manifest.worker.entrypoint, ...manifest.worker.modules];
@@ -267,7 +245,7 @@ async function readManifest(
   }
   const parsed = DeployManifestSchema.safeParse(raw);
   if (!parsed.success) return null;
-  return { manifest: parsed.data, digest: await digest(JSON.stringify(parsed.data)) };
+  return { manifest: parsed.data, digest: await sha256Hex(JSON.stringify(parsed.data)) };
 }
 async function readDeclaredFile(
   env: DeployEnv,
@@ -318,7 +296,9 @@ async function readDeploymentPlan(
   const sourceEntries = Object.entries(sourceDigests).sort(([left], [right]) =>
     left.localeCompare(right)
   );
-  const combinedDigest = await digest(`${manifestResult.digest}\n${JSON.stringify(sourceEntries)}`);
+  const combinedDigest = await sha256Hex(
+    `${manifestResult.digest}\n${JSON.stringify(sourceEntries)}`
+  );
   return { manifest, digest: combinedDigest, sourceDigests };
 }
 async function readJsonBody<T>(request: Request): Promise<T | null> {
@@ -409,16 +389,16 @@ async function selectedSession(
 ): Promise<{ session: DeploymentSession; currentManifest: DeployManifest } | Response> {
   const session = await unseal(env, request, user, repositoryId, ref);
   if (!session)
-    return failure(401, "deploy_session_required", "Create a deployment session first.");
+    return errorResponse(401, "deploy_session_required", "Create a deployment session first.");
   const current = await readDeploymentPlan(env, repositoryId, ref, user);
   if (!current || current.digest !== session.digest)
-    return failure(
+    return errorResponse(
       409,
       "manifest_changed",
       "The deployment manifest changed. Review the plan again."
     );
   if (!(await repositoryForUser(env, user.id, repositoryId)))
-    return failure(404, "not_found", "Repository was not found.");
+    return errorResponse(404, "not_found", "Repository was not found.");
   return { session, currentManifest: current.manifest };
 }
 function resourceEndpoints(
@@ -638,32 +618,32 @@ async function handleDeployRequest(
   logger: DeployLogger
 ): Promise<Response> {
   if (request.headers.has("X-GitEdge-Agent-Session"))
-    return failure(
+    return errorResponse(
       403,
       "agent_deploy_forbidden",
       "Agent sessions cannot access Cloudflare deployment credentials."
     );
   const user = readTrustedUser(request);
-  if (!user) return failure(401, "unauthorized", "Trusted user context is required.");
+  if (!user) return errorResponse(401, "unauthorized", "Trusted user context is required.");
   if (!sameOrigin(request, env))
-    return failure(403, "origin_rejected", "Request origin was rejected.");
+    return errorResponse(403, "origin_rejected", "Request origin was rejected.");
   const url = new URL(request.url);
   const parts = url.pathname.split("/").filter(Boolean);
   const repositoryId = url.searchParams.get("repositoryId") ?? parts[1] ?? "";
   const ref = url.searchParams.get("ref") ?? "HEAD";
   if (!/^[0-9a-f-]{16,64}$/i.test(repositoryId) || !validRef(ref))
-    return failure(400, "bad_request", "A repository and valid ref are required.");
+    return errorResponse(400, "bad_request", "A repository and valid ref are required.");
   if (!(await repositoryForUser(env, user.id, repositoryId)))
-    return failure(404, "not_found", "Repository was not found.");
+    return errorResponse(404, "not_found", "Repository was not found.");
   if (request.method === "GET" && parts[0] === "plan") {
     const plan = await readDeploymentPlan(env, repositoryId, ref, user);
     if (!plan)
-      return failure(
+      return errorResponse(
         404,
         "manifest_not_found",
         "This ref has no valid gitedge.deploy.json manifest."
       );
-    return response({
+    return dataResponse({
       repositoryId,
       ref,
       manifestDigest: plan.digest,
@@ -673,7 +653,7 @@ async function handleDeployRequest(
   }
   if (request.method === "POST" && parts[0] === "session") {
     if (isAgent(user))
-      return failure(
+      return errorResponse(
         403,
         "agent_deploy_forbidden",
         "Agent sessions cannot grant Cloudflare account access."
@@ -686,10 +666,14 @@ async function handleDeployRequest(
       body.token.length > 512 ||
       typeof body.manifestDigest !== "string"
     )
-      return failure(400, "bad_request", "A Cloudflare token and manifest digest are required.");
+      return errorResponse(
+        400,
+        "bad_request",
+        "A Cloudflare token and manifest digest are required."
+      );
     const current = await readDeploymentPlan(env, repositoryId, ref, user);
     if (!current || current.digest !== body.manifestDigest)
-      return failure(
+      return errorResponse(
         409,
         "manifest_changed",
         "The deployment manifest changed. Review the plan again."
@@ -698,10 +682,10 @@ async function handleDeployRequest(
     try {
       accounts = await listAccounts(body.token);
     } catch {
-      return failure(403, "token_invalid", "Cloudflare token could not list accounts.");
+      return errorResponse(403, "token_invalid", "Cloudflare token could not list accounts.");
     }
     if (accounts.length === 0)
-      return failure(
+      return errorResponse(
         403,
         "account_not_authorized",
         "This token has no available Cloudflare accounts."
@@ -717,7 +701,7 @@ async function handleDeployRequest(
         (path) => current.sourceDigests[path]
       ),
       token: body.token,
-      nonce: base64Url(nonceBytes),
+      nonce: bytesToBase64Url(nonceBytes),
       accountId: null,
       resourceNames: {},
       expiresAt: Date.now() + SESSION_SECONDS * 1000,
@@ -725,7 +709,7 @@ async function handleDeployRequest(
     };
     const sealed = await seal(env, session);
     logger.info("deploy:session-created", { repositoryId, accountCount: accounts.length });
-    return response(
+    return dataResponse(
       {
         accounts: accounts.map(({ id, name }) => ({ id, name })),
         permissions: manifestPermissions(current.manifest),
@@ -737,65 +721,69 @@ async function handleDeployRequest(
   }
   if (request.method === "POST" && parts[0] === "account") {
     if (isAgent(user))
-      return failure(
+      return errorResponse(
         403,
         "agent_deploy_forbidden",
         "Agent sessions cannot grant Cloudflare account access."
       );
     const session = await unseal(env, request, user, repositoryId, ref);
     if (!session)
-      return failure(401, "deploy_session_required", "Create a deployment session first.");
+      return errorResponse(401, "deploy_session_required", "Create a deployment session first.");
     const current = await readDeploymentPlan(env, repositoryId, ref, user);
     if (!current || current.digest !== session.digest)
-      return failure(
+      return errorResponse(
         409,
         "manifest_changed",
         "The deployment manifest or source changed. Review the plan again."
       );
     const body = await readJsonBody<{ accountId?: unknown; nonce?: unknown }>(request);
     if (!hasValidNonce(session, body))
-      return failure(403, "csrf_rejected", "Deployment session nonce is invalid.");
+      return errorResponse(403, "csrf_rejected", "Deployment session nonce is invalid.");
     if (!body || typeof body.accountId !== "string" || !/^[a-f0-9]{32}$/.test(body.accountId))
-      return failure(400, "bad_request", "Select a Cloudflare account.");
+      return errorResponse(400, "bad_request", "Select a Cloudflare account.");
     let accounts: CfAccount[];
     try {
       accounts = await listAccounts(session.token);
     } catch {
-      return failure(
+      return errorResponse(
         502,
         "account_lookup_failed",
         "Cloudflare account access could not be checked."
       );
     }
     if (!accounts.some((item) => item.id === body.accountId))
-      return failure(
+      return errorResponse(
         403,
         "account_not_authorized",
         "Selected account is not available to this token."
       );
     session.accountId = body.accountId;
     logger.info("deploy:account-selected", { repositoryId, accountId: body.accountId });
-    return response({ accountId: body.accountId }, 200, {
+    return dataResponse({ accountId: body.accountId }, 200, {
       "Set-Cookie": cookieHeader(await seal(env, session), SESSION_SECONDS),
       "Cache-Control": "no-store",
     });
   }
   if (request.method === "DELETE" && parts[0] === "session")
-    return response({ cleared: true }, 200, {
+    return dataResponse({ cleared: true }, 200, {
       "Set-Cookie": cookieHeader("", 0),
       "Cache-Control": "no-store",
     });
   const selected = await selectedSession(env, request, user, repositoryId, ref);
   if (selected instanceof Response) return selected;
   if (!selected.session.accountId)
-    return failure(400, "account_required", "Select a Cloudflare account first.");
+    return errorResponse(400, "account_required", "Select a Cloudflare account first.");
   if (request.method === "POST" && parts[0] === "resources") {
     const body = await readJsonBody<{ nonce?: unknown; resourceNames?: unknown }>(request);
     if (!hasValidNonce(selected.session, body))
-      return failure(403, "csrf_rejected", "Deployment session nonce is invalid.");
+      return errorResponse(403, "csrf_rejected", "Deployment session nonce is invalid.");
     const selectedNames = validResourceNames(selected.currentManifest, body?.resourceNames);
     if (!selectedNames)
-      return failure(400, "bad_request", "Resource names do not match the deployment manifest.");
+      return errorResponse(
+        400,
+        "bad_request",
+        "Resource names do not match the deployment manifest."
+      );
     const targets = resourceEndpoints(
       selected.currentManifest,
       selected.session.accountId,
@@ -813,20 +801,24 @@ async function handleDeployRequest(
         };
       })
     );
-    return response({ resources: availability }, 200, { "Cache-Control": "no-store" });
+    return dataResponse({ resources: availability }, 200, { "Cache-Control": "no-store" });
   }
   if (request.method === "POST" && parts[0] === "provision") {
     const body = await readJsonBody<{ nonce?: unknown; resourceNames?: unknown }>(request);
     if (!hasValidNonce(selected.session, body))
-      return failure(403, "csrf_rejected", "Deployment session nonce is invalid.");
+      return errorResponse(403, "csrf_rejected", "Deployment session nonce is invalid.");
     const names = validResourceNames(selected.currentManifest, body?.resourceNames);
     if (!names)
-      return failure(400, "bad_request", "Resource names do not match the deployment manifest.");
+      return errorResponse(
+        400,
+        "bad_request",
+        "Resource names do not match the deployment manifest."
+      );
     if (
       Object.keys(selected.session.resourceNames).length &&
       JSON.stringify(names) !== JSON.stringify(selected.session.resourceNames)
     )
-      return failure(
+      return errorResponse(
         409,
         "resource_names_locked",
         "Resource names are locked after the first provisioning attempt."
@@ -843,7 +835,7 @@ async function handleDeployRequest(
         logger.info("deploy:resource-ready", { kind: target.kind, name: target.name, reused });
       } catch {
         logger.warn("deploy:resource-failed", { kind: target.kind, name: target.name });
-        return failure(
+        return errorResponse(
           502,
           "resource_provision_failed",
           `Could not create or reuse the declared ${target.kind} resource. Retry to continue safely.`,
@@ -854,7 +846,7 @@ async function handleDeployRequest(
         );
       }
     }
-    const envelope = response({ resources: done }, 200, {
+    const envelope = dataResponse({ resources: done }, 200, {
       "Set-Cookie": cookieHeader(await seal(env, selected.session), SESSION_SECONDS),
       "Cache-Control": "no-store",
     });
@@ -863,7 +855,7 @@ async function handleDeployRequest(
   if (request.method === "POST" && parts[0] === "migrate") {
     const body = await readJsonBody<{ nonce?: unknown }>(request);
     if (!hasValidNonce(selected.session, body))
-      return failure(403, "csrf_rejected", "Deployment session nonce is invalid.");
+      return errorResponse(403, "csrf_rejected", "Deployment session nonce is invalid.");
     try {
       await applyD1Migrations(
         selected.session,
@@ -877,13 +869,13 @@ async function handleDeployRequest(
       );
     } catch {
       logger.warn("deploy:migration-failed", { repositoryId });
-      return failure(
+      return errorResponse(
         502,
         "migration_failed",
         "A declared database migration failed. Completed migrations can be safely retried."
       );
     }
-    return response(
+    return dataResponse(
       {
         completed: selected.currentManifest.resources.d1.flatMap((database) =>
           database.migrations.map((path) => `${database.id}:${path}`)
@@ -898,7 +890,7 @@ async function handleDeployRequest(
   }
   if (request.method === "POST" && parts[0] === "deploy") {
     if (isAgent(user))
-      return failure(
+      return errorResponse(
         403,
         "agent_deploy_forbidden",
         "Agent sessions cannot grant Cloudflare account access."
@@ -910,20 +902,20 @@ async function handleDeployRequest(
       nonce?: unknown;
     }>(request);
     if (!hasValidNonce(selected.session, body))
-      return failure(403, "csrf_rejected", "Deployment session nonce is invalid.");
+      return errorResponse(403, "csrf_rejected", "Deployment session nonce is invalid.");
     if (
       !body ||
       body.confirmDigest !== selected.session.digest ||
       typeof body.workerName !== "string"
     )
-      return failure(
+      return errorResponse(
         400,
         "confirmation_required",
         "Confirm the reviewed manifest before deploying."
       );
     const workerName = safeName(body.workerName);
     if (!workerName || workerName.length > 58)
-      return failure(400, "bad_request", "Worker name is invalid.");
+      return errorResponse(400, "bad_request", "Worker name is invalid.");
     const modulePaths = Array.from(
       new Set([manifest.worker.entrypoint, ...manifest.worker.modules])
     );
@@ -939,18 +931,26 @@ async function handleDeployRequest(
         MAX_CF_BODY_BYTES
       );
       if (content === null)
-        return failure(404, "module_missing", "A declared Worker module was not found.");
+        return errorResponse(404, "module_missing", "A declared Worker module was not found.");
       const sourceIndex = declaredSourcePaths(manifest).indexOf(modulePath);
       if (
         sourceIndex < 0 ||
         (await sourceDigest(content)) !== selected.session.sourceDigests[sourceIndex]
       )
-        return failure(409, "source_changed", "A declared Worker module changed after review.");
+        return errorResponse(
+          409,
+          "source_changed",
+          "A declared Worker module changed after review."
+        );
       if (typeof content !== "string")
-        return failure(400, "module_invalid", "A declared Worker module is binary or invalid.");
+        return errorResponse(
+          400,
+          "module_invalid",
+          "A declared Worker module is binary or invalid."
+        );
       moduleBytes += new TextEncoder().encode(content).byteLength;
       if (moduleBytes > MAX_CF_BODY_BYTES)
-        return failure(
+        return errorResponse(
           413,
           "modules_too_large",
           "Declared Worker modules exceed the upload size limit."
@@ -1000,7 +1000,7 @@ async function handleDeployRequest(
       );
     } catch {
       logger.warn("deploy:worker-upload-failed", { repositoryId, workerName });
-      return failure(
+      return errorResponse(
         502,
         "worker_upload_failed",
         "Cloudflare rejected the Worker upload. You can retry this step."
@@ -1074,17 +1074,17 @@ async function handleDeployRequest(
       workerName,
       hasWorkersDevUrl: true,
     });
-    return response(result, 200, {
+    return dataResponse(result, 200, {
       "Set-Cookie": cookieHeader("", 0),
       "Cache-Control": "no-store",
     });
   }
   if (request.method === "POST" && parts[0] === "result") {
-    return response({ completed: Object.keys(selected.session.completed) }, 200, {
+    return dataResponse({ completed: Object.keys(selected.session.completed) }, 200, {
       "Cache-Control": "no-store",
     });
   }
-  return failure(404, "not_found", "Deployment endpoint was not found.");
+  return errorResponse(404, "not_found", "Deployment endpoint was not found.");
 }
 
 export async function handleDeploy(
@@ -1096,7 +1096,7 @@ export async function handleDeploy(
     return await handleDeployRequest(request, env, logger);
   } catch {
     logger.error("deploy:request-failed");
-    return failure(
+    return errorResponse(
       502,
       "deploy_request_failed",
       "The deployment request failed. Retry the current step."

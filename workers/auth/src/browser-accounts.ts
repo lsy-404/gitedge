@@ -8,6 +8,7 @@ import {
 import { createLogger } from "../../../src/worker/common/logger";
 import { readJsonLimited } from "../../../src/worker/common/readText";
 import { createSessionCookie, hashToken, readCookie, SESSION_MAX_AGE_SECONDS } from "./session";
+import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 
 const ACCOUNT_PREFIX = "gitedge_account_";
 const ACCOUNT_COOKIE_PATTERN = /^gitedge_account_[0-9a-f-]{36}$/;
@@ -71,15 +72,6 @@ async function savedAccounts(request: Request, env: AccountEnvironment): Promise
     })
     .filter((row, index, all) => all.findIndex((item) => item.id === row.id) === index);
 }
-function response(data: unknown, status = 200): Response {
-  return Response.json({ data }, { status, headers: { "Cache-Control": "no-store" } });
-}
-function fail(status: number, code: string, message: string): Response {
-  return Response.json(
-    { error: { code, message } },
-    { status, headers: { "Cache-Control": "no-store" } }
-  );
-}
 function clearBrowserContext(response: Response): void {
   response.headers.append("Set-Cookie", cookie(VIEW_COOKIE, "", 0));
   response.headers.append(
@@ -129,7 +121,7 @@ export async function rememberBrowserLogin(
       .run();
     const location = response.headers.get("Location");
     if (location) return accountLimitRedirect(location);
-    return fail(409, "account_limit", "Remove a saved account before adding another.");
+    return errorResponse(409, "account_limit", "Remove a saved account before adding another.");
   }
   if (previous && previous.token !== token) {
     await env.DB.prepare("DELETE FROM auth_sessions WHERE token_hash=?")
@@ -155,7 +147,7 @@ export async function browserAccountLogout(
   env: AccountEnvironment
 ): Promise<Response> {
   const token = readCookie(request);
-  const responseValue = response({ loggedOut: true });
+  const responseValue = dataResponse({ loggedOut: true });
   if (token) {
     const row = await env.DB.prepare(
       "DELETE FROM auth_sessions WHERE token_hash=? RETURNING user_id AS id"
@@ -175,13 +167,13 @@ export async function handleBrowserAccounts(
   env: AccountEnvironment
 ): Promise<Response> {
   if (request.headers.has("Authorization"))
-    return fail(403, "forbidden", "Browser accounts require a browser session.");
+    return errorResponse(403, "forbidden", "Browser accounts require a browser session.");
   const path = new URL(request.url).pathname;
   if (request.method !== "GET" && request.headers.get("Origin") !== new URL(request.url).origin)
-    return fail(403, "forbidden", "Same-origin account management is required.");
+    return errorResponse(403, "forbidden", "Same-origin account management is required.");
   const expectedView = request.headers.get("X-GitEdge-Expected-View");
   if (expectedView && expectedView !== (readBrowserView(request) ? "guest" : "account"))
-    return fail(
+    return errorResponse(
       409,
       "account_changed",
       "The active perspective changed. Reload before continuing."
@@ -190,7 +182,11 @@ export async function handleBrowserAccounts(
   const active = accounts.find((account) => account.token === readCookie(request));
   const expected = request.headers.get("X-GitEdge-Expected-User");
   if (expected && expected !== active?.id)
-    return fail(409, "account_changed", "The active account changed. Reload before continuing.");
+    return errorResponse(
+      409,
+      "account_changed",
+      "The active account changed. Reload before continuing."
+    );
   if (path === "/accounts" && request.method === "GET") {
     const data: BrowserAccounts = {
       accounts: accounts.map(({ id, identifier, displayName }) => ({
@@ -202,17 +198,18 @@ export async function handleBrowserAccounts(
       view: { kind: readBrowserView(request) ? "guest" : "account" },
       accountLimit: BROWSER_ACCOUNT_LIMIT,
     };
-    const result = response(data);
+    const result = dataResponse(data);
     pruneSavedCookies(request, result, accounts);
     for (const account of accounts) result.headers.append("Set-Cookie", accountCookie(account));
     return result;
   }
   if (path === "/accounts/switch" && request.method === "POST") {
     const parsed = SwitchBrowserAccountSchema.safeParse(await readJsonLimited(request, 1024));
-    if (!parsed.success) return fail(400, "bad_request", "Invalid account selection.");
+    if (!parsed.success) return errorResponse(400, "bad_request", "Invalid account selection.");
     const selected = accounts.find((account) => account.id === parsed.data.userId);
-    if (!selected) return fail(401, "unauthorized", "This account requires sign-in again.");
-    const result = response({ switched: true });
+    if (!selected)
+      return errorResponse(401, "unauthorized", "This account requires sign-in again.");
+    const result = dataResponse({ switched: true });
     result.headers.append(
       "Set-Cookie",
       createSessionCookie(selected.token, remainingAge(selected.expiresAt))
@@ -225,11 +222,11 @@ export async function handleBrowserAccounts(
   }
   if (path === "/accounts/view" && request.method === "POST") {
     const parsed = SwitchBrowserViewSchema.safeParse(await readJsonLimited(request, 1024));
-    if (!parsed.success) return fail(400, "bad_request", "Invalid perspective.");
+    if (!parsed.success) return errorResponse(400, "bad_request", "Invalid perspective.");
     const view = parsed.data;
     if (view.kind === "guest" && !active)
-      return fail(401, "unauthorized", "Sign in before previewing as a guest.");
-    const result = response({ switched: true });
+      return errorResponse(401, "unauthorized", "Sign in before previewing as a guest.");
+    const result = dataResponse({ switched: true });
     clearBrowserContext(result);
     result.headers.append(
       "Set-Cookie",
@@ -251,7 +248,7 @@ export async function handleBrowserAccounts(
         .bind(...hashes)
         .run();
     }
-    const result = response({ loggedOut: true });
+    const result = dataResponse({ loggedOut: true });
     for (const [name] of cookieEntries(request)
       .filter(([name]) => ACCOUNT_COOKIE_PATTERN.test(name))
       .slice(0, MAX_SAVED_COOKIES))
@@ -262,12 +259,12 @@ export async function handleBrowserAccounts(
   }
   if (/^\/accounts\/[^/]+$/.test(path) && request.method === "DELETE") {
     const selected = accounts.find((account) => account.id === path.split("/")[2]);
-    if (!selected) return fail(404, "not_found", "Account was not found.");
+    if (!selected) return errorResponse(404, "not_found", "Account was not found.");
     await env.DB.prepare("DELETE FROM auth_sessions WHERE token_hash=?")
       .bind(selected.tokenHash)
       .run();
     const isCurrent = selected.id === active?.id;
-    const result = response({ removed: true, isCurrent });
+    const result = dataResponse({ removed: true, isCurrent });
     result.headers.append("Set-Cookie", savedCookie(ACCOUNT_PREFIX + selected.id, "", 0));
     if (isCurrent) {
       result.headers.append("Set-Cookie", createSessionCookie("", 0));
@@ -275,5 +272,5 @@ export async function handleBrowserAccounts(
     }
     return result;
   }
-  return fail(404, "not_found", "Account endpoint was not found.");
+  return errorResponse(404, "not_found", "Account endpoint was not found.");
 }

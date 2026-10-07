@@ -15,6 +15,7 @@ import {
   completeSamlLogoutNotification,
 } from "./saml";
 import type { SsoEnvironment, SsoIdentityClaims, SsoProvider, SsoProviderSecrets } from "./types";
+import { dataResponse, errorResponse } from "../../../../src/worker/common/http";
 
 const FLOW_COOKIE = "gitedge_sso";
 const FLOW_SECONDS = 600;
@@ -53,15 +54,6 @@ async function persistFlow(
       now + FLOW_SECONDS * 1000
     ),
   ]);
-}
-function json(data: unknown, status = 200): Response {
-  return Response.json({ data }, { status, headers: { "Cache-Control": "no-store" } });
-}
-function fail(status: number, code: string, message: string): Response {
-  return Response.json(
-    { error: { code, message } },
-    { status, headers: { "Cache-Control": "no-store" } }
-  );
 }
 function flowCookie(value: string, age = FLOW_SECONDS): string {
   // SAML POST callbacks need the browser proof on cross-site navigations.
@@ -163,7 +155,7 @@ async function handleSsoRequest(
     providers = ssoProviders(env);
   } catch {
     logger.error("sso:configuration-invalid", {});
-    return fail(503, "sso_configuration", "SSO provider configuration is unavailable.");
+    return errorResponse(503, "sso_configuration", "SSO provider configuration is unavailable.");
   }
   if (parts[1] === "providers" && parts.length === 2 && request.method === "GET") {
     const summaries: SsoProviderSummary[] = providers.map((provider) => ({
@@ -174,34 +166,35 @@ async function handleSsoRequest(
         ? { metadataUrl: new URL(`/api/auth/sso/${provider.id}/metadata`, url).toString() }
         : {}),
     }));
-    return json(summaries);
+    return dataResponse(summaries);
   }
   if (parts[1] === "identities") {
     if (!user || user.agentSession || request.headers.has("Authorization"))
-      return fail(401, "unauthorized", "A human account session is required.");
+      return errorResponse(401, "unauthorized", "A human account session is required.");
     if (request.method === "GET" && parts.length === 2)
-      return json(await listSsoIdentities(env, user, providers));
+      return dataResponse(await listSsoIdentities(env, user, providers));
     if (request.method === "DELETE" && parts.length === 3) {
       if (request.headers.get("Origin") !== url.origin)
-        return fail(403, "forbidden", "Same-origin account management is required.");
+        return errorResponse(403, "forbidden", "Same-origin account management is required.");
       if (!(await unlinkSsoIdentity(env, user, parts[2], providers)))
-        return fail(
+        return errorResponse(
           409,
           "last_login_method",
           "Identity was not found or is the account's last login method."
         );
       logger.info("sso:identity-unlinked", { userId: user.id, identityId: parts[2] });
-      return json({ unlinked: true });
+      return dataResponse({ unlinked: true });
     }
-    return fail(405, "method_not_allowed", "Method is not allowed.");
+    return errorResponse(405, "method_not_allowed", "Method is not allowed.");
   }
   const provider = providers.find((candidate) => candidate.id === parts[1]);
-  if (!provider || parts.length !== 3) return fail(404, "not_found", "SSO provider was not found.");
+  if (!provider || parts.length !== 3)
+    return errorResponse(404, "not_found", "SSO provider was not found.");
   let secrets: SsoProviderSecrets;
   try {
     secrets = ssoSecrets(env, provider);
   } catch {
-    return fail(503, "sso_configuration", "SSO provider credentials are unavailable.");
+    return errorResponse(503, "sso_configuration", "SSO provider credentials are unavailable.");
   }
   if (parts[2] === "metadata" && request.method === "GET" && provider.protocol === "saml") {
     return new Response(samlMetadata(provider, secrets, callbackUrl(request, provider)), {
@@ -214,15 +207,15 @@ async function handleSsoRequest(
   ) {
     const linking = parts[2] === "link";
     if (linking && (!user || user.agentSession || request.headers.has("Authorization")))
-      return fail(401, "unauthorized", "A human account session is required.");
+      return errorResponse(401, "unauthorized", "A human account session is required.");
     if (linking && request.headers.get("Origin") !== url.origin)
-      return fail(403, "forbidden", "Same-origin account management is required.");
+      return errorResponse(403, "forbidden", "Same-origin account management is required.");
     let returnTo =
       url.searchParams.get("returnTo") ?? (linking ? "/settings/account" : "/dashboard");
     if (linking) {
       const text = await readTextLimited(request.body, 4096);
       if (text === null)
-        return fail(413, "bad_request", "Account-link request exceeded the size limit.");
+        return errorResponse(413, "bad_request", "Account-link request exceeded the size limit.");
       try {
         const input: unknown = JSON.parse(text ?? "null");
         if (
@@ -233,11 +226,11 @@ async function handleSsoRequest(
         )
           returnTo = input.returnTo;
       } catch {
-        return fail(400, "bad_request", "Invalid account-link request.");
+        return errorResponse(400, "bad_request", "Invalid account-link request.");
       }
     }
     if (!safeReturnTo(returnTo, url.origin))
-      return fail(400, "bad_request", "The return path must stay on this site.");
+      return errorResponse(400, "bad_request", "The return path must stay on this site.");
     const state = createToken();
     const proof = createToken();
     const callback = callbackUrl(request, provider);
@@ -262,7 +255,7 @@ async function handleSsoRequest(
       });
       logger.info("sso:started", { providerId: provider.id, protocol: provider.protocol, linking });
       const response = linking
-        ? json({ url: authorization.url })
+        ? dataResponse({ url: authorization.url })
         : new Response(null, {
             status: 302,
             headers: { Location: authorization.url, "Cache-Control": "no-store" },
@@ -271,7 +264,7 @@ async function handleSsoRequest(
       return response;
     } catch {
       logger.warn("sso:start-failed", { providerId: provider.id });
-      return fail(
+      return errorResponse(
         502,
         "sso_configuration",
         "The identity provider could not start authentication."
@@ -280,15 +273,15 @@ async function handleSsoRequest(
   }
   if (parts[2] === "logout" && request.method === "POST") {
     if (!user || user.agentSession || request.headers.has("Authorization"))
-      return fail(401, "unauthorized", "A human account session is required.");
+      return errorResponse(401, "unauthorized", "A human account session is required.");
     if (request.headers.get("Origin") !== url.origin)
-      return fail(403, "forbidden", "Same-origin account management is required.");
+      return errorResponse(403, "forbidden", "Same-origin account management is required.");
     const text = await readTextLimited(request.body, 4096);
     let input: unknown;
     try {
       input = JSON.parse(text ?? "null");
     } catch {
-      return fail(400, "bad_request", "Invalid logout request.");
+      return errorResponse(400, "bad_request", "Invalid logout request.");
     }
     if (
       !input ||
@@ -296,7 +289,7 @@ async function handleSsoRequest(
       !("identityId" in input) ||
       typeof input.identityId !== "string"
     )
-      return fail(400, "bad_request", "Select a linked identity to sign out.");
+      return errorResponse(400, "bad_request", "Select a linked identity to sign out.");
     const identity = await env.DB.prepare(
       "SELECT subject, display_name AS displayName, COALESCE(session_index, '') AS sessionIndex, COALESCE(name_id_format, '') AS nameIdFormat FROM auth_sso_identities WHERE id = ? AND user_id = ? AND provider_id = ? AND issuer = ?"
     )
@@ -304,7 +297,7 @@ async function handleSsoRequest(
       .first<
         Pick<SsoIdentityClaims, "subject" | "displayName" | "sessionIndex" | "nameIdFormat">
       >();
-    if (!identity) return fail(404, "not_found", "Linked identity was not found.");
+    if (!identity) return errorResponse(404, "not_found", "Linked identity was not found.");
     const token = readCookie(request);
     if (token)
       await env.DB.prepare("DELETE FROM auth_sessions WHERE token_hash = ?")
@@ -345,7 +338,7 @@ async function handleSsoRequest(
       target = null;
       logger.warn("sso:provider-logout-unavailable", { providerId: provider.id });
     }
-    const response = json({ url: target, providerLogoutUnavailable: providerError });
+    const response = dataResponse({ url: target, providerLogoutUnavailable: providerError });
     response.headers.append("Set-Cookie", createSessionCookie("", 0));
     response.headers.append(
       "Set-Cookie",
@@ -363,7 +356,8 @@ async function handleSsoRequest(
     ["GET", "POST"].includes(request.method)
   ) {
     const body = request.method === "POST" ? await readTextLimited(request.body, 1024 * 1024) : "";
-    if (body === null) return fail(413, "bad_request", "SSO response exceeded the size limit.");
+    if (body === null)
+      return errorResponse(413, "bad_request", "SSO response exceeded the size limit.");
     const params = request.method === "POST" ? new URLSearchParams(body) : url.searchParams;
     if (
       provider.protocol === "saml" &&
@@ -411,7 +405,11 @@ async function handleSsoRequest(
           ),
         ]);
         if (!results[1].results.length)
-          return fail(400, "sso_replayed", "Logout notification has already been processed.");
+          return errorResponse(
+            400,
+            "sso_replayed",
+            "Logout notification has already been processed."
+          );
         const response = new Response(null, {
           status: 302,
           headers: { Location: notification.responseUrl, "Cache-Control": "no-store" },
@@ -427,13 +425,13 @@ async function handleSsoRequest(
         return response;
       } catch {
         logger.warn("sso:idp-logout-rejected", { providerId: provider.id });
-        return fail(400, "sso_invalid_logout", "Logout notification is invalid.");
+        return errorResponse(400, "sso_invalid_logout", "Logout notification is invalid.");
       }
     }
     const state = params.get(provider.protocol === "saml" ? "RelayState" : "state");
     const proof = browserProof(request);
     if (!state || state.length > 128 || !proof || proof.length > 128)
-      return fail(400, "sso_expired", "Authentication state is missing or expired.");
+      return errorResponse(400, "sso_expired", "Authentication state is missing or expired.");
     const flow = await env.DB.prepare(
       "DELETE FROM auth_sso_requests WHERE state_hash = ? AND provider_id = ? AND issuer = ? AND browser_hash = ? AND expires_at > ? RETURNING intent, user_id, session_hash, return_to, callback_url, payload"
     )
@@ -446,7 +444,11 @@ async function handleSsoRequest(
       )
       .first<SsoRequestRow>();
     if (!flow)
-      return fail(400, "sso_expired", "Authentication state is invalid, expired, or already used.");
+      return errorResponse(
+        400,
+        "sso_expired",
+        "Authentication state is invalid, expired, or already used."
+      );
     if (new URL(flow.callback_url).origin !== url.origin)
       return redirect(flow.return_to, "invalid_response");
     try {
@@ -505,7 +507,7 @@ async function handleSsoRequest(
       return redirect(flow.return_to, "invalid_response");
     }
   }
-  return fail(405, "method_not_allowed", "Method is not allowed.");
+  return errorResponse(405, "method_not_allowed", "Method is not allowed.");
 }
 
 export async function handleSso(
@@ -517,6 +519,6 @@ export async function handleSso(
     return await handleSsoRequest(request, env, user);
   } catch {
     createLogger(env.LOG_LEVEL, { service: "sso" }).error("sso:request-failed", {});
-    return fail(503, "sso_unavailable", "Single sign-on is temporarily unavailable.");
+    return errorResponse(503, "sso_unavailable", "Single sign-on is temporarily unavailable.");
   }
 }

@@ -1,10 +1,6 @@
+import { bytesToBase64 } from "../../../src/worker/common/encoding";
 const SESSION_COOKIE = "gitedge_session";
 export const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
-export function bytesToBase64(bytes: Uint8Array): string {
-  let value = "";
-  for (const byte of bytes) value += String.fromCharCode(byte);
-  return btoa(value);
-}
 export function createSessionCookie(token: string, maxAge: number): string {
   return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
 }

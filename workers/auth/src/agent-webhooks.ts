@@ -6,7 +6,17 @@ import {
 } from "../../../packages/contracts/src/index";
 import { createLogger } from "../../../src/worker/common/logger";
 import { repositoryRole, writableRole } from "../../../src/worker/common/repositories";
-import { dataResponse as response, errorResponse as failure, readJsonLimited } from "./http";
+import {
+  base64ToBytes,
+  bytesToBase64,
+  bytesToHex,
+  randomHex,
+} from "../../../src/worker/common/encoding";
+import {
+  dataResponse as response,
+  errorResponse as failure,
+} from "../../../src/worker/common/http";
+import { readJsonLimited, SMALL_JSON_BYTES } from "../../../src/worker/common/readText";
 import { z } from "zod";
 
 export interface AgentWebhookEnv {
@@ -88,17 +98,11 @@ const EVENT_SELECT =
 function decodeKey(value: string | undefined): Uint8Array<ArrayBuffer> | null {
   if (!value) return null;
   try {
-    const binary = atob(value);
-    if (binary.length !== 32) return null;
-    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const bytes = base64ToBytes(value);
+    return bytes.length === 32 ? bytes : null;
   } catch {
     return null;
   }
-}
-function base64(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
 }
 async function encryptionKey(env: AgentWebhookEnv): Promise<CryptoKey> {
   const bytes = decodeKey(env.WEBHOOK_ENCRYPTION_KEY);
@@ -115,16 +119,16 @@ async function encryptSecret(
     await encryptionKey(env),
     new TextEncoder().encode(secret)
   );
-  return { ciphertext: base64(new Uint8Array(encrypted)), iv: base64(iv) };
+  return { ciphertext: bytesToBase64(new Uint8Array(encrypted)), iv: bytesToBase64(iv) };
 }
 async function decryptSecret(env: AgentWebhookEnv, row: SettingsRow): Promise<string> {
   const bytes = await crypto.subtle.decrypt(
     {
       name: "AES-GCM",
-      iv: Uint8Array.from(atob(row.secretIv), (character) => character.charCodeAt(0)),
+      iv: base64ToBytes(row.secretIv),
     },
     await encryptionKey(env),
-    Uint8Array.from(atob(row.secretCiphertext), (character) => character.charCodeAt(0))
+    base64ToBytes(row.secretCiphertext)
   );
   return new TextDecoder().decode(bytes);
 }
@@ -202,7 +206,7 @@ async function sign(secret: string, body: string): Promise<string> {
     ["sign"]
   );
   const bytes = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body));
-  return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return bytesToHex(new Uint8Array(bytes));
 }
 async function limitedText(response: Response): Promise<void> {
   const reader = response.body?.getReader();
@@ -521,7 +525,7 @@ export async function handleAgentWebhookManagement(
     const row = await loadSettings(env, agentId);
     if (parts.length === 3 && request.method === "GET") return response(publicSettings(row));
     if (parts.length === 3 && request.method === "PUT") {
-      const raw = await readJsonLimited(request);
+      const raw = await readJsonLimited(request, SMALL_JSON_BYTES);
       if (typeof raw !== "object" || raw === null || Array.isArray(raw))
         return failure(400, "bad_request", "Invalid webhook settings.");
       const input = z.record(z.string(), z.unknown()).safeParse(raw);
@@ -550,7 +554,7 @@ export async function handleAgentWebhookManagement(
           .run();
         return response({ ...parsed.data, configured: true, secret: null });
       }
-      const secret = `ge_webhook_${Array.from(crypto.getRandomValues(new Uint8Array(32)), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+      const secret = `ge_webhook_${randomHex(32)}`;
       const encrypted = await encryptSecret(env, secret);
       const now = Date.now();
       await env.DB.prepare(
@@ -683,7 +687,7 @@ export async function handleAgentEvent(
   try {
     if (request.method !== "POST" || new URL(request.url).hostname !== "auth.internal")
       return "invalid";
-    const raw = await readJsonLimited(request);
+    const raw = await readJsonLimited(request, SMALL_JSON_BYTES);
     const parsed = AgentEventInputSchema.safeParse(raw);
     if (!parsed.success) return "invalid";
     const input = parsed.data;

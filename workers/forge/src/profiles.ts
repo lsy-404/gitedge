@@ -4,8 +4,9 @@ import {
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
 import { readTextLimited } from "../../../src/worker/common/readText";
-import { json, error, repoResponse, type ForgeEnv, type RepositoryRow } from "./common";
+import { repoResponse, type ForgeEnv, type RepositoryRow } from "./common";
 import { z } from "zod";
+import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 export async function publicProfile(
   env: ForgeEnv,
   request: Request,
@@ -13,7 +14,7 @@ export async function publicProfile(
   user: TrustedUser | null
 ): Promise<Response> {
   const parsed = NamespaceSlugSchema.safeParse(owner);
-  if (!parsed.success) return error(404, "not_found", "Profile was not found.");
+  if (!parsed.success) return errorResponse(404, "not_found", "Profile was not found.");
   const profile = await env.DB.prepare(
     "SELECT n.slug AS owner,COALESCE(p.display_name,n.display_name,n.slug) AS displayName,COALESCE(p.bio,n.description,'') AS bio,COALESCE(p.location,'') AS location,COALESCE(p.website,'') AS website FROM namespaces n LEFT JOIN users u ON n.kind='personal' AND u.id=n.created_by LEFT JOIN auth_account_profiles p ON p.user_id=u.id WHERE n.slug=?"
   )
@@ -25,7 +26,7 @@ export async function publicProfile(
       location: string;
       website: string;
     }>();
-  if (!profile) return error(404, "not_found", "Profile was not found.");
+  if (!profile) return errorResponse(404, "not_found", "Profile was not found.");
   const repos = await env.DB.prepare(
     "SELECT r.*,n.slug AS owner FROM repositories r JOIN namespaces n ON n.id=r.namespace_id WHERE n.slug=? AND r.visibility='public' AND r.artifact_name IS NOT NULL ORDER BY r.updated_at DESC LIMIT 101"
   )
@@ -63,12 +64,10 @@ export async function publicProfile(
       }
     } else await response.body?.cancel();
   }
-  return json({
-    data: {
-      ...profile,
-      readme,
-      repositories: repos.results.slice(0, 100).map((repo) => repoResponse(repo, false)),
-      truncated: repos.results.length > 100,
-    },
+  return dataResponse({
+    ...profile,
+    readme,
+    repositories: repos.results.slice(0, 100).map((repo) => repoResponse(repo, false)),
+    truncated: repos.results.length > 100,
   });
 }
