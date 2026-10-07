@@ -14,13 +14,33 @@ export const workerConfigs = [
 
 const unresolvedIdPattern = /REPLACE_WITH_[A-Z0-9_]+/;
 
-function cloudflareEnvironment() {
-  const authConfig = JSON.parse(readFileSync("workers/auth/wrangler.jsonc", "utf8"));
-  if (!/^[a-f0-9]{32}$/.test(authConfig.account_id ?? "")) {
-    throw new Error("Auth Worker must declare a valid production account_id.");
-  }
+const bootstrapServices = ["git", "forge", "actions"];
 
-  return { ...process.env, CLOUDFLARE_ACCOUNT_ID: authConfig.account_id };
+export function accountId(configPaths = workerConfigs) {
+  const accounts = configPaths.map((configPath) => ({
+    configPath,
+    accountId: JSON.parse(readFileSync(configPath, "utf8")).account_id,
+  }));
+  const invalid = accounts.filter((entry) => !/^[a-f0-9]{32}$/.test(entry.accountId ?? ""));
+  if (invalid.length > 0) {
+    throw new Error(
+      `Every Worker must declare a valid production account_id: ${invalid
+        .map((entry) => `${entry.configPath} (${entry.accountId})`)
+        .join(", ")}`
+    );
+  }
+  if (new Set(accounts.map((entry) => entry.accountId)).size !== 1) {
+    throw new Error(
+      `Workers must share one account_id: ${accounts
+        .map((entry) => `${entry.configPath}=${entry.accountId}`)
+        .join(", ")}`
+    );
+  }
+  return accounts[0].accountId;
+}
+
+function cloudflareEnvironment() {
+  return { ...process.env, CLOUDFLARE_ACCOUNT_ID: accountId() };
 }
 
 export function findUnresolvedResourceIds(configPaths = workerConfigs) {
@@ -47,9 +67,9 @@ function assertProductionResourceIds() {
   return false;
 }
 
-function run(command, args, { cloudflare = false } = {}) {
+function run(command, args, { cloudflare = false, quiet = false } = {}) {
   const result = spawnSync(command, args, {
-    stdio: "inherit",
+    stdio: quiet ? "ignore" : "inherit",
     env: cloudflare ? cloudflareEnvironment() : process.env,
   });
   if (result.error) {
@@ -61,6 +81,45 @@ function run(command, args, { cloudflare = false } = {}) {
     console.error(`Command failed with status ${result.status ?? "unknown"}: ${command}`);
     process.exitCode = result.status ?? 1;
     return false;
+  }
+  return true;
+}
+
+function workerExists(service) {
+  const result = spawnSync(
+    "pnpm",
+    ["exec", "wrangler", "deployments", "list", "--config", `workers/${service}/wrangler.jsonc`],
+    { stdio: "ignore", env: cloudflareEnvironment() }
+  );
+  return result.status === 0;
+}
+
+// Git, Forge and Actions bind each other, so a fresh account needs placeholders before the real deploys.
+function bootstrapCyclicWorkers() {
+  for (const service of bootstrapServices) {
+    if (workerExists(service)) continue;
+    const configPath = `workers/${service}/wrangler.jsonc`;
+    const config = JSON.parse(readFileSync(configPath, "utf8"));
+    console.log(`Creating placeholder Worker ${config.name}`);
+    if (
+      !run(
+        "pnpm",
+        [
+          "exec",
+          "wrangler",
+          "deploy",
+          "--config",
+          "scripts/bootstrap-stub.wrangler.jsonc",
+          "--name",
+          config.name,
+          "--compatibility-date",
+          config.compatibility_date,
+        ],
+        { cloudflare: true }
+      )
+    ) {
+      return false;
+    }
   }
   return true;
 }
@@ -91,7 +150,9 @@ export function deployStack({ dryRun = false } = {}) {
     }
   }
 
-  for (const service of ["limits", "auth", "actions", "git", "forge", "deploy", "gateway"]) {
+  if (!dryRun && !bootstrapCyclicWorkers()) return false;
+
+  for (const service of ["limits", "auth", "forge", "git", "actions", "deploy", "gateway"]) {
     const args = ["exec", "wrangler", "deploy", "--config", `workers/${service}/wrangler.jsonc`];
     if (dryRun) args.push("--dry-run");
     if (!run("pnpm", args, { cloudflare: true })) return false;

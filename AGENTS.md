@@ -46,10 +46,11 @@ Use the smallest relevant checks while editing, then verify affected integration
 pnpm run typecheck
 pnpm run test
 pnpm run test:workers
+pnpm run test:web
 pnpm run build
 pnpm run format:check
 ```
 
-`build` compiles Vue and dry-runs all Workers. `test:auth` targets the Auth D1 lifecycle tests. `test:web` runs browser-oriented Vue tests. With the local stack running, `node test/e2e/api-git.mjs` exercises real Artifacts push/clone, isolated agents and collaboration. It creates verification repositories in the configured namespace.
+`build` compiles Vue and dry-runs all Workers. `test:auth` runs the Auth worker tests (agents, accounts, SSO, signatures). `test:web` runs browser-oriented Vue tests. With the local stack running, `node test/e2e/api-git.mjs` exercises real Artifacts push/clone, isolated agents and collaboration. It creates verification repositories in the configured namespace. CI runs the commands above; the `test/e2e`, `test/artifacts-smoke`, `test/performance` and `test/production-receiver` scripts are manual checks against a running stack or a real account.
 
 Local Artifacts bindings connect remotely. Production deployment is separate from local verification; preserve existing storage until repository import and data transfer have been verified.

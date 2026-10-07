@@ -27,13 +27,18 @@ pnpm run test
 pnpm run test:workers
 pnpm run test:web
 pnpm run build
+pnpm run format:check
 ```
+
+`pnpm run test:auth` runs only the Auth worker tests (agents, accounts, SSO and signatures).
 
 With the local stack running, `node test/e2e/api-git.mjs` verifies account creation, native Git push/clone, two isolated agent forks, reviews/checks/merges, collaboration edits, deployment plan parsing and session revocation. It creates remote Artifacts verification repositories and stores temporary credentials only under ignored `work/` with private file permissions.
 
 Run `node test/e2e/git-boundaries.mjs <fixture-directory>` after that Git check to verify private repositories, Basic authentication, binary files, tags, read-only credentials and access isolation. `GITEDGE_API=http://localhost:8877 node test/e2e/deploy.mjs` exercises actual Cloudflare provisioning, migration, upload and live binding readback using the current Wrangler account; it creates uniquely named test resources. See [SSO configuration](docs/sso.md#live-acceptance-with-keycloak) for the real Keycloak acceptance fixture.
 
-`build` builds the Vue interface and bundles every Worker with Wrangler's dry-run mode. Production deployment is a separate `pnpm run deploy` operation that applies D1 migrations and deploys internal services before the Gateway.
+The remaining e2e scripts need these inputs. `test/e2e/browser-accounts.mjs` runs against the local stack (`GITEDGE_API`, loopback only) and creates two accounts to check browser identity switching. `test/e2e/seed-ui.mjs` and `test/e2e/settings-signatures.mjs` run against the local stack and require `GITEDGE_FIXTURE` pointing at an `api-git.mjs` fixture directory (plus optional `GITEDGE_API`). `test/e2e/production-smoke.mjs` runs against the production Gateway (`GITEDGE_PRODUCTION_URL`, defaulting to the configured custom domain; optional `GITEDGE_REPOSITORY_VISIBILITY`). `test/e2e/production-actions.mjs` runs against production and requires `GITEDGE_WEBHOOK_RECEIVER` and `GITEDGE_WEBHOOK_RECEIVER_NAME` for an owned verification receiver.
+
+`build` builds the Vue interface and bundles every Worker with Wrangler's dry-run mode. Dry-run builds do not check that service binding targets exist. Production deployment is a separate `pnpm run deploy` operation that applies D1 migrations and deploys internal services before the Gateway. The first deploy into an empty account creates placeholder Workers for the cyclic bindings (Git, Forge and Actions) and then replaces them with the real deploys.
 
 ## Git and agents
 
@@ -61,10 +66,6 @@ Repository deployment accepts prebuilt JavaScript modules plus declared D1, R2 a
 
 [Cloudflare Artifacts](https://developers.cloudflare.com/artifacts/) supplies the Git foundation. Overture informed the permission-first deployment interaction; GitEdge's deployment implementation is independently written under MIT.
 
-## License
-
-[MIT](LICENSE). The retained upstream logger attribution is in [LICENSES/MIT-git-on-cloudflare.txt](LICENSES/MIT-git-on-cloudflare.txt).
-
 ## Repository controls and Actions
 
 Repository settings independently enable collaboration areas, agents, deployments, commit graphs, Actions and online editing. Renaming preserves historical repository URLs. Branch patterns can require PRs, human approvals, named checks, linear history and verified signatures. Repository collaborators have read, write or admin access.
@@ -85,7 +86,7 @@ jobs:
         run: node --check src/index.js
 ```
 
-Workflow check names are their file paths, for example `.github/workflows/verify.yml`. Only the Actions service may publish these system CI checks. Agent webhooks use an encrypted signing secret configured through `WEBHOOK_ENCRYPTION_KEY`; the key must be a base64-encoded 32-byte value. Events are signed with HMAC-SHA256 and retried up to five times.
+Workflow check names are their file paths, for example `.github/workflows/verify.yml`. Only the Actions service may publish these system CI checks. Agent webhooks use an encrypted signing secret configured through `WEBHOOK_ENCRYPTION_KEY`; see [configuration](docs/configuration.md#auth). Events are signed with HMAC-SHA256 and retried up to five times.
 
 ## Private repository access responses
 
@@ -95,3 +96,7 @@ Configure `PRIVATE_REPOSITORY_RESPONSE` in `workers/gateway/wrangler.jsonc` and 
 - `forbidden`: unauthorized private repositories return 403 with an explicit access-denied message. This discloses repository existence, but never its contents.
 
 Unset or invalid values use `not_found`. The policy covers browser repository routes, Forge and Git APIs, and anonymous Git HTTPS reads. Missing repositories remain 404 in both modes. Repository listings continue to omit inaccessible repositories. Invalid Git credentials still receive an authentication challenge.
+
+## License
+
+[MIT](LICENSE). The retained upstream logger attribution is in [LICENSES/MIT-git-on-cloudflare.txt](LICENSES/MIT-git-on-cloudflare.txt).

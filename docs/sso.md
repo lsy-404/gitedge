@@ -33,22 +33,24 @@ The corresponding secret is an object such as `{"workforce":{"clientSecret":"<pr
 
 Provider IDs must remain stable. Changing an issuer does not silently transfer an existing identity to the replacement provider. GitEdge identifies accounts by provider ID, issuer and subject, never by matching email addresses. Linking requires both an existing GitEdge session and successful authentication with the new provider.
 
-## Void Carve ID
+## Voidcarve Access
 
 The `https://id.voidcarve.com` OIDC issuer is configured as an ordinary provider. In the Auth Worker variable `SSO_PROVIDERS_JSON` add:
 
 ```json
 {
   "id": "voidcarve",
-  "label": "Void Carve ID",
+  "label": "Voidcarve Access",
   "protocol": "oidc",
   "issuer": "https://id.voidcarve.com",
   "clientId": "<client-id-registered-at-the-issuer>",
-  "scopes": ["openid", "profile"]
+  "scopes": ["openid", "profile", "email"],
+  "tokenAuthMethod": "client_secret_basic",
+  "allowSignup": true
 }
 ```
 
-Store the client secret in `SSO_SECRETS_JSON` as `{"voidcarve":{"clientSecret":"<secret>"}}` with `wrangler secret put SSO_SECRETS_JSON --config workers/auth/wrangler.jsonc`. At id.voidcarve.com register the redirect URI `https://gitedge.voidcarve.com/api/auth/sso/voidcarve/callback`. Client authentication defaults to `client_secret_basic`; the issuer advertises RS256 ID tokens, S256 PKCE and the `iss` response parameter, all of which are enforced by the standard code-flow library. Request only `openid profile` (not `offline_access`); no picture claim is provided. Sign-in starts at `/api/auth/sso/voidcarve/start`. New accounts get an `sso-` identifier unrelated to profile claims; the issuer subject is the only identity key.
+Store the client secret in `SSO_SECRETS_JSON` as `{"voidcarve":{"clientSecret":"<secret>"}}` with `wrangler secret put SSO_SECRETS_JSON --config workers/auth/wrangler.jsonc`. At id.voidcarve.com register the redirect URI `https://gitedge.voidcarve.com/api/auth/sso/voidcarve/callback`. Client authentication defaults to `client_secret_basic`; the issuer advertises RS256 ID tokens, S256 PKCE and the `iss` response parameter, all of which are enforced by the standard code-flow library. Request `openid profile email` (not `offline_access`); the email claim is stored with the identity and is never used to match accounts. No picture claim is provided. Sign-in starts at `/api/auth/sso/voidcarve/start`. New accounts get an `sso-` identifier unrelated to profile claims; the issuer subject is the only identity key.
 
 ## OIDC
 

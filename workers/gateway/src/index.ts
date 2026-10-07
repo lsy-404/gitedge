@@ -74,6 +74,36 @@ function isSessionPayload(value: unknown): value is AuthSessionPayload {
   );
 }
 
+const securityHeaders: Readonly<Record<string, string>> = {
+  "Content-Security-Policy":
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; media-src 'self' https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+};
+
+const unavailableMessages: Readonly<Record<string, string>> = {
+  "/api/forge": "Forge service is unavailable.",
+  "/api/git": "Git service is unavailable.",
+  "/api/actions": "Actions service is unavailable.",
+  "/api/deploy": "Deployment service is unavailable.",
+};
+
+export function withSecurityHeaders(response: Response, pathname: string): Response {
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(securityHeaders)) {
+    if (!headers.has(name)) headers.set(name, value);
+  }
+  if (pathname.startsWith("/api/") && !headers.has("Cache-Control")) {
+    headers.set("Cache-Control", "private, no-store");
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 function isGitRequest(pathname: string): boolean {
   return /^\/[^/]+\/[^/]+\.git(?:\/|$)/.test(pathname);
 }
@@ -201,11 +231,26 @@ function rateLimitedResponse(decision: RateLimitDecision): Response | null {
   );
 }
 
+export function rateLimitIpKey(ip: string): string {
+  if (!ip.includes(":") || ip.includes(".")) return ip;
+  // Clients typically control a whole IPv6 /64, so the limiter keys on the prefix.
+  const [head, tail = ""] = ip.split("::");
+  const left = head ? head.split(":") : [];
+  const right = tail ? tail.split(":") : [];
+  const groups = ip.includes("::")
+    ? [...left, ...Array<string>(Math.max(0, 8 - left.length - right.length)).fill("0"), ...right]
+    : left;
+  return `${groups
+    .slice(0, 4)
+    .map((group) => group.toLowerCase().padStart(4, "0"))
+    .join(":")}::/64`;
+}
+
 async function enforceIpLimit(request: Request, env: GatewayEnv): Promise<Response | null> {
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
   const decision = await consumeRateLimit(
     env.RATE_LIMITER,
-    `ip:${ip}`,
+    `ip:${rateLimitIpKey(ip)}`,
     parsePositiveLimit(env.IP_RPM_LIMIT, 300)
   );
   return rateLimitedResponse(decision);
@@ -282,7 +327,7 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
             : env.DEPLOY;
     if (!service)
       return Response.json(
-        { error: { code: "service_unavailable", message: "Deployment service is unavailable." } },
+        { error: { code: "service_unavailable", message: unavailableMessages[prefix] } },
         { status: 503 }
       );
     const session = await authenticate(request, env.AUTH);
@@ -458,7 +503,10 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
 }
 
 export default {
-  fetch(request: Request, env: GatewayEnv): Promise<Response> {
-    return handleGatewayRequest(request, env);
+  async fetch(request: Request, env: GatewayEnv): Promise<Response> {
+    return withSecurityHeaders(
+      await handleGatewayRequest(request, env),
+      new URL(request.url).pathname
+    );
   },
 };
