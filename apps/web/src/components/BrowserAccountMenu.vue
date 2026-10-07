@@ -63,6 +63,10 @@ async function selectAccount(account: BrowserAccount): Promise<void> {
   }
 }
 
+function selectGuestView(): void {
+  if (!busy.value && sessionState.view !== "guest") emit("guest-preview");
+}
+
 async function removeAccount(account: BrowserAccount): Promise<void> {
   if (busy.value) return;
   busy.value = true;
@@ -97,8 +101,8 @@ async function logoutAll(): Promise<void> {
 </script>
 
 <template>
-  <section class="browser-account-menu" :aria-label="t('browserAccounts')">
-    <h3>{{ t("browserAccounts") }}</h3>
+  <section class="browser-account-menu" aria-labelledby="browser-accounts-title">
+    <p id="browser-accounts-title" class="browser-account-heading">{{ t("browserAccounts") }}</p>
     <p v-if="loading" class="browser-account-state" role="status">{{ t("loading") }}</p>
     <div v-else-if="error" class="browser-account-load-error">
       <p class="browser-account-state browser-account-error" role="alert">{{ error }}</p>
@@ -110,12 +114,12 @@ async function logoutAll(): Promise<void> {
       </button>
     </div>
     <template v-else-if="accounts">
-      <div v-if="accounts.accounts.length" class="browser-account-list">
-        <div v-for="account in accounts.accounts" :key="account.id" class="browser-account-row">
+      <ul v-if="accounts.accounts.length" class="browser-account-list">
+        <li v-for="account in accounts.accounts" :key="account.id" class="browser-account-row">
           <button
             class="browser-account-option"
             :aria-pressed="selectedAccount(account)"
-            :disabled="busy || selectedAccount(account)"
+            :disabled="busy"
             @click="selectAccount(account)"
           >
             <span class="browser-account-copy">
@@ -137,8 +141,8 @@ async function logoutAll(): Promise<void> {
           >
             <AppIcon name="close" :size="14" />
           </button>
-        </div>
-      </div>
+        </li>
+      </ul>
       <p v-else class="browser-account-state">{{ t("noBrowserAccounts") }}</p>
       <button
         v-if="accounts.accounts.length < accounts.accountLimit"
@@ -154,13 +158,15 @@ async function logoutAll(): Promise<void> {
       <div
         v-if="accounts.activeAccountId || sessionState.view === 'guest'"
         class="browser-view-options"
+        role="group"
+        aria-labelledby="browser-views-title"
       >
-        <h3>{{ t("browserViews") }}</h3>
+        <p id="browser-views-title" class="browser-account-heading">{{ t("browserViews") }}</p>
         <button
           class="browser-account-option"
           :aria-pressed="sessionState.view === 'guest'"
-          :disabled="busy || sessionState.view === 'guest'"
-          @click="emit('guest-preview')"
+          :disabled="busy"
+          @click="selectGuestView"
         >
           <AppIcon name="eye" :size="16" />{{ t("guestView") }}
           <AppIcon v-if="sessionState.view === 'guest'" name="check" :size="14" />

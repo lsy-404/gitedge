@@ -29,7 +29,6 @@ export default {
     noExternalIdentityHint: "关联外部登录身份，以便使用组织提供的身份验证。",
     allOrganizations: "全部组织",
     findOrganization: "查找组织…",
-    workspace: "工作空间",
     organizationListHint: "查看你所属的组织和团队空间。",
     noMatchingOrganizations: "没有找到匹配的组织。",
     organizationOnboardingHint: "创建组织后，可以集中管理团队成员和组织仓库。",
@@ -81,7 +80,6 @@ export default {
       "Link an external sign-in identity to use authentication provided by your organization.",
     allOrganizations: "All organizations",
     findOrganization: "Find an organization…",
-    workspace: "Workspace",
     organizationListHint: "View the organizations and team spaces you belong to.",
     noMatchingOrganizations: "No organizations match your search.",
     organizationOnboardingHint:

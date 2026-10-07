@@ -109,6 +109,12 @@ async function setPreference(
   if (key === "theme" && value !== "system" && value !== "light" && value !== "dark") return;
   await updatePreference(key, value);
 }
+function onSearchFocusOut(event: FocusEvent) {
+  const form = event.currentTarget;
+  if (!(form instanceof HTMLElement)) return;
+  if (!(event.relatedTarget instanceof Node && form.contains(event.relatedTarget)))
+    searchExpanded.value = false;
+}
 function submitSearch() {
   const query = search.value.trim();
   if (/^[a-z\d_-]+\/[a-z\d_.-]+$/i.test(query)) void router.push(`/${query}`);
@@ -266,7 +272,7 @@ if (!sessionState.checked) void refreshSession();
               ><span class="muted">/</span
               ><RouterLink :to="repositoryPath">{{ route.params.repo }}</RouterLink></template
             >
-            <strong v-else>{{ pageName }}</strong>
+            <strong v-else aria-current="page">{{ pageName }}</strong>
           </nav>
           <form
             v-if="!authPage"
@@ -274,6 +280,7 @@ if (!sessionState.checked) void refreshSession();
             :class="{ 'search-expanded': searchExpanded }"
             role="search"
             @submit.prevent="submitSearch"
+            @focusout="onSearchFocusOut"
           >
             <AppIcon name="search" /><input
               ref="searchInput"

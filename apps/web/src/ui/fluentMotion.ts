@@ -1,6 +1,12 @@
 const FOCUSABLE_SELECTOR =
   'a[href], button, input:not([type="hidden"]), select, textarea, summary, [tabindex]';
 
+const SEARCH_WRAPPER_SELECTOR = ".global-search, .workspace-search, .file-search, .search-field";
+
+function focusFrame(target: HTMLElement): HTMLElement {
+  return target.closest<HTMLElement>(SEARCH_WRAPPER_SELECTOR) ?? target;
+}
+
 function isVisibleFocusTarget(
   target: EventTarget | null,
   keyboardNavigation: boolean
@@ -47,8 +53,9 @@ export function installFluentMotion(): () => void {
       return;
     }
 
-    const rect = activeTarget.getBoundingClientRect();
-    const style = getComputedStyle(activeTarget);
+    const frameElement = focusFrame(activeTarget);
+    const rect = frameElement.getBoundingClientRect();
+    const style = getComputedStyle(frameElement);
     const radius = Number.parseFloat(style.borderTopLeftRadius) || 0;
     activeTarget.classList.add("fluent-focus-target--tracked");
     indicator.style.left = `${rect.left - 4}px`;
@@ -74,6 +81,7 @@ export function installFluentMotion(): () => void {
     if (typeof ResizeObserver !== "undefined") {
       resizeObserver = new ResizeObserver(scheduleUpdate);
       resizeObserver.observe(target);
+      resizeObserver.observe(focusFrame(target));
     }
     update();
   }

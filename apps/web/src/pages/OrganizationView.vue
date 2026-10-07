@@ -17,6 +17,7 @@ const router = useRouter();
 const { t } = useI18n();
 const roles = ["member", "owner"] as const;
 const slug = computed(() => String(route.params.slug));
+const membersSelected = computed(() => route.hash === "#organization-members");
 const organization = ref<Organization | null>(null);
 const members = ref<OrganizationMember[]>([]);
 const loading = ref(true);
@@ -98,12 +99,11 @@ watch(
 </script>
 <template>
   <section class="workspace-page organization-page">
-    <header class="organization-banner">
+    <header class="box organization-banner">
       <span class="organization-avatar">{{
         (organization?.displayName || slug).slice(0, 1).toUpperCase()
       }}</span>
       <div class="organization-banner-main">
-        <p class="workspace-eyebrow">{{ t("organization") }}</p>
         <h1>{{ organization?.displayName || slug }}</h1>
         <p>{{ organization?.description || t("noDescription") }}</p>
       </div>
@@ -118,20 +118,26 @@ watch(
     </header>
     <StatusState :loading="loading" :error="error" @retry="load" />
     <div v-if="!loading && !error" class="organization-layout">
-      <nav class="organization-nav" :aria-label="t('organizationNavigation')">
-        <a class="workspace-nav-item is-selected" href="#organization-overview"
+      <nav class="box organization-nav" :aria-label="t('organizationNavigation')">
+        <a
+          class="workspace-nav-item"
+          href="#organization-overview"
+          :aria-current="membersSelected ? undefined : 'location'"
           ><AppIcon name="home" />{{ t("overview") }}</a
         >
-        <a class="workspace-nav-item" href="#organization-members"
+        <a
+          class="workspace-nav-item"
+          href="#organization-members"
+          :aria-current="membersSelected ? 'location' : undefined"
           ><AppIcon name="person" />{{ t("members") }}
           <StatusBadge>{{ members.length }}</StatusBadge></a
         >
       </nav>
       <div class="organization-content">
-        <section id="organization-overview" class="workspace-panel organization-overview-panel">
-          <div class="workspace-panel-heading">
+        <section id="organization-overview" class="box">
+          <div class="box-header workspace-panel-heading">
             <div>
-              <h3>{{ t("organizationOverview") }}</h3>
+              <h2>{{ t("organizationOverview") }}</h2>
               <p class="muted">{{ t("organizationOverviewHint") }}</p>
             </div>
           </div>
@@ -152,15 +158,19 @@ watch(
             </div>
           </div>
         </section>
-        <section id="organization-members" class="workspace-panel organization-members-panel">
-          <div class="workspace-panel-heading">
+        <section id="organization-members" class="box">
+          <div class="box-header workspace-panel-heading">
             <div>
-              <h3>{{ t("members") }}</h3>
+              <h2>{{ t("members") }}</h2>
               <p class="muted">{{ t("organizationMembersHint") }}</p>
             </div>
             <StatusBadge>{{ members.length }}</StatusBadge>
           </div>
-          <div v-for="member in members" :key="member.identifier" class="organization-member-row">
+          <div
+            v-for="member in members"
+            :key="member.identifier"
+            class="box-row organization-member-row"
+          >
             <span class="organization-member-avatar"><AppIcon name="person" /></span
             ><span class="organization-member-name">{{ member.identifier }}</span
             ><StatusBadge :tone="member.role === 'owner' ? 'brand' : 'neutral'">{{
@@ -186,13 +196,10 @@ watch(
             {{ t("organizationEmptyMembers") }}
           </div>
         </section>
-        <section
-          v-if="organization?.role === 'owner'"
-          class="workspace-panel organization-add-member"
-        >
-          <div class="workspace-panel-heading">
+        <section v-if="organization?.role === 'owner'" class="box">
+          <div class="box-header workspace-panel-heading">
             <div>
-              <h3>{{ t("addMember") }}</h3>
+              <h2>{{ t("addMember") }}</h2>
               <p class="muted">{{ t("addMemberHint") }}</p>
             </div>
           </div>

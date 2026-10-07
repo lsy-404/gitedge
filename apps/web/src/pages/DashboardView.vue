@@ -123,84 +123,72 @@ onMounted(load);
 <template>
   <section class="workspace-page dashboard-page">
     <aside class="workspace-sidebar dashboard-sidebar">
-      <div class="workspace-sidebar-heading">
-        <h1>{{ t("dashboard") }}</h1>
-        <RouterLink
-          class="btn btn-subtle btn-sm icon-button"
-          to="/organizations"
-          :aria-label="t('organizations')"
-        >
-          <AppIcon name="organization" />
+      <nav :aria-label="t('dashboard')">
+        <RouterLink class="workspace-nav-item is-selected" to="/dashboard">
+          <AppIcon name="home" />{{ t("dashboardOverview") }}
         </RouterLink>
-      </div>
-      <RouterLink class="workspace-nav-item is-selected" to="/dashboard">
-        <AppIcon name="home" />{{ t("dashboardOverview") }}
-      </RouterLink>
-      <RouterLink class="workspace-nav-item" to="/organizations">
-        <AppIcon name="organization" />{{ t("organizations") }}
-      </RouterLink>
-      <RouterLink class="workspace-nav-item" to="/settings/agents">
-        <AppIcon name="agent" />{{ t("agents") }}
-      </RouterLink>
+        <RouterLink class="workspace-nav-item" to="/organizations">
+          <AppIcon name="organization" />{{ t("organizations") }}
+        </RouterLink>
+        <RouterLink class="workspace-nav-item" to="/settings/agents">
+          <AppIcon name="agent" />{{ t("agents") }}
+        </RouterLink>
+      </nav>
 
-      <div class="workspace-sidebar-heading repo-sidebar-title">
-        <h2>{{ t("repositories") }}</h2>
-        <button
-          class="btn btn-subtle btn-sm icon-button"
-          type="button"
-          :aria-label="t('newRepo')"
-          @click="router.replace({ path: '/dashboard', query: { ...route.query, new: '1' } })"
-        >
-          <AppIcon name="plus" />
-        </button>
-      </div>
-      <label class="workspace-search">
-        <AppIcon name="search" />
-        <input
-          v-model="filter"
-          type="search"
-          :placeholder="t('findRepository')"
-          :aria-label="t('findRepository')"
+      <div class="workspace-sidebar-group" role="group" aria-labelledby="dashboard-sidebar-title">
+        <div class="workspace-sidebar-heading">
+          <p id="dashboard-sidebar-title" class="workspace-sidebar-title">
+            {{ t("repositories") }}
+          </p>
+          <button
+            class="btn btn-subtle btn-sm icon-button"
+            type="button"
+            :aria-label="t('newRepo')"
+            @click="router.replace({ path: '/dashboard', query: { ...route.query, new: '1' } })"
+          >
+            <AppIcon name="plus" />
+          </button>
+        </div>
+        <label class="workspace-search">
+          <AppIcon name="search" />
+          <input
+            v-model="filter"
+            type="search"
+            :placeholder="t('findRepository')"
+            :aria-label="t('findRepository')"
+          />
+        </label>
+        <StatusState
+          v-if="loading || error"
+          :loading="loading"
+          :error="error"
+          :empty="false"
+          @retry="load"
         />
-      </label>
-      <StatusState
-        v-if="loading || error"
-        :loading="loading"
-        :error="error"
-        :empty="false"
-        @retry="load"
-      />
-      <div v-else class="dashboard-repo-nav">
-        <RouterLink
-          v-for="repo in visibleRepos"
-          :key="repo.id"
-          class="workspace-nav-item repo-nav-item"
-          :to="`/${repo.owner}/${repo.name}`"
-        >
-          <span class="repo-dot"><AppIcon name="repo" /></span>
-          <span class="repo-nav-name">{{ repo.owner }}/{{ repo.name }}</span>
-          <span v-if="repo.visibility === 'private'" class="visually-hidden">{{
-            t("private")
-          }}</span>
-        </RouterLink>
-        <p v-if="!visibleRepos.length" class="sidebar-empty muted">
-          {{ t("noMatchingRepositories") }}
-        </p>
+        <div v-else class="dashboard-repo-nav">
+          <RouterLink
+            v-for="repo in visibleRepos"
+            :key="repo.id"
+            class="workspace-nav-item repo-nav-item"
+            :to="`/${repo.owner}/${repo.name}`"
+          >
+            <span class="repo-dot"><AppIcon name="repo" /></span>
+            <span class="repo-nav-name">{{ repo.owner }}/{{ repo.name }}</span>
+            <span v-if="repo.visibility === 'private'" class="visually-hidden">{{
+              t("private")
+            }}</span>
+          </RouterLink>
+          <p v-if="!visibleRepos.length" class="sidebar-empty muted">
+            {{ t("noMatchingRepositories") }}
+          </p>
+        </div>
       </div>
-      <button
-        class="workspace-nav-item sidebar-create"
-        type="button"
-        @click="router.replace({ path: '/dashboard', query: { ...route.query, new: '1' } })"
-      >
-        <AppIcon name="plus" />{{ t("newRepo") }}
-      </button>
     </aside>
 
     <div class="dashboard-content">
       <header class="workspace-page-heading">
         <div>
-          <p class="workspace-eyebrow">{{ t("dashboard") }}</p>
-          <h2>{{ t("welcomeBack", { name: sessionState.user?.identifier || "" }) }}</h2>
+          <h1>{{ t("welcomeBack", { name: sessionState.user?.identifier || "" }) }}</h1>
           <p class="muted">{{ t("dashboardIntro") }}</p>
         </div>
         <button
@@ -214,13 +202,13 @@ onMounted(load);
 
       <div class="dashboard-columns">
         <div class="dashboard-main-column">
-          <section class="workspace-panel">
-            <div class="workspace-panel-heading">
+          <section class="box">
+            <div class="box-header workspace-panel-heading">
               <div>
-                <h3>{{ t("recentRepositories") }}</h3>
+                <h2>{{ t("recentRepositories") }}</h2>
                 <p class="muted">{{ t("recentRepositoriesHint") }}</p>
               </div>
-              <label class="workspace-search dashboard-list-search">
+              <label class="workspace-search">
                 <AppIcon name="search" />
                 <input
                   v-model="filter"
@@ -237,13 +225,13 @@ onMounted(load);
               :empty="false"
               @retry="load"
             />
-            <div v-else-if="repos.length" class="workspace-repository-list">
+            <div v-else-if="repos.length">
               <RouterLink
                 v-for="repo in recentRepos.filter((item) =>
                   visibleRepos.some((match) => match.id === item.id)
                 )"
                 :key="repo.id"
-                class="workspace-repository-row"
+                class="box-row workspace-repository-row"
                 :to="`/${repo.owner}/${repo.name}`"
               >
                 <div class="repository-row-main">
@@ -273,7 +261,7 @@ onMounted(load);
             </div>
             <div v-else class="dashboard-repo-onboarding">
               <span class="onboarding-icon"><AppIcon name="repo" :size="24" /></span>
-              <h4>{{ t("noRepositoriesYet") }}</h4>
+              <h3>{{ t("noRepositoriesYet") }}</h3>
               <p class="muted">{{ t("repositoryOnboardingText") }}</p>
               <button
                 class="btn btn-primary"
@@ -293,14 +281,14 @@ onMounted(load);
         </div>
 
         <aside class="dashboard-right-column">
-          <section class="workspace-panel getting-started-panel">
-            <div class="workspace-panel-heading">
+          <section class="box">
+            <div class="box-header workspace-panel-heading">
               <div>
-                <h3>{{ t("gettingStarted") }}</h3>
+                <h2>{{ t("gettingStarted") }}</h2>
                 <p class="muted">{{ t("gettingStartedHint") }}</p>
               </div>
             </div>
-            <RouterLink class="dashboard-action-row" to="/organizations">
+            <RouterLink class="box-row dashboard-action-row" to="/organizations">
               <span class="action-icon"><AppIcon name="organization" /></span>
               <span
                 ><strong>{{ t("createOrganization") }}</strong
@@ -308,7 +296,7 @@ onMounted(load);
               >
               <AppIcon class="action-chevron" name="chevronRight" />
             </RouterLink>
-            <RouterLink class="dashboard-action-row" to="/settings/agents">
+            <RouterLink class="box-row dashboard-action-row" to="/settings/agents">
               <span class="action-icon"><AppIcon name="agent" /></span>
               <span
                 ><strong>{{ t("configureAgent") }}</strong
@@ -316,7 +304,7 @@ onMounted(load);
               >
               <AppIcon class="action-chevron" name="chevronRight" />
             </RouterLink>
-            <RouterLink class="dashboard-action-row" to="/settings/account">
+            <RouterLink class="box-row dashboard-action-row" to="/settings/account">
               <span class="action-icon"><AppIcon name="gear" /></span>
               <span
                 ><strong>{{ t("secureAccount") }}</strong
@@ -325,9 +313,9 @@ onMounted(load);
               <AppIcon class="action-chevron" name="chevronRight" />
             </RouterLink>
           </section>
-          <section class="workspace-panel dashboard-organizations">
-            <div class="workspace-panel-heading">
-              <h3>{{ t("yourOrganizations") }}</h3>
+          <section class="box dashboard-organizations">
+            <div class="box-header workspace-panel-heading">
+              <h2>{{ t("yourOrganizations") }}</h2>
               <RouterLink to="/organizations">{{ t("viewAll") }}</RouterLink>
             </div>
             <StatusState
@@ -341,7 +329,7 @@ onMounted(load);
               <RouterLink
                 v-for="organization in organizations.slice(0, 4)"
                 :key="organization.slug"
-                class="organization-mini-row"
+                class="box-row organization-mini-row"
                 :to="`/organizations/${organization.slug}`"
               >
                 <span class="organization-mark">{{
@@ -352,7 +340,7 @@ onMounted(load);
                   ><small>{{ organization.slug }}</small></span
                 >
               </RouterLink>
-              <p v-if="!organizations.length" class="sidebar-empty muted">
+              <p v-if="!organizations.length" class="workspace-empty-inline">
                 {{ t("noOrganizationsYet") }}
               </p>
             </template>

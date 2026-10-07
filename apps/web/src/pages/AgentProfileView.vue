@@ -6,6 +6,7 @@ import { ApiError, api } from "../lib/api";
 import type { AgentProfile } from "../../../../packages/contracts/src/agents";
 import AppIcon from "../components/AppIcon.vue";
 import StatusState from "../components/StatusState.vue";
+import "../styles/workspace.css";
 
 const { t } = useI18n();
 const route = useRoute();
@@ -62,9 +63,17 @@ watch([owner, handle], () => void load(), { immediate: true });
   display: flex;
   align-items: flex-start;
   gap: var(--space-4);
-  max-width: 820px;
-  margin: var(--space-5) auto;
+  width: min(820px, calc(100% - 2 * var(--page-gutter)));
+  margin: var(--space-6) auto 0;
   padding: var(--space-5);
+}
+.agent-profile-card > .state,
+.agent-profile-card > .state-error {
+  flex: 1;
+}
+.agent-profile-card > div:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .agent-profile-avatar {
   display: grid;
@@ -72,11 +81,15 @@ watch([owner, handle], () => void load(), { immediate: true });
   width: 64px;
   height: 64px;
   flex: 0 0 auto;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   color: var(--accent-fg);
-  background: var(--bg-subtle);
+  background: var(--accent-subtle);
 }
 .agent-profile-card h1 {
   margin: 0;
+}
+.agent-profile-card p + p,
+.agent-profile-card h1 + p {
+  margin-top: var(--space-1);
 }
 </style>

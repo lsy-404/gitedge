@@ -76,52 +76,60 @@ onMounted(load);
 <template>
   <section class="workspace-page organization-list-page">
     <aside class="workspace-sidebar organization-list-sidebar">
-      <div class="workspace-sidebar-heading">
-        <h1>{{ t("organizations") }}</h1>
-        <button
-          class="btn btn-subtle btn-sm icon-button"
-          type="button"
-          :aria-label="t('newOrganization')"
-          @click="router.replace({ path: '/organizations', query: { ...route.query, new: '1' } })"
+      <nav :aria-label="t('organizations')">
+        <RouterLink class="workspace-nav-item" to="/dashboard"
+          ><AppIcon name="home" />{{ t("dashboard") }}</RouterLink
         >
-          <AppIcon name="plus" />
-        </button>
+        <RouterLink class="workspace-nav-item is-selected" to="/organizations"
+          ><AppIcon name="organization" />{{ t("allOrganizations") }}</RouterLink
+        >
+      </nav>
+      <div
+        class="workspace-sidebar-group"
+        role="group"
+        aria-labelledby="organization-sidebar-title"
+      >
+        <div class="workspace-sidebar-heading">
+          <p id="organization-sidebar-title" class="workspace-sidebar-title">
+            {{ t("yourOrganizations") }}
+          </p>
+          <button
+            class="btn btn-subtle btn-sm icon-button"
+            type="button"
+            :aria-label="t('newOrganization')"
+            @click="router.replace({ path: '/organizations', query: { ...route.query, new: '1' } })"
+          >
+            <AppIcon name="plus" />
+          </button>
+        </div>
+        <label class="workspace-search"
+          ><AppIcon name="search" /><input
+            v-model="filter"
+            type="search"
+            :placeholder="t('findOrganization')"
+            :aria-label="t('findOrganization')"
+        /></label>
+        <RouterLink
+          v-for="organization in visibleOrganizations"
+          :key="organization.slug"
+          class="workspace-nav-item"
+          :to="`/organizations/${organization.slug}`"
+        >
+          <span class="organization-sidebar-mark">{{
+            organization.displayName.slice(0, 1).toUpperCase()
+          }}</span
+          ><span class="repo-nav-name">{{ organization.displayName }}</span>
+        </RouterLink>
+        <p v-if="!loading && !error && !visibleOrganizations.length" class="sidebar-empty muted">
+          {{ t("noOrganizationsYet") }}
+        </p>
       </div>
-      <RouterLink class="workspace-nav-item" to="/dashboard"
-        ><AppIcon name="home" />{{ t("dashboard") }}</RouterLink
-      >
-      <RouterLink class="workspace-nav-item is-selected" to="/organizations"
-        ><AppIcon name="organization" />{{ t("allOrganizations") }}</RouterLink
-      >
-      <label class="workspace-search organization-search"
-        ><AppIcon name="search" /><input
-          v-model="filter"
-          type="search"
-          :placeholder="t('findOrganization')"
-          :aria-label="t('findOrganization')"
-      /></label>
-      <div class="organization-list-sidebar-title">{{ t("yourOrganizations") }}</div>
-      <RouterLink
-        v-for="organization in visibleOrganizations"
-        :key="organization.slug"
-        class="workspace-nav-item"
-        :to="`/organizations/${organization.slug}`"
-      >
-        <span class="organization-sidebar-mark">{{
-          organization.displayName.slice(0, 1).toUpperCase()
-        }}</span
-        ><span class="repo-nav-name">{{ organization.displayName }}</span>
-      </RouterLink>
-      <p v-if="!loading && !error && !visibleOrganizations.length" class="sidebar-empty muted">
-        {{ t("noOrganizationsYet") }}
-      </p>
     </aside>
 
     <div class="organization-list-content">
       <header class="workspace-page-heading">
         <div>
-          <p class="workspace-eyebrow">{{ t("workspace") }}</p>
-          <h2>{{ t("yourOrganizations") }}</h2>
+          <h1>{{ t("yourOrganizations") }}</h1>
           <p class="muted">{{ t("organizationListHint") }}</p>
         </div>
         <button
@@ -132,12 +140,12 @@ onMounted(load);
           <AppIcon name="plus" />{{ t("newOrganization") }}
         </button>
       </header>
-      <section class="workspace-panel organization-directory">
-        <div class="workspace-panel-heading">
-          <h3>
+      <section class="box organization-directory">
+        <div class="box-header workspace-panel-heading">
+          <h2>
             {{ t("organizations") }} <StatusBadge>{{ visibleOrganizations.length }}</StatusBadge>
-          </h3>
-          <label class="workspace-search organization-inline-search"
+          </h2>
+          <label class="workspace-search"
             ><AppIcon name="search" /><input
               v-model="filter"
               type="search"
@@ -152,11 +160,11 @@ onMounted(load);
           :empty="false"
           @retry="load"
         />
-        <div v-else-if="visibleOrganizations.length" class="organization-directory-list">
+        <div v-else-if="visibleOrganizations.length">
           <RouterLink
             v-for="organization in visibleOrganizations"
             :key="organization.slug"
-            class="organization-directory-row"
+            class="box-row organization-directory-row"
             :to="`/organizations/${organization.slug}`"
           >
             <span class="organization-directory-mark">{{
@@ -175,7 +183,7 @@ onMounted(load);
         </div>
         <div v-else class="dashboard-repo-onboarding organization-onboarding">
           <span class="onboarding-icon"><AppIcon name="organization" :size="24" /></span>
-          <h4>{{ t("organizationEmpty") }}</h4>
+          <h3>{{ t("organizationEmpty") }}</h3>
           <p class="muted">{{ t("organizationOnboardingHint") }}</p>
           <button
             class="btn btn-primary"
