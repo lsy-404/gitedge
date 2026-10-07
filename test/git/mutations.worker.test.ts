@@ -138,6 +138,7 @@ describe("Git mutation guards", () => {
       message: "x",
     });
     expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: { code: "refs_changed" } });
     expect(tokenCount()).toBe(before);
   });
 
@@ -232,6 +233,17 @@ describe("Agent session workspace access", () => {
     expect(artifacts.snapshot(forkName).tokens.length).toBe(forkBefore);
   });
 
+  it("lets the session owner past the ownership guard", async () => {
+    const response = await gitCall(
+      `branches?sessionId=${sessionId}`,
+      "POST",
+      { name: "topic", source: "main", expectedOid: oid("a") },
+      "owner"
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: { code: "refs_changed" } });
+  });
+
   describe("published pull request heads", () => {
     const reader: GitRepositoryAccess = {
       user: null,
@@ -316,6 +328,6 @@ describe("Write token revocation", () => {
         (await inner.log({ limit: 1 }))[0].hash,
         async () => {}
       )
-    ).rejects.not.toThrow("revoke failed");
+    ).rejects.toThrow("upstream unavailable");
   });
 });
