@@ -179,19 +179,19 @@ watch(() => [props.repository.id, props.item.number, canEdit.value], load);
 <style scoped>
 .assignment-panel {
   display: grid;
-  gap: var(--spacingVerticalM);
-  margin-top: var(--spacingVerticalL);
-  padding-top: var(--spacingVerticalL);
-  border-top: var(--strokeWidthThin) solid var(--colorNeutralStroke2);
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-default);
 }
 .assignment-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: var(--spacingVerticalL) var(--spacingHorizontalXL);
+  gap: var(--space-4) var(--space-5);
 }
 .task-select {
   display: grid;
-  gap: var(--spacingVerticalS);
+  gap: var(--space-2);
   align-content: start;
   min-width: 0;
 }
@@ -201,13 +201,13 @@ watch(() => [props.repository.id, props.item.number, canEdit.value], load);
 .task-current {
   min-height: 32px;
   overflow-wrap: anywhere;
-  font-weight: var(--fontWeightSemibold);
+  font-weight: var(--font-weight-semibold);
 }
 p.task-current {
-  font-weight: var(--fontWeightRegular);
-  font-size: var(--fontSizeBase200);
+  font-weight: var(--font-weight-regular);
+  font-size: var(--font-size-meta);
 }
 .agent-note {
-  font-size: var(--fontSizeBase200);
+  font-size: var(--font-size-meta);
 }
 </style>

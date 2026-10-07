@@ -1,0 +1,104 @@
+.deploy-wizard {
+  display: grid;
+  gap: var(--space-5);
+  margin: var(--space-5) 0 var(--space-8);
+}
+.deploy-wizard h2,
+.deploy-wizard h3,
+.deploy-wizard h4 {
+  margin-top: 0;
+}
+.deploy-wizard form,
+.deploy-review {
+  display: grid;
+  gap: var(--space-4);
+}
+.deploy-digest {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.35fr) minmax(0, 1fr);
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+}
+.deploy-digest dt {
+  color: var(--fg-muted);
+}
+.deploy-digest dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.deploy-digest code,
+.deploy-list,
+.deploy-progress {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-meta);
+}
+.deploy-list {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding-left: var(--space-5);
+  color: var(--fg-secondary);
+  overflow-wrap: anywhere;
+}
+.deploy-disclosure-text {
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--fg-secondary);
+  font: var(--font-size-meta) / 1.6 var(--font-mono);
+}
+.deploy-disclosure {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.deploy-disclosure + .deploy-disclosure {
+  margin-top: var(--space-2);
+}
+.deploy-disclosure > summary {
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+}
+.deploy-disclosure[open] > summary {
+  border-bottom: 1px solid var(--border-default);
+}
+.deploy-disclosure > .deploy-disclosure-text {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+.deploy-token-form,
+.deploy-resource-controls,
+.deploy-confirm-form {
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-default);
+}
+.deploy-resource-controls {
+  display: grid;
+  gap: var(--space-4);
+}
+.deploy-resource {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: end;
+}
+.deploy-progress ol {
+  display: grid;
+  gap: var(--space-2);
+  padding-left: var(--space-8);
+  color: var(--fg-secondary);
+}
+.deploy-progress li[data-state="done"] {
+  color: var(--success-fg);
+}
+.deploy-progress li[data-state="failed"] {
+  color: var(--danger-fg);
+}

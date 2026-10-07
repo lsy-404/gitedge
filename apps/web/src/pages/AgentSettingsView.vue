@@ -631,16 +631,16 @@ sessionClockTimer = window.setInterval(() => {
 <style scoped>
 .agent-form,
 .session-form {
-  margin-bottom: var(--spacingVerticalL);
+  margin-bottom: var(--space-4);
 }
 .agent-layout {
   display: grid;
   grid-template-columns: minmax(190px, 0.7fr) minmax(0, 1.5fr);
-  gap: var(--spacingHorizontalL);
+  gap: var(--space-4);
 }
 .agent-detail {
   display: grid;
-  gap: var(--spacingVerticalL);
+  gap: var(--space-4);
 }
 .agent-list {
   align-self: start;
@@ -650,37 +650,37 @@ sessionClockTimer = window.setInterval(() => {
   width: 100%;
   justify-content: flex-start;
   height: auto;
-  padding-block: var(--spacingVerticalS);
+  padding-block: var(--space-2);
   text-align: left;
 }
 .agent-choice-text {
   display: grid;
-  gap: var(--spacingVerticalXXS);
+  gap: var(--space-1);
 }
 .agent-choice small {
-  color: var(--colorNeutralForeground3);
+  color: var(--fg-muted);
 }
 .panel-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--spacingHorizontalM);
+  gap: var(--space-3);
 }
 .session-row {
   align-items: center;
 }
 .credential-card {
   display: grid;
-  gap: var(--spacingVerticalM);
+  gap: var(--space-3);
   min-width: min(560px, 80vw);
 }
 .credential-field {
   display: grid;
-  gap: var(--spacingVerticalXS);
+  gap: var(--space-1);
 }
 .field-label {
-  color: var(--colorNeutralForeground2);
-  font-size: var(--fontSizeBase200);
+  color: var(--fg-secondary);
+  font-size: var(--font-size-meta);
 }
 .credential-card code,
 .credential-card pre {
@@ -688,11 +688,11 @@ sessionClockTimer = window.setInterval(() => {
   margin: 0;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
-  padding: var(--spacingVerticalS) var(--spacingHorizontalM);
-  border-radius: var(--borderRadiusMedium);
-  color: var(--colorBrandForegroundLink);
-  background: var(--colorNeutralBackground3);
-  font: var(--fontSizeBase200) / 1.6 var(--fontFamilyMonospace);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  color: var(--accent-fg);
+  background: var(--bg-subtle);
+  font: var(--font-size-meta) / 1.6 var(--font-mono);
 }
 @media (max-width: 700px) {
   .agent-layout {

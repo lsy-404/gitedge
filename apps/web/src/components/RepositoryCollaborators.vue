@@ -181,7 +181,7 @@ watch(() => props.repositoryId, load, { immediate: true });
 .collaborator-intro,
 .collaborator-empty {
   margin: 14px 20px;
-  color: var(--fluent-muted);
+  color: var(--fg-muted);
   font-size: 13px;
 }
 .collaborator-list {
@@ -196,14 +196,14 @@ watch(() => props.repositoryId, load, { immediate: true });
   gap: 12px;
   align-items: center;
   padding: 14px 20px;
-  border-top: 1px solid var(--fluent-border);
+  border-top: 1px solid var(--border-default);
 }
 .collaborator-copy {
   display: grid;
   gap: 4px;
 }
 .collaborator-copy small {
-  color: var(--fluent-muted);
+  color: var(--fg-muted);
   font-size: 12px;
 }
 .collaborator-form {
@@ -212,7 +212,7 @@ watch(() => props.repositoryId, load, { immediate: true });
   gap: 12px;
   align-items: end;
   padding: 20px;
-  border-top: 1px solid var(--fluent-border);
+  border-top: 1px solid var(--border-default);
 }
 .repository-collaborators :deep(.notice-bar) {
   margin: 12px 20px;

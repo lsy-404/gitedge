@@ -37,10 +37,24 @@ export const preferenceSaving = ref(false);
 export const accountProfileState = shallowRef<AccountProfile | null>(null);
 let loadVersion = 0;
 
+const themeColorMetas = Array.from(
+  document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"][data-scheme]')
+);
+const themeColors = new Map(themeColorMetas.map((meta) => [meta.dataset.scheme, meta.content]));
+
+function applyTheme(theme: AccountPreferences["theme"]): void {
+  document.documentElement.dataset.theme = theme;
+  for (const meta of themeColorMetas) {
+    meta.content =
+      themeColors.get(theme === "system" ? meta.dataset.scheme : theme) ?? meta.content;
+  }
+}
+
 function apply(value: AccountPreferences): void {
   Object.assign(preferencesState, value);
   i18n.global.locale.value = value.locale;
   document.documentElement.lang = value.locale;
+  applyTheme(value.theme);
   saveLocalPreferences();
 }
 

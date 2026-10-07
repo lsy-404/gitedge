@@ -350,16 +350,16 @@ function close() {
 <style scoped>
 .file-editor {
   display: grid;
-  gap: var(--spacingVerticalM);
-  margin-top: var(--spacingVerticalL);
-  padding: var(--spacingVerticalL);
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  padding: var(--space-4);
 }
 .file-editor h2 {
   margin: 0;
 }
 .editor-fields {
   display: grid;
-  gap: var(--spacingVerticalM);
+  gap: var(--space-3);
   min-width: 0;
   margin: 0;
   padding: 0;
@@ -368,13 +368,13 @@ function close() {
 .branch-guidance,
 .save-result {
   display: grid;
-  gap: var(--spacingVerticalS);
-  padding: var(--spacingVerticalM);
-  border: 1px solid var(--colorNeutralStroke2);
-  border-radius: var(--borderRadiusMedium);
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
 }
 .file-editor :deep(textarea) {
   min-height: 320px;
-  font-family: var(--fontFamilyMonospace);
+  font-family: var(--font-mono);
 }
 </style>

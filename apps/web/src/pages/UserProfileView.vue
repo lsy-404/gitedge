@@ -141,7 +141,7 @@ watch(() => props.owner, load, { immediate: true });
   gap: 20px;
   align-items: center;
   padding-bottom: 24px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-default);
 }
 .profile-avatar {
   display: grid;
@@ -149,9 +149,9 @@ watch(() => props.owner, load, { immediate: true });
   height: 88px;
   place-items: center;
   border-radius: 50%;
-  background: var(--subtle);
-  border: 1px solid var(--border);
-  color: var(--accent);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-default);
+  color: var(--accent-fg);
   font-size: 32px;
   font-weight: 600;
 }
@@ -161,7 +161,7 @@ watch(() => props.owner, load, { immediate: true });
 }
 .profile-header .eyebrow {
   margin: 0 0 4px;
-  color: var(--muted);
+  color: var(--fg-muted);
   font-size: 12px;
 }
 .profile-header .muted {
@@ -186,7 +186,7 @@ watch(() => props.owner, load, { immediate: true });
   overflow-wrap: anywhere;
 }
 .profile-detail span {
-  color: var(--muted);
+  color: var(--fg-muted);
   font-size: 12px;
 }
 .profile-content {
@@ -197,14 +197,14 @@ watch(() => props.owner, load, { immediate: true });
 .profile-panel {
   min-width: 0;
   padding: 20px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--bg-canvas);
 }
 .profile-panel > h2,
 .profile-panel-heading {
   padding-bottom: 12px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-default);
   font-size: 18px;
 }
 .profile-panel-heading {
@@ -230,7 +230,7 @@ watch(() => props.owner, load, { immediate: true });
 }
 .profile-repositories li {
   padding: 14px 0;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-default);
 }
 .profile-repositories li:last-child {
   border-bottom: 0;

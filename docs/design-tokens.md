@@ -1,0 +1,56 @@
+# Design tokens and UI conventions
+
+All visual values for `apps/web` come from the tokens on `:root` in `apps/web/src/styles/main.css`. Colors use `light-dark(light, dark)` and resolve through `color-scheme`: `:root` follows the system, and `lib/preferences.ts` sets `<html data-theme="light|dark|system">` for an explicit choice. `FluentTheme` follows the same preference, and the Platform Kit `--fluent-*` variables are mapped onto these tokens in `main.css`. Do not set `--fluent-*` anywhere else, do not pass `accent`/`accent-text` to `FluentTheme`, and do not add page-level color variables.
+
+`test/ui/design-tokens.test.ts` checks the WCAG AA pairs below in both themes. Add a pair when you introduce a new foreground/background combination.
+
+## Tokens
+
+| Group     | Token                                                                           | Light / dark                                          | Use                                                           |
+| --------- | ------------------------------------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------- |
+| Surface   | `--bg-canvas`                                                                   | `#ffffff` / `#1a1a1a`                                 | Page, inputs                                                  |
+|           | `--bg-subtle`                                                                   | `#f6f6f6` / `#222222`                                 | Box headers, header bar, inset code, row hover                |
+|           | `--bg-raised`                                                                   | `#ffffff` / `#1f1f1f`                                 | `.box`, cards, panels                                         |
+|           | `--bg-overlay`                                                                  | `#ffffff` / `#282828`                                 | Menus, popovers, dialogs, notices                             |
+|           | `--bg-selected`                                                                 | `#ebebeb` / `#363636`                                 | Selected list or nav item                                     |
+| Control   | `--control-bg` / `-hover` / `-active`                                           | `#f6f6f6 #eeeeee #e5e5e5` / `#262626 #303030 #3a3a3a` | Buttons and menu-item hover/press                             |
+|           | `--control-height` / `--control-height-sm`                                      | `32px` / `28px`                                       | Buttons, inputs, selects                                      |
+| Border    | `--border-muted`                                                                | `#e8e8e8` / `#2c2c2c`                                 | Row separators inside a box                                   |
+|           | `--border-default`                                                              | `#d9d9d9` / `#3a3a3a`                                 | Boxes, buttons, menus                                         |
+|           | `--border-strong`                                                               | `#8a8a8a` / `#7a7a7a`                                 | Input, checkbox, switch boundaries (3:1)                      |
+| Text      | `--fg-default`                                                                  | `#1f1f1f` / `#ededed`                                 | Primary text                                                  |
+|           | `--fg-secondary`                                                                | `#454545` / `#c8c8c8`                                 | Supporting copy                                               |
+|           | `--fg-muted`                                                                    | `#5f5f5f` / `#a6a6a6`                                 | Meta, placeholders, icons                                     |
+|           | `--fg-on-accent`                                                                | `#1a0e04`                                             | Text on orange fills                                          |
+|           | `--fg-on-danger`                                                                | `#ffffff` / `#1a0505`                                 | Text on danger fills                                          |
+| Accent    | `--accent-emphasis` / `-hover` / `-active`                                      | `#f38020` · `#e5751a`/`#f69545` · `#d06810`/`#e0731a` | Primary button and skip-link fills only                       |
+|           | `--accent-fg` / `--accent-fg-hover`                                             | `#a94700` / `#ff9f5a` · `#873900` / `#ffbd8a`         | Links and orange text                                         |
+|           | `--accent-strong`                                                               | `#d0650a`                                             | Selected-tab bars, checkbox/switch fills, graph strokes       |
+|           | `--accent-subtle` / `--accent-border`                                           | `#fff1e6`/`#33210f` · `#f5c08f`/`#6b3d14`             | Brand badge, avatar, pressed toggle                           |
+| Status    | `--{success,warning,danger,info,done}-fg` / `-subtle` / `-border`               | see `main.css`                                        | Status text, badge background, badge border                   |
+|           | `--danger-emphasis` / `-active`                                                 | `#c4291c`/`#f85149` · `#a8231a`/`#ff6a60`             | Danger button hover/press fill                                |
+| Focus     | `--focus-ring`                                                                  | `#d0650a`                                             | Every focus indicator                                         |
+| Elevation | `--shadow-sm`                                                                   | theme-aware                                           | Menus (`.dropdown-panel`), floating cards                     |
+|           | `--shadow-lg`                                                                   | theme-aware                                           | Dialogs, popovers, flyouts (clone menu, branch panel)         |
+|           | `--scrim`                                                                       | 32% / 56% black                                       | Dialog and drawer backdrops                                   |
+| Radius    | `--radius-sm` / `-md` / `-lg` / `-full`                                         | `4px` / `6px` / `8px` / `999px`                       | Menu items / controls and boxes / overlays and panels / pills |
+| Space     | `--space-1` … `--space-6`, `--space-8`                                          | `4px` steps (`4 8 12 16 20 24`, `32`)                 | All gaps and padding; compact density shrinks 3–5             |
+| Type      | `--font-size-meta` / `-body` / `-lg` / `-section` / `-title`                    | `12` / `14` / `16` / `20` / `24px`                    | Meta / body / row titles / section titles / page titles       |
+|           | `--font-weight-regular` / `-medium` / `-semibold`, `--font-sans`, `--font-mono` |                                                       |                                                               |
+|           | `--line-height-body` / `-section` / `-title`                                    | `1.5` / `28px` / `32px`                               |                                                               |
+| Motion    | `--duration-fast` / `--duration-normal`, `--ease-standard`                      | `120ms` / `180ms`; `0ms` under reduced motion         | Transitions and enter animations                              |
+
+Key contrast ratios (light / dark): `--fg-default` on canvas 16.5 / 14.9, `--fg-muted` on canvas 6.4 / 7.2 and on `--bg-selected` 5.4 / 5.0, `--accent-fg` on canvas 5.9 / 8.6, `--fg-on-accent` on `--accent-emphasis` 7.1, `--fg-on-danger` on `--danger-emphasis` 5.7 / 5.9, `--danger-fg` on `--control-bg` 5.3 / 6.2, `--focus-ring` on canvas 3.8 / 4.6, `--border-strong` on canvas 3.5 / 3.9.
+
+## Conventions
+
+- **Colors.** Use tokens only; no hex values, `rgb()` literals or `var(--token, fallback)` fallbacks in components. Syntax highlighting (`markdown.css`) and diff rows (`DiffViewer.vue`) keep their own `light-dark()` palettes. Orange fills are for the primary action only; orange text is always `--accent-fg`. Selection indicators (tab underlines, left bars) use `--accent-strong`. Purple (`--done-*`) is reserved for closed/merged states.
+- **Buttons.** Use `FluentButton` or `.btn`; both render the same family: 32px (`size="small"` / `.btn-sm` 28px, 12px text), `--radius-md`, 1px border, no shadow. Variants map one to one: `tone="primary"` = `.btn-primary` (orange, black text), `tone="danger"` = `.btn-danger` (red text, red fill on hover), `tone="subtle"` = `.btn-subtle` (ghost), default = secondary. Icon-only: `icon-only` / `.icon-button`. Pressed toggles use `aria-pressed`. Do not restyle buttons per page.
+- **Form controls.** Native `input`/`select`/`textarea` and Kit fields share one style (32px, `--border-strong`, `--bg-canvas`, `--radius-md`). The global rule has specificity (0,1,0), so a class-scoped reset such as `.my-search input` wins without `!important`. Wrap fields in `TextField`, `SelectField` or `TextAreaField`.
+- **Inline search.** A bordered wrapper with a borderless input uses one of `.global-search`, `.workspace-search`, `.file-search` or `.search-field`; the wrapper receives the focus ring. Reset the inner input's `border`, `padding`, `min-height`, `border-radius` and `box-shadow`, never its `outline`.
+- **Focus.** Never remove a focus indicator. The global `:focus-visible` rule draws a 2px `--focus-ring` outline offset by 2px; the moving Fluent indicator replaces it only when motion is allowed.
+- **Layout.** Space on the 4px grid with `--space-*`. Boxes are `.box` + `.box-header` + `.box-row`. Body text is 14px; meta text is 12px; nothing below 12px for primary content. Menus use `.dropdown-panel`; overlays use the Kit dialog or popover.
+- **States.** Hover uses `--control-bg-hover` (controls, menu items) or `--bg-subtle` (rows); pressed uses `--control-bg-active`; selected uses `--bg-selected`; disabled controls show `--fg-muted` at reduced opacity and no hover change. Loading, error and empty states go through `StatusState`.
+- **Motion.** Use `--duration-*` and `--ease-standard`. Enter animations change opacity only on route roots; reduced motion is handled once in `motion.css`.
+- **Utilities and placement.** `.visually-hidden` is the only screen-reader utility. Shared primitives live in `main.css` (loaded globally); page-specific rules live in the page stylesheet or the component's `<style scoped>`, never in `main.css`. Anything rendered by the global shell must not depend on a route-loaded stylesheet.
+- **Avatars** have no border or outline.

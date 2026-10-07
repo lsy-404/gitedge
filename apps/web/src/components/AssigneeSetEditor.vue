@@ -96,7 +96,7 @@ function remove(target: Assignee) {
 <style scoped>
 .assignee-set {
   display: grid;
-  gap: var(--spacingVerticalS);
+  gap: var(--space-2);
   min-width: 0;
   align-content: start;
 }
@@ -105,7 +105,7 @@ function remove(target: Assignee) {
 }
 .assignee-list {
   display: grid;
-  gap: var(--spacingVerticalXS);
+  gap: var(--space-1);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -113,18 +113,18 @@ function remove(target: Assignee) {
 .assignee-list li {
   display: flex;
   align-items: center;
-  gap: var(--spacingHorizontalS);
+  gap: var(--space-2);
   min-height: 32px;
 }
 .assignee-name {
   min-width: 0;
   overflow-wrap: anywhere;
-  font-weight: var(--fontWeightSemibold);
+  font-weight: var(--font-weight-semibold);
 }
 .assignee-list FluentButton {
   margin-left: auto;
 }
 .assignee-empty {
-  font-size: var(--fontSizeBase200);
+  font-size: var(--font-size-meta);
 }
 </style>

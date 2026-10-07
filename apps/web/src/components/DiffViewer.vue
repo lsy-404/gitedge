@@ -77,10 +77,10 @@ const hunks = computed(() => {
   width: 100%;
   max-height: none;
   overflow: auto;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-default);
   border-top: 0;
-  border-radius: 0 0 6px 6px;
-  background: var(--bg);
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  background: var(--bg-canvas);
 }
 table {
   min-width: 100%;
@@ -94,10 +94,10 @@ td {
 .diff-number {
   width: 44px;
   min-width: 44px;
-  color: var(--muted);
+  color: var(--fg-muted);
   text-align: right;
   user-select: none;
-  border-right: 1px solid #8c959f22;
+  border-right: 1px solid var(--border-muted);
 }
 .diff-code {
   width: 100%;
@@ -120,7 +120,7 @@ code {
   background: light-dark(#ffd8d3, #522329);
 }
 .diff-hunk {
-  color: var(--muted);
+  color: var(--fg-muted);
   background: light-dark(#ddf4ff, #182b40);
 }
 .diff-hunk td {

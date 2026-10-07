@@ -133,8 +133,8 @@ watch(() => [props.repositoryId, props.refName], load, { immediate: true });
   max-height: 70vh;
   overflow: auto;
   padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
 }
 .community-readme-heading {
   display: flex;
@@ -142,7 +142,7 @@ watch(() => [props.repositoryId, props.refName], load, { immediate: true });
   gap: 12px;
   align-items: center;
   padding-bottom: 10px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-default);
 }
 .community-readme-heading h3 {
   margin: 0;
@@ -154,13 +154,13 @@ watch(() => [props.repositoryId, props.refName], load, { immediate: true });
   display: grid;
   margin: 0;
   padding: 0;
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
   list-style: none;
   overflow: hidden;
 }
 .community-file + .community-file {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-default);
 }
 .community-file summary {
   display: flex;
@@ -169,13 +169,13 @@ watch(() => [props.repositoryId, props.refName], load, { immediate: true });
   align-items: baseline;
   padding: 12px 16px;
   cursor: pointer;
-  background: var(--subtle);
+  background: var(--bg-subtle);
 }
 .community-file summary span {
   font-weight: 600;
 }
 .community-file summary small {
-  color: var(--muted);
+  color: var(--fg-muted);
   font-size: 12px;
 }
 .community-inherited {

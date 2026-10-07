@@ -198,8 +198,8 @@ watch(() => [props.repositoryId, props.refName, props.kind], load, { immediate: 
   gap: 12px;
   min-width: 0;
   padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
 }
 .template-choice-heading {
   display: flex;
@@ -217,18 +217,18 @@ watch(() => [props.repositoryId, props.refName, props.kind], load, { immediate: 
 }
 .template-limit {
   margin: 0;
-  color: var(--warning-text, var(--muted));
+  color: var(--warning-fg);
   font-size: 13px;
 }
 .template-preview {
   max-height: 50vh;
   overflow: auto;
   padding-top: 12px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-default);
 }
 .template-preview summary {
   margin-bottom: 12px;
-  color: var(--muted);
+  color: var(--fg-muted);
   cursor: pointer;
 }
 @media (max-width: 700px) {

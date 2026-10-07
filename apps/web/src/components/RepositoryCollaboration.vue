@@ -1553,7 +1553,7 @@ watch(
 .collab-section {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: var(--spacingVerticalL);
+  gap: var(--space-4);
 }
 .section-actions {
   display: flex;
@@ -1568,21 +1568,21 @@ watch(
   text-decoration: none;
 }
 .item-link:hover strong {
-  color: var(--colorBrandForegroundLink);
+  color: var(--accent-fg);
 }
 .item-row {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: var(--spacingHorizontalM);
+  gap: var(--space-3);
   min-height: 48px;
-  padding: var(--spacingVerticalS) 0;
-  border-bottom: 1px solid var(--colorNeutralStroke2);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border-default);
 }
 .item-row small,
 .item-link small,
 .actor-line {
-  color: var(--colorNeutralForeground3);
+  color: var(--fg-muted);
 }
 .item-row small,
 .item-link small {
@@ -1590,96 +1590,96 @@ watch(
 }
 .number,
 code {
-  color: var(--colorBrandForegroundLink);
-  font-family: var(--fontFamilyMonospace);
-  font-size: var(--fontSizeBase200);
+  color: var(--accent-fg);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-meta);
 }
 .list-limit-note {
-  padding: var(--spacingVerticalM);
-  color: var(--colorNeutralForeground3);
-  font-size: var(--fontSizeBase200);
+  padding: var(--space-3);
+  color: var(--fg-muted);
+  font-size: var(--font-size-meta);
   text-align: center;
 }
 .detail-card {
-  margin-top: var(--spacingVerticalM);
+  margin-top: var(--space-3);
 }
 .detail-heading {
   display: flex;
   justify-content: space-between;
-  gap: var(--spacingHorizontalL);
+  gap: var(--space-4);
   align-items: flex-start;
 }
 .detail-heading h2 {
-  margin: 0 0 var(--spacingVerticalL);
-  font-size: var(--fontSizeHero700);
-  line-height: var(--lineHeightHero700);
+  margin: 0 0 var(--space-4);
+  font-size: var(--font-size-title);
+  line-height: var(--line-height-title);
 }
 .detail-actions {
   display: flex;
-  gap: var(--spacingHorizontalS);
+  gap: var(--space-2);
 }
 .actor-line {
   display: flex;
-  gap: var(--spacingHorizontalM);
+  gap: var(--space-3);
   align-items: center;
   flex-wrap: wrap;
-  font-size: var(--fontSizeBase200);
+  font-size: var(--font-size-meta);
 }
 .body-content {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font: var(--fontSizeBase300) / 1.7 var(--fontFamilyBase);
-  margin: var(--spacingVerticalL) 0;
+  font: var(--font-size-body) / 1.7 var(--font-sans);
+  margin: var(--space-4) 0;
 }
 .metadata-row,
 .pull-meta {
   display: flex;
-  gap: var(--spacingHorizontalS);
+  gap: var(--space-2);
   flex-wrap: wrap;
   align-items: center;
-  padding: var(--spacingVerticalM) 0;
+  padding: var(--space-3) 0;
 }
 .wiki-history,
 .wiki-edit-actions,
 .pull-review {
-  margin-top: var(--spacingVerticalL);
+  margin-top: var(--space-4);
 }
 .changed-file {
-  border-top: 1px solid var(--colorNeutralStroke2);
-  padding: var(--spacingVerticalM) 0;
+  border-top: 1px solid var(--border-default);
+  padding: var(--space-3) 0;
 }
 .diff-preview {
   max-height: 420px;
   overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  background: var(--colorNeutralBackground3);
-  border-radius: var(--borderRadiusMedium);
-  padding: var(--spacingVerticalM);
-  font: var(--fontSizeBase200) / 1.6 var(--fontFamilyMonospace);
+  background: var(--bg-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  font: var(--font-size-meta) / 1.6 var(--font-mono);
 }
 .merge-actions {
   display: flex;
   align-items: center;
-  gap: var(--spacingHorizontalM);
-  padding-top: var(--spacingVerticalM);
+  gap: var(--space-3);
+  padding-top: var(--space-3);
 }
 .comment-row {
-  border-bottom: 1px solid var(--colorNeutralStroke2);
-  padding: var(--spacingVerticalM) 0;
+  border-bottom: 1px solid var(--border-default);
+  padding: var(--space-3) 0;
 }
 .comment-row .actor-line small {
   margin-left: auto;
 }
 .inline-form {
-  margin-top: var(--spacingVerticalM);
+  margin-top: var(--space-3);
 }
 @media (max-width: 640px) {
   .detail-heading {
     display: block;
   }
   .detail-actions {
-    margin-bottom: var(--spacingVerticalM);
+    margin-bottom: var(--space-3);
   }
 }
 </style>

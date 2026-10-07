@@ -239,12 +239,7 @@ onUnmounted(() => {
 if (!sessionState.checked) void refreshSession();
 </script>
 <template>
-  <FluentTheme
-    :mode="preferencesState.theme"
-    accent="#f6821f"
-    accent-text="#1a0e04"
-    :data-density="preferencesState.density"
-  >
+  <FluentTheme :mode="preferencesState.theme" :data-density="preferencesState.density">
     <div class="app-shell">
       <a class="skip-link" href="#main">{{ t("skipToContent") }}</a>
       <header class="site-header" :class="{ 'site-header-auth': authPage }">

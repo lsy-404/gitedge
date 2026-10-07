@@ -934,11 +934,7 @@ onUnmounted(() => {
                 :y1="20 + edge.fromRow * graphLayout.rowHeight"
                 :x2="12 + edge.toLane * 22"
                 :y2="20 + edge.toRow * graphLayout.rowHeight"
-                :stroke="
-                  edge.fromLane === edge.toLane
-                    ? 'var(--colorCompoundBrandStroke)'
-                    : 'var(--colorNeutralForeground3)'
-                "
+                :stroke="edge.fromLane === edge.toLane ? 'var(--accent-strong)' : 'var(--fg-muted)'"
                 stroke-width="2"
               />
               <circle
@@ -952,8 +948,8 @@ onUnmounted(() => {
                 :aria-label="`${t('openCommit')} ${point.commit.oid}`"
                 :fill="
                   (sessionMarkers.get(point.commit.oid)?.length ?? 0) > 0
-                    ? 'var(--colorPaletteMarigoldForeground2)'
-                    : 'var(--colorCompoundBrandForeground1)'
+                    ? 'var(--warning-fg)'
+                    : 'var(--accent-fg)'
                 "
                 @click="selectCommit(point.commit.oid)"
                 @keydown="handleCommitKeydown($event, point.commit.oid)"
@@ -1117,12 +1113,12 @@ onUnmounted(() => {
 .code-toolbar {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: var(--spacingVerticalM);
+  gap: var(--space-3);
 }
 .toolbar-row {
   display: flex;
   align-items: flex-end;
-  gap: var(--spacingHorizontalM);
+  gap: var(--space-3);
   flex-wrap: wrap;
 }
 .toolbar-row > .text-field {
@@ -1134,11 +1130,11 @@ onUnmounted(() => {
 .clone-control {
   display: flex;
   align-items: center;
-  gap: var(--spacingHorizontalS);
+  gap: var(--space-2);
   flex: 1 1 320px;
   min-width: 0;
-  color: var(--colorNeutralForeground2);
-  font-size: var(--fontSizeBase200);
+  color: var(--fg-secondary);
+  font-size: var(--font-size-meta);
 }
 .clone-control code {
   flex: 1;
@@ -1146,57 +1142,57 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding: var(--spacingVerticalXS) var(--spacingHorizontalS);
-  border-radius: var(--borderRadiusMedium);
-  background: var(--colorNeutralBackground3);
-  color: var(--colorBrandForegroundLink);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  color: var(--accent-fg);
 }
 .browser-grid {
   display: grid;
   grid-template-columns: minmax(260px, 0.8fr) minmax(0, 1.2fr);
-  gap: var(--spacingHorizontalL);
+  gap: var(--space-4);
   align-items: start;
 }
 .panel-heading {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: var(--spacingHorizontalM);
+  gap: var(--space-3);
 }
 .file-entry {
   display: flex;
   width: 100%;
   justify-content: flex-start;
   border-radius: 0;
-  border-bottom: 1px solid var(--colorNeutralStroke2);
+  border-bottom: 1px solid var(--border-default);
 }
 .file-entry::part(content) {
   display: flex;
   align-items: center;
-  gap: var(--spacingHorizontalM);
+  gap: var(--space-3);
   width: 100%;
 }
 .file-entry small {
   margin-left: auto;
-  color: var(--colorNeutralForeground3);
-  font-family: var(--fontFamilyMonospace);
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
 }
 .file-type {
-  color: var(--colorCompoundBrandForeground1);
+  color: var(--accent-fg);
 }
 .text-preview,
 .diff-preview {
   overflow: auto;
   max-height: 70vh;
   margin: 0;
-  padding: var(--spacingVerticalM) var(--spacingHorizontalL);
+  padding: var(--space-3) var(--space-4);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font: var(--fontSizeBase200) / 1.65 var(--fontFamilyMonospace);
+  font: var(--font-size-meta) / 1.65 var(--font-mono);
 }
 .readme-title {
   margin: 0;
-  padding: var(--spacingVerticalM) var(--spacingHorizontalL) 0;
+  padding: var(--space-3) var(--space-4) 0;
 }
 .graph-panel {
   position: relative;
@@ -1212,15 +1208,15 @@ onUnmounted(() => {
   pointer-events: none;
 }
 .commit-row {
-  padding-block: var(--spacingVerticalS);
-  border-bottom: 1px solid var(--colorNeutralStroke2);
-  color: var(--colorNeutralForeground3);
-  font-size: var(--fontSizeBase200);
+  padding-block: var(--space-2);
+  border-bottom: 1px solid var(--border-default);
+  color: var(--fg-muted);
+  font-size: var(--font-size-meta);
 }
 .commit-title {
   display: flex;
   align-items: center;
-  gap: var(--spacingHorizontalM);
+  gap: var(--space-3);
   height: 24px;
   min-width: 0;
 }
@@ -1229,7 +1225,7 @@ onUnmounted(() => {
 }
 .commit-labels {
   display: flex;
-  gap: var(--spacingHorizontalS);
+  gap: var(--space-2);
   overflow-x: auto;
   min-width: 0;
 }
@@ -1242,52 +1238,52 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--colorNeutralForeground1);
+  color: var(--fg-default);
 }
 .commit-row code,
 .commit-detail code {
-  color: var(--colorBrandForegroundLink);
-  font: var(--fontSizeBase200) var(--fontFamilyMonospace);
+  color: var(--accent-fg);
+  font: var(--font-size-meta) var(--font-mono);
 }
 .session-overlay-row {
   display: grid;
-  gap: var(--spacingVerticalXXS);
-  border-top: 1px solid var(--colorNeutralStroke2);
-  padding: var(--spacingVerticalS) 0;
+  gap: var(--space-1);
+  border-top: 1px solid var(--border-default);
+  padding: var(--space-2) 0;
 }
 .graph-scroll svg circle {
   pointer-events: all;
   cursor: pointer;
 }
 .session-overlay-row small {
-  color: var(--colorNeutralForeground3);
+  color: var(--fg-muted);
 }
 .session-overlay {
   display: grid;
-  gap: var(--spacingVerticalXS);
-  padding-top: var(--spacingVerticalM);
-  color: var(--colorNeutralForeground2);
-  font-size: var(--fontSizeBase200);
+  gap: var(--space-1);
+  padding-top: var(--space-3);
+  color: var(--fg-secondary);
+  font-size: var(--font-size-meta);
 }
 .token-once {
   display: grid;
-  gap: var(--spacingVerticalM);
+  gap: var(--space-3);
   overflow-wrap: anywhere;
 }
 .token-once p {
-  margin: var(--spacingVerticalXS) 0 0;
-  color: var(--colorNeutralForeground2);
+  margin: var(--space-1) 0 0;
+  color: var(--fg-secondary);
 }
 .token-once code {
-  padding: var(--spacingVerticalS) var(--spacingHorizontalM);
-  border-radius: var(--borderRadiusMedium);
-  background: var(--colorNeutralBackground3);
-  color: var(--colorBrandForegroundLink);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  color: var(--accent-fg);
 }
 .compare-form {
   display: flex;
   align-items: flex-end;
-  gap: var(--spacingHorizontalM);
+  gap: var(--space-3);
   flex-wrap: wrap;
 }
 .diff-preview {
@@ -1300,9 +1296,9 @@ onUnmounted(() => {
   display: flex;
   align-items: flex-start;
   flex-wrap: wrap;
-  gap: var(--spacingHorizontalS);
-  padding: var(--spacingVerticalM) 0;
-  border-bottom: 1px solid var(--colorNeutralStroke2);
+  gap: var(--space-2);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border-default);
 }
 @media (max-width: 720px) {
   .browser-grid {

@@ -7,6 +7,7 @@ import NoticeBar from "./NoticeBar.vue";
 import SelectField from "./SelectField.vue";
 import TextField from "./TextField.vue";
 import StatusBadge from "./StatusBadge.vue";
+import "../styles/deploy.css";
 
 type DeployStepId = "provision" | "migrate" | "deploy";
 type Progress = { id: DeployStepId; state: "pending" | "running" | "done" | "failed" };

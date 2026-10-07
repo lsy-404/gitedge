@@ -191,24 +191,24 @@ watch(
 }
 .branch-panel {
   display: grid;
-  gap: var(--spacingVerticalS);
+  gap: var(--space-2);
   position: absolute;
   z-index: 4;
-  top: calc(100% + var(--spacingVerticalXS));
+  top: calc(100% + var(--space-1));
   left: 0;
   width: min(680px, 90vw);
   max-height: min(70vh, 620px);
   overflow: auto;
-  padding: var(--spacingVerticalM);
-  box-shadow: var(--shadow16);
+  padding: var(--space-3);
+  box-shadow: var(--shadow-lg);
 }
 .branch-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--spacingHorizontalS);
+  gap: var(--space-2);
   align-items: center;
-  padding-block: var(--spacingVerticalXS);
-  border-bottom: 1px solid var(--colorNeutralStroke2);
+  padding-block: var(--space-1);
+  border-bottom: 1px solid var(--border-default);
 }
 .branch-select {
   justify-content: flex-start;
@@ -222,15 +222,15 @@ watch(
 }
 .branch-rules {
   grid-column: 1;
-  color: var(--colorNeutralForeground3);
-  font-size: var(--fontSizeBase200);
+  color: var(--fg-muted);
+  font-size: var(--font-size-meta);
 }
 .branch-create {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--spacingHorizontalS);
+  gap: var(--space-2);
   align-items: end;
-  padding-top: var(--spacingVerticalM);
+  padding-top: var(--space-3);
 }
 .branch-create small {
   grid-column: 1;

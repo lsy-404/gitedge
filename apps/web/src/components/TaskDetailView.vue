@@ -625,47 +625,47 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
 .task-detail {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: var(--spacingVerticalL);
+  gap: var(--space-4);
 }
 .task-heading {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: var(--spacingHorizontalL);
+  gap: var(--space-4);
 }
 .task-heading h2 {
   margin: 0;
-  font-size: var(--fontSizeHero700);
-  line-height: var(--lineHeightHero700);
+  font-size: var(--font-size-title);
+  line-height: var(--line-height-title);
   overflow-wrap: anywhere;
 }
 .task-card {
   display: grid;
-  gap: var(--spacingVerticalL);
+  gap: var(--space-4);
 }
 .task-controls {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: var(--spacingHorizontalL);
+  gap: var(--space-4);
 }
 .task-readonly {
   display: grid;
-  gap: var(--spacingVerticalXS);
+  gap: var(--space-1);
   align-content: start;
 }
 .task-readonly .eyebrow,
 .task-overview .eyebrow,
 .task-progress-block .eyebrow {
-  margin-bottom: var(--spacingVerticalXS);
+  margin-bottom: var(--space-1);
 }
 .actor-line {
-  color: var(--colorNeutralForeground3);
-  font-size: var(--fontSizeBase200);
+  color: var(--fg-muted);
+  font-size: var(--font-size-meta);
 }
 .task-overview {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: var(--spacingVerticalL) var(--spacingHorizontalXL);
+  gap: var(--space-4) var(--space-5);
 }
 .body-text {
   white-space: pre-wrap;
@@ -675,8 +675,8 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
 .task-progress {
   display: flex;
   align-items: center;
-  gap: var(--spacingHorizontalM);
-  font-size: var(--fontSizeBase200);
+  gap: var(--space-3);
+  font-size: var(--font-size-meta);
 }
 .bar {
   width: min(320px, 60%);
@@ -684,52 +684,52 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
   flex: none;
   appearance: none;
   border: 0;
-  border-radius: var(--borderRadiusCircular);
-  background: var(--colorNeutralStroke2);
+  border-radius: var(--radius-full);
+  background: var(--border-default);
   overflow: hidden;
 }
 .bar::-webkit-progress-bar {
-  background: var(--colorNeutralStroke2);
+  background: var(--border-default);
 }
 .bar::-webkit-progress-value {
-  background: var(--colorBrandBackground);
+  background: var(--accent-emphasis);
 }
 .bar::-moz-progress-bar {
-  background: var(--colorBrandBackground);
+  background: var(--accent-emphasis);
 }
 .doc-tabs {
   display: flex;
   max-width: 100%;
   overflow-x: auto;
   scrollbar-width: none;
-  margin-bottom: var(--spacingVerticalL);
-  border-bottom: var(--strokeWidthThin) solid var(--colorNeutralStroke2);
+  margin-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border-default);
 }
 .doc-tab {
   flex: none;
   padding: 10px 14px;
   border: 0;
   border-bottom: 2px solid transparent;
-  color: var(--muted, var(--colorNeutralForeground3));
+  color: var(--fg-muted);
   background: transparent;
   font: inherit;
   cursor: pointer;
 }
 .doc-tab[aria-selected="true"] {
-  border-bottom-color: var(--accent, var(--colorBrandBackground));
-  color: var(--text, var(--colorNeutralForeground1));
+  border-bottom-color: var(--accent-strong);
+  color: var(--fg-default);
   font-weight: 600;
 }
 .doc-tab:focus-visible {
-  outline: 2px solid var(--link, var(--colorBrandForegroundLink));
+  outline: 2px solid var(--accent-fg);
   outline-offset: -2px;
 }
 .section-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--spacingHorizontalM);
-  margin-bottom: var(--spacingVerticalM);
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
 }
 .section-head h3 {
   margin: 0;
@@ -744,10 +744,10 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: var(--spacingHorizontalM);
+  gap: var(--space-3);
   min-height: 44px;
-  padding: var(--spacingVerticalXS) 0;
-  border-bottom: var(--strokeWidthThin) solid var(--colorNeutralStroke2);
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--border-default);
 }
 .plain-list li:last-child {
   border-bottom: 0;
@@ -756,8 +756,8 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
   margin-left: auto;
 }
 .commit-oid code {
-  color: var(--colorBrandForegroundLink);
-  font-size: var(--fontSizeBase200);
+  color: var(--accent-fg);
+  font-size: var(--font-size-meta);
 }
 .commit-summary {
   min-width: 0;
@@ -769,15 +769,15 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
   order: 5;
 }
 .inline-form {
-  margin-bottom: var(--spacingVerticalL);
+  margin-bottom: var(--space-4);
 }
 @media (max-width: 640px) {
   .task-heading {
     flex-direction: column;
   }
   .task-heading h2 {
-    font-size: var(--fontSizeBase600);
-    line-height: var(--lineHeightBase600);
+    font-size: var(--font-size-section);
+    line-height: var(--line-height-section);
   }
   .bar {
     width: 100%;

@@ -297,7 +297,7 @@ watch(
 .controls-empty,
 .controls-hint {
   margin: 14px 20px;
-  color: var(--fluent-muted);
+  color: var(--fg-muted);
   font-size: 13px;
 }
 .control-list {
@@ -312,7 +312,7 @@ watch(
   justify-content: space-between;
   gap: 16px;
   padding: 16px 20px;
-  border-top: 1px solid var(--fluent-border);
+  border-top: 1px solid var(--border-default);
 }
 .control-list-copy,
 .control-list-actions,
@@ -323,7 +323,7 @@ watch(
 }
 .control-list-copy small,
 .control-list-copy span {
-  color: var(--fluent-muted);
+  color: var(--fg-muted);
   font-size: 12px;
 }
 .control-list-actions {
@@ -331,7 +331,7 @@ watch(
 }
 .branch-rule-form {
   padding: 20px;
-  border-top: 1px solid var(--fluent-border);
+  border-top: 1px solid var(--border-default);
 }
 .branch-rule-form h4 {
   margin: 0;

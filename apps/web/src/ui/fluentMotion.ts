@@ -50,7 +50,6 @@ export function installFluentMotion(): () => void {
     const rect = activeTarget.getBoundingClientRect();
     const style = getComputedStyle(activeTarget);
     const radius = Number.parseFloat(style.borderTopLeftRadius) || 0;
-    indicator.style.borderColor = style.getPropertyValue("--link").trim() || style.color;
     activeTarget.classList.add("fluent-focus-target--tracked");
     indicator.style.left = `${rect.left - 4}px`;
     indicator.style.top = `${rect.top - 4}px`;

@@ -107,6 +107,6 @@ defineExpose({ arm });
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--spacingHorizontalS, 8px);
+  gap: var(--space-2);
 }
 </style>

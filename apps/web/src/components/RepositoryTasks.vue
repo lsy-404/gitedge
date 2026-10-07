@@ -342,20 +342,20 @@ watch(
 .tasks-section {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: var(--spacingVerticalL);
+  gap: var(--space-4);
 }
 .memory-box {
-  padding: var(--spacingVerticalL);
+  padding: var(--space-4);
 }
 .tasks-toolbar {
   display: flex;
   align-items: flex-end;
   flex-wrap: wrap;
-  gap: var(--spacingHorizontalM);
+  gap: var(--space-3);
 }
 .view-switch {
   display: flex;
-  gap: var(--spacingHorizontalXS);
+  gap: var(--space-1);
 }
 .status-filter {
   width: 220px;
@@ -364,8 +364,8 @@ watch(
   margin-left: auto;
 }
 .field-hint {
-  margin-top: calc(var(--spacingVerticalS) * -1);
-  font-size: var(--fontSizeBase200);
+  margin-top: calc(var(--space-2) * -1);
+  font-size: var(--font-size-meta);
 }
 .item-link {
   color: inherit;
@@ -374,19 +374,19 @@ watch(
   text-decoration: none;
 }
 .item-link:hover .task-title {
-  color: var(--colorBrandForegroundLink);
+  color: var(--accent-fg);
 }
 .number {
-  color: var(--colorNeutralForeground3);
-  font-family: var(--fontFamilyMonospace);
-  font-size: var(--fontSizeBase200);
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-meta);
 }
 .task-progress {
   display: flex;
   align-items: center;
-  gap: var(--spacingHorizontalM);
-  margin-top: var(--spacingVerticalS);
-  font-size: var(--fontSizeBase200);
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+  font-size: var(--font-size-meta);
 }
 .bar {
   width: min(240px, 40%);
@@ -394,28 +394,28 @@ watch(
   flex: none;
   appearance: none;
   border: 0;
-  border-radius: var(--borderRadiusCircular);
-  background: var(--colorNeutralStroke2);
+  border-radius: var(--radius-full);
+  background: var(--border-default);
   overflow: hidden;
 }
 .bar::-webkit-progress-bar {
-  background: var(--colorNeutralStroke2);
+  background: var(--border-default);
 }
 .bar::-webkit-progress-value {
-  background: var(--colorBrandBackground);
+  background: var(--accent-emphasis);
 }
 .bar::-moz-progress-bar {
-  background: var(--colorBrandBackground);
+  background: var(--accent-emphasis);
 }
 .table-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: var(--spacingHorizontalL);
-  margin-bottom: var(--spacingVerticalL);
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
 }
 .table-head .eyebrow {
-  margin-bottom: var(--spacingVerticalXXS);
+  margin-bottom: var(--space-1);
 }
 @media (max-width: 640px) {
   .status-filter {

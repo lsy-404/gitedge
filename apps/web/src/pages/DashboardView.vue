@@ -125,7 +125,11 @@ onMounted(load);
     <aside class="workspace-sidebar dashboard-sidebar">
       <div class="workspace-sidebar-heading">
         <h1>{{ t("dashboard") }}</h1>
-        <RouterLink class="icon-button" to="/organizations" :aria-label="t('organizations')">
+        <RouterLink
+          class="btn btn-subtle btn-sm icon-button"
+          to="/organizations"
+          :aria-label="t('organizations')"
+        >
           <AppIcon name="organization" />
         </RouterLink>
       </div>
@@ -142,7 +146,7 @@ onMounted(load);
       <div class="workspace-sidebar-heading repo-sidebar-title">
         <h2>{{ t("repositories") }}</h2>
         <button
-          class="icon-button"
+          class="btn btn-subtle btn-sm icon-button"
           type="button"
           :aria-label="t('newRepo')"
           @click="router.replace({ path: '/dashboard', query: { ...route.query, new: '1' } })"
@@ -175,7 +179,9 @@ onMounted(load);
         >
           <span class="repo-dot"><AppIcon name="repo" /></span>
           <span class="repo-nav-name">{{ repo.owner }}/{{ repo.name }}</span>
-          <span v-if="repo.visibility === 'private'" class="sr-only">{{ t("private") }}</span>
+          <span v-if="repo.visibility === 'private'" class="visually-hidden">{{
+            t("private")
+          }}</span>
         </RouterLink>
         <p v-if="!visibleRepos.length" class="sidebar-empty muted">
           {{ t("noMatchingRepositories") }}

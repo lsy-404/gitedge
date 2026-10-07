@@ -1,10 +1,10 @@
 :where(button, a, input, textarea, select, summary, .btn, .dropdown-panel) {
   transition:
-    color var(--fluent-fast, 120ms) var(--fluent-ease, cubic-bezier(0.16, 1, 0.3, 1)),
-    background-color var(--fluent-fast, 120ms) var(--fluent-ease, cubic-bezier(0.16, 1, 0.3, 1)),
-    border-color var(--fluent-fast, 120ms) var(--fluent-ease, cubic-bezier(0.16, 1, 0.3, 1)),
-    box-shadow var(--fluent-fast, 120ms) var(--fluent-ease, cubic-bezier(0.16, 1, 0.3, 1)),
-    transform var(--fluent-fast, 120ms) var(--fluent-ease, cubic-bezier(0.16, 1, 0.3, 1));
+    color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard),
+    transform var(--duration-fast) var(--ease-standard);
 }
 
 :where(button, .btn):active:not(:disabled) {
@@ -12,30 +12,29 @@
 }
 
 .dropdown[open] > .dropdown-panel {
-  animation: gitedge-menu-in calc(var(--fluent-fast, 120ms) + 60ms)
-    var(--fluent-ease, cubic-bezier(0.16, 1, 0.3, 1)) both;
+  animation: gitedge-menu-in var(--duration-normal) var(--ease-standard) backwards;
 }
 
+/* Opacity only: a transform on the route root would contain its fixed-position descendants. */
 #main > * {
-  animation: gitedge-page-in calc(var(--fluent-fast, 120ms) + 60ms)
-    var(--fluent-ease, cubic-bezier(0.16, 1, 0.3, 1)) both;
+  animation: gitedge-page-in var(--duration-normal) var(--ease-standard) backwards;
 }
 
 .fluent-focus-indicator {
   position: fixed;
   z-index: 10000;
   pointer-events: none;
-  border: 2px solid var(--fluent-accent, var(--link));
+  border: 2px solid var(--focus-ring);
   opacity: 0;
   visibility: hidden;
   transition:
-    left var(--fluent-fast, 120ms) var(--fluent-ease, cubic-bezier(0.16, 1, 0.3, 1)),
-    top var(--fluent-fast, 120ms) var(--fluent-ease, cubic-bezier(0.16, 1, 0.3, 1)),
-    width var(--fluent-fast, 120ms) var(--fluent-ease, cubic-bezier(0.16, 1, 0.3, 1)),
-    height var(--fluent-fast, 120ms) var(--fluent-ease, cubic-bezier(0.16, 1, 0.3, 1)),
-    border-radius var(--fluent-fast, 120ms) var(--fluent-ease, cubic-bezier(0.16, 1, 0.3, 1)),
-    opacity 100ms ease,
-    visibility 0s linear var(--fluent-fast, 120ms);
+    left var(--duration-fast) var(--ease-standard),
+    top var(--duration-fast) var(--ease-standard),
+    width var(--duration-fast) var(--ease-standard),
+    height var(--duration-fast) var(--ease-standard),
+    border-radius var(--duration-fast) var(--ease-standard),
+    opacity var(--duration-fast) ease,
+    visibility 0s linear var(--duration-fast);
 }
 
 .fluent-focus-indicator--visible {
@@ -44,6 +43,7 @@
   transition-delay: 0s;
 }
 
+/* The moving indicator replaces the native ring, whichever rule drew it. */
 :focus-visible.fluent-focus-target--tracked {
   outline-color: transparent !important;
 }
@@ -53,31 +53,24 @@
     opacity: 0;
     transform: translateY(-3px) scale(0.99);
   }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
 }
 
 @keyframes gitedge-page-in {
   from {
     opacity: 0.7;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 0ms;
+    --duration-normal: 0ms;
+  }
   *,
   *::before,
   *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
+    animation: none !important;
+    transition: none !important;
     scroll-behavior: auto !important;
-    transition-duration: 0.01ms !important;
-    transition-delay: 0ms !important;
   }
 }

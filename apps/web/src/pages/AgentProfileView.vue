@@ -61,10 +61,10 @@ watch([owner, handle], () => void load(), { immediate: true });
 .agent-profile-card {
   display: flex;
   align-items: flex-start;
-  gap: var(--spacingHorizontalL);
+  gap: var(--space-4);
   max-width: 820px;
-  margin: var(--spacingVerticalXL) auto;
-  padding: var(--spacingVerticalXL);
+  margin: var(--space-5) auto;
+  padding: var(--space-5);
 }
 .agent-profile-avatar {
   display: grid;
@@ -73,8 +73,8 @@ watch([owner, handle], () => void load(), { immediate: true });
   height: 64px;
   flex: 0 0 auto;
   border-radius: 50%;
-  color: var(--colorBrandForeground1);
-  background: var(--colorNeutralBackground3);
+  color: var(--accent-fg);
+  background: var(--bg-subtle);
 }
 .agent-profile-card h1 {
   margin: 0;

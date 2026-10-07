@@ -617,12 +617,12 @@ watch(() => props.repository.id, load, { immediate: true });
 .settings-header h2,
 .settings-card h3 {
   margin: 0;
-  color: var(--fluent-text);
+  color: var(--fg-default);
 }
 .settings-header p,
 .settings-card p {
   margin: 6px 0 0;
-  color: var(--fluent-muted);
+  color: var(--fg-muted);
   font-size: 12px;
 }
 .settings-body {
@@ -637,27 +637,27 @@ watch(() => props.repository.id, load, { immediate: true });
   display: grid;
   gap: 4px;
   padding: 6px;
-  border: 1px solid var(--fluent-border);
-  border-radius: var(--fluent-panel-radius);
-  background: var(--fluent-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
 }
 .settings-nav button {
   min-height: 38px;
   padding: 8px 12px;
   border: 0;
-  border-radius: var(--fluent-radius);
+  border-radius: var(--radius-md);
   background: transparent;
-  color: var(--fluent-text);
+  color: var(--fg-default);
   font: inherit;
   text-align: left;
   cursor: pointer;
 }
 .settings-nav button:hover {
-  background: var(--fluent-control-hover);
+  background: var(--control-bg-hover);
 }
 .settings-nav button[aria-current="page"] {
-  background: var(--fluent-selection);
-  color: var(--fluent-accent);
+  background: var(--bg-selected);
+  color: var(--accent-fg);
   font-weight: 600;
 }
 .settings-main {
@@ -667,14 +667,14 @@ watch(() => props.repository.id, load, { immediate: true });
 }
 .settings-card {
   overflow: hidden;
-  border: 1px solid var(--fluent-border);
-  border-radius: var(--fluent-panel-radius);
-  background: var(--fluent-surface);
-  color: var(--fluent-text);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  color: var(--fg-default);
 }
 .settings-card h3 {
   padding: 18px 20px;
-  border-bottom: 1px solid var(--fluent-border);
+  border-bottom: 1px solid var(--border-default);
   font-size: 18px;
 }
 .settings-card .card-intro {
@@ -687,7 +687,7 @@ watch(() => props.repository.id, load, { immediate: true });
   align-items: center;
   min-width: 0;
   padding: 18px 20px;
-  border-bottom: 1px solid var(--fluent-border);
+  border-bottom: 1px solid var(--border-default);
 }
 .settings-row:last-child {
   border-bottom: 0;
@@ -698,7 +698,7 @@ watch(() => props.repository.id, load, { immediate: true });
 .row-copy > span,
 .row-copy > strong,
 .row-copy > label {
-  color: var(--fluent-text);
+  color: var(--fg-default);
   font-size: 14px;
   font-weight: 600;
 }
@@ -717,7 +717,7 @@ watch(() => props.repository.id, load, { immediate: true });
   gap: 6px;
 }
 .archive-card {
-  border-color: var(--fluent-danger);
+  border-color: var(--danger-fg);
 }
 .settings-actions {
   display: flex;

@@ -225,32 +225,32 @@ watch(agentId, () => void load(), { immediate: true });
 }
 .event-list {
   display: grid;
-  gap: var(--spacingVerticalS);
-  border: 1px solid var(--colorNeutralStroke2);
-  border-radius: var(--borderRadiusMedium);
-  padding: var(--spacingVerticalM);
+  gap: var(--space-2);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
 }
 .event-list legend {
-  padding-inline: var(--spacingHorizontalXS);
+  padding-inline: var(--space-1);
 }
 .event-choice {
   display: flex;
   align-items: center;
-  gap: var(--spacingHorizontalS);
+  gap: var(--space-2);
 }
 .event-choice code {
   margin-left: auto;
-  color: var(--colorNeutralForeground3);
+  color: var(--fg-muted);
 }
 .delivery-row {
   align-items: center;
 }
 .secret-card {
   display: grid;
-  gap: var(--spacingVerticalS);
-  padding: var(--spacingVerticalM);
-  background: var(--colorNeutralBackground3);
-  border-radius: var(--borderRadiusMedium);
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--bg-subtle);
+  border-radius: var(--radius-md);
 }
 .secret-card code {
   overflow-wrap: anywhere;

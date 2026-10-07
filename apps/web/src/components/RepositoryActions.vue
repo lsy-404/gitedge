@@ -443,7 +443,7 @@ onUnmounted(() => clearInterval(pollingTimer));
 .actions-muted,
 .actions-oid,
 .actions-empty {
-  color: var(--colorNeutralForeground2, #656d76);
+  color: var(--fg-secondary);
 }
 .actions-layout {
   display: grid;
@@ -453,7 +453,7 @@ onUnmounted(() => clearInterval(pollingTimer));
 }
 .actions-syntax {
   margin-top: 0.5rem;
-  color: var(--colorNeutralForeground2, #656d76);
+  color: var(--fg-secondary);
 }
 .actions-syntax summary {
   cursor: pointer;
@@ -468,9 +468,9 @@ onUnmounted(() => clearInterval(pollingTimer));
 .actions-panel {
   min-width: 0;
   padding: 1rem;
-  border: 1px solid var(--border, #d1d9e0);
-  border-radius: var(--borderRadiusMedium, 0.5rem);
-  background: var(--surface, var(--colorNeutralBackground1, #fff));
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-raised);
 }
 .actions-toolbar {
   align-items: end;
@@ -487,10 +487,10 @@ onUnmounted(() => clearInterval(pollingTimer));
   margin: 0.75rem 0 0;
 }
 .actions-warning {
-  color: var(--colorPaletteDarkOrangeForeground1, #9a6700);
+  color: var(--warning-fg);
 }
 .actions-error {
-  color: var(--colorPaletteRedForeground1, #cf222e);
+  color: var(--danger-fg);
 }
 .actions-oid code,
 .actions-section-heading code {
@@ -512,13 +512,13 @@ onUnmounted(() => clearInterval(pollingTimer));
   color: inherit;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 0.4rem;
+  border-radius: var(--radius-md);
   cursor: pointer;
 }
 .actions-run-button:hover,
 .actions-run-button[aria-current="true"] {
-  background: var(--colorNeutralBackground2, #f6f8fa);
-  border-color: var(--border, #d1d9e0);
+  background: var(--bg-subtle);
+  border-color: var(--border-default);
 }
 .actions-run-name {
   font-weight: 600;
@@ -527,7 +527,7 @@ onUnmounted(() => clearInterval(pollingTimer));
   font:
     0.8rem ui-monospace,
     monospace;
-  color: var(--colorNeutralForeground2, #656d76);
+  color: var(--fg-secondary);
   overflow-wrap: anywhere;
 }
 .actions-run-button :deep(.badge) {
@@ -545,7 +545,7 @@ onUnmounted(() => clearInterval(pollingTimer));
 .actions-step {
   min-width: 0;
   padding-top: 0.65rem;
-  border-top: 1px solid var(--border, #d1d9e0);
+  border-top: 1px solid var(--border-default);
 }
 .actions-step > header {
   justify-content: flex-start;
@@ -555,9 +555,9 @@ onUnmounted(() => clearInterval(pollingTimer));
   overflow: auto;
   margin: 0.5rem 0 0;
   padding: 0.75rem;
-  color: var(--colorNeutralForeground1, #1f2328);
-  background: var(--colorNeutralBackground3, #f6f8fa);
-  border-radius: 0.35rem;
+  color: var(--fg-default);
+  background: var(--bg-subtle);
+  border-radius: var(--radius-md);
   font:
     0.82rem/1.5 ui-monospace,
     monospace;

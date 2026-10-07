@@ -79,7 +79,7 @@ onMounted(load);
       <div class="workspace-sidebar-heading">
         <h1>{{ t("organizations") }}</h1>
         <button
-          class="icon-button"
+          class="btn btn-subtle btn-sm icon-button"
           type="button"
           :aria-label="t('newOrganization')"
           @click="router.replace({ path: '/organizations', query: { ...route.query, new: '1' } })"

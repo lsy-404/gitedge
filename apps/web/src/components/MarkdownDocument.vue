@@ -229,51 +229,51 @@ async function viewRevision(revision: number) {
 <style scoped>
 .doc {
   display: grid;
-  gap: var(--spacingVerticalM);
+  gap: var(--space-3);
   min-width: 0;
 }
 .doc-head {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: var(--spacingHorizontalS);
+  gap: var(--space-2);
 }
 .doc-head h3 {
   margin: 0;
 }
 .doc-byline {
-  font-size: var(--fontSizeBase200);
+  font-size: var(--font-size-meta);
 }
 .doc-actions {
   display: flex;
-  gap: var(--spacingHorizontalS);
+  gap: var(--space-2);
   margin-left: auto;
 }
 .doc-body {
   min-width: 0;
 }
 .doc-empty {
-  padding: var(--spacingVerticalL) 0;
+  padding: var(--space-4) 0;
 }
 .doc-editor :deep(textarea) {
   height: 320px;
-  font-family: var(--fontFamilyMonospace);
+  font-family: var(--font-mono);
   resize: vertical;
 }
 .doc-latest {
-  padding: var(--spacingVerticalM);
-  border: var(--strokeWidthThin) solid var(--colorNeutralStroke2);
-  border-radius: var(--borderRadiusMedium);
-  background: var(--colorNeutralBackground3);
+  padding: var(--space-3);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
 }
 .doc-latest summary {
   cursor: pointer;
-  margin-bottom: var(--spacingVerticalS);
-  font-weight: var(--fontWeightSemibold);
+  margin-bottom: var(--space-2);
+  font-weight: var(--font-weight-semibold);
 }
 .doc-history {
-  padding-top: var(--spacingVerticalM);
-  border-top: var(--strokeWidthThin) solid var(--colorNeutralStroke2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-default);
 }
 .doc-revisions {
   display: grid;
@@ -285,9 +285,9 @@ async function viewRevision(revision: number) {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: var(--spacingHorizontalM);
+  gap: var(--space-3);
   min-height: 44px;
-  border-bottom: var(--strokeWidthThin) solid var(--colorNeutralStroke2);
+  border-bottom: 1px solid var(--border-default);
 }
 .doc-revisions li .fluent-button {
   margin-left: auto;
