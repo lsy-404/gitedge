@@ -6,9 +6,6 @@
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
-  "vars": {
-    "USER_GROUP_LIMITS_JSON": "{\"free\":{\"rpm\":120,\"maxRepositories\":10,\"maxPushBytes\":268435456,\"maxRepositoryBytes\":1073741824,\"maxStorageBytes\":5368709120},\"team\":{\"rpm\":600,\"maxRepositories\":100,\"maxPushBytes\":1073741824,\"maxRepositoryBytes\":10737418240,\"maxStorageBytes\":107374182400},\"admin\":{\"rpm\":1200,\"maxRepositories\":1000,\"maxPushBytes\":5368709120,\"maxRepositoryBytes\":107374182400,\"maxStorageBytes\":1099511627776}}"
-  },
   "d1_databases": [
     {
       "binding": "DB",

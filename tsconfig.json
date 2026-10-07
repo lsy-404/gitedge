@@ -3,7 +3,6 @@
     "target": "es2022",
     "module": "es2022",
     "moduleResolution": "bundler",
-    "jsx": "react-jsx",
     "strict": true,
     "noEmit": true,
     "lib": ["ES2022"],
@@ -16,11 +15,8 @@
     "noUnusedParameters": true,
     "allowUnreachableCode": false,
     "allowUnusedLabels": false,
-    "forceConsistentCasingInFileNames": true,
-    "paths": {
-      "@/*": ["./src/*"]
-    }
+    "forceConsistentCasingInFileNames": true
   },
   "exclude": ["node_modules"],
-  "include": ["src", "./worker-configuration.d.ts"]
+  "include": ["src"]
 }

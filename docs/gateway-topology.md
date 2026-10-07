@@ -1,6 +1,6 @@
 # Gateway topology
 
-Only `gitedge-gateway` has a public route. Auth, Forge, Git, Deploy and Limits disable `workers.dev`.
+Only `gitedge-gateway` has a public route. Auth, Forge, Git, Actions, Deploy and Limits disable `workers.dev`.
 
 | Public path           | Internal service         |
 | --------------------- | ------------------------ |
@@ -8,6 +8,7 @@ Only `gitedge-gateway` has a public route. Auth, Forge, Git, Deploy and Limits d
 | `/api/forge/*`        | Forge                    |
 | `/api/git/*`          | Git                      |
 | `/api/deploy/*`       | Deploy                   |
+| `/api/actions/*`      | Actions                  |
 | `/:owner/:repo.git/*` | Git Smart HTTP proxy     |
 | Other GET/HEAD paths  | Vue assets and SPA shell |
 

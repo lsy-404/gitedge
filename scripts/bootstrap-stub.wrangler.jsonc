@@ -1,0 +1,6 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "gitedge-bootstrap-placeholder",
+  "main": "bootstrap-stub.mjs",
+  "workers_dev": false
+}

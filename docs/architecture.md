@@ -10,4 +10,6 @@ Git uses disposable Artifacts repository handles for commit, tree and file reads
 
 Deploy reads a strict manifest and its declared files from Git. It binds the reviewed source digest, user, repository, ref, account and nonce into an encrypted short-lived cookie. It uses exact Cloudflare resource APIs and persists no Cloudflare credential in D1.
 
+Actions parses `.github/workflows/*.yml` from a bounded source snapshot and runs each run in its own Container, limited in time, logs and input, with networking off by default. Git notifies it on push through `/internal/push`. Its Durable Objects use only their own storage and container. Only Actions may publish workflow check records; Forge stores them keyed to the exact commit OID.
+
 Rate limiting uses sharded SQLite Durable Objects. Repository storage and refs remain entirely under Artifacts.
