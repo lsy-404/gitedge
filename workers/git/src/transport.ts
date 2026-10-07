@@ -75,6 +75,13 @@ export async function proxyGitTransport(
       );
     try {
       const parsed = await readReceiveCommands(request.body);
+      const defaultRef = `refs/heads/${access.repository.defaultBranch}`;
+      if (
+        parsed.updates.some((update) => update.ref === defaultRef && /^0{40}$/.test(update.newOid))
+      ) {
+        await parsed.cancel();
+        return fail(409, "default_branch", "The default branch cannot be deleted.");
+      }
       if (!access.user?.agentSession) {
         const rules = await branchRules(env.DB, repository.id);
         const denied = parsed.updates.some(

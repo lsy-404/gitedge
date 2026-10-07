@@ -1,6 +1,7 @@
 import * as git from "isomorphic-git";
 import { Volume, createFsFromVolume } from "memfs";
 import type { EditRepositoryFileInput } from "../../../packages/contracts/src/repository-controls";
+import { createLogger, type Logger } from "../../../src/worker/common/logger";
 import { gitHttpClient } from "./http";
 import { resolveCommit } from "./read";
 
@@ -29,11 +30,24 @@ function author(name: string, id: string): git.CommitObject["author"] {
     timezoneOffset: 0,
   };
 }
-async function checkout(repo: ArtifactsRepo, branch: string, expectedOid: string | null) {
+async function revokeWriteToken(repo: ArtifactsRepo, tokenId: string, logger: Logger) {
+  try {
+    await repo.revokeToken(tokenId);
+  } catch {
+    logger.warn("artifacts:write-token-revoke-failed", {});
+  }
+}
+async function checkout(
+  repo: ArtifactsRepo,
+  branch: string,
+  expectedOid: string | null,
+  level: string | undefined
+) {
   const current = await resolveCommit(repo, branch);
   if ((current?.hash ?? null) !== expectedOid)
     throw new GitWriteConflict("The branch changed. Reload before committing.");
   const info = await repo.info();
+  const logger = createLogger(level, { service: "git-write", repoId: info.name });
   if (!current && info.lastPushAt !== null)
     throw new GitWriteInputError("The source branch does not exist.");
   const token = await repo.createToken("write", 60);
@@ -59,9 +73,9 @@ async function checkout(repo: ArtifactsRepo, branch: string, expectedOid: string
     }
     if (current && (await git.resolveRef({ fs, dir, ref: branch })) !== expectedOid)
       throw new GitWriteConflict("The branch changed. Reload before committing.");
-    return { fs, dir, http, info, token, current };
+    return { fs, dir, http, info, token, current, logger };
   } catch (error) {
-    await repo.revokeToken(token.id);
+    await revokeWriteToken(repo, token.id, logger);
     throw error;
   }
 }
@@ -69,7 +83,8 @@ export async function editRepositoryFile(
   repo: ArtifactsRepo,
   input: EditRepositoryFileInput,
   user: { id: string; identifier: string },
-  beforePush: () => Promise<void>
+  beforePush: () => Promise<void>,
+  level?: string
 ): Promise<{ oid: string; branch: string; path: string }> {
   if (
     !editablePath(input.path) ||
@@ -79,8 +94,8 @@ export async function editRepositoryFile(
   const target = input.newBranch ?? input.branch;
   if (input.newBranch && (await resolveCommit(repo, target)))
     throw new GitWriteConflict("The new branch already exists.");
-  const state = await checkout(repo, input.branch, input.expectedOid);
-  const { fs, dir, http, info, token, current } = state;
+  const state = await checkout(repo, input.branch, input.expectedOid, level);
+  const { fs, dir, http, info, token, current, logger } = state;
   try {
     const blob =
       input.content === null
@@ -165,7 +180,7 @@ export async function editRepositoryFile(
       throw new GitWriteConflict("The branch changed before the commit could be saved.");
     throw error;
   } finally {
-    await repo.revokeToken(token.id);
+    await revokeWriteToken(repo, token.id, logger);
   }
 }
 export async function createRepositoryBranch(
@@ -173,10 +188,11 @@ export async function createRepositoryBranch(
   name: string,
   source: string,
   expectedOid: string,
-  beforePush: () => Promise<void>
+  beforePush: () => Promise<void>,
+  level?: string
 ): Promise<{ name: string; oid: string }> {
   if (await resolveCommit(repo, name)) throw new GitWriteConflict("The branch already exists.");
-  const { fs, dir, http, info, token } = await checkout(repo, source, expectedOid);
+  const { fs, dir, http, info, token, logger } = await checkout(repo, source, expectedOid, level);
   try {
     await git.writeRef({ fs, dir, ref: `refs/heads/${name}`, value: expectedOid });
     await beforePush();
@@ -201,16 +217,17 @@ export async function createRepositoryBranch(
       throw new GitWriteConflict("The branch already exists.");
     throw error;
   } finally {
-    await repo.revokeToken(token.id);
+    await revokeWriteToken(repo, token.id, logger);
   }
 }
 export async function deleteRepositoryBranch(
   repo: ArtifactsRepo,
   name: string,
   expectedOid: string,
-  beforePush: () => Promise<void>
+  beforePush: () => Promise<void>,
+  level?: string
 ): Promise<void> {
-  const { fs, dir, http, info, token } = await checkout(repo, name, expectedOid);
+  const { fs, dir, http, info, token, logger } = await checkout(repo, name, expectedOid, level);
   try {
     if (name === info.defaultBranch)
       throw new GitWriteInputError("The native default branch cannot be deleted.");
@@ -235,6 +252,6 @@ export async function deleteRepositoryBranch(
       throw new GitWriteConflict("The branch changed before deletion.");
     throw error;
   } finally {
-    await repo.revokeToken(token.id);
+    await revokeWriteToken(repo, token.id, logger);
   }
 }

@@ -2,6 +2,7 @@ import * as git from "isomorphic-git";
 import { createFsFromVolume, Volume } from "memfs";
 import { z } from "zod";
 import { GitBranchSchema, GitOidSchema } from "../../../packages/contracts/src/index";
+import { createLogger } from "../../../src/worker/common/logger";
 import { gitHttpClient } from "./http";
 import { resolveCommit } from "./read";
 
@@ -41,7 +42,8 @@ export async function mergeArtifacts(
   baseRepo: ArtifactsRepo,
   headRepo: ArtifactsRepo,
   input: GitMergeInput,
-  policy: GitMergePolicy
+  policy: GitMergePolicy,
+  level?: string
 ): Promise<GitMergeResult> {
   const base = await resolveCommit(baseRepo, input.baseRef);
   const head = await resolveCommit(headRepo, input.headRef);
@@ -200,9 +202,13 @@ export async function mergeArtifacts(
     }
     return { ok: true, oid: mergedOid };
   } finally {
-    await Promise.allSettled([
+    const logger = createLogger(level, { service: "git-merge", repoId: baseInfo.name });
+    const revoked = await Promise.allSettled([
       baseRepo.revokeToken(baseToken.id),
       headRepo.revokeToken(headToken.id),
     ]);
+    for (const [index, result] of revoked.entries())
+      if (result.status === "rejected")
+        logger.warn("artifacts:merge-token-revoke-failed", { side: index === 0 ? "base" : "head" });
   }
 }
