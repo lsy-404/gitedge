@@ -1708,7 +1708,9 @@ export default {
         return error(413, "repository_limit", "Repository listing exceeds its limit.");
       if (rows.results.some((row) => !row.artifact_name || !row.remote))
         return error(503, "internal_error", "One or more repositories have unavailable storage.");
-      return json({ data: rows.results.map((row) => repoResponse(row, row.can_write === 1)) });
+      return json({
+        data: rows.results.map((row) => repoResponse(row, null, row.can_write === 1)),
+      });
     }
     if (request.method === "POST" && url.pathname === "/repositories") {
       const parsed = CreateRepositoryInputSchema.safeParse(await parseJson(request));
@@ -1820,7 +1822,7 @@ export default {
             "Repository was created but README initialization failed. Open the repository to retry."
           );
       }
-      return json({ data: repoResponse(created, true) }, 201);
+      return json({ data: repoResponse(created, "admin", true) }, 201);
     }
 
     const repositoryId = parts[1];
@@ -1832,16 +1834,16 @@ export default {
       if (!named) return repositoryNotFound();
       if (user.agentSession && named.id !== user.agentSession.repositoryId)
         return repositoryNotFound();
-      if (
-        named.visibility === "private" &&
-        (await repositoryRole(env.DB, named.id, user.id)) === null
-      )
-        return repositoryAccessDenied();
+      const role = await repositoryRole(env.DB, named.id, user.id);
+      if (named.visibility === "private" && role === null) return repositoryAccessDenied();
       if (!named.artifact_name || !named.remote)
         return error(503, "internal_error", "Repository storage is unavailable.");
-      const member = await isMember(env, named.id, user.id);
       return json({
-        data: repoResponse(named, member && canWriteSession(user, named.id)) satisfies Repository,
+        data: repoResponse(
+          named,
+          role,
+          writableRole(role) && canWriteSession(user, named.id)
+        ) satisfies Repository,
       });
     }
     const repository = await repositoryById(env, repositoryId);
@@ -1851,11 +1853,12 @@ export default {
     if (!repository.artifact_name || !repository.remote)
       return error(503, "internal_error", "Repository storage is unavailable.");
     if (request.method === "GET" && parts.length === 2) {
-      const member = await isMember(env, repositoryId, user.id);
+      const role = await repositoryRole(env.DB, repositoryId, user.id);
       return json({
         data: repoResponse(
           repository,
-          member && canWriteSession(user, repositoryId)
+          role,
+          writableRole(role) && canWriteSession(user, repositoryId)
         ) satisfies Repository,
       });
     }

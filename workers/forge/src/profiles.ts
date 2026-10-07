@@ -67,7 +67,7 @@ export async function publicProfile(
     data: {
       ...profile,
       readme,
-      repositories: repos.results.slice(0, 100).map((repo) => repoResponse(repo, false)),
+      repositories: repos.results.slice(0, 100).map((repo) => repoResponse(repo)),
       truncated: repos.results.length > 100,
     },
   });

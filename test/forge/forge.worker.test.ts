@@ -588,6 +588,24 @@ describe("Forge collaboration", () => {
   });
 });
 
+describe("Repository viewer role", () => {
+  it("reports the effective role without granting write to read collaborators", async () => {
+    await env.DB.prepare(
+      "INSERT INTO repository_collaborators (repository_id, user_id, role, created_at) VALUES ('r1','u3','read',1)"
+    ).run();
+    try {
+      const read = await call("/repositories/r1", "GET", "u3", "eve");
+      expect(await read.json()).toMatchObject({ data: { viewerRole: "read", canWrite: false } });
+      const byName = await call("/repositories/by-name/alice/demo", "GET", "u3", "eve");
+      expect(await byName.json()).toMatchObject({ data: { viewerRole: "read", canWrite: false } });
+      const owner = await call("/repositories/r1", "GET", "u1", "alice");
+      expect(await owner.json()).toMatchObject({ data: { viewerRole: "admin", canWrite: true } });
+    } finally {
+      await env.DB.prepare("DELETE FROM repository_collaborators WHERE user_id = 'u3'").run();
+    }
+  });
+});
+
 describe("Public repository boundaries", () => {
   const read = (path: string) => forge.fetch(new Request(`https://forge.test${path}`), forgeEnv);
 

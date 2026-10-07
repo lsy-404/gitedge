@@ -4,6 +4,7 @@ import {
   ActorSchema,
   type Actor,
   type Repository,
+  type RepositoryRole,
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
 
@@ -115,7 +116,11 @@ export function parseActor(value: unknown, authorId: unknown): Actor {
   return { kind: "user", id, name: id };
 }
 
-export function repoResponse(row: RepositoryRow, canWrite = false) {
+export function repoResponse(
+  row: RepositoryRow,
+  viewerRole: RepositoryRole | null = null,
+  canWrite = false
+) {
   return {
     id: row.id,
     namespaceId: row.namespace_id,
@@ -145,6 +150,7 @@ export function repoResponse(row: RepositoryRow, canWrite = false) {
     requirePassingChecks: row.require_passing_checks === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    viewerRole,
     canWrite,
   } satisfies Omit<Repository, "createdAt"> & { createdAt: number };
 }

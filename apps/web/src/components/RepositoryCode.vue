@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import type {
@@ -16,6 +16,7 @@ import { api, errorMessage } from "../lib/api";
 import AppIcon from "./AppIcon.vue";
 import AppLink from "./AppLink.vue";
 import SelectField from "./SelectField.vue";
+import NoticeBar from "./NoticeBar.vue";
 import StatusBadge from "./StatusBadge.vue";
 import StatusState from "./StatusState.vue";
 import { oneOf } from "../ui/formEvents";
@@ -72,9 +73,12 @@ const loading = ref(false);
 const error = ref("");
 const emptyReason = ref("");
 const emptyRepository = ref(false);
-const offset = ref(0);
-const hasMoreCommits = ref(false);
-const limit = 50;
+const graphPageSize = 100;
+const graphStep = 50;
+const graphMaxLimit = 250;
+const graphLimit = ref(graphPageSize);
+const loadingMore = ref(false);
+const moreError = ref("");
 const token = ref<{ id: string; token: string; expiresAt: number } | null>(null);
 const tokenName = ref("");
 const cloneUrl = computed(() =>
@@ -83,7 +87,9 @@ const cloneUrl = computed(() =>
 const cloneCommand = computed(() =>
   gitCloneCommand(cloneUrl.value, props.repository.defaultBranch, token.value?.token)
 );
-const canCreateCloneToken = computed(() => props.repository.canWrite && sessionState.user !== null);
+const canCreateCloneToken = computed(
+  () => sessionState.user !== null && props.repository.viewerRole !== null
+);
 const tokenScopes = ["read", "write"] as const;
 const tokenScope = ref<(typeof tokenScopes)[number]>("read");
 const tokenBusy = ref(false);
@@ -145,6 +151,14 @@ const markdownBase = computed(
 const queryText = ref("");
 const showFileSearch = ref(false);
 const showCloneMenu = ref(false);
+const cloneToggle = ref<HTMLElement | null>(null);
+const codeRoot = ref<HTMLElement | null>(null);
+const fileSearchInput = ref<HTMLInputElement | null>(null);
+const copied = ref(false);
+let copiedTimer: number | undefined;
+const hasMoreGraph = computed(
+  () => Boolean(graph.value?.truncated) && graphLimit.value < graphMaxLimit
+);
 const filteredEntries = computed(() =>
   (tree.value?.entries ?? []).filter((entry) =>
     entry.name.toLocaleLowerCase().includes(queryText.value.trim().toLocaleLowerCase())
@@ -208,15 +222,13 @@ async function load() {
       return;
     }
     if (props.section === "commits") {
-      const items = await api.commits(props.repository.id, refName.value, offset.value, limit);
+      const [latest, graphData] = await Promise.all([
+        api.commits(props.repository.id, refName.value, 0, 1),
+        props.graphEnabled ? api.graph(props.repository.id, refName.value, graphLimit.value) : null,
+      ]);
       if (version !== requestVersion) return;
-      commits.value = offset.value === 0 ? items : [...commits.value, ...items];
-      hasMoreCommits.value = items.length === limit;
-      graph.value = props.graphEnabled
-        ? await api.graph(props.repository.id, refName.value, 100)
-        : null;
-      if (version !== requestVersion) return;
-      emptyReason.value = items.length === 0 && offset.value === 0 ? "commits" : "";
+      commits.value = latest;
+      graph.value = graphData;
       return;
     }
     if (props.section === "compare") {
@@ -271,8 +283,21 @@ async function refreshRefs() {
   }
 }
 async function loadMore() {
-  offset.value = commits.value.length;
-  await load();
+  if (loadingMore.value || !hasMoreGraph.value) return;
+  const version = requestVersion;
+  const nextLimit = Math.min(graphLimit.value + graphStep, graphMaxLimit);
+  loadingMore.value = true;
+  moreError.value = "";
+  try {
+    const next = await api.graph(props.repository.id, refName.value, nextLimit);
+    if (version !== requestVersion) return;
+    graphLimit.value = nextLimit;
+    graph.value = next;
+  } catch (cause) {
+    if (version === requestVersion) moreError.value = errorMessage(cause, t);
+  } finally {
+    if (version === requestVersion) loadingMore.value = false;
+  }
 }
 function openNewFile() {
   editorCreatesNew.value = true;
@@ -333,7 +358,7 @@ async function closeFileEditor() {
   await load();
 }
 async function changeRef(value: string) {
-  offset.value = 0;
+  graphLimit.value = graphPageSize;
   commits.value = [];
   await router.push({
     path: `/${props.repository.owner}/${props.repository.name}`,
@@ -352,11 +377,30 @@ function handleCommitKeydown(event: KeyboardEvent, oid: string) {
     selectCommit(oid);
   }
 }
+async function copyText(text: string) {
+  clearTimeout(copiedTimer);
+  try {
+    await navigator.clipboard.writeText(text);
+    copied.value = true;
+    copiedTimer = window.setTimeout(() => (copied.value = false), 2000);
+  } catch {
+    copied.value = false;
+    error.value = t("apiError");
+  }
+}
 function copyCloneUrl() {
-  void navigator.clipboard.writeText(cloneUrl.value);
+  return copyText(cloneUrl.value);
 }
 function copyCloneCommand() {
-  void navigator.clipboard.writeText(cloneCommand.value);
+  return copyText(cloneCommand.value);
+}
+function openFileSearch() {
+  showFileSearch.value = true;
+  void nextTick(() => fileSearchInput.value?.focus());
+}
+function closeFileSearch() {
+  showFileSearch.value = false;
+  void nextTick(() => codeRoot.value?.querySelector<HTMLElement>(".search-trigger")?.focus());
 }
 async function issueToken() {
   tokenBusy.value = true;
@@ -428,7 +472,10 @@ function rawFile() {
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 function dismissCodeMenu(event: Event) {
-  if (event instanceof KeyboardEvent && event.key === "Escape") showCloneMenu.value = false;
+  if (event instanceof KeyboardEvent && event.key === "Escape" && showCloneMenu.value) {
+    showCloneMenu.value = false;
+    cloneToggle.value?.focus();
+  }
   if (
     event instanceof PointerEvent &&
     event.target instanceof Element &&
@@ -475,9 +522,9 @@ watch(
       previousSection !== props.section ||
       previousRef !== refName.value;
     if (resetCommits) {
-      offset.value = 0;
+      graphLimit.value = graphPageSize;
+      moreError.value = "";
       commits.value = [];
-      hasMoreCommits.value = false;
       if (previousRepositoryId !== props.repository.id) clearToken();
     }
     previousRepositoryId = props.repository.id;
@@ -499,12 +546,13 @@ onUnmounted(() => {
   document.removeEventListener("pointerdown", dismissCodeMenu);
   clearInterval(clockTimer);
   clearTimeout(tokenExpiryTimer);
+  clearTimeout(copiedTimer);
   tokenRequestVersion += 1;
 });
 </script>
 
 <template>
-  <section class="code-section">
+  <section ref="codeRoot" class="code-section">
     <div v-if="section === 'code'" class="code-toolbar">
       <div class="toolbar-row code-controls">
         <SelectField
@@ -543,13 +591,14 @@ onUnmounted(() => {
         <label v-if="showFileSearch" class="file-search">
           <AppIcon name="search" />
           <input
+            ref="fileSearchInput"
             v-model="queryText"
-            autofocus
+            :aria-label="t('goToFile')"
             :placeholder="t('codeSearchPlaceholder')"
-            @keydown.esc="showFileSearch = false"
+            @keydown.esc.stop="closeFileSearch"
           />
         </label>
-        <FluentButton v-else class="search-trigger" tone="secondary" @click="showFileSearch = true"
+        <FluentButton v-else class="search-trigger" tone="secondary" @click="openFileSearch"
           ><AppIcon name="search" />{{ t("goToFile") }}</FluentButton
         >
         <FluentButton
@@ -562,20 +611,26 @@ onUnmounted(() => {
 
         <div class="clone-menu-wrap">
           <button
+            ref="cloneToggle"
             type="button"
             class="btn btn-primary"
+            aria-controls="clone-menu"
             :aria-expanded="showCloneMenu"
             @click="showCloneMenu = !showCloneMenu"
           >
             <AppIcon name="code" />{{ t("codeMenu") }}
             <AppIcon slot="end" name="chevron" />
           </button>
-          <div v-if="showCloneMenu" class="clone-menu box">
+          <div v-if="showCloneMenu" id="clone-menu" class="clone-menu box">
             <strong>{{ t("cloneWithHttps") }}</strong>
             <div class="clone-url">
               <code>{{ cloneUrl }}</code
-              ><FluentButton tone="subtle" icon-only :aria-label="t('copy')" @click="copyCloneUrl"
-                ><AppIcon name="copy"
+              ><FluentButton
+                tone="subtle"
+                icon-only
+                :aria-label="copied ? t('copied') : t('copy')"
+                @click="copyCloneUrl"
+                ><AppIcon :name="copied ? 'check' : 'copy'"
               /></FluentButton>
             </div>
             <code>{{ gitCloneCommand(cloneUrl, repository.defaultBranch) }}</code>
@@ -590,7 +645,9 @@ onUnmounted(() => {
                 @update:model-value="tokenScope = oneOf(tokenScopes, $event, 'read')"
               >
                 <option value="read">{{ t("readToken") }}</option>
-                <option value="write" :disabled="repository.archived">{{ t("writeToken") }}</option>
+                <option value="write" :disabled="!repository.canWrite || repository.archived">
+                  {{ t("writeToken") }}
+                </option>
               </SelectField>
               <FluentButton
                 type="button"
@@ -603,6 +660,9 @@ onUnmounted(() => {
         </div>
       </div>
     </div>
+    <span class="visually-hidden" role="status" aria-live="polite">{{
+      copied ? t("copied") : ""
+    }}</span>
     <div v-if="token" class="token-once box box-form">
       <div>
         <strong>{{ t(tokenExpired ? "tokenExpired" : "tokenShownOnce") }}</strong>
@@ -669,12 +729,6 @@ onUnmounted(() => {
         }}</time>
       </div>
       <div v-if="!isBlob" class="box file-panel">
-        <div class="file-table-head">
-          <strong>{{ filePath || refName }}</strong>
-          <div class="file-table-actions">
-            <span>{{ filteredEntries.length }} {{ t("items") }}</span>
-          </div>
-        </div>
         <FluentButton
           v-if="filePath"
           type="button"
@@ -706,7 +760,7 @@ onUnmounted(() => {
             :name="entry.type === 'tree' ? 'folder' : 'file'"
             :class="{ 'folder-icon': entry.type === 'tree' }"
           /><span>{{ entry.name }}</span
-          ><small>{{ entry.type === "tree" ? t("directory") : entry.oid.slice(0, 8) }}</small>
+          ><small v-if="entry.type === 'tree'">{{ t("directory") }}</small>
         </RouterLink>
         <div v-if="emptyReason === 'tree'" class="state">{{ t("emptyTree") }}</div>
       </div>
@@ -981,8 +1035,9 @@ onUnmounted(() => {
             >
           </div>
         </div>
-        <FluentButton v-if="hasMoreCommits" type="button" @click="loadMore">
-          {{ t("loadMore") }}
+        <p v-if="moreError" class="state" role="alert">{{ moreError }}</p>
+        <FluentButton v-if="hasMoreGraph" type="button" :disabled="loadingMore" @click="loadMore">
+          {{ moreError ? t("retry") : t("loadMore") }}
         </FluentButton>
       </section>
       <section v-if="route.query.oid && !emptyRepository" class="box box-form commit-detail">
@@ -1039,10 +1094,16 @@ onUnmounted(() => {
         {{ comparison.commits.length }} {{ t("commits") }} · {{ comparison.files.length }}
         {{ t("changedFiles") }}
       </p>
+      <NoticeBar v-if="comparison?.truncated" intent="warning">{{
+        t("comparisonTruncated")
+      }}</NoticeBar>
       <div v-for="change in comparison?.files" :key="change.path" class="item-row">
         <strong>{{ change.path }}</strong
         ><StatusBadge>{{ change.type }}</StatusBadge>
         <DiffViewer v-if="change.patch" :patch="change.patch" />
+        <span v-else class="muted">{{
+          change.binary ? t("binaryPreviewUnavailable") : t("diffTooLarge")
+        }}</span>
       </div>
     </section>
   </section>
