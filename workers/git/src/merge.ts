@@ -1,24 +1,10 @@
 import * as git from "isomorphic-git";
 import { createFsFromVolume, Volume } from "memfs";
-import { z } from "zod";
-import { GitBranchSchema, GitOidSchema } from "../../../packages/contracts/src/index";
+import type { GitMergeInput } from "../../../packages/contracts/src/forge";
 import { createLogger } from "../../../src/worker/common/logger";
 import { gitHttpClient } from "./http";
 import { resolveCommit } from "./read";
 
-export const GitMergeInputSchema = z.object({
-  pullRequestId: z.string().optional(),
-  leaseAt: z.number().optional(),
-  method: z.enum(["merge", "squash", "rebase"]).default("merge"),
-  baseRef: GitBranchSchema,
-  headRef: GitBranchSchema,
-  headSessionId: z.string().nullable().optional(),
-  expectedBaseOid: GitOidSchema,
-  expectedHeadOid: GitOidSchema,
-  author: z.object({ name: z.string().min(1).max(100), email: z.string().min(1).max(200) }),
-  message: z.string().min(1).max(50_000),
-});
-export type GitMergeInput = z.infer<typeof GitMergeInputSchema>;
 export type GitMergeResult =
   | { ok: true; oid: string }
   | {

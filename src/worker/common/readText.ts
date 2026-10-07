@@ -44,3 +44,5 @@ export async function readJsonLimited(
     return null;
   }
 }
+
+export const SMALL_JSON_BYTES = 65_536;

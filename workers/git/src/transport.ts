@@ -6,7 +6,7 @@ import { branchRules, matchingBranchRules } from "../../../src/worker/common/bra
 import { readReceiveCommands, InvalidReceiveCommands } from "./receive-commands";
 import { z } from "zod";
 import { resolveGitAccess, type GitEnv } from "./access";
-import { fail } from "./api";
+import { errorResponse } from "../../../src/worker/common/http";
 import { createLogger } from "../../../src/worker/common/logger";
 
 const GitGrantSchema = z.object({
@@ -22,7 +22,7 @@ export async function proxyGitTransport(
   const match = /^\/([^/]+)\/([^/]+)\.git\/(info\/refs|git-upload-pack|git-receive-pack)$/.exec(
     url.pathname
   );
-  if (!match) return fail(404, "not_found", "Git endpoint was not found.");
+  if (!match) return errorResponse(404, "not_found", "Git endpoint was not found.");
   const repository = await resolveRepositoryPath(env.DB, match[1], match[2]);
   if (!repository) return repositoryNotFound();
   const access = await resolveGitAccess(request, env, repository.id);
@@ -39,14 +39,14 @@ export async function proxyGitTransport(
   const write =
     match[3] === "git-receive-pack" || url.searchParams.get("service") === "git-receive-pack";
   if (write && access.repository.archived === 1)
-    return fail(409, "repository_archived", "Archived repositories are read-only.");
+    return errorResponse(409, "repository_archived", "Archived repositories are read-only.");
   if (match[3] === "info/refs" ? request.method !== "GET" : request.method !== "POST")
-    return fail(405, "method_not_allowed", "Invalid Git method.");
+    return errorResponse(405, "method_not_allowed", "Invalid Git method.");
   if (
     match[3] === "info/refs" &&
     !["git-upload-pack", "git-receive-pack"].includes(url.searchParams.get("service") ?? "")
   )
-    return fail(400, "bad_request", "Invalid Git service.");
+    return errorResponse(400, "bad_request", "Invalid Git service.");
   const rawGrant = request.headers.get("X-GitEdge-Git-Grant");
   const grant = rawGrant ? GitGrantSchema.safeParse(JSON.parse(rawGrant)) : null;
   if (
@@ -68,7 +68,7 @@ export async function proxyGitTransport(
       request.headers.has("Content-Encoding") &&
       request.headers.get("Content-Encoding") !== "identity"
     )
-      return fail(
+      return errorResponse(
         415,
         "unsupported_encoding",
         "Compressed receive-pack envelopes are unsupported."
@@ -80,7 +80,7 @@ export async function proxyGitTransport(
         parsed.updates.some((update) => update.ref === defaultRef && /^0{40}$/.test(update.newOid))
       ) {
         await parsed.cancel();
-        return fail(409, "default_branch", "The default branch cannot be deleted.");
+        return errorResponse(409, "default_branch", "The default branch cannot be deleted.");
       }
       if (!access.user?.agentSession) {
         const rules = await branchRules(env.DB, repository.id);
@@ -91,7 +91,7 @@ export async function proxyGitTransport(
         );
         if (denied) {
           await parsed.cancel();
-          return fail(
+          return errorResponse(
             403,
             "protected_branch",
             "Protected branches must be updated through an approved pull request."
@@ -101,13 +101,18 @@ export async function proxyGitTransport(
       updates = parsed.updates;
       upstreamBody = parsed.body;
     } catch (cause) {
-      if (cause instanceof InvalidReceiveCommands) return fail(400, "bad_request", cause.message);
+      if (cause instanceof InvalidReceiveCommands)
+        return errorResponse(400, "bad_request", cause.message);
       throw cause;
     }
   }
   const artifactName = access.user?.agentSession?.workspaceName ?? access.repository.artifactName;
   if (!artifactName)
-    return fail(409, "repository_storage_unavailable", "Repository must be imported to Artifacts.");
+    return errorResponse(
+      409,
+      "repository_storage_unavailable",
+      "Repository must be imported to Artifacts."
+    );
   using repo = await env.ARTIFACTS.get(artifactName);
   const info = await repo.info();
   const token = await repo.createToken(write ? "write" : "read", 60);
@@ -129,14 +134,18 @@ export async function proxyGitTransport(
       signal: AbortSignal.timeout(120_000),
     });
     if (response.status >= 300 && response.status < 400)
-      return fail(502, "upstream_redirect", "Artifacts redirected the Git request.");
+      return errorResponse(502, "upstream_redirect", "Artifacts redirected the Git request.");
     logger.debug("artifacts:git-transport", {
       operation: match[3],
       status: response.status,
       sessionId: access.user?.agentSession?.id,
     });
     if (response.status === 401 || response.status === 403)
-      return fail(502, "upstream_auth_failed", "Artifacts rejected the scoped credential.");
+      return errorResponse(
+        502,
+        "upstream_auth_failed",
+        "Artifacts rejected the scoped credential."
+      );
     const responseHeaders = new Headers(response.headers);
     responseHeaders.set("Cache-Control", "no-store");
     const writer = access.user;

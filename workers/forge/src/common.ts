@@ -52,17 +52,6 @@ type NumberRow = { number: number | null };
 export type NumberedTable =
   "forge_issues" | "forge_pull_requests" | "forge_discussions" | "forge_tasks";
 
-export function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json; charset=utf-8" },
-  });
-}
-
-export function error(status: number, code: string, message: string): Response {
-  return json({ error: { code, message } }, status);
-}
-
 export async function parseJson(request: Request): Promise<unknown> {
   return readJsonLimited(request);
 }
@@ -105,13 +94,12 @@ export async function nextNumber(
   return row.number;
 }
 
+// Invalid or schema-mismatched actor_json (including the '{}' column default) resolves to the stored author identity.
 export function parseActor(value: unknown, authorId: unknown): Actor {
   try {
     const parsed = ActorSchema.safeParse(JSON.parse(String(value)));
     if (parsed.success) return parsed.data;
-  } catch {
-    /* malformed legacy actor data falls back to the stored user identity */
-  }
+  } catch {}
   const id = typeof authorId === "string" ? authorId : "unknown";
   return { kind: "user", id, name: id };
 }

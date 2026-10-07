@@ -1,5 +1,6 @@
 import type { AuthEnv } from "./index";
-import { dataResponse as json, errorResponse as fail, readJsonLimited } from "./http";
+import { dataResponse as json, errorResponse as fail } from "../../../src/worker/common/http";
+import { readJsonLimited, SMALL_JSON_BYTES } from "../../../src/worker/common/readText";
 import {
   AddSigningKeyInputSchema,
   SigningKeyChallengeInputSchema,
@@ -58,7 +59,9 @@ export async function handleSigningKeys(
   if (request.method !== "GET" && request.headers.get("Origin") !== new URL(request.url).origin)
     return fail(403, "forbidden", "Same-origin key management is required.");
   if (path === "/signing-keys/challenges" && request.method === "POST") {
-    const parsed = SigningKeyChallengeInputSchema.safeParse(await readJsonLimited(request));
+    const parsed = SigningKeyChallengeInputSchema.safeParse(
+      await readJsonLimited(request, SMALL_JSON_BYTES)
+    );
     if (!parsed.success) return fail(400, "bad_request", "Invalid signing key.");
     let key;
     try {
@@ -107,7 +110,9 @@ export async function handleSigningKeys(
     );
   }
   if (path === "/signing-keys" && request.method === "POST") {
-    const parsed = AddSigningKeyInputSchema.safeParse(await readJsonLimited(request));
+    const parsed = AddSigningKeyInputSchema.safeParse(
+      await readJsonLimited(request, SMALL_JSON_BYTES)
+    );
     if (!parsed.success) return fail(400, "bad_request", "Invalid signing proof.");
     const challenge = await env.DB.prepare(
       "SELECT id,title,fingerprint,public_key AS publicKey,payload,expires_at AS expiresAt FROM auth_signing_key_challenges WHERE id = ? AND user_id = ? AND expires_at > ?"

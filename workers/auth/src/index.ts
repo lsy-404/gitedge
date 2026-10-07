@@ -18,7 +18,7 @@ import {
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
 import { createLogger } from "../../../src/worker/common/logger";
-import { bytesToBase64, readCookie, issueSession, hashToken, createToken } from "./session";
+import { readCookie, issueSession, hashToken, createToken } from "./session";
 import { PBKDF2_ITERATIONS } from "./password";
 import {
   authenticateAgentSession,
@@ -27,7 +27,9 @@ import {
   handleAgentSessionRevocation,
   handleAgentProfile,
 } from "./agents";
-import { readJsonLimited } from "./http";
+import { dataResponse, errorResponse, jsonResponse } from "../../../src/worker/common/http";
+import { base64ToBytes, bytesToBase64 } from "../../../src/worker/common/encoding";
+import { readJsonLimited, SMALL_JSON_BYTES } from "../../../src/worker/common/readText";
 import { handleAccountProfile, handleWebSessions } from "./profile";
 import { drainAgentEventOutbox, handleAgentEvent } from "./agent-webhooks";
 
@@ -78,41 +80,14 @@ type GithubUserResponse = { id: number; login: string; avatar_url: string; html_
 const GITHUB_STATE_MAX_AGE_MS = 10 * 60 * 1000;
 const GITHUB_FLOW_COOKIE = "gitedge_github_flow";
 
-function json(body: unknown, status = 200, headers?: HeadersInit): Response {
-  const responseHeaders = new Headers(headers);
-  responseHeaders.set("Content-Type", "application/json; charset=utf-8");
-  responseHeaders.set("Cache-Control", "no-store");
-  return new Response(JSON.stringify(body), { status, headers: responseHeaders });
-}
-
-function fail(
-  status: number,
-  code:
-    | "bad_request"
-    | "unauthorized"
-    | "forbidden"
-    | "conflict"
-    | "method_not_allowed"
-    | "service_unavailable",
-  message: string
-): Response {
-  return json({ error: { code, message } }, status);
-}
-
 const LOGIN_ATTEMPTS_PER_MINUTE = 10;
 const REGISTRATIONS_PER_MINUTE = 5;
 
 function rateLimited(decision: RateLimitDecision): Response | null {
   if (decision.allowed) return null;
-  return json(
-    { error: { code: "rate_limited", message: "Too many attempts. Try again later." } },
-    429,
-    { "Retry-After": String(decision.retryAfter) }
-  );
-}
-
-function base64ToBytes(value: string): Uint8Array<ArrayBuffer> {
-  return Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
+  return errorResponse(429, "rate_limited", "Too many attempts. Try again later.", {
+    "Retry-After": String(decision.retryAfter),
+  });
 }
 
 async function derivePasswordHash(
@@ -496,12 +471,12 @@ export async function startGithubOAuth(request: Request, env: AuthEnv): Promise<
   const logger = createLogger(env.LOG_LEVEL, { service: "auth" });
   if (!env.GITHUB_CLIENT_ID || env.GITHUB_CLIENT_ID === "set-with-wrangler-secret-or-vars") {
     logger.error("github-oauth:missing-client-id");
-    return fail(503, "bad_request", "GitHub sign-in is not configured.");
+    return errorResponse(503, "bad_request", "GitHub sign-in is not configured.");
   }
   const url = new URL(request.url);
   const returnTo = url.searchParams.get("returnTo");
   if (!isSafeReturnTo(returnTo, request))
-    return fail(400, "bad_request", "Invalid GitHub sign-in request.");
+    return errorResponse(400, "bad_request", "Invalid GitHub sign-in request.");
 
   const state = createToken();
   const verifier = createPkceVerifier();
@@ -547,7 +522,7 @@ export async function completeGithubOAuth(request: Request, env: AuthEnv): Promi
     !env.GITHUB_CLIENT_SECRET
   ) {
     logger.error("github-oauth:missing-client-config");
-    return fail(503, "bad_request", "GitHub sign-in is not configured.");
+    return errorResponse(503, "bad_request", "GitHub sign-in is not configured.");
   }
   const url = new URL(request.url);
   const state = url.searchParams.get("state");
@@ -557,7 +532,8 @@ export async function completeGithubOAuth(request: Request, env: AuthEnv): Promi
     .map((part) => part.trim())
     .find((part) => part.startsWith(`${GITHUB_FLOW_COOKIE}=`))
     ?.slice(GITHUB_FLOW_COOKIE.length + 1);
-  if (!state || !proof) return fail(400, "bad_request", "Invalid GitHub sign-in response.");
+  if (!state || !proof)
+    return errorResponse(400, "bad_request", "Invalid GitHub sign-in response.");
   const oauthState = await env.DB.prepare(
     "DELETE FROM github_oauth_states WHERE state_hash = ? AND expires_at > ? AND browser_hash = ? RETURNING code_verifier, return_to"
   )
@@ -565,7 +541,7 @@ export async function completeGithubOAuth(request: Request, env: AuthEnv): Promi
     .first<GithubOAuthStateRow>();
   if (!oauthState) {
     logger.warn("github-oauth:invalid-state");
-    return fail(400, "bad_request", "GitHub sign-in session has expired.");
+    return errorResponse(400, "bad_request", "GitHub sign-in session has expired.");
   }
   if (url.searchParams.has("error")) {
     logger.warn("github-oauth:provider-denied");
@@ -638,7 +614,11 @@ export default {
       !["/session", "/browser-session"].includes(path) &&
       expectedView !== (browserView ? "guest" : "account")
     )
-      return fail(409, "conflict", "The active perspective changed. Reload before continuing.");
+      return errorResponse(
+        409,
+        "conflict",
+        "The active perspective changed. Reload before continuing."
+      );
     if (
       browserView &&
       ![
@@ -654,7 +634,7 @@ export default {
       !/^\/sso\/[^/]+\/(start|callback|metadata)$/.test(path) &&
       !/^\/agent-profiles\//.test(path)
     )
-      return fail(
+      return errorResponse(
         403,
         "forbidden",
         "Return to your account perspective to manage human account settings."
@@ -664,12 +644,16 @@ export default {
       request.method === "POST" &&
       request.headers.get("Origin") !== new URL(request.url).origin
     )
-      return fail(403, "forbidden", "Same-origin authentication is required.");
+      return errorResponse(403, "forbidden", "Same-origin authentication is required.");
     const expectedUser = request.headers.get("X-GitEdge-Expected-User");
     if (expectedUser && !["/session", "/browser-session"].includes(path)) {
       const expectedSession = await getHumanSession();
       if (!expectedSession.ok || expectedSession.data.id !== expectedUser)
-        return fail(409, "conflict", "The active account changed. Reload before continuing.");
+        return errorResponse(
+          409,
+          "conflict",
+          "The active account changed. Reload before continuing."
+        );
     }
     if (path.startsWith("/sso/")) {
       const active = request.headers.has("Authorization") ? null : await getHumanSession();
@@ -677,14 +661,14 @@ export default {
     }
     if (path === "/signing-keys" || path.startsWith("/signing-keys/")) {
       const active = await getHumanSession();
-      if (!active.ok) return json({ error: active.error }, active.status);
+      if (!active.ok) return errorResponse(active.status, active.error.code, active.error.message);
       return handleSigningKeys(request, env, active.data);
     }
     if (request.method === "GET" && path === "/git-session") {
       const authenticated = await authenticateGitToken(request, env);
       return authenticated
-        ? json({ data: authenticated }, 200, { "Cache-Control": "no-store" })
-        : fail(401, "unauthorized", "Invalid Git credential.");
+        ? dataResponse(authenticated)
+        : errorResponse(401, "unauthorized", "Invalid Git credential.");
     }
     if (request.method === "GET" && path === "/github/start") return startGithubOAuth(request, env);
     if (request.method === "GET" && path === "/github/callback")
@@ -701,28 +685,26 @@ export default {
         logger.warn("auth:register-rate-limited");
         return limited;
       }
-      const result = await register(env, await readJsonLimited(request));
-      if (!result.ok) return json({ error: result.error }, result.status);
+      const result = await register(env, await readJsonLimited(request, SMALL_JSON_BYTES));
+      if (!result.ok) return errorResponse(result.status, result.error.code, result.error.message);
       logger.info("auth:registered", { userId: result.data.id });
       return rememberBrowserLogin(
         request,
         env,
         result.data.id,
         result.data.sessionToken,
-        json(
+        dataResponse(
           {
-            data: {
-              id: result.data.id,
-              identifier: result.data.identifier,
-              groupKey: result.data.groupKey,
-            },
+            id: result.data.id,
+            identifier: result.data.identifier,
+            groupKey: result.data.groupKey,
           },
           201
         )
       );
     }
     if (request.method === "POST" && path === "/login") {
-      const body = await readJsonLimited(request);
+      const body = await readJsonLimited(request, SMALL_JSON_BYTES);
       const parsedLogin = LoginInputSchema.safeParse(body);
       if (parsedLogin.success) {
         const limited = rateLimited(
@@ -738,20 +720,18 @@ export default {
         }
       }
       const result = await login(env, body);
-      if (!result.ok) return json({ error: result.error }, result.status);
+      if (!result.ok) return errorResponse(result.status, result.error.code, result.error.message);
       logger.info("auth:logged-in", { userId: result.data.id });
       return rememberBrowserLogin(
         request,
         env,
         result.data.id,
         result.data.sessionToken,
-        json(
+        dataResponse(
           {
-            data: {
-              id: result.data.id,
-              identifier: result.data.identifier,
-              groupKey: result.data.groupKey,
-            },
+            id: result.data.id,
+            identifier: result.data.identifier,
+            groupKey: result.data.groupKey,
           },
           200
         )
@@ -762,42 +742,41 @@ export default {
     }
     if (path === "/_internal/agent-events" && request.method === "POST") {
       if (new URL(request.url).hostname !== "auth.internal")
-        return fail(404, "bad_request", "Endpoint was not found.");
+        return errorResponse(404, "bad_request", "Endpoint was not found.");
       try {
         const result = await handleAgentEvent(request, env);
-        if (result === "invalid") return fail(400, "bad_request", "Invalid agent event.");
+        if (result === "invalid") return errorResponse(400, "bad_request", "Invalid agent event.");
         if (result === "full")
-          return fail(503, "service_unavailable", "Agent event queue is full.");
-        return json({ data: { accepted: result === "queued" } }, 202);
+          return errorResponse(503, "service_unavailable", "Agent event queue is full.");
+        return dataResponse({ accepted: result === "queued" }, 202);
       } catch {
-        return fail(503, "service_unavailable", "Agent event could not be queued.");
+        return errorResponse(503, "service_unavailable", "Agent event could not be queued.");
       }
     }
     if (path === "/_internal/agent-sessions/revoke" && request.method === "POST") {
       if (new URL(request.url).hostname !== "auth.internal")
-        return fail(404, "bad_request", "Endpoint was not found.");
+        return errorResponse(404, "bad_request", "Endpoint was not found.");
       return handleAgentSessionRevocation(request, env);
     }
     if (request.method === "GET" && path === "/browser-session") {
-      if (browserView) return json({ data: { user: null, view: { kind: "guest" } } });
+      if (browserView) return dataResponse({ user: null, view: { kind: "guest" } });
       const result = await getHumanSession();
-      return json({ data: { user: result.ok ? result.data : null, view: { kind: "account" } } });
+      return dataResponse({ user: result.ok ? result.data : null, view: { kind: "account" } });
     }
     if (request.method === "GET" && path === "/session") {
-      if (browserView) return json({ data: null, view: "guest" });
+      if (browserView) return jsonResponse({ data: null, view: "guest" });
       const authorization = request.headers.get("Authorization");
       if (authorization) {
         const user = authorization.startsWith("Bearer ")
           ? await authenticateAgentSession(env, authorization.slice(7))
           : null;
         return user
-          ? json({ data: user }, 200, { "Cache-Control": "no-store" })
-          : fail(401, "unauthorized", "Invalid agent session.");
+          ? dataResponse(user)
+          : errorResponse(401, "unauthorized", "Invalid agent session.");
       }
       const result = await getHumanSession();
-      if (!result.ok)
-        return json({ error: result.error }, result.status, { "Cache-Control": "no-store" });
-      return json({ data: result.data }, 200, { "Cache-Control": "no-store" });
+      if (!result.ok) return errorResponse(result.status, result.error.code, result.error.message);
+      return dataResponse(result.data);
     }
     if (/^\/agent-profiles\//.test(path)) {
       const profileSession = browserView ? null : await getHumanSession();
@@ -808,11 +787,12 @@ export default {
       const agent = authorization?.startsWith("Bearer ")
         ? await authenticateAgentSession(env, authorization.slice(7))
         : null;
-      if (agent) return fail(403, "forbidden", "Agent sessions cannot manage human accounts.");
+      if (agent)
+        return errorResponse(403, "forbidden", "Agent sessions cannot manage human accounts.");
       const active = await getHumanSession();
-      if (!active.ok) return json({ error: active.error }, active.status);
+      if (!active.ok) return errorResponse(active.status, active.error.code, active.error.message);
       if (request.method !== "GET" && request.headers.get("Origin") !== new URL(request.url).origin)
-        return fail(403, "forbidden", "Same-origin account management is required.");
+        return errorResponse(403, "forbidden", "Same-origin account management is required.");
       const webSessions = await handleWebSessions(
         request,
         env,
@@ -828,14 +808,15 @@ export default {
       const agent = authorization?.startsWith("Bearer ")
         ? await authenticateAgentSession(env, authorization.slice(7))
         : null;
-      if (agent) return fail(403, "forbidden", "Agent sessions cannot manage human accounts.");
+      if (agent)
+        return errorResponse(403, "forbidden", "Agent sessions cannot manage human accounts.");
       const active = await getHumanSession();
-      if (!active.ok) return json({ error: active.error }, active.status);
+      if (!active.ok) return errorResponse(active.status, active.error.code, active.error.message);
       return handleAccountProfile(request, env, active.data);
     }
     return request.method === "GET" || request.method === "POST"
-      ? fail(404, "bad_request", "Unknown auth endpoint.")
-      : fail(405, "method_not_allowed", "Method is not allowed.");
+      ? errorResponse(404, "bad_request", "Unknown auth endpoint.")
+      : errorResponse(405, "method_not_allowed", "Method is not allowed.");
   },
   async scheduled(_controller: ScheduledController, env: AuthEnv): Promise<void> {
     await drainAgentEventOutbox(env);

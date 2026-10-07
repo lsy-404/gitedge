@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { createLogger } from "../../../src/worker/common/logger";
-import { error, json, parseJson, type ForgeEnv } from "./common";
+import { parseJson, type ForgeEnv } from "./common";
+import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 
 const CheckInput = z
   .object({
@@ -51,32 +52,32 @@ function checkStatement(
 
 export async function actionsCheck(request: Request, env: ForgeEnv): Promise<Response> {
   if (new URL(request.url).hostname !== "forge.internal" || request.method !== "POST")
-    return error(404, "not_found", "Endpoint was not found.");
+    return errorResponse(404, "not_found", "Endpoint was not found.");
   const parsed = CheckInput.safeParse(await parseJson(request));
-  if (!parsed.success) return error(400, "bad_request", "Invalid Actions check.");
+  if (!parsed.success) return errorResponse(400, "bad_request", "Invalid Actions check.");
   const run = await env.DB.prepare("SELECT * FROM actions_runs WHERE id=?")
     .bind(parsed.data.runId)
     .first<RunRow>();
-  if (!run) return error(404, "not_found", "Action run was not found.");
+  if (!run) return errorResponse(404, "not_found", "Action run was not found.");
   const latest = await env.DB.prepare(
     "SELECT id FROM actions_runs WHERE repository_id=? AND path=? AND commit_oid=? AND source_ref=? ORDER BY created_at DESC,id DESC LIMIT 1"
   )
     .bind(run.repository_id, run.path, run.commit_oid, run.source_ref)
     .first<{ id: string }>();
-  if (latest?.id !== run.id) return json({ data: { superseded: true } });
+  if (latest?.id !== run.id) return dataResponse({ superseded: true });
   const pulls = await env.DB.prepare(
     "SELECT id, merge_started_at FROM forge_pull_requests WHERE repository_id=? AND head_ref=? AND head_session_id IS NULL AND state='open' LIMIT 101"
   )
     .bind(run.repository_id, run.source_ref)
     .all<{ id: string; merge_started_at: number | null }>();
   if (pulls.results.length > 100)
-    return error(413, "pull_limit", "Too many pull requests for this head.");
+    return errorResponse(413, "pull_limit", "Too many pull requests for this head.");
   if (
     pulls.results.some(
       (pull) => pull.merge_started_at !== null && pull.merge_started_at > Date.now() - 300_000
     )
   )
-    return error(409, "merge_in_progress", "Retry check delivery after the active merge.");
+    return errorResponse(409, "merge_in_progress", "Retry check delivery after the active merge.");
   if (pulls.results.length > 0)
     await env.DB.batch(
       pulls.results.map((pull) =>
@@ -94,7 +95,7 @@ export async function actionsCheck(request: Request, env: ForgeEnv): Promise<Res
     "actions:check-published",
     { runId: run.id, count: pulls.results.length, oid: run.commit_oid }
   );
-  return json({ data: { published: pulls.results.length } });
+  return dataResponse({ published: pulls.results.length });
 }
 
 export async function attachActionChecks(

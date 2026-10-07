@@ -12,7 +12,8 @@ import {
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
 import { createLogger } from "../../../src/worker/common/logger";
-import { error, type ForgeEnv, type RepositoryRow } from "./common";
+import { type ForgeEnv, type RepositoryRow } from "./common";
+import { errorResponse } from "../../../src/worker/common/http";
 
 type AssignmentRow = { role: AssignmentRole; kind: "user" | "agent"; id: string; name: string };
 export type AssignmentSets = { assignees: Assignee[]; reviewers: Assignee[] };
@@ -91,7 +92,7 @@ export async function resolveAssignable(
       logger.warn("forge:assignment-rejected-user", { repositoryId: repository.id });
       return {
         ok: false,
-        response: error(400, "bad_request", "Assignee must be a repository member."),
+        response: errorResponse(400, "bad_request", "Assignee must be a repository member."),
       };
     }
     return { ok: true, assignee: { kind: "user", id: row.id, name: row.identifier } };
@@ -110,7 +111,7 @@ export async function resolveAssignable(
     logger.warn("forge:assignment-rejected-agent", { repositoryId: repository.id });
     return {
       ok: false,
-      response: error(400, "bad_request", "Agent is unavailable in this repository."),
+      response: errorResponse(400, "bad_request", "Agent is unavailable in this repository."),
     };
   }
   const effectivePolicy = policy ?? (await agentAssignmentPolicy(env, repository.id));
@@ -121,7 +122,7 @@ export async function resolveAssignable(
     });
     return {
       ok: false,
-      response: error(
+      response: errorResponse(
         403,
         "forbidden",
         "Only the agent owner may assign this agent under the current policy."

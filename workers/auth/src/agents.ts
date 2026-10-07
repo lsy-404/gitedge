@@ -1,4 +1,4 @@
-import { readJsonLimited } from "./http";
+import { readJsonLimited, SMALL_JSON_BYTES } from "../../../src/worker/common/readText";
 import {
   repositoryRole,
   writableRole,
@@ -18,6 +18,8 @@ import {
 } from "../../../packages/contracts/src/index";
 import { createLogger, type Logger } from "../../../src/worker/common/logger";
 import { handleAgentWebhookManagement } from "./agent-webhooks";
+import { randomHex } from "../../../src/worker/common/encoding";
+import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 
 export interface AgentAuthEnv {
   DB: D1Database;
@@ -61,23 +63,8 @@ export interface GitAuthentication {
 const sessionSelect =
   "SELECT s.id, s.agent_id AS agentId, a.name AS agentName, s.repository_id AS repositoryId, s.workspace_name AS workspaceName, s.remote, s.base_ref AS baseRef, s.base_oid AS baseOid, s.permission, s.status, s.created_at AS createdAt, s.expires_at AS expiresAt, s.git_token_id AS gitTokenId, s.user_id AS userId, u.identifier, u.group_key AS groupKey FROM auth_agent_sessions s JOIN auth_agents a ON a.id = s.agent_id JOIN users u ON u.id = s.user_id";
 
-function json(data: unknown, status = 200): Response {
-  return Response.json({ data }, { status, headers: { "Cache-Control": "no-store" } });
-}
-function fail(status: number, code: string, message: string): Response {
-  return Response.json(
-    { error: { code, message } },
-    { status, headers: { "Cache-Control": "no-store" } }
-  );
-}
-
 function newToken(prefix: string): string {
-  return (
-    prefix +
-    Array.from(crypto.getRandomValues(new Uint8Array(32)), (byte) =>
-      byte.toString(16).padStart(2, "0")
-    ).join("")
-  );
+  return prefix + randomHex(32);
 }
 function sessionResponse(row: AgentSessionRow): AgentSession {
   return {
@@ -275,8 +262,10 @@ export async function handleAgentSessionRevocation(
   env: AgentAuthEnv
 ): Promise<Response> {
   const logger = createLogger(env.LOG_LEVEL, { service: "agent-auth" });
-  const parsed = RevokeAgentSessionsInputSchema.safeParse(await readJsonLimited(request));
-  if (!parsed.success) return fail(400, "bad_request", "Invalid revocation request.");
+  const parsed = RevokeAgentSessionsInputSchema.safeParse(
+    await readJsonLimited(request, SMALL_JSON_BYTES)
+  );
+  if (!parsed.success) return errorResponse(400, "bad_request", "Invalid revocation request.");
   const input = parsed.data;
   const rows =
     "namespaceId" in input
@@ -302,10 +291,10 @@ export async function handleAgentSessionRevocation(
   const truncated = rows.results.length > REVOKE_BATCH_LIMIT;
   if (failed > 0 || truncated) {
     logger.warn("agent:session-revocation-incomplete", { failed, truncated });
-    return fail(503, "service_unavailable", "Some agent sessions are still active.");
+    return errorResponse(503, "service_unavailable", "Some agent sessions are still active.");
   }
   logger.info("agent:sessions-revoked", { count: batch.length });
-  return json({ revoked: batch.length });
+  return dataResponse({ revoked: batch.length });
 }
 
 export async function handleAgentManagement(
@@ -317,7 +306,7 @@ export async function handleAgentManagement(
   const parts = url.pathname.split("/").filter(Boolean);
   if (!["agents", "sessions", "tokens"].includes(parts[0] ?? "")) return null;
   if (user.agentSession)
-    return fail(403, "forbidden", "Agent sessions cannot manage account credentials.");
+    return errorResponse(403, "forbidden", "Agent sessions cannot manage account credentials.");
   const logger = createLogger(env.LOG_LEVEL, { service: "agent-auth" });
   try {
     if (parts[0] === "tokens") return await handleGitTokenManagement(request, env, user);
@@ -326,7 +315,7 @@ export async function handleAgentManagement(
       if (repoId) {
         const repository = await repositoryForOwner(env, user.id, repoId);
         if (!repository || repository.agentsEnabled === 0)
-          return fail(404, "not_found", "Repository agent sessions are unavailable.");
+          return errorResponse(404, "not_found", "Repository agent sessions are unavailable.");
       }
       const rows = repoId
         ? await env.DB.prepare(
@@ -340,7 +329,7 @@ export async function handleAgentManagement(
           )
             .bind(user.id)
             .all<AgentSessionRow>();
-      return json(rows.results.map(sessionResponse));
+      return dataResponse(rows.results.map(sessionResponse));
     }
     if (parts.length === 1 && request.method === "GET") {
       const rows = await env.DB.prepare(
@@ -348,26 +337,30 @@ export async function handleAgentManagement(
       )
         .bind(user.id)
         .all<AgentRow>();
-      return json(
+      return dataResponse(
         rows.results.map((agent) => ({ ...agent, profilePublic: Boolean(agent.profilePublic) }))
       );
     }
     if (parts.length === 1 && request.method === "POST") {
-      const parsed = CreateAgentInputSchema.safeParse(await readJsonLimited(request));
-      if (!parsed.success) return fail(400, "bad_request", "Invalid agent payload.");
+      const parsed = CreateAgentInputSchema.safeParse(
+        await readJsonLimited(request, SMALL_JSON_BYTES)
+      );
+      if (!parsed.success) return errorResponse(400, "bad_request", "Invalid agent payload.");
       const createdAt = Date.now();
       const id = crypto.randomUUID();
       const handle =
         parsed.data.handle ??
         (await availableHandle(env, user.id, readableHandle(parsed.data.name)));
-      if (!handle) return fail(409, "conflict", "Agent handle or account limit conflicts.");
+      if (!handle)
+        return errorResponse(409, "conflict", "Agent handle or account limit conflicts.");
       if (parsed.data.handle) {
         const occupied = await env.DB.prepare(
           "SELECT 1 AS found FROM auth_agents WHERE user_id = ? AND handle = ?"
         )
           .bind(user.id, handle)
           .first<{ found: number }>();
-        if (occupied) return fail(409, "conflict", "Agent handle or account limit conflicts.");
+        if (occupied)
+          return errorResponse(409, "conflict", "Agent handle or account limit conflicts.");
       }
       const result = await env.DB.prepare(
         "INSERT OR IGNORE INTO auth_agents (id,user_id,name,description,handle,profile_public,created_at,updated_at) SELECT ?,?,?,?,?,0,?,? WHERE (SELECT COUNT(*) FROM auth_agents WHERE user_id = ? AND disabled_at IS NULL) < 100"
@@ -384,11 +377,11 @@ export async function handleAgentManagement(
         )
         .run();
       if (result.meta.changes !== 1)
-        return fail(409, "conflict", "Agent handle or account limit conflicts.");
+        return errorResponse(409, "conflict", "Agent handle or account limit conflicts.");
       const created = await loadManagedAgent(env, user.id, id);
       if (!created) throw new Error("Created agent was not readable.");
       logger.info("agent:created", { agentId: id, userId: user.id });
-      return json(created, 201);
+      return dataResponse(created, 201);
     }
     const agentId = parts[1];
     const agent = await env.DB.prepare(
@@ -396,14 +389,16 @@ export async function handleAgentManagement(
     )
       .bind(agentId ?? "", user.id)
       .first<AgentRow>();
-    if (!agent) return fail(404, "not_found", "Agent was not found.");
+    if (!agent) return errorResponse(404, "not_found", "Agent was not found.");
     const managedAgent: Agent = { ...agent, profilePublic: Boolean(agent.profilePublic) };
     const webhookResponse = await handleAgentWebhookManagement(request, env, user, agent.id);
     if (webhookResponse) return webhookResponse;
-    if (parts.length === 2 && request.method === "GET") return json(managedAgent);
+    if (parts.length === 2 && request.method === "GET") return dataResponse(managedAgent);
     if (parts.length === 2 && request.method === "PATCH") {
-      const parsed = UpdateAgentInputSchema.safeParse(await readJsonLimited(request));
-      if (!parsed.success) return fail(400, "bad_request", "Invalid agent payload.");
+      const parsed = UpdateAgentInputSchema.safeParse(
+        await readJsonLimited(request, SMALL_JSON_BYTES)
+      );
+      if (!parsed.success) return errorResponse(400, "bad_request", "Invalid agent payload.");
       const values = parsed.data;
       const handle = values.handle ?? agent.handle;
       if (values.handle && values.handle !== agent.handle) {
@@ -412,7 +407,7 @@ export async function handleAgentManagement(
         )
           .bind(user.id, handle, agent.id)
           .first<{ found: number }>();
-        if (occupied) return fail(409, "conflict", "Agent handle is already in use.");
+        if (occupied) return errorResponse(409, "conflict", "Agent handle is already in use.");
       }
       const now = Date.now();
       await env.DB.prepare(
@@ -429,7 +424,9 @@ export async function handleAgentManagement(
         )
         .run();
       const updated = await loadManagedAgent(env, user.id, agent.id);
-      return updated ? json(updated) : fail(404, "not_found", "Agent was not found.");
+      return updated
+        ? dataResponse(updated)
+        : errorResponse(404, "not_found", "Agent was not found.");
     }
     if (parts.length === 2 && request.method === "DELETE") {
       await env.DB.prepare("UPDATE auth_agents SET disabled_at = ? WHERE id = ?")
@@ -442,43 +439,53 @@ export async function handleAgentManagement(
         .all<AgentSessionRow>();
       const failed = await revokeSessions(env, sessions.results, logger);
       if (failed > 0)
-        return fail(503, "service_unavailable", "Some agent sessions could not be revoked.");
+        return errorResponse(
+          503,
+          "service_unavailable",
+          "Some agent sessions could not be revoked."
+        );
       logger.info("agent:disabled", { agentId: agent.id, userId: user.id });
-      return json({ disabled: true });
+      return dataResponse({ disabled: true });
     }
-    if (parts[2] !== "sessions") return fail(404, "not_found", "Endpoint was not found.");
+    if (parts[2] !== "sessions") return errorResponse(404, "not_found", "Endpoint was not found.");
     if (parts.length === 3 && request.method === "GET") {
       const rows = await env.DB.prepare(
         sessionSelect + " WHERE s.agent_id = ? ORDER BY s.created_at DESC LIMIT 100"
       )
         .bind(agent.id)
         .all<AgentSessionRow>();
-      return json(rows.results.map(sessionResponse));
+      return dataResponse(rows.results.map(sessionResponse));
     }
     if (parts.length === 4 && request.method === "DELETE") {
       const row = await env.DB.prepare(sessionSelect + " WHERE s.id = ? AND s.agent_id = ?")
         .bind(parts[3], agent.id)
         .first<AgentSessionRow>();
-      if (!row) return fail(404, "not_found", "Session was not found.");
+      if (!row) return errorResponse(404, "not_found", "Session was not found.");
       await revokeSession(env, row);
       logger.info("agent:session-revoked", { sessionId: row.id, agentId: agent.id });
-      return json({ revoked: true });
+      return dataResponse({ revoked: true });
     }
     if (parts.length !== 3 || request.method !== "POST")
-      return fail(405, "method_not_allowed", "Method is not allowed.");
-    if (agent.disabledAt !== null) return fail(409, "conflict", "Agent is disabled.");
-    const parsed = CreateAgentSessionInputSchema.safeParse(await readJsonLimited(request));
-    if (!parsed.success) return fail(400, "bad_request", "Invalid session payload.");
+      return errorResponse(405, "method_not_allowed", "Method is not allowed.");
+    if (agent.disabledAt !== null) return errorResponse(409, "conflict", "Agent is disabled.");
+    const parsed = CreateAgentSessionInputSchema.safeParse(
+      await readJsonLimited(request, SMALL_JSON_BYTES)
+    );
+    if (!parsed.success) return errorResponse(400, "bad_request", "Invalid session payload.");
     const repository = await repositoryForOwner(env, user.id, parsed.data.repositoryId);
-    if (!repository) return fail(404, "not_found", "Repository was not found.");
+    if (!repository) return errorResponse(404, "not_found", "Repository was not found.");
     if (repository.agentsEnabled === 0)
-      return fail(404, "feature_disabled", "Repository agents are disabled.");
+      return errorResponse(404, "feature_disabled", "Repository agents are disabled.");
     if (!repository.writable && parsed.data.permission === "write")
-      return fail(403, "forbidden", "Repository write access is required.");
+      return errorResponse(403, "forbidden", "Repository write access is required.");
     if (repository.archived === 1 && parsed.data.permission === "write")
-      return fail(409, "repository_archived", "Archived repositories cannot issue write sessions.");
+      return errorResponse(
+        409,
+        "repository_archived",
+        "Archived repositories cannot issue write sessions."
+      );
     if (!repository.artifactName)
-      return fail(
+      return errorResponse(
         409,
         "repository_storage_unavailable",
         "Repository must be imported to Artifacts."
@@ -488,14 +495,15 @@ export async function handleAgentManagement(
     )
       .bind(user.id, Date.now())
       .first<{ count: number }>();
-    if ((active?.count ?? 0) >= 100) return fail(409, "conflict", "Session limit reached.");
+    if ((active?.count ?? 0) >= 100)
+      return errorResponse(409, "conflict", "Session limit reached.");
     const id = crypto.randomUUID();
     const workspaceName = `session-${id}`;
     using source = await env.ARTIFACTS.get(repository.artifactName);
     const base = await source.log({ ref: parsed.data.baseRef, limit: 1 });
     const sourceInfo = await source.info();
     if (!base.length && sourceInfo.lastPushAt !== null)
-      return fail(409, "conflict", "Base branch was not found.");
+      return errorResponse(409, "conflict", "Base branch was not found.");
     logger.debug("agent:session-fork-start", { repositoryId: repository.id, sessionId: id });
     const forked = await source.fork(workspaceName, {
       description: agent.name,
@@ -556,10 +564,10 @@ export async function handleAgentManagement(
       repositoryId: repository.id,
       sessionId: id,
     });
-    return json(created, 201);
+    return dataResponse(created, 201);
   } catch {
     logger.error("agent:operation-failed", { userId: user.id, resource: parts[0] });
-    return fail(
+    return errorResponse(
       503,
       "service_unavailable",
       "Agent operation failed; account changes remain visible for retry."
@@ -590,7 +598,7 @@ async function handleGitTokenManagement(
     )
       .bind(user.id)
       .all();
-    return json(rows.results);
+    return dataResponse(rows.results);
   }
   if (parts.length === 2 && request.method === "DELETE") {
     const result = await env.DB.prepare(
@@ -599,19 +607,21 @@ async function handleGitTokenManagement(
       .bind(Date.now(), parts[1], user.id)
       .run();
     return result.meta.changes
-      ? json({ revoked: true })
-      : fail(404, "not_found", "Token was not found.");
+      ? dataResponse({ revoked: true })
+      : errorResponse(404, "not_found", "Token was not found.");
   }
   if (parts.length !== 1 || request.method !== "POST")
-    return fail(405, "method_not_allowed", "Method is not allowed.");
-  const parsed = CreateGitTokenInputSchema.safeParse(await readJsonLimited(request));
-  if (!parsed.success) return fail(400, "bad_request", "Invalid Git token payload.");
+    return errorResponse(405, "method_not_allowed", "Method is not allowed.");
+  const parsed = CreateGitTokenInputSchema.safeParse(
+    await readJsonLimited(request, SMALL_JSON_BYTES)
+  );
+  if (!parsed.success) return errorResponse(400, "bad_request", "Invalid Git token payload.");
   const repository = await repositoryForOwner(env, user.id, parsed.data.repositoryId);
-  if (!repository) return fail(404, "not_found", "Repository was not found.");
+  if (!repository) return errorResponse(404, "not_found", "Repository was not found.");
   if (!repository.writable && parsed.data.permission === "write")
-    return fail(403, "forbidden", "Repository write access is required.");
+    return errorResponse(403, "forbidden", "Repository write access is required.");
   if (repository.archived === 1 && parsed.data.permission === "write")
-    return fail(
+    return errorResponse(
       409,
       "repository_archived",
       "Archived repositories cannot issue write credentials."
@@ -639,7 +649,7 @@ async function handleGitTokenManagement(
     repositoryId: repository.id,
     tokenId: id,
   });
-  return json(
+  return dataResponse(
     {
       id,
       token,
@@ -660,7 +670,7 @@ export async function handleAgentProfile(
 ): Promise<Response> {
   const parts = new URL(request.url).pathname.split("/").filter(Boolean);
   if (parts.length !== 3 || parts[0] !== "agent-profiles" || request.method !== "GET")
-    return fail(404, "not_found", "Agent profile was not found.");
+    return errorResponse(404, "not_found", "Agent profile was not found.");
   const owner = parts[1];
   const handle = parts[2];
   const row = await env.DB.prepare(
@@ -678,8 +688,8 @@ export async function handleAgentProfile(
       disabledAt: number | null;
     }>();
   if (!row || row.disabledAt !== null || (row.profilePublic !== 1 && viewer?.identifier !== owner))
-    return fail(404, "not_found", "Agent profile was not found.");
-  return json({
+    return errorResponse(404, "not_found", "Agent profile was not found.");
+  return dataResponse({
     owner: row.owner,
     handle: row.handle,
     name: row.name,

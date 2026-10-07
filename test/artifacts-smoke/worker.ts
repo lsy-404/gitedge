@@ -1,6 +1,7 @@
 import { listArtifactRefs, readArtifactTree, artifactGraph } from "../../workers/git/src/read";
 import { compareArtifacts } from "../../workers/git/src/compare";
-import { mergeArtifacts, GitMergeInputSchema } from "../../workers/git/src/merge";
+import { mergeArtifacts } from "../../workers/git/src/merge";
+import { GitMergeInputSchema } from "../../packages/contracts/src/forge";
 
 export default {
   async fetch(request: Request, env: { ARTIFACTS: Artifacts }): Promise<Response> {

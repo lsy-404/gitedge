@@ -30,6 +30,7 @@ import {
   CreateReviewInputSchema,
   PutCheckRunInputSchema,
   UpdateDiscussionInputSchema,
+  MergeAuthorizationInputSchema,
   MergePullRequestInputSchema,
   type Actor,
   type Repository,
@@ -40,9 +41,7 @@ import { assignmentsColumn, parseAssignments, replaceAssignments } from "./assig
 import {
   canWriteSession,
   repoResponse,
-  error,
   isMember,
-  json,
   nextNumber,
   parseActor,
   parseJson,
@@ -60,6 +59,7 @@ import {
   readTrustedUser,
   trustedHeaders,
 } from "../../../packages/contracts/src/trust";
+import { dataResponse, errorResponse, jsonResponse } from "../../../src/worker/common/http";
 
 type NamespaceKind = "personal" | "organization";
 type OrganizationRole = "owner" | "member";
@@ -163,7 +163,7 @@ async function activeAgentSession(env: ForgeEnv, user: TrustedUser): Promise<Res
     row.workspace_name !== identity.workspaceName ||
     row.permission !== identity.permission
   )
-    return error(401, "unauthorized", "Agent session is invalid or expired.");
+    return errorResponse(401, "unauthorized", "Agent session is invalid or expired.");
   return null;
 }
 
@@ -174,12 +174,12 @@ async function authorizeRepository(
   options: { member?: boolean; write?: boolean } = {}
 ): Promise<Response | null> {
   if (user.agentSession && user.agentSession.repositoryId !== repository.id)
-    return error(403, "forbidden", "Agent session is limited to another repository.");
+    return errorResponse(403, "forbidden", "Agent session is limited to another repository.");
   if (options.write && !canWriteSession(user, repository.id))
-    return error(403, "forbidden", "Read-only agent session cannot write.");
+    return errorResponse(403, "forbidden", "Read-only agent session cannot write.");
   const member = await isMember(env, repository.id, user.id);
   if (options.member && !member)
-    return error(403, "forbidden", "Repository membership is required.");
+    return errorResponse(403, "forbidden", "Repository membership is required.");
   if (
     repository.visibility === "private" &&
     (await repositoryRole(env.DB, repository.id, user.id)) === null
@@ -206,7 +206,7 @@ function boundedList<T>(
   chronological = false
 ): Response {
   const kept = rows.slice(0, MAX_LIST_ROWS);
-  return json({
+  return jsonResponse({
     data: (chronological ? kept.reverse() : kept).map(present),
     truncated: rows.length > MAX_LIST_ROWS,
   });
@@ -238,7 +238,7 @@ async function pullRequestHeadOid(
   if (pull.head_session_id) gitUrl.searchParams.set("headSessionId", String(pull.head_session_id));
   const response = await env.GIT.fetch(new Request(gitUrl, { headers: trustedHeaders(user) }));
   if (response.status === 404)
-    return error(409, "stale_commit", "The pull request head is no longer available.");
+    return errorResponse(409, "stale_commit", "The pull request head is no longer available.");
   const body: unknown = response.ok ? await response.json().catch(() => null) : null;
   const data = body && typeof body === "object" && "data" in body ? body.data : null;
   const headOid =
@@ -251,7 +251,7 @@ async function pullRequestHeadOid(
       pullRequestId: pull.id,
       status: response.status,
     });
-    return error(502, "git_unavailable", "The pull request head could not be resolved.");
+    return errorResponse(502, "git_unavailable", "The pull request head could not be resolved.");
   }
   return headOid;
 }
@@ -415,8 +415,8 @@ async function publicRepositoryRead(
 ): Promise<Response> {
   const parts = ["public", "repositories", repository.owner, repository.slug, ...suffix];
   if (!repository.artifact_name || !repository.remote)
-    return error(503, "internal_error", "Repository storage is unavailable.");
-  if (parts.length === 4) return json({ data: repoResponse(repository) });
+    return errorResponse(503, "internal_error", "Repository storage is unavailable.");
+  if (parts.length === 4) return dataResponse(repoResponse(repository));
 
   const resource = parts[4];
   const disabled =
@@ -429,9 +429,10 @@ async function publicRepositoryRead(
           : resource === "wiki" && repository.wiki_enabled === 0
             ? "wiki"
             : null;
-  if (disabled) return error(404, "feature_disabled", `Repository ${disabled} are disabled.`);
+  if (disabled)
+    return errorResponse(404, "feature_disabled", `Repository ${disabled} are disabled.`);
   if (repository.archived === 1 && request.method !== "GET")
-    return error(409, "repository_archived", "Archived repositories are read-only.");
+    return errorResponse(409, "repository_archived", "Archived repositories are read-only.");
   if (resource === "issues" && parts.length === 5) {
     const rows = await env.DB.prepare(
       `SELECT forge_issues.*, users.identifier AS author${assignmentsSelect("forge_issues", "forge_issues")} FROM forge_issues JOIN users ON users.id = forge_issues.author_id WHERE forge_issues.repository_id = ? ORDER BY forge_issues.number DESC LIMIT ?`
@@ -462,7 +463,7 @@ async function publicRepositoryRead(
     )
       .bind(repository.id, parts[5])
       .first();
-    return page ? json({ data: page }) : error(404, "not_found", "Wiki page was not found.");
+    return page ? dataResponse(page) : errorResponse(404, "not_found", "Wiki page was not found.");
   }
   if (resource === "wiki" && parts[5] && parts[6] === "history" && parts.length === 7) {
     const rows = await env.DB.prepare(
@@ -478,7 +479,9 @@ async function publicRepositoryRead(
     )
       .bind(repository.id, parts[5], Number(parts[7]))
       .first();
-    return page ? json({ data: page }) : error(404, "not_found", "Wiki revision was not found.");
+    return page
+      ? dataResponse(page)
+      : errorResponse(404, "not_found", "Wiki revision was not found.");
   }
   if (
     resource === "pull-requests" &&
@@ -490,8 +493,10 @@ async function publicRepositoryRead(
     )
       .bind(repository.id, Number(parts[5]))
       .first<Record<string, unknown>>();
-    if (!pull) return error(404, "not_found", "Pull request was not found.");
+    if (!pull) return errorResponse(404, "not_found", "Pull request was not found.");
     if (parts[6] === "diff") {
+      if (pull.state === "closed" && pull.head_session_id)
+        return errorResponse(404, "not_found", "Pull request head was not found.");
       const gitUrl = new URL(`/repositories/${repository.id}/compare`, request.url);
       gitUrl.searchParams.set(
         "base",
@@ -515,7 +520,7 @@ async function publicRepositoryRead(
     )
       .bind(String(pull.id))
       .all<Record<string, unknown>>();
-    return json({ data: rows.results.map((row) => presentForgeRow(parts[6], row)) });
+    return dataResponse(rows.results.map((row) => presentForgeRow(parts[6], row)));
   }
   if (resource === "discussions" && parts.length === 5) {
     const rows = await env.DB.prepare(
@@ -531,7 +536,7 @@ async function publicRepositoryRead(
   ) {
     const number = Number(parts[5]);
     if (!Number.isSafeInteger(number) || number < 1)
-      return error(404, "not_found", "Resource was not found.");
+      return errorResponse(404, "not_found", "Resource was not found.");
     const table =
       resource === "issues"
         ? "forge_issues"
@@ -544,8 +549,8 @@ async function publicRepositoryRead(
       .bind(repository.id, number)
       .first<Record<string, unknown>>();
     return row
-      ? json({ data: presentForgeRow(resource, row) })
-      : error(404, "not_found", "Resource was not found.");
+      ? dataResponse(presentForgeRow(resource, row))
+      : errorResponse(404, "not_found", "Resource was not found.");
   }
   if (
     (resource === "issues" || resource === "pull-requests" || resource === "discussions") &&
@@ -570,7 +575,7 @@ async function publicRepositoryRead(
     )
       .bind(repository.id, number)
       .first<{ id: string }>();
-    if (!target) return error(404, "not_found", "Resource was not found.");
+    if (!target) return errorResponse(404, "not_found", "Resource was not found.");
     const rows = await env.DB.prepare(
       "SELECT * FROM forge_comments WHERE repository_id = ? AND target_kind = ? AND target_id = ? ORDER BY created_at DESC LIMIT ?"
     )
@@ -580,7 +585,7 @@ async function publicRepositoryRead(
   }
   const memory = await memoryTaskRequest(env, request, repository, ANONYMOUS_VIEWER, suffix);
   if (memory) return memory;
-  return error(404, "not_found", "Endpoint was not found.");
+  return errorResponse(404, "not_found", "Endpoint was not found.");
 }
 
 async function featureRequest(
@@ -602,18 +607,23 @@ async function featureRequest(
           : resource === "wiki" && repository.wiki_enabled === 0
             ? "wiki"
             : null;
-  if (disabled) return error(404, "feature_disabled", `Repository ${disabled} are disabled.`);
+  if (disabled)
+    return errorResponse(404, "feature_disabled", `Repository ${disabled} are disabled.`);
   if (repository.archived === 1 && request.method !== "GET")
-    return error(409, "repository_archived", "Archived repositories are read-only.");
+    return errorResponse(409, "repository_archived", "Archived repositories are read-only.");
   const actor = actorFor(user);
   const member = await isMember(env, repository.id, user.id);
   const writeAllowed = canWriteSession(user, repository.id);
   const requireWrite = (): Response | null =>
-    writeAllowed ? null : error(403, "forbidden", "Read-only agent session cannot write.");
+    writeAllowed ? null : errorResponse(403, "forbidden", "Read-only agent session cannot write.");
   const requireMember = (): Response | null =>
     member && writeAllowed
       ? null
-      : error(403, "forbidden", "Repository membership and a writable session are required.");
+      : errorResponse(
+          403,
+          "forbidden",
+          "Repository membership and a writable session are required."
+        );
   const targetTable =
     resource === "issues"
       ? "forge_issues"
@@ -637,7 +647,7 @@ async function featureRequest(
     if (denied) return denied;
     if (targetTable === "forge_issues") {
       const parsed = CreateIssueInputSchema.safeParse(await parseJson(request));
-      if (!parsed.success) return error(400, "bad_request", "Invalid issue payload.");
+      if (!parsed.success) return errorResponse(400, "bad_request", "Invalid issue payload.");
       const number = await nextNumber(env, targetTable, repository.id),
         id = crypto.randomUUID(),
         now = Date.now();
@@ -662,31 +672,34 @@ async function featureRequest(
         issueNumber: number,
         actorKind: actor.kind,
       });
-      return json(
+      return dataResponse(
         {
-          data: {
-            id,
-            number,
-            ...parsed.data,
-            state: "open",
-            author: user.identifier,
-            actor,
-            assignees: [],
-            reviewers: [],
-            createdAt: now,
-            updatedAt: now,
-          },
+          id,
+          number,
+          ...parsed.data,
+          state: "open",
+          author: user.identifier,
+          actor,
+          assignees: [],
+          reviewers: [],
+          createdAt: now,
+          updatedAt: now,
         },
         201
       );
     }
     if (targetTable === "forge_pull_requests") {
       const parsed = CreatePullRequestInputSchema.safeParse(await parseJson(request));
-      if (!parsed.success) return error(400, "bad_request", "Invalid pull request payload.");
+      if (!parsed.success)
+        return errorResponse(400, "bad_request", "Invalid pull request payload.");
       if (actor.kind === "agent" && parsed.data.headSessionId !== user.agentSession?.id)
-        return error(403, "forbidden", "An agent pull request must use its own workspace session.");
+        return errorResponse(
+          403,
+          "forbidden",
+          "An agent pull request must use its own workspace session."
+        );
       if (parsed.data.headSessionId && repository.agents_enabled === 0)
-        return error(404, "feature_disabled", "Repository agents are disabled.");
+        return errorResponse(404, "feature_disabled", "Repository agents are disabled.");
       if (parsed.data.headSessionId) {
         const session = await env.DB.prepare(
           "SELECT id FROM auth_agent_sessions WHERE auth_agent_sessions.id = ? AND auth_agent_sessions.user_id = ? AND auth_agent_sessions.repository_id = ? AND auth_agent_sessions.status = 'active' AND auth_agent_sessions.expires_at > ? AND EXISTS (SELECT 1 FROM auth_agents a WHERE a.id = auth_agent_sessions.agent_id AND a.disabled_at IS NULL)"
@@ -694,7 +707,7 @@ async function featureRequest(
           .bind(parsed.data.headSessionId, user.id, repository.id, Date.now())
           .first<{ id: string }>();
         if (!session)
-          return error(
+          return errorResponse(
             403,
             "forbidden",
             "Pull request head session is not active for this repository."
@@ -735,27 +748,25 @@ async function featureRequest(
         pullRequestNumber: number,
         actorKind: actor.kind,
       });
-      return json(
+      return dataResponse(
         {
-          data: {
-            id,
-            number,
-            ...parsed.data,
-            state: "open",
-            author: user.identifier,
-            actor,
-            mergedOid: null,
-            assignees: [],
-            reviewers: [],
-            createdAt: now,
-            updatedAt: now,
-          },
+          id,
+          number,
+          ...parsed.data,
+          state: "open",
+          author: user.identifier,
+          actor,
+          mergedOid: null,
+          assignees: [],
+          reviewers: [],
+          createdAt: now,
+          updatedAt: now,
         },
         201
       );
     }
     const parsed = CreateDiscussionInputSchema.safeParse(await parseJson(request));
-    if (!parsed.success) return error(400, "bad_request", "Invalid discussion payload.");
+    if (!parsed.success) return errorResponse(400, "bad_request", "Invalid discussion payload.");
     if (parsed.data.category === "announcements") {
       const denied = requireMember();
       if (denied) return denied;
@@ -784,18 +795,16 @@ async function featureRequest(
       discussionNumber: number,
       actorKind: actor.kind,
     });
-    return json(
+    return dataResponse(
       {
-        data: {
-          id,
-          number,
-          ...parsed.data,
-          state: "open",
-          actor,
-          answerCommentId: null,
-          createdAt: now,
-          updatedAt: now,
-        },
+        id,
+        number,
+        ...parsed.data,
+        state: "open",
+        actor,
+        answerCommentId: null,
+        createdAt: now,
+        updatedAt: now,
       },
       201
     );
@@ -803,13 +812,13 @@ async function featureRequest(
   if (targetTable && item) {
     const number = Number(item);
     if (!Number.isSafeInteger(number) || number < 1)
-      return error(404, "not_found", "Resource was not found.");
+      return errorResponse(404, "not_found", "Resource was not found.");
     const current = await env.DB.prepare(
       `SELECT resource.*, users.identifier AS author${assignmentsSelect(targetTable, "resource")} FROM ${targetTable} AS resource JOIN users ON users.id = resource.author_id WHERE resource.repository_id = ? AND resource.number = ?`
     )
       .bind(repository.id, number)
       .first<Record<string, unknown>>();
-    if (!current) return error(404, "not_found", "Resource was not found.");
+    if (!current) return errorResponse(404, "not_found", "Resource was not found.");
     if (request.method === "GET" && !action) {
       const itemRow = await env.DB.prepare(
         `SELECT resource.*, users.identifier AS author${assignmentsSelect(targetTable, "resource")} FROM ${targetTable} AS resource JOIN users ON users.id = resource.author_id WHERE resource.id = ?`
@@ -817,8 +826,8 @@ async function featureRequest(
         .bind(current.id)
         .first<Record<string, unknown>>();
       return itemRow
-        ? json({ data: presentForgeRow(resource, itemRow) })
-        : error(404, "not_found", "Resource was not found.");
+        ? dataResponse(presentForgeRow(resource, itemRow))
+        : errorResponse(404, "not_found", "Resource was not found.");
     }
     if (action === "comments" && (request.method === "GET" || request.method === "POST")) {
       if (request.method === "GET") {
@@ -836,7 +845,7 @@ async function featureRequest(
       const denied = requireWrite();
       if (denied) return denied;
       const parsed = CreateCommentInputSchema.safeParse(await parseJson(request));
-      if (!parsed.success) return error(400, "bad_request", "Invalid comment payload.");
+      if (!parsed.success) return errorResponse(400, "bad_request", "Invalid comment payload.");
       const id = crypto.randomUUID(),
         now = Date.now();
       await env.DB.prepare(
@@ -865,16 +874,14 @@ async function featureRequest(
         targetId: current.id,
         actorKind: actor.kind,
       });
-      return json(
-        {
-          data: presentForgeRow("comments", {
-            id,
-            actor_json: JSON.stringify(actor),
-            body: parsed.data.body,
-            created_at: now,
-            updated_at: now,
-          }),
-        },
+      return dataResponse(
+        presentForgeRow("comments", {
+          id,
+          actor_json: JSON.stringify(actor),
+          body: parsed.data.body,
+          created_at: now,
+          updated_at: now,
+        }),
         201
       );
     }
@@ -888,9 +895,9 @@ async function featureRequest(
       )
         .bind(subitem, repository.id, targetKind, String(current.id))
         .first<{ id: string; author_id: string; body: string }>();
-      if (!comment) return error(404, "not_found", "Comment was not found.");
+      if (!comment) return errorResponse(404, "not_found", "Comment was not found.");
       if (comment.author_id !== user.id && !member)
-        return error(
+        return errorResponse(
           403,
           "forbidden",
           "Only the comment author or a repository member may change it."
@@ -911,7 +918,7 @@ async function featureRequest(
         return new Response(null, { status: 204 });
       }
       const parsed = CreateCommentInputSchema.safeParse(await parseJson(request));
-      if (!parsed.success) return error(400, "bad_request", "Invalid comment payload.");
+      if (!parsed.success) return errorResponse(400, "bad_request", "Invalid comment payload.");
       await env.DB.prepare("UPDATE forge_comments SET body = ?, updated_at = ? WHERE id = ?")
         .bind(parsed.data.body, Date.now(), subitem)
         .run();
@@ -919,26 +926,30 @@ async function featureRequest(
         .bind(subitem)
         .first<Record<string, unknown>>();
       return updatedComment
-        ? json({ data: presentForgeRow("comments", updatedComment) })
-        : error(404, "not_found", "Comment was not found.");
+        ? dataResponse(presentForgeRow("comments", updatedComment))
+        : errorResponse(404, "not_found", "Comment was not found.");
     }
     if (request.method === "PATCH" && !action) {
       const input = await parseJson(request);
       if (targetTable === "forge_issues") {
         const parsed = UpdateIssueInputSchema.safeParse(input);
-        if (!parsed.success) return error(400, "bad_request", "Invalid issue update.");
+        if (!parsed.success) return errorResponse(400, "bad_request", "Invalid issue update.");
         const p = parsed.data;
         const isMember = member && writeAllowed;
         const isPublicAuthor =
           repository.visibility === "public" && current.author_id === user.id && writeAllowed;
         if (!isMember && !isPublicAuthor)
-          return error(
+          return errorResponse(
             403,
             "forbidden",
             "Only repository members or the issue author may edit this issue."
           );
         if (!isMember && p.labels !== undefined)
-          return error(403, "forbidden", "Only repository members may change issue labels.");
+          return errorResponse(
+            403,
+            "forbidden",
+            "Only repository members may change issue labels."
+          );
         const now = Date.now();
         const stateChanged = p.state !== undefined && p.state !== current.state;
         // The task progress entry rides in the same batch so it only lands when the update does.
@@ -965,7 +976,7 @@ async function featureRequest(
             : []),
         ]);
         if (changed.meta.changes !== 1)
-          return error(409, "conflict", "Issue changed while it was being updated.");
+          return errorResponse(409, "conflict", "Issue changed while it was being updated.");
       } else if (targetTable === "forge_pull_requests") {
         const denied = requireMember();
         if (denied) return denied;
@@ -974,9 +985,10 @@ async function featureRequest(
           typeof current.merge_started_at === "number" &&
           current.merge_started_at >= staleMergeCutoff
         )
-          return error(409, "conflict", "Pull request merge is in progress.");
+          return errorResponse(409, "conflict", "Pull request merge is in progress.");
         const parsed = UpdatePullRequestInputSchema.safeParse(input);
-        if (!parsed.success) return error(400, "bad_request", "Invalid pull request update.");
+        if (!parsed.success)
+          return errorResponse(400, "bad_request", "Invalid pull request update.");
         const p = parsed.data;
         const now = Date.now();
         const stateChanged = p.state !== undefined && p.state !== current.state;
@@ -1003,7 +1015,7 @@ async function featureRequest(
             : []),
         ]);
         if (changed.meta.changes !== 1)
-          return error(
+          return errorResponse(
             409,
             "conflict",
             "Pull request changed while it was being updated or merged."
@@ -1016,7 +1028,7 @@ async function featureRequest(
         const denied = requireMember();
         if (denied) return denied;
         const parsed = UpdateDiscussionInputSchema.safeParse(input);
-        if (!parsed.success) return error(400, "bad_request", "Invalid discussion update.");
+        if (!parsed.success) return errorResponse(400, "bad_request", "Invalid discussion update.");
         const p = parsed.data;
         if (p.answerCommentId) {
           const answer = await env.DB.prepare(
@@ -1025,7 +1037,11 @@ async function featureRequest(
             .bind(p.answerCommentId, repository.id, current.id)
             .first<{ id: string }>();
           if (!answer)
-            return error(400, "bad_request", "Answer comment must belong to this discussion.");
+            return errorResponse(
+              400,
+              "bad_request",
+              "Answer comment must belong to this discussion."
+            );
         }
         const changed = await env.DB.prepare(
           "UPDATE forge_discussions SET title = COALESCE(?, title), body = COALESCE(?, body), state = COALESCE(?, state), answer_comment_id = CASE WHEN ? THEN ? ELSE answer_comment_id END, updated_at = ? WHERE id = ?"
@@ -1041,14 +1057,14 @@ async function featureRequest(
           )
           .run();
         if (changed.meta.changes !== 1)
-          return error(409, "conflict", "Discussion changed while it was being updated.");
+          return errorResponse(409, "conflict", "Discussion changed while it was being updated.");
       }
       const updated = await env.DB.prepare(
         `SELECT resource.*, users.identifier AS author${assignmentsSelect(targetTable, "resource")} FROM ${targetTable} AS resource JOIN users ON users.id = resource.author_id WHERE resource.id = ?`
       )
         .bind(current.id)
         .first<Record<string, unknown>>();
-      return json({ data: updated ? presentForgeRow(resource, updated) : null });
+      return dataResponse(updated ? presentForgeRow(resource, updated) : null);
     }
     if (
       (targetTable === "forge_issues" || targetTable === "forge_pull_requests") &&
@@ -1058,7 +1074,7 @@ async function featureRequest(
       const denied = requireMember();
       if (denied) return denied;
       const parsed = SetAssignmentsInputSchema.safeParse(await parseJson(request));
-      if (!parsed.success) return error(400, "bad_request", "Invalid assignment payload.");
+      if (!parsed.success) return errorResponse(400, "bad_request", "Invalid assignment payload.");
       const failure = await replaceAssignments(
         env,
         repository,
@@ -1072,7 +1088,7 @@ async function featureRequest(
       )
         .bind(current.id)
         .first<Record<string, unknown>>();
-      return json({ data: updated ? presentForgeRow(resource, updated) : null });
+      return dataResponse(updated ? presentForgeRow(resource, updated) : null);
     }
     if (targetTable === "forge_pull_requests" && action === "reviews" && request.method === "GET") {
       const rows = await env.DB.prepare(
@@ -1080,7 +1096,7 @@ async function featureRequest(
       )
         .bind(String(current.id))
         .all<Record<string, unknown>>();
-      return json({ data: rows.results.map((row) => presentForgeRow("reviews", row)) });
+      return dataResponse(rows.results.map((row) => presentForgeRow("reviews", row)));
     }
     if (
       targetTable === "forge_pull_requests" &&
@@ -1090,19 +1106,19 @@ async function featureRequest(
       const denied = requireWrite();
       if (denied) return denied;
       if (current.state !== "open" || hasActiveMergeLease(current))
-        return error(
+        return errorResponse(
           409,
           "conflict",
           "Reviews cannot change while this pull request is closed or merging."
         );
       const parsed = CreateReviewInputSchema.safeParse(await parseJson(request));
-      if (!parsed.success) return error(400, "bad_request", "Invalid review payload.");
+      if (!parsed.success) return errorResponse(400, "bad_request", "Invalid review payload.");
       if (actor.kind === "agent" && !user.agentSession)
-        return error(403, "forbidden", "Trusted agent session is required.");
+        return errorResponse(403, "forbidden", "Trusted agent session is required.");
       const reviewHead = await pullRequestHeadOid(env, request.url, repository, current, user);
       if (reviewHead instanceof Response) return reviewHead;
       if (parsed.data.commitOid !== reviewHead)
-        return error(409, "stale_commit", "The commit is no longer the pull request head.");
+        return errorResponse(409, "stale_commit", "The commit is no longer the pull request head.");
       const id = crypto.randomUUID(),
         now = Date.now();
       await env.DB.prepare(
@@ -1128,7 +1144,7 @@ async function featureRequest(
         state: parsed.data.state,
         actorKind: actor.kind,
       });
-      return json({ data: { id, ...parsed.data, actor, createdAt: now } }, 201);
+      return dataResponse({ id, ...parsed.data, actor, createdAt: now }, 201);
     }
     if (
       targetTable === "forge_pull_requests" &&
@@ -1141,20 +1157,20 @@ async function featureRequest(
         )
           .bind(String(current.id))
           .all<Record<string, unknown>>();
-        return json({ data: rows.results.map((row) => presentForgeRow("checks", row)) });
+        return dataResponse(rows.results.map((row) => presentForgeRow("checks", row)));
       }
       const denied = requireMember();
       if (denied) return denied;
       if (current.state !== "open" || hasActiveMergeLease(current))
-        return error(
+        return errorResponse(
           409,
           "conflict",
           "Checks cannot change while this pull request is closed or merging."
         );
       const parsed = PutCheckRunInputSchema.safeParse(await parseJson(request));
-      if (!parsed.success) return error(400, "bad_request", "Invalid check run payload.");
+      if (!parsed.success) return errorResponse(400, "bad_request", "Invalid check run payload.");
       if (parsed.data.name.startsWith(".github/workflows/"))
-        return error(
+        return errorResponse(
           403,
           "reserved_check",
           "Workflow check names are reserved for Container Actions."
@@ -1162,7 +1178,7 @@ async function featureRequest(
       const checkHead = await pullRequestHeadOid(env, request.url, repository, current, user);
       if (checkHead instanceof Response) return checkHead;
       if (parsed.data.commitOid !== checkHead)
-        return error(409, "stale_commit", "The commit is no longer the pull request head.");
+        return errorResponse(409, "stale_commit", "The commit is no longer the pull request head.");
       const id = crypto.randomUUID(),
         now = Date.now(),
         key = actorKey(actor);
@@ -1186,7 +1202,11 @@ async function featureRequest(
         )
         .first<Record<string, unknown>>();
       if (!check)
-        return error(409, "conflict", "Check run cannot move backwards from its current status.");
+        return errorResponse(
+          409,
+          "conflict",
+          "Check run cannot move backwards from its current status."
+        );
       logger.info("forge:check-run-recorded", {
         repositoryId: repository.id,
         pullRequestNumber: number,
@@ -1195,7 +1215,7 @@ async function featureRequest(
         status: parsed.data.status,
         conclusion: parsed.data.conclusion,
       });
-      return json({ data: presentForgeRow("checks", check) }, check.id === id ? 201 : 200);
+      return dataResponse(presentForgeRow("checks", check), check.id === id ? 201 : 200);
     }
     if (targetTable === "forge_pull_requests" && action === "diff" && request.method === "GET") {
       logger.debug("forge:pull-request-diff", {
@@ -1209,9 +1229,9 @@ async function featureRequest(
       const denied = requireMember();
       if (denied) return denied;
       if (actor.kind !== "user")
-        return error(403, "forbidden", "Only a human repository member may merge.");
+        return errorResponse(403, "forbidden", "Only a human repository member may merge.");
       const parsed = MergePullRequestInputSchema.safeParse(await parseJson(request));
-      if (!parsed.success) return error(400, "bad_request", "Invalid merge payload.");
+      if (!parsed.success) return errorResponse(400, "bad_request", "Invalid merge payload.");
       if (current.state === "merged" && current.merged_oid) {
         const merged = await env.DB.prepare(
           `SELECT pull.*, users.identifier AS author${assignmentsSelect("forge_pull_requests", "pull")} FROM forge_pull_requests AS pull JOIN users ON users.id = pull.author_id WHERE pull.id = ?`
@@ -1219,25 +1239,26 @@ async function featureRequest(
           .bind(current.id)
           .first<Record<string, unknown>>();
         return merged
-          ? json({ data: presentForgeRow(resource, merged) })
-          : error(404, "not_found", "Pull request was not found.");
+          ? dataResponse(presentForgeRow(resource, merged))
+          : errorResponse(404, "not_found", "Pull request was not found.");
       }
       if (current.state !== "open" || current.draft)
-        return error(409, "conflict", "Pull request must be open and ready to merge.");
+        return errorResponse(409, "conflict", "Pull request must be open and ready to merge.");
 
       const rules = matchingBranchRules(
         await branchRules(env.DB, repository.id),
         String(current.base_ref)
       );
       if (rules.some((rule) => rule.locked))
-        return error(403, "protected_branch", "The base branch is locked.");
+        return errorResponse(403, "protected_branch", "The base branch is locked.");
       const allowed =
         parsed.data.method === "merge"
           ? repository.allow_merge_commit !== 0
           : parsed.data.method === "squash"
             ? repository.allow_squash_merge !== 0
             : repository.allow_rebase_merge !== 0;
-      if (!allowed) return error(403, "merge_method_disabled", "This merge method is disabled.");
+      if (!allowed)
+        return errorResponse(403, "merge_method_disabled", "This merge method is disabled.");
       const leaseAt = Date.now();
       const staleBefore = leaseAt - 300_000;
       const lease = await env.DB.prepare(
@@ -1252,7 +1273,11 @@ async function featureRequest(
         )
         .first<{ id: string }>();
       if (!lease)
-        return error(409, "conflict", "Another merge is in progress for this pull request.");
+        return errorResponse(
+          409,
+          "conflict",
+          "Another merge is in progress for this pull request."
+        );
       const releaseLease = async (): Promise<void> => {
         await env.DB.prepare(
           "UPDATE forge_pull_requests SET merge_started_at = NULL, merge_base_oid = NULL, merge_head_oid = NULL WHERE id = ? AND merge_started_at = ?"
@@ -1298,7 +1323,7 @@ async function featureRequest(
           pullRequestNumber: number,
           status: gitResponse.status,
         });
-        return error(
+        return errorResponse(
           gitResponse.status === 409 ? 409 : 502,
           "conflict",
           gitFailureMessage(payload)
@@ -1369,9 +1394,9 @@ async function featureRequest(
           pullRequestNumber: number,
           mergedOid: merged.merged_oid,
         });
-        return json({ data: presentForgeRow(resource, merged) });
+        return dataResponse(presentForgeRow(resource, merged));
       }
-      return error(409, "conflict", "Pull request state changed after Git merge.");
+      return errorResponse(409, "conflict", "Pull request state changed after Git merge.");
     }
   }
 
@@ -1392,15 +1417,17 @@ async function featureRequest(
           .bind(repository.id, item, Number(subitem))
           .first();
         return page
-          ? json({ data: page })
-          : error(404, "not_found", "Wiki revision was not found.");
+          ? dataResponse(page)
+          : errorResponse(404, "not_found", "Wiki revision was not found.");
       }
       const page = await env.DB.prepare(
         "SELECT slug, title, content, revision, updated_by AS updatedBy, updated_at AS updatedAt FROM forge_wiki_pages WHERE repository_id = ? AND slug = ?"
       )
         .bind(repository.id, item)
         .first();
-      return page ? json({ data: page }) : error(404, "not_found", "Wiki page was not found.");
+      return page
+        ? dataResponse(page)
+        : errorResponse(404, "not_found", "Wiki page was not found.");
     }
     if (request.method === "PUT" || (action === "restore" && request.method === "POST")) {
       const denied = requireMember();
@@ -1418,7 +1445,7 @@ async function featureRequest(
           !Number.isSafeInteger(input.expectedRevision) ||
           input.expectedRevision < 0
         )
-          return error(
+          return errorResponse(
             400,
             "bad_request",
             "A current wiki revision is required to restore history."
@@ -1428,13 +1455,13 @@ async function featureRequest(
         )
           .bind(repository.id, item, Number(subitem))
           .first<{ title: string; content: string }>();
-        if (!historical) return error(404, "not_found", "Wiki revision was not found.");
+        if (!historical) return errorResponse(404, "not_found", "Wiki revision was not found.");
         title = historical.title;
         content = historical.content;
         expected = input.expectedRevision;
       } else {
         const parsed = PutWikiPageInputSchema.safeParse(await parseJson(request));
-        if (!parsed.success) return error(400, "bad_request", "Invalid wiki page payload.");
+        if (!parsed.success) return errorResponse(400, "bad_request", "Invalid wiki page payload.");
         title = parsed.data.title;
         content = parsed.data.content;
         expected = parsed.data.expectedRevision;
@@ -1458,8 +1485,8 @@ async function featureRequest(
         ).bind(repository.id, item, title, content, user.id, JSON.stringify(actor), now),
       ]);
       if (inserted[0].meta.changes === 1)
-        return json(
-          { data: { slug: item, title, content, revision: 1, updatedBy: user.id, updatedAt: now } },
+        return dataResponse(
+          { slug: item, title, content, revision: 1, updatedBy: user.id, updatedAt: now },
           201
         );
       const expectedRevision = expected ?? 0;
@@ -1481,16 +1508,14 @@ async function featureRequest(
         ),
       ]);
       if (updated[0].meta.changes !== 1)
-        return error(409, "conflict", "Wiki page revision has changed.");
-      return json({
-        data: {
-          slug: item,
-          title,
-          content,
-          revision: expectedRevision + 1,
-          updatedBy: user.id,
-          updatedAt: now,
-        },
+        return errorResponse(409, "conflict", "Wiki page revision has changed.");
+      return dataResponse({
+        slug: item,
+        title,
+        content,
+        revision: expectedRevision + 1,
+        updatedBy: user.id,
+        updatedAt: now,
       });
     }
   }
@@ -1507,43 +1532,37 @@ export default {
     const user = trustedUser(request);
     if (url.pathname === "/internal/merge-authorization") {
       if (url.hostname !== "forge.internal" || request.method !== "POST" || !user)
-        return error(404, "not_found", "Endpoint was not found.");
-      const value = await parseJson(request);
-      if (
-        !value ||
-        typeof value !== "object" ||
-        !("pullRequestId" in value) ||
-        typeof value.pullRequestId !== "string" ||
-        !("leaseAt" in value) ||
-        typeof value.leaseAt !== "number"
-      )
-        return error(400, "bad_request", "Invalid merge authorization.");
-      const input = MergePullRequestInputSchema.safeParse(value);
-      if (!input.success) return error(400, "bad_request", "Invalid merge authorization.");
+        return errorResponse(404, "not_found", "Endpoint was not found.");
+      const input = MergeAuthorizationInputSchema.safeParse(await parseJson(request));
+      if (!input.success) return errorResponse(400, "bad_request", "Invalid merge authorization.");
       const pull = await env.DB.prepare("SELECT * FROM forge_pull_requests WHERE id=?")
-        .bind(value.pullRequestId)
+        .bind(input.data.pullRequestId)
         .first<Record<string, unknown>>();
       if (
         !pull ||
         pull.state !== "open" ||
-        pull.merge_started_at !== value.leaseAt ||
-        value.leaseAt < Date.now() - 300_000 ||
+        pull.repository_id !== input.data.repositoryId ||
+        pull.base_ref !== input.data.baseRef ||
+        pull.head_ref !== input.data.headRef ||
+        (pull.head_session_id ?? null) !== (input.data.headSessionId ?? null) ||
+        pull.merge_started_at !== input.data.leaseAt ||
+        input.data.leaseAt < Date.now() - 300_000 ||
         pull.merge_base_oid !== input.data.expectedBaseOid ||
         pull.merge_head_oid !== input.data.expectedHeadOid
       )
-        return error(409, "merge_changed", "Merge authorization expired or changed.");
+        return errorResponse(409, "merge_changed", "Merge authorization expired or changed.");
       const repository = await repositoryById(env, String(pull.repository_id));
       if (!repository) return repositoryNotFound();
       return (
         (await authorizeMerge(env, repository, user, pull, input.data)) ??
-        json({ data: { authorized: true } })
+        dataResponse({ authorized: true })
       );
     }
     if (request.method === "GET" && parts[0] === "profiles" && parts.length === 2)
       return publicProfile(env, request, parts[1], user);
     if (!user) {
       if (request.method !== "GET" || parts[0] !== "repositories")
-        return error(401, "unauthorized", "Trusted user context is required.");
+        return errorResponse(401, "unauthorized", "Trusted user context is required.");
       const byName = parts[1] === "by-name";
       const repository = byName
         ? await publicRepositoryForOwnerAndSlug(env, parts[2] ?? "", parts[3] ?? "")
@@ -1561,9 +1580,9 @@ export default {
         !parts[1] ||
         (parts[1] !== user.agentSession.repositoryId && parts[1] !== "by-name"))
     )
-      return error(403, "forbidden", "Agent session is limited to its repository.");
+      return errorResponse(403, "forbidden", "Agent session is limited to its repository.");
     if (user.agentSession && request.method !== "GET" && parts[1] === "by-name")
-      return error(
+      return errorResponse(
         403,
         "forbidden",
         "Agent sessions cannot resolve repositories by name for writes."
@@ -1575,11 +1594,12 @@ export default {
       )
         .bind(user.id)
         .all<NamespaceAccessRow>();
-      return json({ data: rows.results.map(organizationResponse) });
+      return dataResponse(rows.results.map(organizationResponse));
     }
     if (request.method === "POST" && url.pathname === "/organizations") {
       const parsed = CreateOrganizationInputSchema.safeParse(await parseJson(request));
-      if (!parsed.success) return error(400, "bad_request", "Invalid organization payload.");
+      if (!parsed.success)
+        return errorResponse(400, "bad_request", "Invalid organization payload.");
       const now = Date.now();
       const organizationId = crypto.randomUUID();
       try {
@@ -1603,7 +1623,7 @@ export default {
           slug: parsed.data.slug,
           userId: user.id,
         });
-        return error(409, "conflict", "Organization slug already exists.");
+        return errorResponse(409, "conflict", "Organization slug already exists.");
       }
       const organization: NamespaceAccessRow = {
         id: organizationId,
@@ -1620,40 +1640,40 @@ export default {
         slug: organization.slug,
         userId: user.id,
       });
-      return json({ data: organizationResponse(organization) }, 201);
+      return dataResponse(organizationResponse(organization), 201);
     }
 
     const organizationSlug = parts[1];
     if (parts[0] === "organizations" && organizationSlug) {
       const organization = await namespaceForUser(env, user.id, organizationSlug);
       if (!organization || organization.kind !== "organization")
-        return error(404, "not_found", "Organization was not found.");
+        return errorResponse(404, "not_found", "Organization was not found.");
       if (request.method === "GET" && parts.length === 2)
-        return json({ data: organizationResponse(organization) });
+        return dataResponse(organizationResponse(organization));
       if (parts[2] === "members") {
         if (request.method === "GET" && parts.length === 3) {
           if (!organization.role)
-            return error(403, "forbidden", "Organization membership is required.");
+            return errorResponse(403, "forbidden", "Organization membership is required.");
           const rows = await env.DB.prepare(
             "SELECT users.identifier, namespace_memberships.role, namespace_memberships.created_at AS createdAt FROM namespace_memberships JOIN users ON users.id = namespace_memberships.user_id WHERE namespace_memberships.namespace_id = ? ORDER BY namespace_memberships.role DESC, users.identifier ASC"
           )
             .bind(organization.id)
             .all<OrganizationMemberRow>();
-          return json({ data: rows.results });
+          return dataResponse(rows.results);
         }
         if (!organizationOwner(organization))
-          return error(403, "forbidden", "Organization owner access is required.");
+          return errorResponse(403, "forbidden", "Organization owner access is required.");
         if (request.method === "POST" && parts.length === 3) {
           const parsed = AddOrganizationMemberInputSchema.safeParse(await parseJson(request));
           if (!parsed.success)
-            return error(400, "bad_request", "Invalid organization member payload.");
+            return errorResponse(400, "bad_request", "Invalid organization member payload.");
           const result = await env.DB.prepare(
             "INSERT OR IGNORE INTO namespace_memberships (namespace_id, user_id, created_at, role) SELECT ?, users.id, ?, ? FROM users WHERE users.identifier = ?"
           )
             .bind(organization.id, Date.now(), parsed.data.role, parsed.data.identifier)
             .run();
           if (result.meta.changes !== 1)
-            return error(
+            return errorResponse(
               409,
               "conflict",
               "User was not found or is already an organization member."
@@ -1664,10 +1684,7 @@ export default {
             role: parsed.data.role,
             userId: user.id,
           });
-          return json(
-            { data: { identifier: parsed.data.identifier, role: parsed.data.role } },
-            201
-          );
+          return dataResponse({ identifier: parsed.data.identifier, role: parsed.data.role }, 201);
         }
         const memberIdentifier = parts[3];
         if (request.method === "DELETE" && memberIdentifier && parts.length === 4) {
@@ -1677,7 +1694,7 @@ export default {
             .bind(organization.id, memberIdentifier, organization.id)
             .first<{ user_id: string }>();
           if (!result)
-            return error(
+            return errorResponse(
               409,
               "conflict",
               "Member was not found or is the last organization owner."
@@ -1691,11 +1708,11 @@ export default {
             identifier: memberIdentifier,
             userId: user.id,
           });
-          if (!revoked) return json({ data: { removed: true, revocationIncomplete: true } }, 202);
+          if (!revoked) return dataResponse({ removed: true, revocationIncomplete: true }, 202);
           return new Response(null, { status: 204 });
         }
       }
-      return error(405, "method_not_allowed", "Method is not allowed for this endpoint.");
+      return errorResponse(405, "method_not_allowed", "Method is not allowed for this endpoint.");
     }
 
     if (request.method === "GET" && url.pathname === "/repositories") {
@@ -1705,16 +1722,18 @@ export default {
         .bind(user.id, user.id)
         .all<RepositoryRow>();
       if (rows.results.length > 1000)
-        return error(413, "repository_limit", "Repository listing exceeds its limit.");
+        return errorResponse(413, "repository_limit", "Repository listing exceeds its limit.");
       if (rows.results.some((row) => !row.artifact_name || !row.remote))
-        return error(503, "internal_error", "One or more repositories have unavailable storage.");
-      return json({
-        data: rows.results.map((row) => repoResponse(row, null, row.can_write === 1)),
-      });
+        return errorResponse(
+          503,
+          "internal_error",
+          "One or more repositories have unavailable storage."
+        );
+      return dataResponse(rows.results.map((row) => repoResponse(row, null, row.can_write === 1)));
     }
     if (request.method === "POST" && url.pathname === "/repositories") {
       const parsed = CreateRepositoryInputSchema.safeParse(await parseJson(request));
-      if (!parsed.success) return error(400, "bad_request", "Invalid repository payload.");
+      if (!parsed.success) return errorResponse(400, "bad_request", "Invalid repository payload.");
       const limits = parseUserGroupLimits(env.USER_GROUP_LIMITS_JSON);
       const groupLimits = limits[user.groupKey] ?? limits.free;
       const repositoryCount = await env.DB.prepare(
@@ -1723,11 +1742,15 @@ export default {
         .bind(user.id)
         .first<{ count: number }>();
       if ((repositoryCount?.count ?? 0) >= groupLimits.maxRepositories)
-        return error(403, "forbidden", "Repository limit reached for this user group.");
+        return errorResponse(403, "forbidden", "Repository limit reached for this user group.");
       const namespace = await namespaceForUser(env, user.id, parsed.data.owner);
-      if (!namespace) return error(404, "not_found", "Repository owner was not found.");
+      if (!namespace) return errorResponse(404, "not_found", "Repository owner was not found.");
       if (!canCreateRepository(namespace, user.id))
-        return error(403, "forbidden", "Repository creation requires namespace owner access.");
+        return errorResponse(
+          403,
+          "forbidden",
+          "Repository creation requires namespace owner access."
+        );
       const now = Date.now(),
         id = crypto.randomUUID(),
         artifactName = `repo-${id}`;
@@ -1752,7 +1775,11 @@ export default {
           cause instanceof Error &&
           (cause.message.includes("UNIQUE") || cause.message.includes("repository path"))
         )
-          return error(409, "conflict", "Repository name is already used or reserved by a rename.");
+          return errorResponse(
+            409,
+            "conflict",
+            "Repository name is already used or reserved by a rename."
+          );
         throw cause;
       }
       let createdArtifact: { name: string; remote: string };
@@ -1777,7 +1804,7 @@ export default {
           namespaceId: namespace.id,
           error: cause instanceof Error ? cause.message : "unknown",
         });
-        return error(503, "internal_error", "Repository storage is unavailable.");
+        return errorResponse(503, "internal_error", "Repository storage is unavailable.");
       }
       await env.DB.prepare("INSERT INTO forge_counters (repository_id) VALUES (?)").bind(id).run();
       const created: RepositoryRow = {
@@ -1816,18 +1843,18 @@ export default {
           })
         );
         if (!initial.ok)
-          return error(
+          return errorResponse(
             503,
             "initialization_failed",
             "Repository was created but README initialization failed. Open the repository to retry."
           );
       }
-      return json({ data: repoResponse(created, "admin", true) }, 201);
+      return dataResponse(repoResponse(created, "admin", true), 201);
     }
 
     const repositoryId = parts[1];
     if (parts[0] !== "repositories" || !repositoryId)
-      return error(404, "not_found", "Endpoint was not found.");
+      return errorResponse(404, "not_found", "Endpoint was not found.");
     if (request.method === "GET" && repositoryId === "by-name" && parts[2] && parts[3]) {
       const path = await resolveRepositoryPath(env.DB, parts[2], parts[3]);
       const named = path ? await repositoryById(env, path.id) : null;
@@ -1837,34 +1864,34 @@ export default {
       const role = await repositoryRole(env.DB, named.id, user.id);
       if (named.visibility === "private" && role === null) return repositoryAccessDenied();
       if (!named.artifact_name || !named.remote)
-        return error(503, "internal_error", "Repository storage is unavailable.");
-      return json({
-        data: repoResponse(
+        return errorResponse(503, "internal_error", "Repository storage is unavailable.");
+      return dataResponse(
+        repoResponse(
           named,
           role,
           writableRole(role) && canWriteSession(user, named.id)
-        ) satisfies Repository,
-      });
+        ) satisfies Repository
+      );
     }
     const repository = await repositoryById(env, repositoryId);
     if (!repository) return repositoryNotFound();
     const access = await authorizeRepository(env, user, repository);
     if (access) return access;
     if (!repository.artifact_name || !repository.remote)
-      return error(503, "internal_error", "Repository storage is unavailable.");
+      return errorResponse(503, "internal_error", "Repository storage is unavailable.");
     if (request.method === "GET" && parts.length === 2) {
       const role = await repositoryRole(env.DB, repositoryId, user.id);
-      return json({
-        data: repoResponse(
+      return dataResponse(
+        repoResponse(
           repository,
           role,
           writableRole(role) && canWriteSession(user, repositoryId)
-        ) satisfies Repository,
-      });
+        ) satisfies Repository
+      );
     }
     if (parts[2] === "wiki" && !parts[3] && request.method === "GET") {
       if (repository.wiki_enabled === 0)
-        return error(404, "feature_disabled", "Repository wiki is disabled.");
+        return errorResponse(404, "feature_disabled", "Repository wiki is disabled.");
       const rows = await env.DB.prepare(
         "SELECT slug, title, revision, updated_by AS updatedBy, updated_at AS updatedAt FROM forge_wiki_pages WHERE repository_id = ? ORDER BY slug ASC LIMIT ?"
       )
@@ -1890,6 +1917,6 @@ export default {
     const feature = await featureRequest(env, user, repository, parts, request);
     if (feature) return feature;
 
-    return error(405, "method_not_allowed", "Method is not allowed for this endpoint.");
+    return errorResponse(405, "method_not_allowed", "Method is not allowed for this endpoint.");
   },
 };

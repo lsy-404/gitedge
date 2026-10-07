@@ -19,6 +19,8 @@ import { createLogger } from "../../../src/worker/common/logger";
 import { repositoryRole, writableRole } from "../../../src/worker/common/repositories";
 import { parseWorkflow, WorkflowValidationError } from "./workflow";
 import { ActionRun as ActionRunDurableObject, type ActionRunInput } from "./run";
+import { base64ToBytes } from "../../../src/worker/common/encoding";
+import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 
 export { ActionRunDurableObject as ActionRun };
 
@@ -62,17 +64,6 @@ interface ActionRunStub {
   getRun(): Promise<ActionRunDetails | null>;
   cancel(): Promise<ActionRunDetails | null>;
   failStaleRun(): Promise<ActionRunDetails | null>;
-}
-
-function json(data: unknown, status = 200): Response {
-  return Response.json({ data }, { status, headers: { "Cache-Control": "no-store" } });
-}
-
-function error(status: number, code: string, message: string): Response {
-  return Response.json(
-    { error: { code, message } },
-    { status, headers: { "Cache-Control": "no-store" } }
-  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -215,7 +206,7 @@ function snapshotFile(snapshot: RepositorySnapshot, path: string): string | null
   const file = snapshot.files.find((entry) => entry.path === path);
   if (!file) return null;
   try {
-    const bytes = Uint8Array.from(atob(file.contentBase64), (char) => char.charCodeAt(0));
+    const bytes = base64ToBytes(file.contentBase64);
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {
     return null;
@@ -410,7 +401,7 @@ async function listWorkflows(
   const ref = url.searchParams.get("ref") ?? repo.default_branch;
   const oid = url.searchParams.get("oid") ?? undefined;
   if (!ref || ref.length > 255 || (oid && !GitOidSchema.safeParse(oid).success)) {
-    return error(400, "bad_request", "Invalid ref or commit OID.");
+    return errorResponse(400, "bad_request", "Invalid ref or commit OID.");
   }
   try {
     const snapshot = await repositorySnapshot(env, repositoryId, ref, oid, user);
@@ -445,13 +436,13 @@ async function listWorkflows(
         });
       }
     }
-    return json({ oid: snapshot.oid, workflows });
+    return dataResponse({ oid: snapshot.oid, workflows });
   } catch (cause) {
     const logger = createLogger(env.LOG_LEVEL, { service: "actions", repoId: repositoryId });
     logger.warn("actions:workflow-list-failed", {
       reason: cause instanceof Error ? cause.message : "unknown",
     });
-    return error(
+    return errorResponse(
       422,
       "bad_request",
       cause instanceof Error ? cause.message : "Unable to load workflows."
@@ -607,13 +598,13 @@ async function queueActionRun(
 
 async function handleInternalPush(request: Request, env: ActionsEnv): Promise<Response> {
   if (new URL(request.url).hostname !== "actions.internal") {
-    return error(404, "not_found", "Actions endpoint was not found.");
+    return errorResponse(404, "not_found", "Actions endpoint was not found.");
   }
   if (request.method !== "POST") {
-    return error(405, "method_not_allowed", "Method is not allowed.");
+    return errorResponse(405, "method_not_allowed", "Method is not allowed.");
   }
   const user = readTrustedUser(request);
-  if (!user) return error(401, "unauthorized", "Trusted user context is required.");
+  if (!user) return errorResponse(401, "unauthorized", "Trusted user context is required.");
   const body: unknown = await readJsonLimited(request, 65_536);
   if (
     !isRecord(body) ||
@@ -625,20 +616,30 @@ async function handleInternalPush(request: Request, env: ActionsEnv): Promise<Re
     body.ref.length > 255 ||
     !GitOidSchema.safeParse(body.expectedOid).success
   ) {
-    return error(400, "bad_request", "A repository, ref, and expected commit OID are required.");
+    return errorResponse(
+      400,
+      "bad_request",
+      "A repository, ref, and expected commit OID are required."
+    );
   }
   const repositoryId = body.repositoryId;
   const repo = await repositoryFor(env, repositoryId);
   if (!repo || !(await canReadRepository(env, repo, user))) {
-    return error(404, "not_found", "Repository was not found.");
+    return errorResponse(404, "not_found", "Repository was not found.");
   }
   if (!(await canWriteRepository(env, repo, user))) {
-    return error(403, "forbidden", "Write permission is required for push Actions.");
+    return errorResponse(403, "forbidden", "Write permission is required for push Actions.");
   }
-  if (repo.archived) return error(409, "conflict", "Archived repositories cannot run Actions.");
-  if (repo.actions_enabled !== 1) return error(409, "conflict", "Repository Actions are disabled.");
+  if (repo.archived)
+    return errorResponse(409, "conflict", "Archived repositories cannot run Actions.");
+  if (repo.actions_enabled !== 1)
+    return errorResponse(409, "conflict", "Repository Actions are disabled.");
   if (!env.ACTION_RUNS) {
-    return error(503, "internal_error", "Repository Actions are unavailable on this deployment.");
+    return errorResponse(
+      503,
+      "internal_error",
+      "Repository Actions are unavailable on this deployment."
+    );
   }
 
   let snapshot: RepositorySnapshot;
@@ -646,7 +647,11 @@ async function handleInternalPush(request: Request, env: ActionsEnv): Promise<Re
   try {
     snapshot = await repositorySnapshot(env, repositoryId, body.ref, body.expectedOid, user);
     if (snapshot.oid !== body.expectedOid) {
-      return error(409, "conflict", "The pushed ref no longer points to the expected commit.");
+      return errorResponse(
+        409,
+        "conflict",
+        "The pushed ref no longer points to the expected commit."
+      );
     }
     const files = snapshot.files.filter(
       (file) => file.path.startsWith(".github/workflows/") && /\.(?:yml|yaml)$/.test(file.path)
@@ -654,18 +659,18 @@ async function handleInternalPush(request: Request, env: ActionsEnv): Promise<Re
     for (const file of files) {
       const source = snapshotFile(snapshot, file.path);
       if (source === null) {
-        return error(422, "bad_request", `Workflow ${file.path} is not valid UTF-8.`);
+        return errorResponse(422, "bad_request", `Workflow ${file.path} is not valid UTF-8.`);
       }
       try {
         workflows.push(parseWorkflow(file.path, source));
       } catch (cause) {
         const reason =
           cause instanceof WorkflowValidationError ? cause.message : "Workflow file is invalid.";
-        return error(422, "bad_request", `Workflow ${file.path} is unsupported: ${reason}`);
+        return errorResponse(422, "bad_request", `Workflow ${file.path} is unsupported: ${reason}`);
       }
     }
   } catch (cause) {
-    return error(
+    return errorResponse(
       422,
       "bad_request",
       cause instanceof Error ? cause.message : "Unable to inspect push workflows."
@@ -674,7 +679,7 @@ async function handleInternalPush(request: Request, env: ActionsEnv): Promise<Re
 
   const triggered = workflows.filter((workflow) => workflow.triggers.includes("push"));
   if (triggered.length > 3) {
-    return error(422, "bad_request", "A push may start at most three workflows.");
+    return errorResponse(422, "bad_request", "A push may start at most three workflows.");
   }
   const runs: ActionRunSummary[] = [];
   const failures: Array<{ path: string; message: string }> = [];
@@ -691,7 +696,7 @@ async function handleInternalPush(request: Request, env: ActionsEnv): Promise<Re
     if (result.ok) runs.push(result.summary);
     else failures.push({ path: workflow.path, message: result.message });
   }
-  return json({ runs, failures }, failures.length ? 207 : 202);
+  return dataResponse({ runs, failures }, failures.length ? 207 : 202);
 }
 
 async function startRun(
@@ -701,10 +706,12 @@ async function startRun(
   user: TrustedUser,
   repositoryId: string
 ): Promise<Response> {
-  if (repo.archived) return error(409, "conflict", "Archived repositories cannot run Actions.");
-  if (repo.actions_enabled !== 1) return error(409, "conflict", "Repository Actions are disabled.");
+  if (repo.archived)
+    return errorResponse(409, "conflict", "Archived repositories cannot run Actions.");
+  if (repo.actions_enabled !== 1)
+    return errorResponse(409, "conflict", "Repository Actions are disabled.");
   if (!(await canWriteRepository(env, repo, user)))
-    return error(403, "forbidden", "Write permission is required to run Actions.");
+    return errorResponse(403, "forbidden", "Write permission is required to run Actions.");
   const body: unknown = await readJsonLimited(request, 65_536);
   if (
     !isRecord(body) ||
@@ -712,30 +719,38 @@ async function startRun(
     typeof body.ref !== "string" ||
     typeof body.expectedOid !== "string"
   ) {
-    return error(400, "bad_request", "A workflow path, ref, and expected commit OID are required.");
+    return errorResponse(
+      400,
+      "bad_request",
+      "A workflow path, ref, and expected commit OID are required."
+    );
   }
   if (
     body.ref.length === 0 ||
     body.ref.length > 255 ||
     !GitOidSchema.safeParse(body.expectedOid).success
   ) {
-    return error(400, "bad_request", "Invalid ref or expected commit OID.");
+    return errorResponse(400, "bad_request", "Invalid ref or expected commit OID.");
   }
   let snapshot: RepositorySnapshot;
   let workflow: ActionWorkflow;
   try {
     snapshot = await repositorySnapshot(env, repositoryId, body.ref, body.expectedOid, user);
     if (snapshot.oid !== body.expectedOid)
-      return error(409, "conflict", "The selected ref no longer points to the expected commit.");
+      return errorResponse(
+        409,
+        "conflict",
+        "The selected ref no longer points to the expected commit."
+      );
     const source = snapshotFile(snapshot, body.workflowPath);
     if (source === null)
-      return error(404, "not_found", "Workflow file was not found at the selected commit.");
+      return errorResponse(404, "not_found", "Workflow file was not found at the selected commit.");
     workflow = parseWorkflow(body.workflowPath, source);
     if (!workflow.triggers.includes("workflow_dispatch")) {
-      return error(409, "conflict", "This workflow does not enable manual dispatch.");
+      return errorResponse(409, "conflict", "This workflow does not enable manual dispatch.");
     }
   } catch (cause) {
-    return error(
+    return errorResponse(
       422,
       "bad_request",
       cause instanceof Error ? cause.message : "Workflow is not supported."
@@ -743,8 +758,8 @@ async function startRun(
   }
 
   const result = await queueActionRun(env, repo, user, repositoryId, body.ref, snapshot, workflow);
-  if (!result.ok) return error(result.status, result.code, result.message);
-  return json(result.summary, 202);
+  if (!result.ok) return errorResponse(result.status, result.code, result.message);
+  return dataResponse(result.summary, 202);
 }
 
 async function listRuns(env: ActionsEnv, repositoryId: string): Promise<Response> {
@@ -758,7 +773,7 @@ async function listRuns(env: ActionsEnv, repositoryId: string): Promise<Response
     const run = await actionStub(env, row.id).getRun();
     if (run) runs.push(toSummary(run));
   }
-  return json(runs);
+  return dataResponse(runs);
 }
 
 async function getRun(env: ActionsEnv, id: string): Promise<ActionRunDetails | null> {
@@ -777,10 +792,15 @@ async function handleRepositoryRoute(
 ): Promise<Response> {
   const repo = await repositoryFor(env, repositoryId);
   if (!repo || !(await canReadRepository(env, repo, user)))
-    return error(404, "not_found", "Repository was not found.");
-  if (repo.actions_enabled !== 1) return error(409, "conflict", "Repository Actions are disabled.");
+    return errorResponse(404, "not_found", "Repository was not found.");
+  if (repo.actions_enabled !== 1)
+    return errorResponse(409, "conflict", "Repository Actions are disabled.");
   if (!env.ACTION_RUNS)
-    return error(503, "internal_error", "Repository Actions are unavailable on this deployment.");
+    return errorResponse(
+      503,
+      "internal_error",
+      "Repository Actions are unavailable on this deployment."
+    );
   if (tail.length === 1 && tail[0] === "workflows" && request.method === "GET") {
     return listWorkflows(request, env, repo, user, repositoryId);
   }
@@ -788,10 +808,10 @@ async function handleRepositoryRoute(
     return listRuns(env, repositoryId);
   }
   if (tail.length === 1 && tail[0] === "runs" && request.method === "POST") {
-    if (!user) return error(401, "unauthorized", "Sign in to run Actions.");
+    if (!user) return errorResponse(401, "unauthorized", "Sign in to run Actions.");
     return startRun(request, env, repo, user, repositoryId);
   }
-  return error(404, "not_found", "Actions endpoint was not found.");
+  return errorResponse(404, "not_found", "Actions endpoint was not found.");
 }
 
 async function handleRunRoute(
@@ -802,29 +822,36 @@ async function handleRunRoute(
   cancel: boolean
 ): Promise<Response> {
   if (!env.ACTION_RUNS)
-    return error(503, "internal_error", "Repository Actions are unavailable on this deployment.");
+    return errorResponse(
+      503,
+      "internal_error",
+      "Repository Actions are unavailable on this deployment."
+    );
   const row = await env.DB.prepare(
     "SELECT actions_runs.repository_id, actions_runs.check_published_at FROM actions_runs WHERE actions_runs.id = ?"
   )
     .bind(runId)
     .first<{ repository_id: string; check_published_at: number | null }>();
-  if (!row) return error(404, "not_found", "Action run was not found.");
+  if (!row) return errorResponse(404, "not_found", "Action run was not found.");
   const repo = await repositoryFor(env, row.repository_id);
   if (!repo || !(await canReadRepository(env, repo, user)))
-    return error(404, "not_found", "Action run was not found.");
+    return errorResponse(404, "not_found", "Action run was not found.");
   if (cancel) {
     if (request.method !== "POST")
-      return error(405, "method_not_allowed", "Method is not allowed.");
+      return errorResponse(405, "method_not_allowed", "Method is not allowed.");
     if (!user || !(await canWriteRepository(env, repo, user)))
-      return error(403, "forbidden", "Write permission is required to cancel Actions.");
+      return errorResponse(403, "forbidden", "Write permission is required to cancel Actions.");
     const cancelled = await actionStub(env, runId).cancel();
-    return cancelled ? json(cancelled) : error(404, "not_found", "Action run was not found.");
+    return cancelled
+      ? dataResponse(cancelled)
+      : errorResponse(404, "not_found", "Action run was not found.");
   }
-  if (request.method !== "GET") return error(405, "method_not_allowed", "Method is not allowed.");
+  if (request.method !== "GET")
+    return errorResponse(405, "method_not_allowed", "Method is not allowed.");
   const run = await getRun(env, runId);
-  if (!run) return error(404, "not_found", "Action run was not found.");
+  if (!run) return errorResponse(404, "not_found", "Action run was not found.");
   if (run.status === "completed" && row.check_published_at === null) await publishCheck(env, run);
-  return json(run);
+  return dataResponse(run);
 }
 
 export default {
@@ -846,12 +873,12 @@ export default {
       if (parts.length === 3 && parts[0] === "runs" && parts[2] === "cancel") {
         return handleRunRoute(request, env, user, parts[1] ?? "", true);
       }
-      return error(404, "not_found", "Actions endpoint was not found.");
+      return errorResponse(404, "not_found", "Actions endpoint was not found.");
     } catch (cause) {
       logger.error("actions:request-failed", {
         reason: cause instanceof Error ? cause.message : "unknown",
       });
-      return error(503, "internal_error", "Actions request failed.");
+      return errorResponse(503, "internal_error", "Actions request failed.");
     }
   },
   async scheduled(

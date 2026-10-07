@@ -477,6 +477,12 @@ describe("Auth agents, Artifact sessions, and Git credentials", () => {
         "https://service.INTERNAL./",
         "https://service.localdomain./",
         "https://service.home.arpa./",
+        "http://hooks.example.com/x",
+        "https://user:pw@hooks.example.com/x",
+        "https://hooks.example.com:8443/x",
+        "https://[::1]/x",
+        "https://203.0.113.9/x",
+        "https://metadata.google.internal/x",
       ]) {
         const rejected = await accountApi(`/agents/${buildAgent.id}/webhook`, "PUT", cookie, {
           url,

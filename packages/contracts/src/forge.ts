@@ -293,6 +293,24 @@ export const CreateAgentSessionInputSchema = z.object({
   permission: z.enum(["read", "write"]).default("write"),
   ttlSeconds: z.number().int().min(300).max(86_400).default(3_600),
 });
+export const GitMergeInputSchema = z.object({
+  pullRequestId: z.string().optional(),
+  leaseAt: z.number().optional(),
+  method: z.enum(["merge", "squash", "rebase"]).default("merge"),
+  baseRef: GitBranchSchema,
+  headRef: GitBranchSchema,
+  headSessionId: z.string().nullable().optional(),
+  expectedBaseOid: GitOidSchema,
+  expectedHeadOid: GitOidSchema,
+  author: z.object({ name: z.string().min(1).max(100), email: z.string().min(1).max(200) }),
+  message: z.string().min(1).max(50_000),
+});
+export type GitMergeInput = z.infer<typeof GitMergeInputSchema>;
+export const MergeAuthorizationInputSchema = GitMergeInputSchema.extend({
+  repositoryId: z.string().min(1),
+  pullRequestId: z.string().min(1),
+  leaseAt: z.number(),
+});
 export const MergePullRequestInputSchema = z.object({
   method: z.enum(["merge", "squash", "rebase"]).default("merge"),
   expectedBaseOid: GitOidSchema,

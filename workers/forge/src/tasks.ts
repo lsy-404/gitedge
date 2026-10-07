@@ -41,15 +41,8 @@ import {
 import { actorForUser, trustedHeaders } from "../../../packages/contracts/src/trust";
 import { createLogger } from "../../../src/worker/common/logger";
 import { assigneeCandidates, resolveAssignable } from "./assignments";
-import {
-  error,
-  json,
-  nextNumber,
-  parseActor,
-  parseJson,
-  type ForgeEnv,
-  type RepositoryRow,
-} from "./common";
+import { nextNumber, parseActor, parseJson, type ForgeEnv, type RepositoryRow } from "./common";
+import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 
 /** Who is asking; anonymous public readers have no user and no membership. */
 export type Viewer = {
@@ -417,14 +410,14 @@ async function memoryRequest(
   const [, item, action] = rest;
   const logger = createLogger(env.LOG_LEVEL, { service: "forge" });
   if (request.method === "GET" && !item)
-    return json({ data: presentMemory(await readMemory(env, repository.id)) });
+    return dataResponse(presentMemory(await readMemory(env, repository.id)));
   if (request.method === "GET" && item === "history" && !action) {
     const rows = await env.DB.prepare(
       "SELECT revision, actor_json, length(content) AS size, updated_at FROM forge_memory_index_revisions WHERE repository_id = ? ORDER BY revision DESC"
     )
       .bind(repository.id)
       .all<HistoryRow>();
-    return json({ data: rows.results.map(presentHistory) });
+    return dataResponse(rows.results.map(presentHistory));
   }
   if (request.method === "GET" && item === "revisions" && action) {
     const revision = positiveInteger(action);
@@ -436,13 +429,13 @@ async function memoryRequest(
           .first<MemoryRow>()
       : null;
     return row
-      ? json({ data: presentMemory(row) })
-      : error(404, "not_found", "Memory revision was not found.");
+      ? dataResponse(presentMemory(row))
+      : errorResponse(404, "not_found", "Memory revision was not found.");
   }
   if (request.method !== "PUT" || item || !viewer.user) return null;
 
   const parsed = PutMemoryIndexInputSchema.safeParse(await parseJson(request));
-  if (!parsed.success) return error(400, "bad_request", "Invalid memory index payload.");
+  if (!parsed.success) return errorResponse(400, "bad_request", "Invalid memory index payload.");
   const actor = actorForUser(viewer.user);
   const actorJson = JSON.stringify(actor);
   const now = Date.now();
@@ -486,7 +479,7 @@ async function memoryRequest(
         repositoryId: repository.id,
         expectedRevision,
       });
-      return error(409, "conflict", "Memory index revision has changed.");
+      return errorResponse(409, "conflict", "Memory index revision has changed.");
     }
   }
   logger.info("forge:memory-index-saved", {
@@ -494,7 +487,7 @@ async function memoryRequest(
     revision: expectedRevision + 1,
     actorKind: actor.kind,
   });
-  return json({ data: presentMemory(await readMemory(env, repository.id)) }, created ? 201 : 200);
+  return dataResponse(presentMemory(await readMemory(env, repository.id)), created ? 201 : 200);
 }
 
 function presentHistory(row: HistoryRow) {
@@ -513,13 +506,14 @@ async function listTasks(
 ): Promise<Response> {
   const statusParam = new URL(request.url).searchParams.get("status");
   const status = statusParam === null ? null : TaskStatusSchema.safeParse(statusParam);
-  if (status && !status.success) return error(400, "bad_request", "Invalid task status filter.");
+  if (status && !status.success)
+    return errorResponse(400, "bad_request", "Invalid task status filter.");
   const rows = await env.DB.prepare(
     `${TASK_SELECT} WHERE t.repository_id = ? AND (? IS NULL OR t.status = ?) ORDER BY t.number DESC`
   )
     .bind(repository.id, status?.data ?? null, status?.data ?? null)
     .all<TaskRow>();
-  return json({ data: rows.results.map(presentTask) });
+  return dataResponse(rows.results.map(presentTask));
 }
 
 async function taskDetail(env: ForgeEnv, taskId: string): Promise<TaskDetail | null> {
@@ -576,7 +570,7 @@ async function createTask(
   user: TrustedUser
 ): Promise<Response> {
   const parsed = CreateTaskInputSchema.safeParse(await parseJson(request));
-  if (!parsed.success) return error(400, "bad_request", "Invalid task payload.");
+  if (!parsed.success) return errorResponse(400, "bad_request", "Invalid task payload.");
   const actor = actorForUser(user);
   const actorJson = JSON.stringify(actor);
   const number = await nextNumber(env, "forge_tasks", repository.id);
@@ -610,7 +604,7 @@ async function createTask(
     type: parsed.data.type,
     actorKind: actor.kind,
   });
-  return json({ data: await taskDetail(env, id) }, 201);
+  return dataResponse(await taskDetail(env, id), 201);
 }
 
 async function updateTask(
@@ -621,7 +615,7 @@ async function updateTask(
   task: { id: string; number: number; status: TaskStatus }
 ): Promise<Response> {
   const parsed = UpdateTaskInputSchema.safeParse(await parseJson(request));
-  if (!parsed.success) return error(400, "bad_request", "Invalid task update.");
+  if (!parsed.success) return errorResponse(400, "bad_request", "Invalid task update.");
   const p = parsed.data;
   const now = Date.now();
   const statusChanged = p.status !== undefined && p.status !== task.status;
@@ -652,7 +646,7 @@ async function updateTask(
     taskNumber: task.number,
     statusChanged,
   });
-  return json({ data: await taskDetail(env, task.id) });
+  return dataResponse(await taskDetail(env, task.id));
 }
 
 async function assignTask(
@@ -663,7 +657,7 @@ async function assignTask(
   task: { id: string; number: number }
 ): Promise<Response> {
   const parsed = AssignTaskInputSchema.safeParse(await parseJson(request));
-  if (!parsed.success) return error(400, "bad_request", "Invalid task assignee payload.");
+  if (!parsed.success) return errorResponse(400, "bad_request", "Invalid task assignee payload.");
   let kind: "user" | "agent" | null = null;
   let id: string | null = null;
   if (parsed.data.assignee) {
@@ -688,7 +682,7 @@ async function assignTask(
     taskNumber: task.number,
     assigneeKind: kind,
   });
-  return json({ data: await taskDetail(env, task.id) });
+  return dataResponse(await taskDetail(env, task.id));
 }
 
 async function documentRequest(
@@ -701,7 +695,7 @@ async function documentRequest(
 ): Promise<Response | null> {
   const [, , , kindParam, view, revisionParam] = rest;
   const kind = TaskDocumentKindSchema.safeParse(kindParam);
-  if (!kind.success) return error(404, "not_found", "Task document was not found.");
+  if (!kind.success) return errorResponse(404, "not_found", "Task document was not found.");
   if (request.method === "GET" && !view) {
     const row = await env.DB.prepare(
       "SELECT kind, content, revision, actor_json, updated_at FROM forge_task_documents WHERE task_id = ? AND kind = ?"
@@ -709,8 +703,8 @@ async function documentRequest(
       .bind(task.id, kind.data)
       .first<DocumentRow>();
     return row
-      ? json({ data: presentDocument(row) })
-      : error(404, "not_found", "Task document was not found.");
+      ? dataResponse(presentDocument(row))
+      : errorResponse(404, "not_found", "Task document was not found.");
   }
   if (request.method === "GET" && view === "history" && !revisionParam) {
     const rows = await env.DB.prepare(
@@ -718,7 +712,7 @@ async function documentRequest(
     )
       .bind(task.id, kind.data)
       .all<HistoryRow>();
-    return json({ data: rows.results.map(presentHistory) });
+    return dataResponse(rows.results.map(presentHistory));
   }
   if (request.method === "GET" && view === "revisions" && revisionParam) {
     const revision = positiveInteger(revisionParam);
@@ -730,12 +724,12 @@ async function documentRequest(
           .first<DocumentRow>()
       : null;
     return row
-      ? json({ data: presentDocument(row) })
-      : error(404, "not_found", "Task document revision was not found.");
+      ? dataResponse(presentDocument(row))
+      : errorResponse(404, "not_found", "Task document revision was not found.");
   }
   if (request.method !== "PUT" || view || !user) return null;
   const parsed = PutTaskDocumentInputSchema.safeParse(await parseJson(request));
-  if (!parsed.success) return error(400, "bad_request", "Invalid task document payload.");
+  if (!parsed.success) return errorResponse(400, "bad_request", "Invalid task document payload.");
   const actor = actorForUser(user);
   const now = Date.now();
   const { content, expectedRevision } = parsed.data;
@@ -759,7 +753,7 @@ async function documentRequest(
       kind: kind.data,
       expectedRevision,
     });
-    return error(409, "conflict", "Task document revision has changed.");
+    return errorResponse(409, "conflict", "Task document revision has changed.");
   }
   logger.info("forge:task-document-saved", {
     repositoryId: repository.id,
@@ -768,15 +762,15 @@ async function documentRequest(
     revision: expectedRevision + 1,
     actorKind: actor.kind,
   });
-  return json({
-    data: presentDocument({
+  return dataResponse(
+    presentDocument({
       kind: kind.data,
       content,
       revision: expectedRevision + 1,
       actor_json: JSON.stringify(actor),
       updated_at: now,
-    }),
-  });
+    })
+  );
 }
 
 async function linkRequest(
@@ -791,13 +785,13 @@ async function linkRequest(
   const [, , , kindParam, numberParam] = rest;
   if (request.method === "POST" && !kindParam) {
     const parsed = AttachTaskLinkInputSchema.safeParse(await parseJson(request));
-    if (!parsed.success) return error(400, "bad_request", "Invalid task link payload.");
+    if (!parsed.success) return errorResponse(400, "bad_request", "Invalid task link payload.");
     const target = await env.DB.prepare(
       `SELECT id, title, state FROM ${LINK_TABLES[parsed.data.kind]} WHERE repository_id = ? AND number = ?`
     )
       .bind(repository.id, parsed.data.number)
       .first<{ id: string; title: string; state: LinkRow["state"] }>();
-    if (!target) return error(404, "not_found", "Issue or pull request was not found.");
+    if (!target) return errorResponse(404, "not_found", "Issue or pull request was not found.");
     const now = Date.now();
     const inserted = await env.DB.prepare(
       "INSERT INTO forge_task_links (id, repository_id, task_id, target_kind, target_id, actor_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(target_kind, target_id) DO NOTHING"
@@ -818,7 +812,7 @@ async function linkRequest(
         targetKind: parsed.data.kind,
         targetNumber: parsed.data.number,
       });
-      return error(409, "conflict", "Issue or pull request already belongs to a task.");
+      return errorResponse(409, "conflict", "Issue or pull request already belongs to a task.");
     }
     logger.info("forge:task-link-attached", {
       repositoryId: repository.id,
@@ -826,29 +820,28 @@ async function linkRequest(
       targetKind: parsed.data.kind,
       targetNumber: parsed.data.number,
     });
-    return json(
+    return dataResponse(
       {
-        data: {
-          kind: parsed.data.kind,
-          number: parsed.data.number,
-          title: target.title,
-          state: target.state,
-          createdAt: now,
-        } satisfies TaskLink,
-      },
+        kind: parsed.data.kind,
+        number: parsed.data.number,
+        title: target.title,
+        state: target.state,
+        createdAt: now,
+      } satisfies TaskLink,
       201
     );
   }
   if (request.method === "DELETE" && kindParam && numberParam) {
     const kind = z.enum(["issue", "pull_request"]).safeParse(kindParam);
     const number = positiveInteger(numberParam);
-    if (!kind.success || !number) return error(404, "not_found", "Task link was not found.");
+    if (!kind.success || !number)
+      return errorResponse(404, "not_found", "Task link was not found.");
     const removed = await env.DB.prepare(
       `DELETE FROM forge_task_links WHERE task_id = ? AND target_kind = ? AND target_id = (SELECT id FROM ${LINK_TABLES[kind.data]} WHERE repository_id = ? AND number = ?) RETURNING id`
     )
       .bind(task.id, kind.data, repository.id, number)
       .first<{ id: string }>();
-    if (!removed) return error(404, "not_found", "Task link was not found.");
+    if (!removed) return errorResponse(404, "not_found", "Task link was not found.");
     logger.info("forge:task-link-detached", {
       repositoryId: repository.id,
       taskNumber: task.number,
@@ -876,19 +869,19 @@ async function itemTaskRequest(
   const kind = TaskLinkKindSchema.safeParse(kindParam);
   const number = positiveInteger(numberParam);
   if (!kind.success || !number)
-    return error(404, "not_found", "Issue or pull request was not found.");
+    return errorResponse(404, "not_found", "Issue or pull request was not found.");
   const target = await env.DB.prepare(
     `SELECT id FROM ${LINK_TABLES[kind.data]} WHERE repository_id = ? AND number = ?`
   )
     .bind(repository.id, number)
     .first<{ id: string }>();
-  if (!target) return error(404, "not_found", "Issue or pull request was not found.");
+  if (!target) return errorResponse(404, "not_found", "Issue or pull request was not found.");
   const owning = () =>
     env.DB.prepare(OWNING_TASK_SELECT).bind(kind.data, target.id).first<TaskReference>();
-  if (request.method === "GET") return json({ data: (await owning()) ?? null });
+  if (request.method === "GET") return dataResponse((await owning()) ?? null);
   if (request.method !== "PUT" || !user) return null;
   const parsed = MoveTaskLinkInputSchema.safeParse(await parseJson(request));
-  if (!parsed.success) return error(400, "bad_request", "Invalid task move payload.");
+  if (!parsed.success) return errorResponse(400, "bad_request", "Invalid task move payload.");
   const destination = parsed.data.task;
   const task =
     destination === null
@@ -896,7 +889,7 @@ async function itemTaskRequest(
       : await env.DB.prepare("SELECT id FROM forge_tasks WHERE repository_id = ? AND number = ?")
           .bind(repository.id, destination)
           .first<{ id: string }>();
-  if (destination !== null && !task) return error(404, "not_found", "Task was not found.");
+  if (destination !== null && !task) return errorResponse(404, "not_found", "Task was not found.");
   await env.DB.batch([
     env.DB.prepare("DELETE FROM forge_task_links WHERE target_kind = ? AND target_id = ?").bind(
       kind.data,
@@ -924,7 +917,7 @@ async function itemTaskRequest(
     targetNumber: number,
     taskNumber: destination,
   });
-  return json({ data: (await owning()) ?? null });
+  return dataResponse((await owning()) ?? null);
 }
 
 async function commitRequest(
@@ -939,7 +932,8 @@ async function commitRequest(
   const [, , , oidParam] = rest;
   if (request.method === "POST" && !oidParam) {
     const parsed = BindTaskCommitInputSchema.safeParse(await parseJson(request));
-    if (!parsed.success) return error(400, "bad_request", "Invalid commit binding payload.");
+    if (!parsed.success)
+      return errorResponse(400, "bad_request", "Invalid commit binding payload.");
     // One hop to the Git service confirms the repository itself holds the commit on the given
     // ref (never an agent session workspace) and snapshots it.
     const gitUrl = new URL(`/repositories/${repository.id}/commit`, request.url);
@@ -951,7 +945,7 @@ async function commitRequest(
         repositoryId: repository.id,
         oid: parsed.data.oid,
       });
-      return error(404, "not_found", "Commit was not found on this ref of the repository.");
+      return errorResponse(404, "not_found", "Commit was not found on this ref of the repository.");
     }
     const commit = GitCommitResponseSchema.safeParse(await gitResponse.json().catch(() => null));
     if (!gitResponse.ok || !commit.success) {
@@ -959,7 +953,7 @@ async function commitRequest(
         repositoryId: repository.id,
         status: gitResponse.status,
       });
-      return error(502, "internal_error", "Git service could not verify the commit.");
+      return errorResponse(502, "internal_error", "Git service could not verify the commit.");
     }
     const actor = actorForUser(user);
     const now = Date.now();
@@ -980,25 +974,23 @@ async function commitRequest(
       )
       .run();
     if (inserted.meta.changes !== 1)
-      return error(409, "conflict", "Commit is already bound to this task.");
+      return errorResponse(409, "conflict", "Commit is already bound to this task.");
     logger.info("forge:task-commit-bound", {
       repositoryId: repository.id,
       taskNumber: task.number,
       oid: parsed.data.oid,
       actorKind: actor.kind,
     });
-    return json(
+    return dataResponse(
       {
-        data: {
-          oid: parsed.data.oid,
-          ref: parsed.data.ref,
-          summary,
-          author: commit.data.data.author.name,
-          boundBy: actor,
-          source: "manual",
-          boundAt: now,
-        } satisfies TaskCommit,
-      },
+        oid: parsed.data.oid,
+        ref: parsed.data.ref,
+        summary,
+        author: commit.data.data.author.name,
+        boundBy: actor,
+        source: "manual",
+        boundAt: now,
+      } satisfies TaskCommit,
       201
     );
   }
@@ -1008,7 +1000,7 @@ async function commitRequest(
     )
       .bind(task.id, oidParam)
       .first<{ id: string }>();
-    if (!removed) return error(404, "not_found", "Bound commit was not found.");
+    if (!removed) return errorResponse(404, "not_found", "Bound commit was not found.");
     logger.info("forge:task-commit-unbound", {
       repositoryId: repository.id,
       taskNumber: task.number,
@@ -1034,19 +1026,18 @@ async function taskRequest(
       return createTask(env, request, repository, viewer.user);
     return null;
   }
-  if (item === "table" && reading && !action)
-    return json({ data: await taskTable(env, repository) });
+  if (item === "table" && reading && !action) return dataResponse(await taskTable(env, repository));
   if (item === "link")
     return itemTaskRequest(env, request, repository, viewer.user, action, rest[3]);
   const number = positiveInteger(item);
-  if (!number) return error(404, "not_found", "Task was not found.");
+  if (!number) return errorResponse(404, "not_found", "Task was not found.");
   const task = await env.DB.prepare(
     "SELECT id, number, status FROM forge_tasks WHERE repository_id = ? AND number = ?"
   )
     .bind(repository.id, number)
     .first<{ id: string; number: number; status: TaskStatus }>();
-  if (!task) return error(404, "not_found", "Task was not found.");
-  if (reading && !action) return json({ data: await taskDetail(env, task.id) });
+  if (!task) return errorResponse(404, "not_found", "Task was not found.");
+  if (reading && !action) return dataResponse(await taskDetail(env, task.id));
   if (request.method === "PATCH" && !action && viewer.user)
     return updateTask(env, request, repository, viewer.user, task);
   if (request.method === "PUT" && action === "assignee" && viewer.user)
@@ -1068,14 +1059,18 @@ async function settingsRequest(
 ): Promise<Response | null> {
   if (request.method === "GET") {
     const settings = await repositorySettings(env, repository.id);
-    return json({ data: { ...settings, canManage: await viewer.isOwner() } });
+    return dataResponse({ ...settings, canManage: await viewer.isOwner() });
   }
   if (request.method !== "PATCH" || !viewer.user) return null;
   const logger = createLogger(env.LOG_LEVEL, { service: "forge" });
   if (!(await viewer.isOwner()))
-    return error(403, "forbidden", "Repository owner access is required to change settings.");
+    return errorResponse(
+      403,
+      "forbidden",
+      "Repository owner access is required to change settings."
+    );
   const parsed = UpdateRepositorySettingsInputSchema.safeParse(await parseJson(request));
-  if (!parsed.success) return error(400, "bad_request", "Invalid repository settings.");
+  if (!parsed.success) return errorResponse(400, "bad_request", "Invalid repository settings.");
   const input = parsed.data;
   const slug = input.name ?? input.slug;
   if (
@@ -1083,14 +1078,14 @@ async function settingsRequest(
     !(input.allowSquashMerge ?? repository.allow_squash_merge !== 0) &&
     !(input.allowRebaseMerge ?? repository.allow_rebase_merge !== 0)
   )
-    return error(400, "bad_request", "At least one merge method must be enabled.");
+    return errorResponse(400, "bad_request", "At least one merge method must be enabled.");
   if (slug && slug !== repository.slug) {
     const collision = await env.DB.prepare(
       "SELECT 1 AS found FROM repository_paths WHERE namespace_id = ? AND slug = ? AND repository_id != ?"
     )
       .bind(repository.namespace_id, slug, repository.id)
       .first<{ found: number }>();
-    if (collision) return error(409, "conflict", "Repository slug already exists.");
+    if (collision) return errorResponse(409, "conflict", "Repository slug already exists.");
   }
   if (input.defaultBranch && input.defaultBranch !== repository.default_branch) {
     const gitUrl = new URL(`/repositories/${repository.id}/refs`, request.url);
@@ -1099,13 +1094,17 @@ async function settingsRequest(
     );
     const branchFound = await repositoryBranchExists(response, input.defaultBranch);
     if (branchFound === null)
-      return error(
+      return errorResponse(
         503,
         "internal_error",
         "Repository refs are unavailable or exceed the response limit."
       );
     if (!branchFound)
-      return error(400, "bad_request", "Default branch must name an existing repository branch.");
+      return errorResponse(
+        400,
+        "bad_request",
+        "Default branch must name an existing repository branch."
+      );
   }
   const visibility = input.visibility ?? null;
   const memoryVisibility = visibility === "private" ? "members" : (input.memoryVisibility ?? null);
@@ -1146,7 +1145,7 @@ async function settingsRequest(
     );
     const changed = await mutation.run();
     if (changed.meta.changes < 1)
-      return error(
+      return errorResponse(
         400,
         "bad_request",
         "Only public repositories can expose tasks and memory publicly."
@@ -1155,10 +1154,10 @@ async function settingsRequest(
     const detail = cause instanceof Error ? cause.message : "unknown";
     if (!detail.includes("UNIQUE constraint") && !detail.includes("repository path")) {
       logger.error("forge:settings-update-failed", { repositoryId: repository.id, error: detail });
-      return error(500, "internal_error", "Repository settings could not be updated.");
+      return errorResponse(500, "internal_error", "Repository settings could not be updated.");
     }
     logger.warn("forge:settings-conflict", { repositoryId: repository.id });
-    return error(409, "conflict", "Repository slug already exists.");
+    return errorResponse(409, "conflict", "Repository slug already exists.");
   }
   const revocationIncomplete =
     input.agentsEnabled === false &&
@@ -1169,12 +1168,10 @@ async function settingsRequest(
     visibility,
     archived: input.archived,
   });
-  return json({
-    data: {
-      ...(await repositorySettings(env, repository.id)),
-      canManage: true,
-      ...(revocationIncomplete ? { revocationIncomplete } : {}),
-    },
+  return dataResponse({
+    ...(await repositorySettings(env, repository.id)),
+    canManage: true,
+    ...(revocationIncomplete ? { revocationIncomplete } : {}),
   });
 }
 
@@ -1235,16 +1232,16 @@ export async function memoryTaskRequest(
   rest: string[]
 ): Promise<Response | null> {
   if ((rest[0] === "tasks" || rest[0] === "memory") && repository.tasks_enabled === 0)
-    return error(404, "feature_disabled", "Tasks and memory are disabled.");
+    return errorResponse(404, "feature_disabled", "Tasks and memory are disabled.");
   const resource = rest[0];
   if (resource === "settings" && rest.length === 1)
     return settingsRequest(env, request, repository, viewer);
   if (resource && request.method !== "GET" && repository.archived === 1)
-    return error(409, "repository_archived", "Archived repositories are read-only.");
+    return errorResponse(409, "repository_archived", "Archived repositories are read-only.");
   if (resource === "assignee-candidates" && rest.length === 1 && request.method === "GET") {
     if (!viewer.user || !viewer.member)
-      return error(403, "forbidden", "Repository membership is required.");
-    return json({ data: await assigneeCandidates(env, repository, viewer.user) });
+      return errorResponse(403, "forbidden", "Repository membership is required.");
+    return dataResponse(await assigneeCandidates(env, repository, viewer.user));
   }
   if (resource !== "memory" && resource !== "tasks") return null;
 
@@ -1252,9 +1249,17 @@ export async function memoryTaskRequest(
     const settings = await repositorySettings(env, repository.id);
     const publicRead = repository.visibility === "public" && settings.memoryVisibility === "public";
     if (!viewer.member && !publicRead)
-      return error(403, "forbidden", "Repository membership is required to read tasks and memory.");
+      return errorResponse(
+        403,
+        "forbidden",
+        "Repository membership is required to read tasks and memory."
+      );
   } else if (!viewer.user || !viewer.member || !viewer.writeAllowed) {
-    return error(403, "forbidden", "Repository membership and a writable session are required.");
+    return errorResponse(
+      403,
+      "forbidden",
+      "Repository membership and a writable session are required."
+    );
   }
   return resource === "memory"
     ? memoryRequest(env, request, repository, viewer, rest)
