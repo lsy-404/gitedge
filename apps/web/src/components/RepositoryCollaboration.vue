@@ -1648,16 +1648,6 @@ code {
   border-top: 1px solid var(--border-default);
   padding: var(--space-3) 0;
 }
-.diff-preview {
-  max-height: 420px;
-  overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  background: var(--bg-subtle);
-  border-radius: var(--radius-md);
-  padding: var(--space-3);
-  font: var(--font-size-meta) / 1.6 var(--font-mono);
-}
 .merge-actions {
   display: flex;
   align-items: center;

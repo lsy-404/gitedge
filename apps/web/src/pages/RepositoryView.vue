@@ -23,6 +23,9 @@ const section = computed(() =>
   route.params.view ? "code" : String(route.params.section || route.path.split("/")[3] || "code")
 );
 const activeTab = computed(() => section.value);
+const titleTag = computed(() =>
+  ["issues", "pulls", "discussions", "wiki"].includes(section.value) ? "p" : "h1"
+);
 const tabs: { key: string; label: string; icon: IconName; write?: boolean }[] = [
   { key: "code", label: "code", icon: "code" },
   { key: "commits", label: "commitGraph", icon: "clock" },
@@ -215,30 +218,14 @@ watch(
       <RouterLink class="btn" to="/dashboard">{{ t("ghBackHome") }}</RouterLink>
     </div>
     <template v-else-if="repository">
-      <nav class="repository-nav" :aria-label="t('repositoryNav')">
-        <RouterLink
-          v-for="tab in tabs.filter(
-            (tab) => (!tab.write || repository?.canWrite) && sectionEnabled(tab.key)
-          )"
-          :key="tab.key"
-          :to="tab.key === 'code' ? base : `${base}/${tab.key}`"
-          :class="{ selected: activeTab === tab.key }"
-          :aria-current="activeTab === tab.key ? 'page' : undefined"
-          ><AppIcon :name="tab.icon" />{{ t(tab.label)
-          }}<span v-if="counts[tab.key] !== undefined && counts[tab.key] > 0" class="nav-count"
-            >{{ counts[tab.key] }}{{ countsTruncated[tab.key] ? "+" : "" }}</span
-          ></RouterLink
-        >
-      </nav>
-      <div
-        v-if="!['issues', 'pulls', 'discussions', 'wiki'].includes(section)"
-        class="repository-heading"
-      >
-        <div class="repository-heading-inner">
+      <div class="repository-header">
+        <div class="repository-heading">
           <AppIcon name="repo" :size="20" />
-          <h1>
-            <span class="repo-owner">{{ owner }} / </span>{{ repoName }}
-          </h1>
+          <component :is="titleTag" class="repository-title">
+            <span class="repo-owner">{{ owner }}</span
+            ><span class="repo-separator" aria-hidden="true"> / </span
+            ><span class="repo-name">{{ repoName }}</span>
+          </component>
           <StatusBadge
             ><AppIcon v-if="repository.visibility === 'private'" name="lock" :size="12" />{{
               t(repository.visibility)
@@ -258,6 +245,22 @@ watch(
             >
           </div>
         </div>
+        <nav class="repository-nav" :aria-label="t('repositoryNav')">
+          <RouterLink
+            v-for="tab in tabs.filter(
+              (tab) => (!tab.write || repository?.canWrite) && sectionEnabled(tab.key)
+            )"
+            :key="tab.key"
+            :to="tab.key === 'code' ? base : `${base}/${tab.key}`"
+            :class="{ selected: activeTab === tab.key }"
+            :aria-current="activeTab === tab.key ? 'page' : undefined"
+            ><AppIcon :name="tab.icon" />{{ t(tab.label)
+            }}<span v-if="counts[tab.key] !== undefined && counts[tab.key] > 0" class="nav-count"
+              ><span class="visually-hidden">, </span>{{ counts[tab.key]
+              }}{{ countsTruncated[tab.key] ? "+" : "" }}</span
+            ></RouterLink
+          >
+        </nav>
       </div>
       <div class="repository-content">
         <NoticeBar v-if="repository.archived" intent="info">{{

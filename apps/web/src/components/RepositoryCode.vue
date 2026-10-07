@@ -193,6 +193,26 @@ const compareHead = computed({
     void router.replace({ query: { ...route.query, head: value } });
   },
 });
+const canOpenPull = computed(
+  () =>
+    props.repository.pullsEnabled &&
+    !props.repository.archived &&
+    sessionState.user !== null &&
+    (comparison.value?.commits.length ?? 0) > 0 &&
+    compareBase.value !== compareHead.value
+);
+const openPullLocation = computed(() => {
+  const headSessionId = route.query.headSessionId?.toString();
+  return {
+    path: `/${props.repository.owner}/${props.repository.name}/pulls`,
+    query: {
+      new: "1",
+      base: compareBase.value,
+      head: compareHead.value,
+      ...(headSessionId ? { headSessionId } : {}),
+    },
+  };
+});
 let requestVersion = 0;
 let refsRefreshVersion = 0;
 
@@ -556,7 +576,7 @@ onUnmounted(() => {
 <template>
   <section ref="codeRoot" class="code-section">
     <div v-if="section === 'code'" class="code-toolbar">
-      <div class="toolbar-row code-controls">
+      <div class="code-controls">
         <SelectField
           class="ref-picker"
           :model-value="refName"
@@ -681,23 +701,26 @@ onUnmounted(() => {
         <FluentButton type="button" @click="clearToken">{{ t("close") }}</FluentButton>
       </div>
     </div>
-    <div v-if="loading || error" class="box">
+    <div v-if="(loading || error) && section !== 'compare'" class="box">
       <StatusState :loading="loading" :error="error" :empty="false" @retry="load" />
     </div>
     <div v-else-if="emptyRepository" class="empty-repository box">
       <h2>{{ t("emptyRepositoryTitle") }}</h2>
       <p>{{ t("emptyRepositoryText") }}</p>
-      <code>mkdir {{ repository.name }} &amp;&amp; cd {{ repository.name }}</code>
-      <code>git init</code>
-      <code>echo "# {{ repository.name }}" &gt; README.md</code
-      ><code>git add README.md &amp;&amp; git commit -m "first commit"</code
-      ><code>git branch -M {{ repository.defaultBranch }}</code
-      ><code>git remote add origin {{ cloneUrl }}</code
-      ><code>git push -u origin {{ repository.defaultBranch }}</code>
+      <pre
+        class="command-block"
+        tabindex="0"
+      ><code>mkdir {{ repository.name }} &amp;&amp; cd {{ repository.name }}
+git init
+echo "# {{ repository.name }}" &gt; README.md
+git add README.md &amp;&amp; git commit -m "first commit"
+git branch -M {{ repository.defaultBranch }}
+git remote add origin {{ cloneUrl }}
+git push -u origin {{ repository.defaultBranch }}</code></pre>
       <h3>{{ t("pushExistingRepository") }}</h3>
-      <code>git remote add gitedge {{ cloneUrl }}</code>
-      <code>git push gitedge --all</code>
-      <code>git push gitedge --tags</code>
+      <pre class="command-block" tabindex="0"><code>git remote add gitedge {{ cloneUrl }}
+git push gitedge --all
+git push gitedge --tags</code></pre>
       <FluentButton v-if="canManageCode" type="button" tone="primary" @click="openNewFile"
         ><AppIcon name="plus" />{{ t("codeNewFile") }}</FluentButton
       >
@@ -717,34 +740,27 @@ onUnmounted(() => {
       />
     </div>
     <template v-else-if="section === 'code'">
-      <div v-if="latestCommit && !isBlob" class="latest-commit box">
-        <AppIcon name="commit" />
-        <RouterLink
-          v-if="graphEnabled"
-          :to="`/${repository.owner}/${repository.name}/commits?ref=${encodeURIComponent(refName)}`"
-          ><strong>{{ latestCommit.author.name }}</strong></RouterLink
-        >
-        <strong v-else>{{ latestCommit.author.name }}</strong>
-        <span class="commit-message">{{ latestCommit.message.split("\n")[0] }}</span
-        ><code>{{ latestCommit.oid.slice(0, 7) }}</code
-        ><time :datetime="new Date(latestCommit.author.timestamp * 1000).toISOString()">{{
-          d(latestCommit.author.timestamp * 1000, "short")
-        }}</time>
-      </div>
       <div v-if="!isBlob" class="box file-panel">
-        <FluentButton
+        <div v-if="latestCommit" class="latest-commit">
+          <AppIcon name="commit" />
+          <RouterLink
+            v-if="graphEnabled"
+            :to="`/${repository.owner}/${repository.name}/commits?ref=${encodeURIComponent(refName)}`"
+            ><strong>{{ latestCommit.author.name }}</strong></RouterLink
+          >
+          <strong v-else>{{ latestCommit.author.name }}</strong>
+          <span class="commit-message">{{ latestCommit.message.split("\n")[0] }}</span
+          ><code>{{ latestCommit.oid.slice(0, 7) }}</code
+          ><time :datetime="new Date(latestCommit.author.timestamp * 1000).toISOString()">{{
+            d(latestCommit.author.timestamp * 1000, "short")
+          }}</time>
+        </div>
+        <RouterLink
           v-if="filePath"
-          type="button"
-          tone="subtle"
-          class="file-entry"
-          @click="
-            router.push(
-              `/${repository.owner}/${repository.name}?ref=${encodeURIComponent(refName)}`
-            )
-          "
+          class="file-entry file-entry-root"
+          :to="`/${repository.owner}/${repository.name}?ref=${encodeURIComponent(refName)}`"
+          >↑ {{ t("repositoryRoot") }}</RouterLink
         >
-          ↑ {{ t("repositoryRoot") }}
-        </FluentButton>
         <RouterLink
           v-for="entry in filteredEntries"
           :key="entry.path"
@@ -806,19 +822,23 @@ onUnmounted(() => {
         <div class="file-actions">
           <span v-if="markdownFile" class="file-mode-tabs"
             ><button
+              type="button"
               class="btn btn-sm"
               :aria-pressed="fileMode === 'preview'"
               @click="fileMode = 'preview'"
             >
               {{ t("preview") }}</button
             ><button
+              type="button"
               class="btn btn-sm"
               :aria-pressed="fileMode === 'code'"
               @click="fileMode = 'code'"
             >
               {{ t("code") }}
             </button></span
-          ><span>{{ file.size }} {{ t("bytes") }} · {{ file.oid.slice(0, 7) }}</span>
+          ><span class="file-meta"
+            >{{ file.size }} {{ t("bytes") }} · {{ file.oid.slice(0, 7) }}</span
+          >
           <div>
             <FluentButton
               v-if="canManageCode && selectedBranchHeadOid"
@@ -855,6 +875,9 @@ onUnmounted(() => {
         <pre
           v-else
           class="code-source"
+          tabindex="0"
+          role="region"
+          :aria-label="title"
           :class="{ 'code-wrapped': preferencesState.lineWrap }"
           :style="{ tabSize: preferencesState.tabSize }"
         ><code class="line-gutter" aria-hidden="true">{{
@@ -875,17 +898,20 @@ onUnmounted(() => {
         @saved="onFileSaved"
         @changed="emit('changed')"
       />
-      <aside v-if="!isBlob" class="about-panel box">
-        <div class="box-header">
-          <strong>{{ t("about") }}</strong
-          ><RouterLink
+      <aside v-if="!isBlob" class="about-panel" :aria-label="t('about')">
+        <div class="about-heading">
+          <h2>{{ t("about") }}</h2>
+          <RouterLink
             v-if="repository.canWrite"
+            class="btn btn-subtle btn-sm icon-button"
             :to="`/${repository.owner}/${repository.name}/settings`"
             :aria-label="t('editAbout')"
             ><AppIcon name="gear"
           /></RouterLink>
         </div>
-        <p>{{ repository.description || t("noDescription") }}</p>
+        <p :class="{ muted: !repository.description }">
+          {{ repository.description || t("noDescription") }}
+        </p>
         <dl>
           <dt>{{ t("defaultBranch") }}</dt>
           <dd><AppIcon name="branch" />{{ repository.defaultBranch }}</dd>
@@ -897,7 +923,7 @@ onUnmounted(() => {
         <RouterLink
           v-if="graphEnabled"
           :to="`/${repository.owner}/${repository.name}/commits?ref=${encodeURIComponent(refName)}`"
-          >{{ t("commitHistory") }}</RouterLink
+          ><AppIcon name="clock" />{{ t("commitHistory") }}</RouterLink
         >
       </aside>
       <RepositoryCommunity
@@ -908,13 +934,12 @@ onUnmounted(() => {
       />
     </template>
     <template v-else-if="section === 'commits'">
-      <section v-if="!emptyRepository" class="box box-form graph-panel">
-        <div class="panel-heading">
-          <div>
-            <p class="eyebrow">{{ t("commitGraph") }}</p>
-            <strong>{{ refName }}</strong>
-          </div>
-          <span v-if="graph?.truncated" class="muted">{{
+      <section v-if="!emptyRepository" class="box graph-panel">
+        <div class="box-header">
+          <AppIcon name="commit" />
+          <h2>{{ t("commitGraph") }}</h2>
+          <StatusBadge><AppIcon name="branch" :size="12" />{{ refName }}</StatusBadge>
+          <span v-if="graph?.truncated" class="graph-note muted">{{
             t("graphTruncated", { count: graph.commits.length })
           }}</span>
         </div>
@@ -924,7 +949,7 @@ onUnmounted(() => {
             <svg
               :width="graphLayout.width"
               :height="graphLayout.height"
-              role="img"
+              role="group"
               :aria-label="t('commitGraph')"
             >
               <line
@@ -945,7 +970,7 @@ onUnmounted(() => {
                 r="5"
                 tabindex="0"
                 role="link"
-                :aria-label="`${t('openCommit')} ${point.commit.oid}`"
+                :aria-label="`${t('openCommit')} ${point.commit.message.split('\n')[0]} (${point.commit.oid.slice(0, 8)})`"
                 :fill="
                   (sessionMarkers.get(point.commit.oid)?.length ?? 0) > 0
                     ? 'var(--warning-fg)'
@@ -961,7 +986,7 @@ onUnmounted(() => {
             :key="point.commit.oid"
             class="commit-row"
             :style="{
-              paddingLeft: `${graphLayout.width + 10}px`,
+              '--graph-width': `${graphLayout.width}px`,
               height: `${graphLayout.rowHeight}px`,
             }"
           >
@@ -1034,75 +1059,110 @@ onUnmounted(() => {
             >
           </div>
         </div>
-        <p v-if="moreError" class="state" role="alert">{{ moreError }}</p>
-        <FluentButton v-if="hasMoreGraph" type="button" :disabled="loadingMore" @click="loadMore">
-          {{ moreError ? t("retry") : t("loadMore") }}
-        </FluentButton>
+        <div v-if="moreError || hasMoreGraph" class="graph-more">
+          <p v-if="moreError" class="graph-error" role="alert">{{ moreError }}</p>
+          <FluentButton v-if="hasMoreGraph" type="button" :disabled="loadingMore" @click="loadMore">
+            {{ moreError ? t("retry") : t("loadMore") }}
+          </FluentButton>
+        </div>
       </section>
-      <section v-if="route.query.oid && !emptyRepository" class="box box-form commit-detail">
-        <p class="eyebrow">{{ t("commitDetails") }}</p>
-        <code>{{ route.query.oid }}</code>
-        <CommitSignatureStatus
-          v-if="selectedCommit"
-          :repository-id="repository.id"
-          :ref-name="refName"
-          :oid="selectedCommit.oid"
-        />
-        <p v-if="selectedCommit">{{ selectedCommit.message }}</p>
-        <p v-else class="muted">{{ t("commitNotInGraph") }}</p>
-        <strong>{{ t("parents") }}</strong>
-        <div v-for="parent in selectedCommit?.parents" :key="parent">
-          <AppLink
-            :to="{
-              path: `/${repository.owner}/${repository.name}/commits`,
-              query: { ref: refName, oid: parent },
-            }"
-            >{{ parent }}</AppLink
-          >
+      <section v-if="route.query.oid && !emptyRepository" class="box commit-detail">
+        <div class="box-header">
+          <AppIcon name="commit" />
+          <h2>{{ t("commitDetails") }}</h2>
+        </div>
+        <div class="commit-detail-body">
+          <code class="commit-oid">{{ route.query.oid }}</code>
+          <CommitSignatureStatus
+            v-if="selectedCommit"
+            :repository-id="repository.id"
+            :ref-name="refName"
+            :oid="selectedCommit.oid"
+          />
+          <p v-if="selectedCommit" class="commit-full-message">{{ selectedCommit.message }}</p>
+          <p v-else class="muted">{{ t("commitNotInGraph") }}</p>
+          <div class="commit-parents">
+            <strong>{{ t("parents") }}</strong>
+            <AppLink
+              v-for="parent in selectedCommit?.parents"
+              :key="parent"
+              :to="{
+                path: `/${repository.owner}/${repository.name}/commits`,
+                query: { ref: refName, oid: parent },
+              }"
+              >{{ parent }}</AppLink
+            >
+          </div>
         </div>
       </section>
     </template>
-    <section v-else class="box box-form compare-panel">
-      <p class="eyebrow">{{ t("compare") }}</p>
-      <div class="compare-form">
-        <SelectField v-model="compareBase" :label="t('baseBranch')">
-          <option
-            v-if="!refs.some((item) => item.name.replace(/^refs\/(heads|tags)\//, '') === refName)"
-            :value="refName"
-          >
-            {{ refName.slice(0, 12) }}
-          </option>
-          <option v-for="item in shortRefs(branchRefs)" :key="item.name" :value="item.shortName">
-            {{ item.shortName }}
-          </option>
-        </SelectField>
-        <SelectField v-model="compareHead" :label="t('headBranch')">
-          <option
-            v-if="!refs.some((item) => item.name.replace(/^refs\/(heads|tags)\//, '') === refName)"
-            :value="refName"
-          >
-            {{ refName.slice(0, 12) }}
-          </option>
-          <option v-for="item in shortRefs(branchRefs)" :key="item.name" :value="item.shortName">
-            {{ item.shortName }}
-          </option>
-        </SelectField>
-        <FluentButton type="button" tone="primary" @click="load">{{ t("compare") }}</FluentButton>
+    <section v-else class="box compare-panel">
+      <div class="box-header">
+        <AppIcon name="diff" />
+        <h2>{{ t("compare") }}</h2>
       </div>
-      <p v-if="comparison" class="muted">
-        {{ comparison.commits.length }} {{ t("commits") }} · {{ comparison.files.length }}
-        {{ t("changedFiles") }}
-      </p>
-      <NoticeBar v-if="comparison?.truncated" intent="warning">{{
-        t("comparisonTruncated")
-      }}</NoticeBar>
-      <div v-for="change in comparison?.files" :key="change.path" class="item-row">
-        <strong>{{ change.path }}</strong
-        ><StatusBadge>{{ change.type }}</StatusBadge>
-        <DiffViewer v-if="change.patch" :patch="change.patch" />
-        <span v-else class="muted">{{
-          change.binary ? t("binaryPreviewUnavailable") : t("diffTooLarge")
-        }}</span>
+      <div class="compare-body">
+        <div class="compare-form">
+          <SelectField v-model="compareBase" :label="t('baseBranch')">
+            <option
+              v-if="
+                !refs.some((item) => item.name.replace(/^refs\/(heads|tags)\//, '') === refName)
+              "
+              :value="refName"
+            >
+              {{ refName.slice(0, 12) }}
+            </option>
+            <option v-for="item in shortRefs(branchRefs)" :key="item.name" :value="item.shortName">
+              {{ item.shortName }}
+            </option>
+          </SelectField>
+          <AppIcon class="compare-arrow" name="arrowLeft" />
+          <SelectField v-model="compareHead" :label="t('headBranch')">
+            <option
+              v-if="
+                !refs.some((item) => item.name.replace(/^refs\/(heads|tags)\//, '') === refName)
+              "
+              :value="refName"
+            >
+              {{ refName.slice(0, 12) }}
+            </option>
+            <option v-for="item in shortRefs(branchRefs)" :key="item.name" :value="item.shortName">
+              {{ item.shortName }}
+            </option>
+          </SelectField>
+          <FluentButton type="button" :disabled="loading" @click="load">{{
+            t("compare")
+          }}</FluentButton>
+        </div>
+        <StatusState :loading="loading" :error="error" :empty="false" @retry="load" />
+        <template v-if="comparison && !loading && !error">
+          <div class="compare-summary">
+            <p>
+              {{ comparison.commits.length }} {{ t("commits") }} · {{ comparison.files.length }}
+              {{ t("changedFiles") }}
+            </p>
+            <RouterLink v-if="canOpenPull" class="btn btn-primary" :to="openPullLocation"
+              ><AppIcon name="pr" />{{ t("compareOpenPull") }}</RouterLink
+            >
+          </div>
+          <NoticeBar v-if="comparison.truncated" intent="warning">{{
+            t("comparisonTruncated")
+          }}</NoticeBar>
+          <p v-if="!comparison.commits.length && !comparison.files.length" class="state">
+            {{ t("compareNoDifferences") }}
+          </p>
+          <article v-for="change in comparison.files" :key="change.path" class="compare-file">
+            <header class="compare-file-header">
+              <AppIcon name="file" />
+              <strong>{{ change.path }}</strong>
+              <StatusBadge>{{ change.type }}</StatusBadge>
+            </header>
+            <DiffViewer v-if="change.patch" :patch="change.patch" :path="change.path" />
+            <p v-else class="muted">
+              {{ change.binary ? t("binaryPreviewUnavailable") : t("diffTooLarge") }}
+            </p>
+          </article>
+        </template>
       </div>
     </section>
   </section>
@@ -1110,108 +1170,45 @@ onUnmounted(() => {
 
 <style src="../styles/code.css"></style>
 <style scoped>
-.code-toolbar {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: var(--space-3);
-}
-.toolbar-row {
-  display: flex;
-  align-items: flex-end;
-  gap: var(--space-3);
+.graph-panel .box-header {
   flex-wrap: wrap;
 }
-.toolbar-row > .text-field {
-  width: auto;
-  min-width: 0;
-  flex: 1 1 200px;
-  max-width: 320px;
-}
-.clone-control {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex: 1 1 320px;
-  min-width: 0;
-  color: var(--fg-secondary);
-  font-size: var(--font-size-meta);
-}
-.clone-control code {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.graph-panel .box-header h2 {
   white-space: nowrap;
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-md);
-  background: var(--bg-subtle);
-  color: var(--accent-fg);
 }
-.browser-grid {
-  display: grid;
-  grid-template-columns: minmax(260px, 0.8fr) minmax(0, 1.2fr);
-  gap: var(--space-4);
-  align-items: start;
-}
-.panel-heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: var(--space-3);
-}
-.file-entry {
-  display: flex;
-  width: 100%;
-  justify-content: flex-start;
-  border-radius: 0;
-  border-bottom: 1px solid var(--border-default);
-}
-.file-entry::part(content) {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  width: 100%;
-}
-.file-entry small {
+.graph-note {
   margin-left: auto;
-  color: var(--fg-muted);
-  font-family: var(--font-mono);
-}
-.file-type {
-  color: var(--accent-fg);
-}
-.text-preview,
-.diff-preview {
-  overflow: auto;
-  max-height: 70vh;
-  margin: 0;
-  padding: var(--space-3) var(--space-4);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font: var(--font-size-meta) / 1.65 var(--font-mono);
-}
-.readme-title {
-  margin: 0;
-  padding: var(--space-3) var(--space-4) 0;
-}
-.graph-panel {
-  position: relative;
-  overflow: hidden;
+  font-size: var(--font-size-meta);
+  font-weight: var(--font-weight-regular);
 }
 .graph-history {
   position: relative;
 }
 .graph-scroll {
   position: absolute;
-  left: 0;
   top: 0;
+  left: var(--space-4);
   pointer-events: none;
 }
+.graph-scroll svg circle {
+  pointer-events: all;
+  cursor: pointer;
+  stroke: var(--bg-raised);
+  stroke-width: 2;
+}
+.graph-scroll svg circle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
 .commit-row {
-  padding-block: var(--space-2);
-  border-bottom: 1px solid var(--border-default);
+  padding: var(--space-2) var(--space-4) var(--space-2)
+    calc(var(--space-4) + var(--graph-width) + var(--space-2));
+  border-bottom: 1px solid var(--border-muted);
   color: var(--fg-muted);
   font-size: var(--font-size-meta);
+}
+.commit-row:hover {
+  background: var(--bg-subtle);
 }
 .commit-title {
   display: flex;
@@ -1239,31 +1236,66 @@ onUnmounted(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--fg-default);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-medium);
 }
-.commit-row code,
-.commit-detail code {
-  color: var(--accent-fg);
-  font: var(--font-size-meta) var(--font-mono);
-}
-.session-overlay-row {
-  display: grid;
-  gap: var(--space-1);
-  border-top: 1px solid var(--border-default);
-  padding: var(--space-2) 0;
-}
-.graph-scroll svg circle {
-  pointer-events: all;
-  cursor: pointer;
-}
-.session-overlay-row small {
+.commit-row code {
   color: var(--fg-muted);
+  font: var(--font-size-meta) var(--font-mono);
 }
 .session-overlay {
   display: grid;
   gap: var(--space-1);
-  padding-top: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border-default);
   color: var(--fg-secondary);
   font-size: var(--font-size-meta);
+}
+.session-overlay > strong {
+  color: var(--fg-default);
+  font-size: var(--font-size-body);
+}
+.session-overlay-row {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--border-muted);
+}
+.session-overlay-row small {
+  color: var(--fg-muted);
+}
+.graph-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border-default);
+}
+.graph-error {
+  color: var(--danger-fg);
+}
+.commit-detail-body {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+.commit-oid,
+.commit-parents a {
+  overflow-wrap: anywhere;
+  font: var(--font-size-meta) / 20px var(--font-mono);
+}
+.commit-oid {
+  color: var(--fg-muted);
+}
+.commit-full-message {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.commit-parents {
+  display: grid;
+  gap: var(--space-1);
 }
 .token-once {
   display: grid;
@@ -1278,34 +1310,68 @@ onUnmounted(() => {
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
   background: var(--bg-subtle);
-  color: var(--accent-fg);
+}
+.compare-body {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-4);
 }
 .compare-form {
   display: flex;
   align-items: flex-end;
+  flex-wrap: wrap;
   gap: var(--space-3);
-  flex-wrap: wrap;
 }
-.diff-preview {
-  flex-basis: 100%;
-  width: 100%;
-  max-height: 320px;
-  padding: 0;
+.compare-form > .select-field {
+  flex: 1 1 200px;
+  max-width: 280px;
 }
-.item-row {
+.compare-arrow {
+  align-self: flex-end;
+  height: var(--control-height);
+  color: var(--fg-muted);
+}
+.compare-summary {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
+  justify-content: space-between;
   flex-wrap: wrap;
+  gap: var(--space-3);
+  color: var(--fg-secondary);
+}
+.compare-file {
+  display: grid;
   gap: var(--space-2);
-  padding: var(--space-3) 0;
-  border-bottom: 1px solid var(--border-default);
+  min-width: 0;
+}
+.compare-file-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.compare-file-header > .icon {
+  color: var(--fg-muted);
+}
+.compare-file-header strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-meta);
 }
 @media (max-width: 720px) {
-  .browser-grid {
-    grid-template-columns: 1fr;
-  }
   .commit-title small {
     display: none;
+  }
+  .graph-note {
+    flex-basis: 100%;
+    margin-left: 0;
+  }
+  .compare-arrow {
+    display: none;
+  }
+  .compare-form > .select-field {
+    max-width: none;
   }
 }
 </style>

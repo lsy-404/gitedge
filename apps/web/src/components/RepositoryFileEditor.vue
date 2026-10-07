@@ -16,6 +16,7 @@ import type {
 } from "../lib/api";
 import { ApiError, api } from "../lib/api";
 import AppIcon from "./AppIcon.vue";
+import NoticeBar from "./NoticeBar.vue";
 import TextAreaField from "./TextAreaField.vue";
 import TextField from "./TextField.vue";
 
@@ -240,8 +241,10 @@ function close() {
         ><AppIcon name="close" />{{ t("cancel") }}</FluentButton
       >
     </div>
-    <p v-if="!regularTextFile" class="muted" role="status">{{ t("codeNotEditable") }}</p>
-    <form v-else class="form-stack" @submit.prevent="saveFile">
+    <p v-if="!regularTextFile" class="editor-body muted" role="status">
+      {{ t("codeNotEditable") }}
+    </p>
+    <form v-else class="form-stack editor-body" @submit.prevent="saveFile">
       <fieldset class="editor-fields" :disabled="Boolean(saved)">
         <TextField v-if="isNew" v-model="path" required maxlength="1000">{{
           t("codeFilePath")
@@ -266,7 +269,7 @@ function close() {
           <TextField v-model="newBranch" required maxlength="251">{{
             t("codeNewBranchName")
           }}</TextField>
-          <small v-if="!saved && newBranch && !targetBranchValid" class="workspace-form-error">{{
+          <small v-if="!saved && newBranch && !targetBranchValid" class="field-error">{{
             t("codeBranchNameInvalidOrExists")
           }}</small>
         </div>
@@ -274,7 +277,7 @@ function close() {
           <TextField v-model="newBranch" maxlength="251">{{
             t("codeOptionalNewBranch")
           }}</TextField>
-          <small v-if="!saved && newBranch && !targetBranchValid" class="workspace-form-error">{{
+          <small v-if="!saved && newBranch && !targetBranchValid" class="field-error">{{
             t("codeBranchNameInvalidOrExists")
           }}</small>
         </template>
@@ -307,12 +310,12 @@ function close() {
           >{{ t("codeRetryPullCreate") }}</FluentButton
         >
       </div>
-      <p v-if="pullError" role="alert" class="workspace-form-error">{{ pullError }}</p>
-      <p v-if="conflict" role="alert" class="workspace-form-error">
+      <NoticeBar v-if="pullError" intent="error">{{ pullError }}</NoticeBar>
+      <NoticeBar v-if="conflict" intent="error">
         {{ t("codeEditConflict") }}
         <RouterLink :to="compareUrl">{{ t("codeCompareLatest") }}</RouterLink>
-      </p>
-      <p v-if="saveError" role="alert" class="workspace-form-error">{{ saveError }}</p>
+      </NoticeBar>
+      <NoticeBar v-if="saveError" intent="error">{{ saveError }}</NoticeBar>
       <div class="form-actions">
         <FluentButton type="button" :disabled="saving || pullSaving" @click="close">{{
           t("cancel")
@@ -348,14 +351,19 @@ function close() {
 </template>
 
 <style scoped>
-.file-editor {
-  display: grid;
-  gap: var(--space-3);
-  margin-top: var(--space-4);
+.file-editor .box-header {
+  justify-content: space-between;
+}
+.file-editor .box-header p {
+  font-size: var(--font-size-meta);
+  font-weight: var(--font-weight-regular);
+}
+.editor-body {
   padding: var(--space-4);
 }
-.file-editor h2 {
-  margin: 0;
+.field-error {
+  color: var(--danger-fg);
+  font-size: var(--font-size-meta);
 }
 .editor-fields {
   display: grid;
@@ -370,11 +378,12 @@ function close() {
   display: grid;
   gap: var(--space-2);
   padding: var(--space-3);
+  background: var(--bg-subtle);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
 }
 .file-editor :deep(textarea) {
   min-height: 320px;
-  font-family: var(--font-mono);
+  font: var(--font-size-meta) / 20px var(--font-mono);
 }
 </style>

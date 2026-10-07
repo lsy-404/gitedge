@@ -43,8 +43,8 @@ const hunks = computed(() => {
 });
 </script>
 <template>
-  <div class="diff-viewer diff-preview">
-    <table v-if="hunks.length" :aria-label="path">
+  <div class="diff-viewer" tabindex="0" role="region" :aria-label="path ?? t('diff')">
+    <table v-if="hunks.length">
       <thead class="visually-hidden">
         <tr>
           <th scope="col">{{ t("diffOldLine") }}</th>
@@ -75,25 +75,27 @@ const hunks = computed(() => {
 <style scoped>
 .diff-viewer {
   width: 100%;
-  max-height: none;
+  max-height: 70vh;
   overflow: auto;
   border: 1px solid var(--border-default);
-  border-top: 0;
-  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  border-radius: var(--radius-md);
   background: var(--bg-canvas);
+}
+.diff-viewer:focus-visible {
+  outline-offset: -2px;
 }
 table {
   min-width: 100%;
   border-collapse: collapse;
-  font: 12px/20px var(--font-mono);
+  font: var(--font-size-meta) / 20px var(--font-mono);
 }
 td {
-  padding: 0 10px;
+  padding: 0 var(--space-3);
   vertical-align: top;
 }
 .diff-number {
-  width: 44px;
-  min-width: 44px;
+  width: 48px;
+  min-width: 48px;
   color: var(--fg-muted);
   text-align: right;
   user-select: none;
@@ -124,11 +126,11 @@ code {
   background: light-dark(#ddf4ff, #182b40);
 }
 .diff-hunk td {
-  padding-top: 5px;
-  padding-bottom: 5px;
+  padding-block: var(--space-1);
 }
 pre {
   margin: 0;
-  padding: 12px;
+  padding: var(--space-3);
+  font: var(--font-size-meta) / 20px var(--font-mono);
 }
 </style>
