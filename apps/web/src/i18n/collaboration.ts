@@ -27,6 +27,8 @@ export default {
     write: "编辑",
     preview: "预览",
     nothingToPreview: "输入 Markdown 后可在此预览。",
+    reloadLatest: "重新加载最新内容",
+    revisionNoChanges: "此版本与当前页面内容相同。",
     comparisonTruncated: "对比内容过大，仅显示部分变更文件和差异。",
     diffTooLarge: "对比超出大小限制，已省略此文件的差异。",
     chooseBranch: "选择分支",
@@ -66,6 +68,8 @@ export default {
     write: "Write",
     preview: "Preview",
     nothingToPreview: "Enter Markdown to preview it here.",
+    reloadLatest: "Reload latest",
+    revisionNoChanges: "This revision has the same content as the current page.",
     comparisonTruncated:
       "This comparison is too large; only part of the changed files and diffs is shown.",
     diffTooLarge: "Diff omitted because the comparison exceeded its size budget.",

@@ -737,7 +737,7 @@ describe("RepositoryCollaboration rendered workflows", () => {
     expect(wikiAlert).not.toContain("pull request");
     expect(wikiAlert).not.toContain("Wiki page revision");
 
-    findButton(mounted.root, "Retry").click();
+    findButton(mounted.root, "Reload latest").click();
     await settle();
     expect(mounted.root.querySelector(".detail-titlebar h2")?.textContent).toContain(
       "Guide updated elsewhere"
@@ -905,11 +905,39 @@ describe("RepositoryCollaboration action errors, ownership and review aids", () 
       expect(rows[0]?.textContent).toContain("Delete");
       expect(rows[1]?.textContent).not.toContain("Edit");
       expect(rows[1]?.textContent).not.toContain("Delete");
+      const update = vi.spyOn(api, "updateIssue").mockResolvedValue(issue());
       findButton(mounted.root, "Close").click();
+      await settle();
+      expect(update).toHaveBeenNthCalledWith(1, "repo-1", 7, { state: "closed" });
       findButton(mounted.root, "Edit").click();
       await settle();
-      expect(mounted.root.querySelector(".item-edit")?.textContent).not.toContain("Labels");
+      const editForm = control(mounted.root, ".item-edit") as HTMLFormElement;
+      expect(editForm.textContent).not.toContain("Labels");
+      submit(editForm);
+      await settle();
+      expect(update).toHaveBeenCalledTimes(2);
+      expect(Object.keys(update.mock.calls[1]?.[2] ?? {})).not.toContain("labels");
       mounted.unmount();
+
+      for (const restriction of ["private", "archived"] as const) {
+        const previous = { visibility: repository.visibility, archived: repository.archived };
+        if (restriction === "private") repository.visibility = "private";
+        else repository.archived = true;
+        try {
+          detailMocks({ item: issue({ actor: human }), comments: [comment({ actor: human })] });
+          const restricted = await mountSection("/_verify/issues/7", "issues");
+          expect(restricted.root.querySelector(".detail-actions")).toBeNull();
+          if (restriction === "archived") {
+            const row = restricted.root.querySelector<HTMLElement>(".comment-row");
+            expect(row?.textContent).not.toContain("Edit");
+            expect(row?.textContent).not.toContain("Delete");
+          }
+          restricted.unmount();
+        } finally {
+          repository.visibility = previous.visibility;
+          repository.archived = previous.archived;
+        }
+      }
 
       detailMocks({ item: issue({ actor: other }) });
       const foreign = await mountSection("/_verify/issues/7", "issues");
@@ -928,13 +956,28 @@ describe("RepositoryCollaboration action errors, ownership and review aids", () 
     vi.spyOn(api, "pullDiff").mockResolvedValue({
       baseOid: "a".repeat(40),
       headOid: "b".repeat(40),
+      mergeBaseOid: null,
       commits: [],
       truncated: true,
       files: [
-        { path: "big.txt", type: "modified", binary: false, patch: null },
-        { path: "logo.png", type: "added", binary: true, patch: null },
+        {
+          path: "big.txt",
+          type: "modified",
+          oldOid: "c".repeat(40),
+          newOid: "d".repeat(40),
+          binary: false,
+          patch: null,
+        },
+        {
+          path: "logo.png",
+          type: "added",
+          oldOid: null,
+          newOid: "e".repeat(40),
+          binary: true,
+          patch: null,
+        },
       ],
-    } as unknown as GitComparison);
+    } satisfies GitComparison);
     const mounted = await mountSection("/_verify/pulls/12", "pulls");
     const tabs = mounted.root.querySelectorAll<HTMLElement>(".pull-tabs button");
     tabs[1]?.click();
@@ -972,7 +1015,7 @@ describe("RepositoryCollaboration action errors, ownership and review aids", () 
     await settle();
     expect(create).toHaveBeenCalledWith(
       "repo-1",
-      expect.objectContaining({ headRef: "feature", baseRef: "main" })
+      expect.objectContaining({ headRef: "feature", baseRef: "main", draft: true })
     );
     mounted.unmount();
   });
@@ -997,6 +1040,40 @@ describe("RepositoryCollaboration action errors, ownership and review aids", () 
     expect(view?.querySelector(".diff-deletion")?.textContent).toContain("Old line");
     expect(view?.querySelector(".diff-addition")?.textContent).toContain("New line");
     expect(view?.querySelector("table th")).not.toBeNull();
+    mounted.unmount();
+  });
+
+  it("shows a no-changes message when a revision matches the current content", async () => {
+    const current = page({ revision: 2, content: "Same" });
+    vi.spyOn(api, "wikiPage").mockResolvedValue(current);
+    vi.spyOn(api, "wiki").mockResolvedValue({ items: [current], truncated: false });
+    vi.spyOn(api, "wikiHistory").mockResolvedValue({
+      items: [page({ revision: 1, content: "Same" }), current],
+      truncated: false,
+    });
+    vi.spyOn(api, "wikiRevision").mockResolvedValue(page({ revision: 1, content: "Same" }));
+    const mounted = await mountSection("/_verify/wiki/guide", "wiki");
+    findButton(mounted.root, "View revision").click();
+    await settle();
+    const view = mounted.root.querySelector(".wiki-revision-view");
+    expect(view?.textContent).toContain("same content as the current page");
+    expect(view?.querySelector("table")).toBeNull();
+    expect(view?.querySelector("pre")).toBeNull();
+    mounted.unmount();
+  });
+
+  it("opens and prefills the pull request form from query parameters", async () => {
+    vi.spyOn(api, "pulls").mockResolvedValue({ items: [], truncated: false });
+    vi.spyOn(api, "repositorySessions").mockResolvedValue([]);
+    vi.spyOn(api, "repositoryBranches").mockResolvedValue([
+      { name: "main", oid: "1", protected: false, rules: [], isDefault: true },
+      { name: "feature", oid: "2", protected: false, rules: [], isDefault: false },
+    ]);
+    const mounted = await mountSection("/_verify/pulls?new=1&base=main&head=feature", "pulls");
+    const form = control(mounted.root, ".create-form") as HTMLFormElement;
+    const selects = form.querySelectorAll<HTMLSelectElement>("select");
+    expect(selects[0]?.value).toBe("feature");
+    expect(selects[1]?.value).toBe("main");
     mounted.unmount();
   });
 });

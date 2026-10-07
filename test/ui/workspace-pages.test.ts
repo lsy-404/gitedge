@@ -2,7 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp, nextTick } from "vue";
 import App from "../../apps/web/src/App.vue";
 import { i18n } from "../../apps/web/src/i18n";
-import { api, type Organization, type Repository, type User } from "../../apps/web/src/lib/api";
+import {
+  ApiError,
+  api,
+  type Organization,
+  type Repository,
+  type User,
+} from "../../apps/web/src/lib/api";
 import type { AccountProfile } from "../../packages/contracts/src/account";
 import { clearSession, setSession } from "../../apps/web/src/lib/session";
 import { router } from "../../apps/web/src/router";
@@ -135,6 +141,20 @@ describe("workspace entry points", () => {
     expect(mounted.root.querySelector('[role="dialog"]')).not.toBeNull();
     expect(mounted.root.textContent).toContain("Create agent");
 
+    mounted.unmount();
+  });
+
+  it("keeps the agent page visible and shows the error in the form when creation fails", async () => {
+    vi.spyOn(api, "agents").mockResolvedValue([]);
+    vi.spyOn(api, "repositories").mockResolvedValue([repository]);
+    vi.spyOn(api, "createAgent").mockRejectedValue(new ApiError(500, "boom"));
+    const mounted = await mount("/settings/agents?new=1");
+    const form = mounted.root.querySelector<HTMLFormElement>('[role="dialog"] form');
+    if (!form) throw new Error("Agent form did not open.");
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await settle();
+    expect(mounted.root.querySelector('[role="dialog"] .workspace-form-error')).not.toBeNull();
+    expect(mounted.root.querySelector(".agents-page-heading")).not.toBeNull();
     mounted.unmount();
   });
 });

@@ -10,6 +10,7 @@ import {
   type CreatedAgentSession,
   type Repository,
 } from "../lib/api";
+import NoticeBar from "../components/NoticeBar.vue";
 import SelectField from "../components/SelectField.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import StatusState from "../components/StatusState.vue";
@@ -39,7 +40,9 @@ let credentialExpiryTimer: number | undefined;
 let createSessionVersion = 0;
 let sessionClockTimer: number | undefined;
 const saving = ref(false);
-const error = ref("");
+const loadError = ref("");
+const formError = ref("");
+const actionError = ref("");
 const createdSession = ref<CreatedAgentSession | null>(null);
 const credentialDialogOpen = computed({
   get: () => createdSession.value !== null,
@@ -62,7 +65,7 @@ const currentAgent = computed(
 
 async function load() {
   loading.value = true;
-  error.value = "";
+  loadError.value = "";
   try {
     const [agentList, repoList] = await Promise.all([api.agents(), api.repositories()]);
     agents.value = agentList;
@@ -70,7 +73,7 @@ async function load() {
     if (!selectedAgent.value && agentList[0]) selectedAgent.value = agentList[0].id;
     else await loadSessions();
   } catch (cause) {
-    error.value =
+    loadError.value =
       cause instanceof ApiError && cause.status === 404 ? t("agentsUnavailable") : t("apiError");
   } finally {
     loading.value = false;
@@ -127,7 +130,7 @@ function showCreatedCredentials(session: CreatedAgentSession): void {
 }
 async function createAgent() {
   saving.value = true;
-  error.value = "";
+  formError.value = "";
   try {
     const agent = await api.createAgent(agentForm.value);
     agents.value = [agent, ...agents.value];
@@ -137,20 +140,21 @@ async function createAgent() {
     if (route.query.new)
       await router.replace({ path: route.path, query: { ...route.query, new: undefined } });
   } catch (cause) {
-    error.value = errorMessage(cause, t);
+    formError.value = errorMessage(cause, t);
   } finally {
     saving.value = false;
   }
 }
 async function disableAgent(agent: Agent) {
   saving.value = true;
+  actionError.value = "";
   try {
     await api.disableAgent(agent.id);
     agents.value = agents.value.map((row) =>
       row.id === agent.id ? { ...row, disabledAt: Date.now() } : row
     );
   } catch (cause) {
-    error.value = errorMessage(cause, t);
+    actionError.value = errorMessage(cause, t);
   } finally {
     saving.value = false;
   }
@@ -158,7 +162,7 @@ async function disableAgent(agent: Agent) {
 async function createSession() {
   if (!selectedAgent.value) return;
   saving.value = true;
-  error.value = "";
+  formError.value = "";
   const agentId = selectedAgent.value;
   const requestVersion = ++createSessionVersion;
   try {
@@ -171,7 +175,7 @@ async function createSession() {
     sessions.value = [session, ...sessions.value];
     showSessionForm.value = false;
   } catch (cause) {
-    error.value = errorMessage(cause, t);
+    formError.value = errorMessage(cause, t);
   } finally {
     saving.value = false;
   }
@@ -179,13 +183,14 @@ async function createSession() {
 async function revoke(session: AgentSession) {
   if (!selectedAgent.value) return;
   saving.value = true;
+  actionError.value = "";
   try {
     await api.revokeAgentSession(selectedAgent.value, session.id);
     sessions.value = sessions.value.map((row) =>
       row.id === session.id ? { ...row, status: "revoked" } : row
     );
   } catch (cause) {
-    error.value = errorMessage(cause, t);
+    actionError.value = errorMessage(cause, t);
   } finally {
     saving.value = false;
   }
@@ -242,10 +247,11 @@ sessionClockTimer = window.setInterval(() => {
     </aside>
     <div class="settings-content">
       <h2 class="settings-page-title">{{ t("agents") }}</h2>
-      <div v-if="loading || error" class="box">
-        <StatusState :loading="loading" :error="error" :empty="false" @retry="load" />
+      <div v-if="loading || loadError" class="box">
+        <StatusState :loading="loading" :error="loadError" :empty="false" @retry="load" />
       </div>
       <template v-else>
+        <NoticeBar v-if="actionError" intent="error">{{ actionError }}</NoticeBar>
         <div class="agents-page-heading">
           <div>
             <p class="muted">{{ t("multipleAgents") }}</p>
@@ -454,7 +460,7 @@ sessionClockTimer = window.setInterval(() => {
                   {{ saving ? t("loading") : t("createAgent") }}
                 </button>
               </div>
-              <p v-if="error" class="workspace-form-error">{{ error }}</p>
+              <p v-if="formError" class="workspace-form-error">{{ formError }}</p>
             </form>
           </section>
         </div>
@@ -506,7 +512,7 @@ sessionClockTimer = window.setInterval(() => {
                 <option value="86400">1 {{ t("day") }}</option>
                 <option value="604800">7 {{ t("days") }}</option>
               </SelectField>
-              <p v-if="error" class="workspace-form-error">{{ error }}</p>
+              <p v-if="formError" class="workspace-form-error">{{ formError }}</p>
               <div class="form-actions">
                 <button class="btn" type="button" @click="showSessionForm = false">
                   {{ t("cancel") }}</button

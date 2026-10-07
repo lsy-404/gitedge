@@ -228,6 +228,11 @@ const canEditItem = computed(() => {
 function canModifyComment(comment: Comment): boolean {
   return !props.repository.archived && (props.repository.canWrite || ownedByViewer(comment.actor));
 }
+const viewedRevisionUnchanged = computed(() => {
+  const current = item.value;
+  const viewed = viewedRevision.value;
+  return Boolean(viewed && current && "content" in current && viewed.content === current.content);
+});
 const viewedRevisionPatch = computed(() => {
   const current = item.value;
   const viewed = viewedRevision.value;
@@ -723,6 +728,28 @@ watch(
     if (showForm.value && props.section === "pulls") void loadBranches();
   }
 );
+function routeQuery(name: string): string {
+  const value = route.query[name];
+  return typeof value === "string" ? value : "";
+}
+watch(
+  () => [
+    props.section,
+    route.query.new,
+    route.query.base,
+    route.query.head,
+    route.query.headSessionId,
+  ],
+  () => {
+    if (props.section !== "pulls" || routeQuery("new") !== "1" || !canCreate.value) return;
+    resetForm();
+    form.value.baseRef = routeQuery("base") || props.repository.defaultBranch;
+    form.value.headRef = routeQuery("head");
+    form.value.headSessionId = routeQuery("headSessionId");
+    showForm.value = true;
+  },
+  { immediate: true }
+);
 watch(
   () => [props.repository.id, props.section, route.fullPath],
   () => {
@@ -742,7 +769,7 @@ watch(
         >{{ actionError
         }}<template v-if="actionConflict" #actions
           ><FluentButton type="button" size="small" @click="load">{{
-            t("retry")
+            t("reloadLatest")
           }}</FluentButton></template
         ></NoticeBar
       >
@@ -1197,7 +1224,9 @@ watch(
             <p class="eyebrow">r{{ viewedRevision.revision }} · {{ viewedRevision.title }}</p>
             <MarkdownContent class="body-content" :source="viewedRevision.content" />
             <p class="eyebrow">{{ t("revisionChanges") }}</p>
+            <p v-if="viewedRevisionUnchanged" class="muted">{{ t("revisionNoChanges") }}</p>
             <DiffViewer
+              v-else
               :patch="viewedRevisionPatch"
               :path="`${wikiSlug} r${viewedRevision.revision}`"
             />
