@@ -16,10 +16,13 @@ class TestDatabase implements D1Database {
   sessionRow?: Record<string, unknown>;
   passwordUser?: Record<string, unknown>;
   externalIdentityValues?: readonly unknown[];
+  linkedGithubUser?: Record<string, unknown>;
+  batchCount = 0;
   prepare(query: string): D1PreparedStatement {
     return new TestStatement(query, this);
   }
   async batch(_statements: readonly D1PreparedStatement[]): Promise<readonly D1Result[]> {
+    this.batchCount += 1;
     return [];
   }
 }
@@ -53,6 +56,8 @@ class TestStatement implements D1PreparedStatement {
     }
     if (this.query.startsWith("SELECT users.id, users.identifier, users.group_key, external"))
       return (this.database.sessionRow ?? null) as T | null;
+    if (this.query.startsWith("SELECT users.id, users.identifier, users.group_key FROM external"))
+      return (this.database.linkedGithubUser ?? null) as T | null;
     if (this.query.startsWith("SELECT id, identifier, group_key, password_salt"))
       return (this.database.passwordUser ?? null) as T | null;
     return null;
@@ -78,10 +83,10 @@ class TestStatement implements D1PreparedStatement {
   }
 }
 
-function testEnv(database: TestDatabase) {
+function testEnv(database: TestDatabase, allowPublicSignup = "true") {
   return {
     DB: database,
-    ALLOW_PUBLIC_SIGNUP: "true",
+    ALLOW_PUBLIC_SIGNUP: allowPublicSignup,
     DEFAULT_USER_GROUP: "free",
     GITHUB_CLIENT_ID: "github-test-client",
     GITHUB_CLIENT_SECRET: "github-test-secret",
@@ -183,6 +188,64 @@ describe("GitHub OAuth", () => {
       environment
     );
     expect(replay.status).toBe(400);
+  });
+
+  async function finishGithubSignIn(database: TestDatabase, allowPublicSignup: string) {
+    const environment = testEnv(database, allowPublicSignup);
+    const started = await startGithubOAuth(
+      new Request("https://forge.example/github/start?returnTo=%2Faccount"),
+      environment
+    );
+    const state = new URL(started.headers.get("Location") ?? "").searchParams.get("state");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string) => {
+        if (input.endsWith("/access_token"))
+          return Response.json({
+            access_token: "transient-token",
+            token_type: "bearer",
+            scope: "",
+          });
+        return Response.json(
+          {
+            id: 42,
+            login: "octocat",
+            avatar_url: "https://avatars.example/octocat",
+            html_url: "https://github.example/octocat",
+          },
+          { headers: { "X-OAuth-Scopes": "" } }
+        );
+      })
+    );
+    return completeGithubOAuth(
+      new Request(
+        `https://forge.example/api/auth/github/callback?state=${state}&code=provider-code`,
+        { headers: { Cookie: started.headers.get("Set-Cookie")?.split(";")[0] ?? "" } }
+      ),
+      environment
+    );
+  }
+
+  it("does not create an account for an unknown GitHub id when public signup is disabled", async () => {
+    const database = new TestDatabase();
+    const completed = await finishGithubSignIn(database, "false");
+    expect(completed.status).toBe(302);
+    expect(completed.headers.get("Location")).toBe("/account?error=github_signup_disabled");
+    expect(completed.headers.get("Set-Cookie")).toBeNull();
+    expect(database.batchCount).toBe(0);
+    expect(database.externalIdentityValues).toBeUndefined();
+    expect(database.sessions.size).toBe(0);
+  });
+
+  it("still signs in an already linked GitHub identity when public signup is disabled", async () => {
+    const database = new TestDatabase();
+    database.linkedGithubUser = { id: "user-1", identifier: "linked-user", group_key: "free" };
+    const completed = await finishGithubSignIn(database, "false");
+    expect(completed.status).toBe(302);
+    expect(completed.headers.get("Location")).toBe("/account");
+    expect(completed.headers.get("Set-Cookie")).toContain("gitedge_session=");
+    expect(database.batchCount).toBe(0);
+    expect(database.sessions.size).toBe(1);
   });
 
   it("rejects a token grant that includes any scope", async () => {

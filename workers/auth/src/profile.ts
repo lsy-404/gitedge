@@ -62,9 +62,9 @@ async function identifierAvailable(
 ): Promise<boolean> {
   if (ReservedAccountIdentifiers.has(identifier)) return false;
   const collision = await env.DB.prepare(
-    "SELECT id FROM users WHERE identifier = ? AND id <> ? UNION ALL SELECT id FROM namespaces WHERE slug = ? AND NOT (kind = 'personal' AND created_by = ?) LIMIT 1"
+    "SELECT id FROM users WHERE identifier = ? AND id <> ? UNION ALL SELECT id FROM namespaces WHERE slug = ? AND NOT (kind = 'personal' AND created_by = ?) UNION ALL SELECT namespace_id FROM namespace_slug_history WHERE slug = ? AND namespace_id NOT IN (SELECT id FROM namespaces WHERE kind = 'personal' AND created_by = ?) LIMIT 1"
   )
-    .bind(identifier, userId, identifier, userId)
+    .bind(identifier, userId, identifier, userId, identifier, userId)
     .first<{ id: string }>();
   return collision === null;
 }

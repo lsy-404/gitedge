@@ -9,7 +9,10 @@ import { handleSigningKeys } from "./signing-keys";
 import { timingSafeEqual } from "node:crypto";
 import { handleSso } from "./sso/routes";
 import {
+  consumeRateLimit,
   LoginInputSchema,
+  type RateLimitDecision,
+  type RateLimitNamespace,
   RegisterInputSchema,
   type ServiceResult,
   type TrustedUser,
@@ -21,14 +24,17 @@ import {
   authenticateAgentSession,
   authenticateGitToken,
   handleAgentManagement,
+  handleAgentSessionRevocation,
   handleAgentProfile,
 } from "./agents";
+import { readJsonLimited } from "./http";
 import { handleAccountProfile, handleWebSessions } from "./profile";
 import { drainAgentEventOutbox, handleAgentEvent } from "./agent-webhooks";
 
 export type AuthEnv = {
   readonly DB: D1Database;
   readonly ARTIFACTS: Artifacts;
+  readonly RATE_LIMITER: RateLimitNamespace;
   readonly LOG_LEVEL?: string;
   readonly WEBHOOK_ENCRYPTION_KEY?: string;
   readonly ALLOW_PUBLIC_SIGNUP: string;
@@ -93,6 +99,23 @@ function fail(
   return json({ error: { code, message } }, status);
 }
 
+const LOGIN_ATTEMPTS_PER_MINUTE = 10;
+const REGISTRATIONS_PER_MINUTE = 5;
+
+function rateLimited(decision: RateLimitDecision): Response | null {
+  if (decision.allowed) return null;
+  return json(
+    { error: { code: "rate_limited", message: "Too many attempts. Try again later." } },
+    429,
+    { "Retry-After": String(decision.retryAfter) }
+  );
+}
+
+function loginIdentifier(body: unknown): string | null {
+  if (!body || typeof body !== "object" || !("identifier" in body)) return null;
+  return typeof body.identifier === "string" ? body.identifier.toLowerCase() : null;
+}
+
 function base64ToBytes(value: string): Uint8Array<ArrayBuffer> {
   return Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
 }
@@ -144,9 +167,12 @@ function isSafeReturnTo(value: string | null, request: Request): value is string
   return destination.origin === requestUrl.origin;
 }
 
-function githubErrorRedirect(returnTo: string): Response {
+function githubErrorRedirect(
+  returnTo: string,
+  code: "github_oauth_failed" | "github_signup_disabled"
+): Response {
   const destination = new URL(returnTo, "https://gitedge.invalid");
-  destination.searchParams.set("error", "github_oauth_failed");
+  destination.searchParams.set("error", code);
   return new Response(null, {
     status: 302,
     headers: { Location: `${destination.pathname}${destination.search}` },
@@ -188,14 +214,6 @@ function isGithubUserResponse(value: unknown): value is GithubUserResponse {
   );
 }
 
-async function readJson(request: Request): Promise<unknown> {
-  try {
-    return await request.json();
-  } catch {
-    return null;
-  }
-}
-
 export async function register(
   env: AuthEnv,
   input: unknown
@@ -220,8 +238,10 @@ export async function register(
       status: 400,
       error: { code: "bad_request", message: "This identifier is reserved." },
     };
-  const existing = await env.DB.prepare("SELECT id FROM users WHERE identifier = ?")
-    .bind(identifier)
+  const existing = await env.DB.prepare(
+    "SELECT id FROM users WHERE identifier = ? UNION ALL SELECT namespace_id FROM namespace_slug_history WHERE slug = ? LIMIT 1"
+  )
+    .bind(identifier, identifier)
     .first<{ id: string }>();
   if (existing)
     return {
@@ -252,9 +272,9 @@ export async function register(
     ]);
   } catch {
     const conflict = await env.DB.prepare(
-      "SELECT id FROM namespaces WHERE slug = ? UNION ALL SELECT id FROM users WHERE identifier = ? LIMIT 1"
+      "SELECT id FROM namespaces WHERE slug = ? UNION ALL SELECT id FROM users WHERE identifier = ? UNION ALL SELECT namespace_id FROM namespace_slug_history WHERE slug = ? LIMIT 1"
     )
-      .bind(identifier, identifier)
+      .bind(identifier, identifier, identifier)
       .first<{ id: string }>()
       .catch(() => null);
     if (conflict)
@@ -412,33 +432,38 @@ async function fetchGithubApi(env: AuthEnv, token: string, path: string): Promis
   return readGithubJson(response);
 }
 
-async function findOrCreateGithubUser(
+async function findGithubUser(
   env: AuthEnv,
   githubUser: GithubUserResponse
-): Promise<TrustedUser> {
+): Promise<TrustedUser | null> {
   const providerUserId = String(githubUser.id);
   const existing = await env.DB.prepare(
     "SELECT users.id, users.identifier, users.group_key FROM external_identities JOIN users ON users.id = external_identities.user_id WHERE external_identities.provider = ? AND external_identities.provider_user_id = ?"
   )
     .bind("github", providerUserId)
     .first<SessionRow>();
-  const now = Date.now();
-  if (existing) {
-    await env.DB.prepare(
-      "UPDATE external_identities SET provider_login = ?, avatar_url = ?, profile_url = ?, last_verified_at = ? WHERE provider = ? AND provider_user_id = ?"
+  if (!existing) return null;
+  await env.DB.prepare(
+    "UPDATE external_identities SET provider_login = ?, avatar_url = ?, profile_url = ?, last_verified_at = ? WHERE provider = ? AND provider_user_id = ?"
+  )
+    .bind(
+      githubUser.login,
+      githubUser.avatar_url || null,
+      githubUser.html_url || null,
+      Date.now(),
+      "github",
+      providerUserId
     )
-      .bind(
-        githubUser.login,
-        githubUser.avatar_url || null,
-        githubUser.html_url || null,
-        now,
-        "github",
-        providerUserId
-      )
-      .run();
-    return { id: existing.id, identifier: existing.identifier, groupKey: existing.group_key };
-  }
+    .run();
+  return { id: existing.id, identifier: existing.identifier, groupKey: existing.group_key };
+}
 
+async function createGithubUser(
+  env: AuthEnv,
+  githubUser: GithubUserResponse
+): Promise<TrustedUser> {
+  const providerUserId = String(githubUser.id);
+  const now = Date.now();
   // This identifier is independent of mutable GitHub account names and never derives from email.
   const user: TrustedUser = {
     id: crypto.randomUUID(),
@@ -549,10 +574,10 @@ export async function completeGithubOAuth(request: Request, env: AuthEnv): Promi
   }
   if (url.searchParams.has("error")) {
     logger.warn("github-oauth:provider-denied");
-    return githubErrorRedirect(oauthState.return_to);
+    return githubErrorRedirect(oauthState.return_to, "github_oauth_failed");
   }
   const code = url.searchParams.get("code");
-  if (!code) return githubErrorRedirect(oauthState.return_to);
+  if (!code) return githubErrorRedirect(oauthState.return_to, "github_oauth_failed");
   const tokenResponse = await fetch(
     `${githubOAuthBase(env).replace(/\/$/, "")}/login/oauth/access_token`,
     {
@@ -574,16 +599,21 @@ export async function completeGithubOAuth(request: Request, env: AuthEnv): Promi
     !grantsNoScopes(tokenPayload.scope)
   ) {
     logger.warn("github-oauth:token-rejected");
-    return githubErrorRedirect(oauthState.return_to);
+    return githubErrorRedirect(oauthState.return_to, "github_oauth_failed");
   }
 
   const userPayload = await fetchGithubApi(env, tokenPayload.access_token, "/user");
   if (!isGithubUserResponse(userPayload)) {
     logger.warn("github-oauth:user-verification-failed");
-    return githubErrorRedirect(oauthState.return_to);
+    return githubErrorRedirect(oauthState.return_to, "github_oauth_failed");
   }
 
-  const user = await findOrCreateGithubUser(env, userPayload);
+  const existing = await findGithubUser(env, userPayload);
+  if (!existing && env.ALLOW_PUBLIC_SIGNUP !== "true") {
+    logger.warn("github-oauth:signup-disabled");
+    return githubErrorRedirect(oauthState.return_to, "github_signup_disabled");
+  }
+  const user = existing ?? (await createGithubUser(env, userPayload));
   const sessionToken = await issueSession(env, user.id);
   logger.info("github-oauth:completed", { userId: user.id });
   return rememberBrowserLogin(
@@ -665,7 +695,18 @@ export default {
     if (request.method === "GET" && path === "/github/callback")
       return completeGithubOAuth(request, env);
     if (request.method === "POST" && path === "/register") {
-      const result = await register(env, await readJson(request));
+      const limited = rateLimited(
+        await consumeRateLimit(
+          env.RATE_LIMITER,
+          `register:${request.headers.get("CF-Connecting-IP") ?? "unknown"}`,
+          REGISTRATIONS_PER_MINUTE
+        )
+      );
+      if (limited) {
+        logger.warn("auth:register-rate-limited");
+        return limited;
+      }
+      const result = await register(env, await readJsonLimited(request));
       if (!result.ok) return json({ error: result.error }, result.status);
       logger.info("auth:registered", { userId: result.data.id });
       return rememberBrowserLogin(
@@ -686,7 +727,18 @@ export default {
       );
     }
     if (request.method === "POST" && path === "/login") {
-      const result = await login(env, await readJson(request));
+      const body = await readJsonLimited(request);
+      const identifier = loginIdentifier(body);
+      if (identifier) {
+        const limited = rateLimited(
+          await consumeRateLimit(env.RATE_LIMITER, `login:${identifier}`, LOGIN_ATTEMPTS_PER_MINUTE)
+        );
+        if (limited) {
+          logger.warn("auth:login-rate-limited");
+          return limited;
+        }
+      }
+      const result = await login(env, body);
       if (!result.ok) return json({ error: result.error }, result.status);
       logger.info("auth:logged-in", { userId: result.data.id });
       return rememberBrowserLogin(
@@ -721,6 +773,11 @@ export default {
       } catch {
         return fail(503, "service_unavailable", "Agent event could not be queued.");
       }
+    }
+    if (path === "/_internal/agent-sessions/revoke" && request.method === "POST") {
+      if (new URL(request.url).hostname !== "auth.internal")
+        return fail(404, "bad_request", "Endpoint was not found.");
+      return handleAgentSessionRevocation(request, env);
     }
     if (request.method === "GET" && path === "/browser-session") {
       if (browserView) return json({ data: { user: null, view: { kind: "guest" } } });

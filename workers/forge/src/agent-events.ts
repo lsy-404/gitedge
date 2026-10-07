@@ -1,5 +1,6 @@
 import type { AgentWebhookEvent, TrustedUser } from "../../../packages/contracts/src/index";
 import { createLogger } from "../../../src/worker/common/logger";
+import { repositoryRole } from "../../../src/worker/common/repositories";
 import type { ForgeEnv, RepositoryRow } from "./common";
 
 export async function agentEvent(
@@ -35,6 +36,31 @@ export async function agentEvent(
   }
 }
 
+export type AgentSessionRevocationScope =
+  | { readonly repositoryId: string; readonly userId?: string }
+  | { readonly namespaceId: string; readonly userId: string };
+
+export async function revokeAgentSessions(
+  env: ForgeEnv,
+  scope: AgentSessionRevocationScope
+): Promise<void> {
+  if (!env.AUTH) return;
+  const logger = createLogger(env.LOG_LEVEL, { service: "forge" });
+  try {
+    const result = await env.AUTH.fetch(
+      new Request("https://auth.internal/_internal/agent-sessions/revoke", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(scope),
+      })
+    );
+    await result.body?.cancel();
+    if (!result.ok) logger.warn("agent:session-revocation-rejected", { status: result.status });
+  } catch {
+    logger.warn("agent:session-revocation-failed", scope);
+  }
+}
+
 export async function mentionAgents(
   env: ForgeEnv,
   repository: RepositoryRow,
@@ -51,11 +77,19 @@ export async function mentionAgents(
     });
   for (const [, match] of [...unique].slice(0, 10)) {
     const agent = await env.DB.prepare(
-      "SELECT a.id FROM auth_agents a JOIN users u ON u.id=a.user_id WHERE u.identifier=? AND a.handle=? AND a.disabled_at IS NULL"
+      "SELECT a.id, a.user_id AS ownerId FROM auth_agents a JOIN users u ON u.id=a.user_id WHERE u.identifier=? AND a.handle=? AND a.disabled_at IS NULL"
     )
       .bind(match[1], match[2])
-      .first<{ id: string }>();
-    if (agent) await agentEvent(env, repository, user, agent.id, "agent.mentioned", target);
+      .first<{ id: string; ownerId: string }>();
+    if (!agent) continue;
+    if ((await repositoryRole(env.DB, repository.id, agent.ownerId)) === null) {
+      createLogger(env.LOG_LEVEL, { service: "forge", repoId: repository.id }).debug(
+        "agent:mention-ignored-no-access",
+        { agentId: agent.id }
+      );
+      continue;
+    }
+    await agentEvent(env, repository, user, agent.id, "agent.mentioned", target);
   }
 }
 

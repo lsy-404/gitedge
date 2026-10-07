@@ -218,9 +218,9 @@ async function readableIdentifier(
       suffix === 1 ? base : `${base.slice(0, 62 - String(suffix).length)}-${suffix}`;
     if (ReservedAccountIdentifiers.has(identifier)) continue;
     const collision = await env.DB.prepare(
-      "SELECT id FROM users WHERE identifier = ? AND (? IS NULL OR id <> ?) UNION ALL SELECT id FROM namespaces WHERE slug = ? AND NOT (kind = 'personal' AND created_by = ?) LIMIT 1"
+      "SELECT id FROM users WHERE identifier = ? AND (? IS NULL OR id <> ?) UNION ALL SELECT id FROM namespaces WHERE slug = ? AND NOT (kind = 'personal' AND created_by = ?) UNION ALL SELECT namespace_id FROM namespace_slug_history WHERE slug = ? AND namespace_id NOT IN (SELECT id FROM namespaces WHERE kind = 'personal' AND created_by = ?) LIMIT 1"
     )
-      .bind(identifier, userId, userId, identifier, userId)
+      .bind(identifier, userId, userId, identifier, userId, identifier, userId)
       .first<{ id: string }>();
     if (!collision) return identifier;
   }

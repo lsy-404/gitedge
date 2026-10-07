@@ -31,6 +31,8 @@ Example provider configuration:
 
 The corresponding secret is an object such as `{"workforce":{"clientSecret":"<provider-issued-secret>"}}`. `allowSignup: false` permits established identities and explicit account linking while rejecting automatic creation of new accounts.
 
+`ALLOW_PUBLIC_SIGNUP=false` also blocks automatic account creation through GitHub sign-in; identities that are already linked can still sign in.
+
 Provider IDs must remain stable. Changing an issuer does not silently transfer an existing identity to the replacement provider. GitEdge identifies accounts by provider ID, issuer and subject, never by matching email addresses. Linking requires both an existing GitEdge session and successful authentication with the new provider.
 
 ## Void Carve ID

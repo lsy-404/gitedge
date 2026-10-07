@@ -6,6 +6,7 @@ import type { TrustedUser } from "../../../packages/contracts/src/index";
 import { branchRules } from "../../../src/worker/common/branch-protection";
 import { repositoryRole } from "../../../src/worker/common/repositories";
 import { createLogger } from "../../../src/worker/common/logger";
+import { revokeAgentSessions } from "./agent-events";
 import { json, error, parseJson, type ForgeEnv, type RepositoryRow } from "./common";
 
 export async function repositoryControls(
@@ -141,6 +142,7 @@ export async function repositoryControls(
       if (!deleted)
         return error(404, "not_found", "Collaborator was not found or has inherited access.");
       logger.info("collaborator:removed", { userId: id });
+      await revokeAgentSessions(env, { repositoryId: repo.id, userId: id });
       return json({ data: { deleted: true } });
     }
   }

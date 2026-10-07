@@ -15,7 +15,7 @@ import {
   type CreatedAgentSession,
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
-import { createLogger } from "../../../src/worker/common/logger";
+import { createLogger, type Logger } from "../../../src/worker/common/logger";
 import { handleAgentWebhookManagement } from "./agent-webhooks";
 
 export interface AgentAuthEnv {
@@ -235,11 +235,74 @@ async function loadManagedAgent(
 }
 
 async function revokeSession(env: AgentAuthEnv, row: AgentSessionRow): Promise<void> {
+  {
+    using workspace = await env.ARTIFACTS.get(row.workspaceName);
+    await workspace.revokeToken(row.gitTokenId);
+  }
   await env.DB.prepare("UPDATE auth_agent_sessions SET status = 'revoked' WHERE id = ?")
     .bind(row.id)
     .run();
-  using workspace = await env.ARTIFACTS.get(row.workspaceName);
-  await workspace.revokeToken(row.gitTokenId);
+}
+
+async function revokeSessions(
+  env: AgentAuthEnv,
+  rows: readonly AgentSessionRow[],
+  logger: Logger
+): Promise<number> {
+  let failed = 0;
+  for (const row of rows) {
+    try {
+      await revokeSession(env, row);
+    } catch {
+      failed += 1;
+      logger.error("agent:session-revoke-failed", { sessionId: row.id, agentId: row.agentId });
+    }
+  }
+  return failed;
+}
+
+const REVOKE_BATCH_LIMIT = 100;
+const RevokeAgentSessionsInputSchema = z.union([
+  z.object({ repositoryId: z.string().min(1), userId: z.string().min(1).optional() }),
+  z.object({ namespaceId: z.string().min(1), userId: z.string().min(1) }),
+]);
+
+export async function handleAgentSessionRevocation(
+  request: Request,
+  env: AgentAuthEnv
+): Promise<Response> {
+  const logger = createLogger(env.LOG_LEVEL, { service: "agent-auth" });
+  const parsed = RevokeAgentSessionsInputSchema.safeParse(await readJsonLimited(request));
+  if (!parsed.success) return fail(400, "bad_request", "Invalid revocation request.");
+  const input = parsed.data;
+  const rows =
+    "namespaceId" in input
+      ? await env.DB.prepare(
+          sessionSelect +
+            " WHERE s.status = 'active' AND s.user_id = ? AND s.repository_id IN (SELECT r.id FROM repositories r WHERE r.namespace_id = ? AND NOT EXISTS (SELECT 1 FROM repository_collaborators c WHERE c.repository_id = r.id AND c.user_id = ?)) LIMIT ?"
+        )
+          .bind(input.userId, input.namespaceId, input.userId, REVOKE_BATCH_LIMIT + 1)
+          .all<AgentSessionRow>()
+      : await env.DB.prepare(
+          sessionSelect +
+            " WHERE s.status = 'active' AND s.repository_id = ? AND (? IS NULL OR s.user_id = ?) LIMIT ?"
+        )
+          .bind(
+            input.repositoryId,
+            input.userId ?? null,
+            input.userId ?? null,
+            REVOKE_BATCH_LIMIT + 1
+          )
+          .all<AgentSessionRow>();
+  const batch = rows.results.slice(0, REVOKE_BATCH_LIMIT);
+  const failed = await revokeSessions(env, batch, logger);
+  const truncated = rows.results.length > REVOKE_BATCH_LIMIT;
+  if (failed > 0 || truncated) {
+    logger.warn("agent:session-revocation-incomplete", { failed, truncated });
+    return fail(503, "service_unavailable", "Some agent sessions are still active.");
+  }
+  logger.info("agent:sessions-revoked", { count: batch.length });
+  return json({ revoked: batch.length });
 }
 
 export async function handleAgentManagement(
@@ -374,7 +437,9 @@ export async function handleAgentManagement(
       )
         .bind(agent.id)
         .all<AgentSessionRow>();
-      for (const row of sessions.results) await revokeSession(env, row);
+      const failed = await revokeSessions(env, sessions.results, logger);
+      if (failed > 0)
+        return fail(503, "service_unavailable", "Some agent sessions could not be revoked.");
       logger.info("agent:disabled", { agentId: agent.id, userId: user.id });
       return json({ disabled: true });
     }

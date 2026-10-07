@@ -1,3 +1,4 @@
+import { unlimitedRateLimiter } from "../support/rate-limiter";
 import { runSqlScript } from "../support/database";
 import { env } from "cloudflare:workers";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -56,6 +57,7 @@ const artifacts = new FixtureArtifacts();
 const authEnv: Parameters<typeof auth.fetch>[1] = {
   DB: env.DB,
   ARTIFACTS: artifacts,
+  RATE_LIMITER: unlimitedRateLimiter,
   ALLOW_PUBLIC_SIGNUP: "true",
   DEFAULT_USER_GROUP: "free",
   WEBHOOK_ENCRYPTION_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",

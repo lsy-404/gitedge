@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createMessage, generateKey, readPrivateKey, sign } from "openpgp";
 import { z } from "zod";
+import { unlimitedRateLimiter } from "../support/rate-limiter";
 import { runSqlScript } from "../support/database";
 import { FixtureArtifacts } from "../support/artifacts";
 import auth from "../../workers/auth/src/index";
@@ -15,6 +16,7 @@ const migrations = import.meta.glob<string>("../../migrations/*.sql", {
 const authEnv = {
   DB: env.DB,
   ARTIFACTS: new FixtureArtifacts(),
+  RATE_LIMITER: unlimitedRateLimiter,
   ALLOW_PUBLIC_SIGNUP: "true",
   DEFAULT_USER_GROUP: "free",
 };

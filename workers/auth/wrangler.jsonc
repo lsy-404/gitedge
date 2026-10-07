@@ -25,6 +25,15 @@
   "observability": {
     "enabled": true
   },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "RATE_LIMITER",
+        "class_name": "SharedRateLimitDurableObject",
+        "script_name": "gitedge-limits"
+      }
+    ]
+  },
   "artifacts": [
     {
       "binding": "ARTIFACTS",

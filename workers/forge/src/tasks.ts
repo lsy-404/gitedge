@@ -1,4 +1,4 @@
-import { agentEvent } from "./agent-events";
+import { agentEvent, revokeAgentSessions } from "./agent-events";
 import { z } from "zod";
 import {
   AGENT_MODE_VERSION,
@@ -1160,6 +1160,8 @@ async function settingsRequest(
     logger.warn("forge:settings-conflict", { repositoryId: repository.id });
     return error(409, "conflict", "Repository slug already exists.");
   }
+  if (input.agentsEnabled === false)
+    await revokeAgentSessions(env, { repositoryId: repository.id });
   logger.info("forge:settings-updated", {
     repositoryId: repository.id,
     slug,

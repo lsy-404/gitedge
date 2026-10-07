@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
+import { unlimitedRateLimiter } from "../support/rate-limiter";
 import { runSqlScript } from "../support/database";
 import { FixtureArtifacts } from "../support/artifacts";
 import auth from "../../workers/auth/src/index";
@@ -16,6 +17,7 @@ const origin = "https://accounts.test";
 const authEnv = {
   DB: env.DB,
   ARTIFACTS: new FixtureArtifacts(),
+  RATE_LIMITER: unlimitedRateLimiter,
   ALLOW_PUBLIC_SIGNUP: "true",
   DEFAULT_USER_GROUP: "free",
 };

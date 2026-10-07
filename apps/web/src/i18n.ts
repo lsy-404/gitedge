@@ -135,6 +135,8 @@ const messages = {
     continueWith: "使用 {provider} 登录",
     githubSignIn: "使用 GitHub 登录",
     githubLoginError: "GitHub 登录未完成，请重试。",
+    githubSignupDisabled: "此站点已关闭公开注册，该 GitHub 账号尚未关联任何账户。",
+    authRateLimited: "尝试次数过多，请稍后再试。",
     oauthGenericError: "登录未完成，请重试。",
     providerGithub: "GitHub",
     providerOidc: "SSO",
@@ -544,6 +546,9 @@ const messages = {
     continueWith: "Continue with {provider}",
     githubSignIn: "Continue with GitHub",
     githubLoginError: "GitHub sign-in did not finish. Try again.",
+    githubSignupDisabled:
+      "Public registration is closed, and this GitHub account is not linked to an existing account.",
+    authRateLimited: "Too many attempts. Try again later.",
     oauthGenericError: "Sign-in did not finish. Try again.",
     providerGithub: "GitHub",
     providerOidc: "SSO",

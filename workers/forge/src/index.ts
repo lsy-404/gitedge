@@ -4,7 +4,7 @@ import {
 } from "../../../src/worker/common/repository-response";
 import { actionsCheck, attachActionChecks } from "./actions-checks";
 import { authorizeMerge } from "./merge-policy";
-import { mentionAgents, pullRequestEvent } from "./agent-events";
+import { mentionAgents, pullRequestEvent, revokeAgentSessions } from "./agent-events";
 import { publicProfile } from "./profiles";
 import {
   repositoryRole,
@@ -1622,6 +1622,10 @@ export default {
               "conflict",
               "Member was not found or is the last organization owner."
             );
+          await revokeAgentSessions(env, {
+            namespaceId: organization.id,
+            userId: result.user_id,
+          });
           logger.info("forge:organization-member-removed", {
             organizationId: organization.id,
             identifier: memberIdentifier,

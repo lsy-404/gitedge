@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
 import auth from "../../workers/auth/src/index";
 import { FixtureArtifacts } from "../support/artifacts";
+import { unlimitedRateLimiter } from "../support/rate-limiter";
 import { runSqlScript } from "../support/database";
 
 const migrations = import.meta.glob<string>("../../migrations/*.sql", {
@@ -12,6 +13,7 @@ const migrations = import.meta.glob<string>("../../migrations/*.sql", {
 const authEnv: Parameters<typeof auth.fetch>[1] = {
   DB: env.DB,
   ARTIFACTS: new FixtureArtifacts(),
+  RATE_LIMITER: unlimitedRateLimiter,
   ALLOW_PUBLIC_SIGNUP: "true",
   DEFAULT_USER_GROUP: "free",
 };

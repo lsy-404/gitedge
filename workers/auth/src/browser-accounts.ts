@@ -103,6 +103,17 @@ function pruneSavedCookies(request: Request, response: Response, accounts: Saved
   }
 }
 
+function accountLimitRedirect(returnTo: string): Response {
+  const target = new URL("/login", "https://gitedge.invalid");
+  target.searchParams.set("add", "1");
+  target.searchParams.set("redirect", returnTo);
+  target.searchParams.set("error", "account_limit");
+  return new Response(null, {
+    status: 303,
+    headers: { Location: `${target.pathname}${target.search}`, "Cache-Control": "no-store" },
+  });
+}
+
 export async function rememberBrowserLogin(
   request: Request,
   env: AccountEnvironment,
@@ -116,6 +127,8 @@ export async function rememberBrowserLogin(
     await env.DB.prepare("DELETE FROM auth_sessions WHERE token_hash=?")
       .bind(await hashToken(token))
       .run();
+    const location = response.headers.get("Location");
+    if (location) return accountLimitRedirect(location);
     return fail(409, "account_limit", "Remove a saved account before adding another.");
   }
   if (previous && previous.token !== token) {

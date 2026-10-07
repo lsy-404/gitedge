@@ -6,7 +6,8 @@ import AppLink from "../components/AppLink.vue";
 import NoticeBar from "../components/NoticeBar.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import AppIcon from "../components/AppIcon.vue";
-import { api } from "../lib/api";
+import { BROWSER_ACCOUNT_LIMIT } from "../../../../packages/contracts/src/browser-accounts";
+import { api, ApiError } from "../lib/api";
 import type { SsoProviderSummary } from "../lib/api";
 import { setSession, sessionState } from "../lib/session";
 import { notifyBrowserIdentityChanged } from "../lib/browserIdentity";
@@ -38,6 +39,8 @@ const callbackError = computed(() => {
   if (!code) return "";
   if (code === "sso_logout_unavailable") return t("ssoLogoutUnavailable");
   if (code === "github_oauth_failed") return t("githubLoginError");
+  if (code === "github_signup_disabled") return t("githubSignupDisabled");
+  if (code === "account_limit") return t("browserAccountLimit", { limit: BROWSER_ACCOUNT_LIMIT });
   if (code.startsWith("sso_")) return t("ssoLoginError");
   return t("oauthGenericError");
 });
@@ -91,8 +94,11 @@ async function submit() {
       return;
     }
     await router.push(returnTo.value);
-  } catch {
-    error.value = t("apiError");
+  } catch (failure) {
+    if (failure instanceof ApiError && failure.status === 429) error.value = t("authRateLimited");
+    else if (failure instanceof ApiError && failure.status === 409 && !register.value)
+      error.value = t("browserAccountLimit", { limit: BROWSER_ACCOUNT_LIMIT });
+    else error.value = t("apiError");
   } finally {
     busy.value = false;
   }

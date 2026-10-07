@@ -3,6 +3,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import auth from "../../workers/auth/src/index";
 import { FixtureArtifacts } from "../support/artifacts";
+import { unlimitedRateLimiter } from "../support/rate-limiter";
 import { runSqlScript } from "../support/database";
 import { FixtureOidc } from "../support/oidc";
 
@@ -20,6 +21,7 @@ const identityListSchema = z.object({
 const environment: Parameters<typeof auth.fetch>[1] = {
   DB: env.DB,
   ARTIFACTS: new FixtureArtifacts(),
+  RATE_LIMITER: unlimitedRateLimiter,
   ALLOW_PUBLIC_SIGNUP: "true",
   DEFAULT_USER_GROUP: "free",
 };
