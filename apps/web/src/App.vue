@@ -62,6 +62,7 @@ const navigation = ref<HTMLDialogElement | null>(null);
 const userMenu = ref<HTMLDetailsElement | null>(null);
 const userMenuOpen = ref(false);
 const createMenu = ref<HTMLDetailsElement | null>(null);
+const createMenuOpen = ref(false);
 const expandedPreference = ref<"language" | "theme" | null>(null);
 const guestView = computed(() => sessionState.view === "guest");
 const identitySwitchError = ref("");
@@ -76,6 +77,29 @@ function closeMenus() {
   if (userMenu.value) userMenu.value.open = false;
   userMenuOpen.value = false;
   if (createMenu.value) createMenu.value.open = false;
+  createMenuOpen.value = false;
+}
+function headerMenus(): HTMLDetailsElement[] {
+  return [createMenu.value, userMenu.value].filter(
+    (menu): menu is HTMLDetailsElement => menu !== null
+  );
+}
+function dismissHeaderMenus(event: PointerEvent) {
+  const target = event.target;
+  if (!(target instanceof Node)) return;
+  for (const menu of headerMenus()) if (menu.open && !menu.contains(target)) menu.open = false;
+}
+function onMenuFocusOut(event: FocusEvent) {
+  const menu = event.currentTarget;
+  if (!(menu instanceof HTMLDetailsElement)) return;
+  if (event.relatedTarget instanceof Node && !menu.contains(event.relatedTarget)) menu.open = false;
+}
+function onMenuToggle(event: Event) {
+  const menu = event.currentTarget;
+  if (!(menu instanceof HTMLDetailsElement)) return;
+  if (menu === userMenu.value) userMenuOpen.value = menu.open;
+  if (menu === createMenu.value) createMenuOpen.value = menu.open;
+  if (menu.open) for (const other of headerMenus()) if (other !== menu) other.open = false;
 }
 async function setPreference(
   key: "locale" | "theme",
@@ -200,12 +224,14 @@ watch(
 );
 onMounted(() => {
   document.addEventListener("keydown", keyboard);
+  document.addEventListener("pointerdown", dismissHeaderMenus);
   stopIdentityListener = listenForBrowserIdentityChanges(() => void refreshIdentityOnReturn());
   window.addEventListener("focus", refreshIdentityOnFocus);
   document.addEventListener("visibilitychange", refreshIdentityWhenVisible);
 });
 onUnmounted(() => {
   document.removeEventListener("keydown", keyboard);
+  document.removeEventListener("pointerdown", dismissHeaderMenus);
   window.removeEventListener("focus", refreshIdentityOnFocus);
   document.removeEventListener("visibilitychange", refreshIdentityWhenVisible);
   stopIdentityListener();
@@ -271,8 +297,13 @@ if (!sessionState.checked) void refreshSession();
           </button>
           <div class="global-actions">
             <template v-if="sessionState.user && !guestView && !authPage">
-              <details ref="createMenu" class="dropdown create-menu">
-                <summary role="button" class="btn" :aria-label="t('ghCreate')">
+              <details
+                ref="createMenu"
+                class="dropdown create-menu"
+                @toggle="onMenuToggle"
+                @focusout="onMenuFocusOut"
+              >
+                <summary class="btn" :aria-label="t('ghCreate')" :aria-expanded="createMenuOpen">
                   <AppIcon name="plus" /><AppIcon name="chevron" :size="12" />
                 </summary>
                 <div class="dropdown-panel">
@@ -286,12 +317,16 @@ if (!sessionState.checked) void refreshSession();
                 </div>
               </details>
             </template>
-            <details ref="userMenu" class="dropdown user-menu">
+            <details
+              ref="userMenu"
+              class="dropdown user-menu"
+              @toggle="onMenuToggle"
+              @focusout="onMenuFocusOut"
+            >
               <summary
-                role="button"
                 :aria-label="t('ghUserMenu')"
                 class="account-trigger"
-                @click="userMenuOpen = !userMenuOpen"
+                :aria-expanded="userMenuOpen"
               >
                 <span v-if="sessionState.user" class="avatar"
                   ><img
@@ -346,11 +381,13 @@ if (!sessionState.checked) void refreshSession();
                 <div
                   v-if="expandedPreference === 'language'"
                   class="preference-options"
+                  role="group"
                   :aria-label="t('avatarLanguage')"
                 >
                   <button
                     v-for="option in ['zh-CN', 'en']"
                     :key="option"
+                    :lang="option"
                     :disabled="preferenceSaving"
                     :aria-pressed="locale === option"
                     @click="setPreference('locale', option)"
@@ -378,6 +415,7 @@ if (!sessionState.checked) void refreshSession();
                 <div
                   v-if="expandedPreference === 'theme'"
                   class="preference-options"
+                  role="group"
                   :aria-label="t('avatarTheme')"
                 >
                   <button

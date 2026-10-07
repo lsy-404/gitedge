@@ -97,6 +97,8 @@ const countsTruncated = ref<Record<string, boolean>>({});
 const sessions = ref<AgentSession[]>([]);
 const sessionsLoading = ref(false);
 const sessionsError = ref("");
+const revokingSessionId = ref<string | null>(null);
+const revokeError = ref("");
 let loadVersion = 0;
 let sessionVersion = 0;
 async function loadCounts(current: Repository, version: number) {
@@ -166,6 +168,18 @@ async function loadSessions() {
     if (version === sessionVersion) sessionsError.value = t("apiError");
   } finally {
     if (version === sessionVersion) sessionsLoading.value = false;
+  }
+}
+async function revokeSession(session: AgentSession) {
+  revokingSessionId.value = session.id;
+  revokeError.value = "";
+  try {
+    await api.revokeAgentSession(session.agentId, session.id);
+    await loadSessions();
+  } catch {
+    revokeError.value = t("apiError");
+  } finally {
+    revokingSessionId.value = null;
   }
 }
 function sessionStatus(session: AgentSession) {
@@ -303,6 +317,7 @@ watch(
                 }}</RouterLink></template
               ></StatusState
             >
+            <NoticeBar v-if="revokeError" intent="error">{{ revokeError }}</NoticeBar>
             <table
               v-if="!sessionsLoading && !sessionsError && sessions.length"
               class="repo-session-table"
@@ -313,12 +328,18 @@ watch(
                   <th>{{ t("ghBranch") }}</th>
                   <th>{{ t("permission") }}</th>
                   <th>{{ t("expiresAt") }}</th>
+                  <th>
+                    <span class="sr-only">{{ t("agentSessionActions") }}</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="session in sessions" :key="session.id">
                   <td>
                     <strong>{{ session.agentName }}</strong>
+                    <p class="muted">
+                      <code>{{ session.workspaceName }}</code>
+                    </p>
                     <p>
                       <StatusBadge
                         :tone="sessionStatus(session) === 'active' ? 'success' : 'neutral'"
@@ -335,6 +356,17 @@ watch(
                   </td>
                   <td>{{ t(session.permission === "read" ? "ghReadOnly" : "ghReadWrite") }}</td>
                   <td class="muted">{{ d(session.expiresAt, "long") }}</td>
+                  <td>
+                    <button
+                      v-if="sessionStatus(session) === 'active'"
+                      class="btn btn-sm"
+                      type="button"
+                      :disabled="revokingSessionId !== null"
+                      @click="revokeSession(session)"
+                    >
+                      {{ t("revokeSession") }}
+                    </button>
+                  </td>
                 </tr>
               </tbody>
             </table>

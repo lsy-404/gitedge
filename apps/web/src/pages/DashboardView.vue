@@ -22,6 +22,8 @@ const router = useRouter();
 const repos = ref<Repository[]>([]);
 const loading = ref(true);
 const error = ref("");
+const organizationsError = ref("");
+let loadVersion = 0;
 const showForm = ref(false);
 const saving = ref(false);
 const formError = ref("");
@@ -49,17 +51,24 @@ const visibleRepos = computed(() => {
 const recentRepos = computed(() => [...repos.value].sort((a, b) => b.updatedAt - a.updatedAt));
 
 async function load() {
+  const version = ++loadVersion;
   loading.value = true;
   error.value = "";
-  try {
-    repos.value = await api.repositories();
-    organizations.value = await api.organizations();
-    owner.value = owner.value || sessionState.user?.identifier || "";
-  } catch (cause) {
-    error.value = errorMessage(cause, t);
-  } finally {
-    loading.value = false;
+  organizationsError.value = "";
+  const [repoResult, orgResult] = await Promise.allSettled([
+    api.repositories(),
+    api.organizations(),
+  ]);
+  if (version !== loadVersion) return;
+  if (repoResult.status === "fulfilled") repos.value = repoResult.value;
+  else error.value = errorMessage(repoResult.reason, t);
+  if (orgResult.status === "fulfilled") organizations.value = orgResult.value;
+  else {
+    organizations.value = [];
+    organizationsError.value = errorMessage(orgResult.reason, t);
   }
+  owner.value = owner.value || sessionState.user?.identifier || "";
+  loading.value = false;
 }
 
 async function createRepository() {
@@ -316,9 +325,9 @@ onMounted(load);
               <RouterLink to="/organizations">{{ t("viewAll") }}</RouterLink>
             </div>
             <StatusState
-              v-if="loading || error"
+              v-if="loading || organizationsError"
               :loading="loading"
-              :error="error"
+              :error="organizationsError"
               :empty="false"
               @retry="load"
             />
@@ -346,50 +355,40 @@ onMounted(load);
       </div>
     </div>
 
-    <div v-if="showForm" class="workspace-modal-backdrop" @click.self="closeForm">
-      <section
-        class="workspace-modal"
-        role="dialog"
-        aria-modal="true"
-        :aria-labelledby="'new-repository-title'"
-      >
-        <header class="workspace-modal-heading">
-          <h2 id="new-repository-title">{{ t("newRepository") }}</h2>
-          <button class="icon-button" type="button" :aria-label="t('close')" @click="closeForm">
-            <AppIcon name="close" />
-          </button>
-        </header>
-        <p class="muted">{{ t("repositoryOnboardingText") }}</p>
-        <form class="form-stack" @submit.prevent="createRepository">
-          <SelectField v-model="owner" :label="t('repositoryOwner')" required>
-            <option :value="sessionState.user?.identifier">
-              {{ sessionState.user?.identifier }} ({{ t("personal") }})
-            </option>
-            <option
-              v-for="organization in organizations"
-              :key="organization.slug"
-              :value="organization.slug"
-            >
-              {{ organization.displayName }}
-            </option>
-          </SelectField>
-          <TextField v-model="form.name" required>{{ t("repositoryName") }}</TextField>
-          <TextField v-model="form.description">{{ t("description") }}</TextField>
-          <SelectField
-            :model-value="form.visibility"
-            :label="t('visibility')"
-            @update:model-value="form.visibility = oneOf(visibilities, $event, 'private')"
+    <FluentDialog :open="showForm" :label="t('newRepository')" close-on-outside @close="closeForm">
+      <template #title>
+        <h2>{{ t("newRepository") }}</h2>
+      </template>
+      <p class="muted">{{ t("repositoryOnboardingText") }}</p>
+      <form class="form-stack" @submit.prevent="createRepository">
+        <SelectField v-model="owner" :label="t('repositoryOwner')" required>
+          <option :value="sessionState.user?.identifier">
+            {{ sessionState.user?.identifier }} ({{ t("personal") }})
+          </option>
+          <option
+            v-for="organization in organizations"
+            :key="organization.slug"
+            :value="organization.slug"
           >
-            <option value="private">{{ t("private") }}</option>
-            <option value="public">{{ t("public") }}</option>
-          </SelectField>
-          <FluentCheckbox v-model="form.initializeReadme">
-            {{ t("repositoryInitializeReadme") }}
-            <small>{{ t("repositoryInitializeReadmeHint") }}</small>
-          </FluentCheckbox>
-          <FormActions :saving="saving" :error="formError" @cancel="closeForm" />
-        </form>
-      </section>
-    </div>
+            {{ organization.displayName }}
+          </option>
+        </SelectField>
+        <TextField v-model="form.name" required>{{ t("repositoryName") }}</TextField>
+        <TextField v-model="form.description">{{ t("description") }}</TextField>
+        <SelectField
+          :model-value="form.visibility"
+          :label="t('visibility')"
+          @update:model-value="form.visibility = oneOf(visibilities, $event, 'private')"
+        >
+          <option value="private">{{ t("private") }}</option>
+          <option value="public">{{ t("public") }}</option>
+        </SelectField>
+        <FluentCheckbox v-model="form.initializeReadme">
+          {{ t("repositoryInitializeReadme") }}
+          <small>{{ t("repositoryInitializeReadmeHint") }}</small>
+        </FluentCheckbox>
+        <FormActions :saving="saving" :error="formError" @cancel="closeForm" />
+      </form>
+    </FluentDialog>
   </section>
 </template>

@@ -21,6 +21,9 @@ const deliveries = ref<AgentWebhookDelivery[]>([]);
 const secret = ref("");
 const loading = ref(true);
 const saving = ref(false);
+const testing = ref(false);
+const retryingId = ref<string | null>(null);
+let loadVersion = 0;
 const error = ref("");
 const notice = ref("");
 const eventOptions: AgentWebhookEvent[] = [
@@ -44,6 +47,7 @@ function eventLabel(event: AgentWebhookEvent) {
   );
 }
 async function load() {
+  const version = ++loadVersion;
   loading.value = true;
   error.value = "";
   try {
@@ -51,15 +55,20 @@ async function load() {
       api.agentWebhook(agentId.value),
       api.agentWebhookDeliveries(agentId.value),
     ]);
+    if (version !== loadVersion) return;
     settings.value = saved
       ? { url: saved.url, events: saved.events, enabled: saved.enabled }
       : emptySettings();
     deliveries.value = rows;
   } catch (cause) {
+    if (version !== loadVersion) return;
     error.value = errorMessage(cause, t);
   } finally {
-    loading.value = false;
+    if (version === loadVersion) loading.value = false;
   }
+}
+async function loadDeliveries() {
+  deliveries.value = await api.agentWebhookDeliveries(agentId.value);
 }
 async function save(rotateSecret = false) {
   saving.value = true;
@@ -80,25 +89,30 @@ async function save(rotateSecret = false) {
   }
 }
 async function test() {
+  testing.value = true;
   error.value = "";
   notice.value = "";
   try {
     await api.testAgentWebhook(agentId.value);
     notice.value = t("agentWebhookTestSent");
-    await load();
+    await loadDeliveries();
   } catch (cause) {
     error.value = errorMessage(cause, t);
-    await load();
+  } finally {
+    testing.value = false;
   }
 }
 async function retry(delivery: AgentWebhookDelivery) {
+  retryingId.value = delivery.id;
   error.value = "";
+  notice.value = "";
   try {
     await api.retryAgentWebhookDelivery(agentId.value, delivery.id);
-    await load();
+    await loadDeliveries();
   } catch (cause) {
     error.value = errorMessage(cause, t);
-    await load();
+  } finally {
+    retryingId.value = null;
   }
 }
 watch(agentId, () => void load(), { immediate: true });
@@ -141,9 +155,12 @@ watch(agentId, () => void load(), { immediate: true });
             <FluentButton type="button" :disabled="saving" @click="save(true)">{{
               t("agentWebhookRotate")
             }}</FluentButton>
-            <FluentButton type="button" :disabled="saving || !settings.enabled" @click="test">{{
-              t("agentWebhookTest")
-            }}</FluentButton>
+            <FluentButton
+              type="button"
+              :disabled="saving || testing || !settings.enabled"
+              @click="test"
+              >{{ t("agentWebhookTest") }}</FluentButton
+            >
           </div>
           <div v-if="secret" class="secret-card">
             <strong>{{ t("agentWebhookSecret") }}</strong
@@ -177,6 +194,7 @@ watch(agentId, () => void load(), { immediate: true });
                 v-if="delivery.status === 'failed'"
                 class="btn btn-sm"
                 type="button"
+                :disabled="retryingId !== null"
                 @click="retry(delivery)"
               >
                 {{ t("agentWebhookRetry") }}

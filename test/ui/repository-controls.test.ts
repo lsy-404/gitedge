@@ -287,10 +287,10 @@ describe("repository creation form", () => {
       "/_verify/create-repository?new=1",
       () => h(DashboardView)
     );
-    fill(control(mounted.root, ".workspace-modal input"), ".github");
+    fill(control(mounted.root, ".fluent-dialog input"), ".github");
     control(mounted.root, ".fluent-checkbox__input").click();
     await settle();
-    submit(control(mounted.root, ".workspace-modal form"));
+    submit(control(mounted.root, ".fluent-dialog form"));
     await settle();
 
     expect(create).toHaveBeenCalledWith({
@@ -310,9 +310,9 @@ describe("repository creation form", () => {
     const mounted = await mountAt("/_verify/create-invalid", "/_verify/create-invalid?new=1", () =>
       h(DashboardView)
     );
-    fill(control(mounted.root, ".workspace-modal input"), "trailing.");
+    fill(control(mounted.root, ".fluent-dialog input"), "trailing.");
     await settle();
-    submit(control(mounted.root, ".workspace-modal form"));
+    submit(control(mounted.root, ".fluent-dialog form"));
     await settle();
 
     expect(create).not.toHaveBeenCalled();

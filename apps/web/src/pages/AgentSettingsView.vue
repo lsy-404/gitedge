@@ -17,6 +17,8 @@ import { agentSessionDisplayStatus } from "../lib/gitGraphView";
 import { clearAgentSessionSecrets, isCredentialExpired } from "../lib/credentialSecurity";
 import { oneOf } from "../ui/formEvents";
 import TextField from "../components/TextField.vue";
+import TextAreaField from "../components/TextAreaField.vue";
+import NoticeBar from "../components/NoticeBar.vue";
 import AppIcon from "../components/AppIcon.vue";
 import { useRoute, useRouter } from "vue-router";
 import "../styles/workspace.css";
@@ -39,7 +41,15 @@ let credentialExpiryTimer: number | undefined;
 let createSessionVersion = 0;
 let sessionClockTimer: number | undefined;
 const saving = ref(false);
-const error = ref("");
+const loadError = ref("");
+const repositoriesError = ref("");
+const actionError = ref("");
+const agentFormError = ref("");
+const sessionFormError = ref("");
+const profileError = ref("");
+const profileNotice = ref("");
+const profileSaving = ref(false);
+let loadVersion = 0;
 const createdSession = ref<CreatedAgentSession | null>(null);
 const credentialDialogOpen = computed({
   get: () => createdSession.value !== null,
@@ -48,6 +58,7 @@ const credentialDialogOpen = computed({
   },
 });
 const agentForm = ref({ handle: "", name: "", description: "" });
+const profileForm = ref({ handle: "", name: "", description: "", profilePublic: false });
 const showAgentForm = ref(false);
 const showSessionForm = ref(false);
 const sessionForm = ref<{
@@ -61,20 +72,28 @@ const currentAgent = computed(
 );
 
 async function load() {
+  const version = ++loadVersion;
   loading.value = true;
-  error.value = "";
-  try {
-    const [agentList, repoList] = await Promise.all([api.agents(), api.repositories()]);
-    agents.value = agentList;
-    repositories.value = repoList;
-    if (!selectedAgent.value && agentList[0]) selectedAgent.value = agentList[0].id;
-    else await loadSessions();
-  } catch (cause) {
-    error.value =
+  loadError.value = "";
+  repositoriesError.value = "";
+  const [agentResult, repoResult] = await Promise.allSettled([api.agents(), api.repositories()]);
+  if (version !== loadVersion) return;
+  if (agentResult.status === "rejected") {
+    const cause = agentResult.reason;
+    loadError.value =
       cause instanceof ApiError && cause.status === 404 ? t("agentsUnavailable") : t("apiError");
-  } finally {
     loading.value = false;
+    return;
   }
+  agents.value = agentResult.value;
+  if (repoResult.status === "fulfilled") repositories.value = repoResult.value;
+  else {
+    repositories.value = [];
+    repositoriesError.value = errorMessage(repoResult.reason, t);
+  }
+  loading.value = false;
+  if (!selectedAgent.value && agentResult.value[0]) selectedAgent.value = agentResult.value[0].id;
+  else await loadSessions();
 }
 async function loadSessions() {
   const requestVersion = sessionsRequestVersion.value + 1;
@@ -127,7 +146,7 @@ function showCreatedCredentials(session: CreatedAgentSession): void {
 }
 async function createAgent() {
   saving.value = true;
-  error.value = "";
+  agentFormError.value = "";
   try {
     const agent = await api.createAgent(agentForm.value);
     agents.value = [agent, ...agents.value];
@@ -137,12 +156,39 @@ async function createAgent() {
     if (route.query.new)
       await router.replace({ path: route.path, query: { ...route.query, new: undefined } });
   } catch (cause) {
-    error.value = errorMessage(cause, t);
+    agentFormError.value = errorMessage(cause, t, { 409: "agentHandleInUse" });
   } finally {
     saving.value = false;
   }
 }
+async function saveProfile(agent: Agent) {
+  profileSaving.value = true;
+  profileError.value = "";
+  profileNotice.value = "";
+  try {
+    const updated = await api.updateAgent(agent.id, { ...profileForm.value });
+    agents.value = agents.value.map((row) => (row.id === updated.id ? updated : row));
+    profileNotice.value = t("agentProfileSaved");
+  } catch (cause) {
+    profileError.value = errorMessage(cause, t, { 409: "agentHandleInUse" });
+  } finally {
+    profileSaving.value = false;
+  }
+}
+function resetProfileForm(agent: Agent | null) {
+  profileError.value = "";
+  profileNotice.value = "";
+  profileForm.value = agent
+    ? {
+        handle: agent.handle,
+        name: agent.name,
+        description: agent.description,
+        profilePublic: agent.profilePublic,
+      }
+    : { handle: "", name: "", description: "", profilePublic: false };
+}
 async function disableAgent(agent: Agent) {
+  actionError.value = "";
   saving.value = true;
   try {
     await api.disableAgent(agent.id);
@@ -150,7 +196,7 @@ async function disableAgent(agent: Agent) {
       row.id === agent.id ? { ...row, disabledAt: Date.now() } : row
     );
   } catch (cause) {
-    error.value = errorMessage(cause, t);
+    actionError.value = errorMessage(cause, t);
   } finally {
     saving.value = false;
   }
@@ -158,7 +204,7 @@ async function disableAgent(agent: Agent) {
 async function createSession() {
   if (!selectedAgent.value) return;
   saving.value = true;
-  error.value = "";
+  sessionFormError.value = "";
   const agentId = selectedAgent.value;
   const requestVersion = ++createSessionVersion;
   try {
@@ -171,13 +217,14 @@ async function createSession() {
     sessions.value = [session, ...sessions.value];
     showSessionForm.value = false;
   } catch (cause) {
-    error.value = errorMessage(cause, t);
+    sessionFormError.value = errorMessage(cause, t);
   } finally {
     saving.value = false;
   }
 }
 async function revoke(session: AgentSession) {
   if (!selectedAgent.value) return;
+  actionError.value = "";
   saving.value = true;
   try {
     await api.revokeAgentSession(selectedAgent.value, session.id);
@@ -185,7 +232,7 @@ async function revoke(session: AgentSession) {
       row.id === session.id ? { ...row, status: "revoked" } : row
     );
   } catch (cause) {
-    error.value = errorMessage(cause, t);
+    actionError.value = errorMessage(cause, t);
   } finally {
     saving.value = false;
   }
@@ -196,12 +243,31 @@ function clearCredentials() {
   createdSession.value = null;
   credentialsExpired.value = false;
 }
+function openAgentForm() {
+  agentFormError.value = "";
+  showAgentForm.value = true;
+}
+function openSessionForm() {
+  sessionFormError.value = "";
+  showSessionForm.value = true;
+}
+function closeSessionForm() {
+  showSessionForm.value = false;
+}
 function closeAgentForm() {
   showAgentForm.value = false;
   if (route.query.new)
     void router.replace({ path: route.path, query: { ...route.query, new: undefined } });
 }
+watch(
+  currentAgent,
+  (agent, previous) => {
+    if (agent?.id !== previous?.id) resetProfileForm(agent);
+  },
+  { immediate: true }
+);
 watch(selectedAgent, () => {
+  actionError.value = "";
   createSessionVersion += 1;
   clearCredentials();
   void loadSessions();
@@ -218,6 +284,7 @@ onUnmounted(() => {
   clearTimeout(credentialExpiryTimer);
   clearInterval(sessionClockTimer);
   sessionsRequestVersion.value += 1;
+  loadVersion += 1;
   createSessionVersion += 1;
   createdSession.value = null;
 });
@@ -242,18 +309,20 @@ sessionClockTimer = window.setInterval(() => {
     </aside>
     <div class="settings-content">
       <h2 class="settings-page-title">{{ t("agents") }}</h2>
-      <div v-if="loading || error" class="box">
-        <StatusState :loading="loading" :error="error" :empty="false" @retry="load" />
+      <div v-if="loading || loadError" class="box">
+        <StatusState :loading="loading" :error="loadError" :empty="false" @retry="load" />
       </div>
       <template v-else>
         <div class="agents-page-heading">
           <div>
             <p class="muted">{{ t("multipleAgents") }}</p>
           </div>
-          <button class="btn btn-primary" type="button" @click="showAgentForm = true">
+          <button class="btn btn-primary" type="button" @click="openAgentForm">
             <AppIcon name="plus" />{{ t("createAgent") }}
           </button>
         </div>
+        <NoticeBar v-if="actionError" intent="error">{{ actionError }}</NoticeBar>
+        <NoticeBar v-if="repositoriesError" intent="warning">{{ repositoriesError }}</NoticeBar>
         <div class="agent-layout">
           <nav class="box agent-list" :aria-label="t('yourAgents')">
             <div class="box-header agent-list-header">
@@ -279,7 +348,7 @@ sessionClockTimer = window.setInterval(() => {
             <div v-if="!agents.length" class="agent-empty">
               <AppIcon name="agent" :size="22" /><strong>{{ t("noAgents") }}</strong
               ><span class="muted">{{ t("agentEmptyHint") }}</span
-              ><button class="btn btn-sm" type="button" @click="showAgentForm = true">
+              ><button class="btn btn-sm" type="button" @click="openAgentForm">
                 {{ t("createAgent") }}
               </button>
             </div>
@@ -310,6 +379,43 @@ sessionClockTimer = window.setInterval(() => {
               <small class="muted"
                 >{{ t("createdAt") }} {{ d(currentAgent.createdAt, "long") }}</small
               >
+              <form
+                v-if="!currentAgent.disabledAt"
+                class="form-stack agent-profile-form"
+                @submit.prevent="saveProfile(currentAgent)"
+              >
+                <h3>{{ t("agentProfile") }}</h3>
+                <TextField
+                  v-model="profileForm.handle"
+                  required
+                  maxlength="40"
+                  pattern="[a-z0-9](?:[a-z0-9\-]*[a-z0-9])?"
+                  >{{ t("agentHandle") }}</TextField
+                >
+                <small class="muted">{{ t("agentHandleHint") }}</small>
+                <TextField v-model="profileForm.name" required maxlength="80">{{
+                  t("agentName")
+                }}</TextField>
+                <TextAreaField
+                  v-model="profileForm.description"
+                  rows="3"
+                  maxlength="500"
+                  :label="t('description')"
+                />
+                <FluentCheckbox v-model="profileForm.profilePublic">
+                  {{ t("profilePublic") }}
+                  <small>{{ t("profilePublicHint") }}</small>
+                </FluentCheckbox>
+                <NoticeBar v-if="profileError" intent="error">{{ profileError }}</NoticeBar>
+                <NoticeBar v-else-if="profileNotice" intent="success">{{
+                  profileNotice
+                }}</NoticeBar>
+                <div class="form-actions">
+                  <FluentButton type="submit" tone="primary" :disabled="profileSaving">
+                    {{ profileSaving ? t("loading") : t("save") }}
+                  </FluentButton>
+                </div>
+              </form>
             </section>
             <section class="settings-section agent-sessions-section">
               <div class="agent-section-heading">
@@ -322,7 +428,7 @@ sessionClockTimer = window.setInterval(() => {
                   class="btn btn-primary btn-sm"
                   type="button"
                   :disabled="!repositories.length"
-                  @click="showSessionForm = true"
+                  @click="openSessionForm"
                 >
                   <AppIcon name="plus" />{{ t("createAgentSession") }}
                 </button>
@@ -415,112 +521,88 @@ sessionClockTimer = window.setInterval(() => {
             </FluentButton>
           </template>
         </FluentDialog>
-        <div v-if="showAgentForm" class="workspace-modal-backdrop" @click.self="closeAgentForm">
-          <section
-            class="workspace-modal"
-            role="dialog"
-            aria-modal="true"
-            :aria-labelledby="'create-agent-title'"
-          >
-            <header class="workspace-modal-heading">
-              <h2 id="create-agent-title">{{ t("createAgent") }}</h2>
-              <button
-                class="icon-button"
-                type="button"
-                :aria-label="t('close')"
-                @click="closeAgentForm"
-              >
-                <AppIcon name="close" />
-              </button>
-            </header>
-            <p class="muted">{{ t("agentCreateHint") }}</p>
-            <form class="form-stack" @submit.prevent="createAgent">
-              <TextField
-                v-model="agentForm.handle"
-                maxlength="40"
-                pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
-                >{{ t("agentHandle") }}</TextField
-              >
-              <small class="muted">{{ t("agentHandleHint") }}</small>
-              <TextField v-model="agentForm.name" required maxlength="80">{{
-                t("agentName")
-              }}</TextField>
-              <TextField v-model="agentForm.description" maxlength="500">{{
-                t("description")
-              }}</TextField>
-              <div class="form-actions">
-                <button class="btn" type="button" @click="closeAgentForm">{{ t("cancel") }}</button
-                ><button class="btn btn-primary" type="submit" :disabled="saving">
-                  {{ saving ? t("loading") : t("createAgent") }}
-                </button>
-              </div>
-              <p v-if="error" class="workspace-form-error">{{ error }}</p>
-            </form>
-          </section>
-        </div>
-        <div
-          v-if="showSessionForm"
-          class="workspace-modal-backdrop"
-          @click.self="showSessionForm = false"
+        <FluentDialog
+          :open="showAgentForm"
+          :label="t('createAgent')"
+          close-on-outside
+          @close="closeAgentForm"
         >
-          <section
-            class="workspace-modal"
-            role="dialog"
-            aria-modal="true"
-            :aria-labelledby="'create-session-title'"
-          >
-            <header class="workspace-modal-heading">
-              <h2 id="create-session-title">{{ t("createAgentSession") }}</h2>
-              <button
-                class="icon-button"
-                type="button"
-                :aria-label="t('close')"
-                @click="showSessionForm = false"
-              >
-                <AppIcon name="close" />
+          <template #title>
+            <h2>{{ t("createAgent") }}</h2>
+          </template>
+          <p class="muted">{{ t("agentCreateHint") }}</p>
+          <form class="form-stack" @submit.prevent="createAgent">
+            <TextField
+              v-model="agentForm.handle"
+              maxlength="40"
+              pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
+              >{{ t("agentHandle") }}</TextField
+            >
+            <small class="muted">{{ t("agentHandleHint") }}</small>
+            <TextField v-model="agentForm.name" required maxlength="80">{{
+              t("agentName")
+            }}</TextField>
+            <TextField v-model="agentForm.description" maxlength="500">{{
+              t("description")
+            }}</TextField>
+            <NoticeBar v-if="agentFormError" intent="error">{{ agentFormError }}</NoticeBar>
+            <div class="form-actions">
+              <button class="btn" type="button" @click="closeAgentForm">{{ t("cancel") }}</button
+              ><button class="btn btn-primary" type="submit" :disabled="saving">
+                {{ saving ? t("loading") : t("createAgent") }}
               </button>
-            </header>
-            <p class="muted">{{ t("sessionScopeHint") }}</p>
-            <form class="form-stack" @submit.prevent="createSession">
-              <SelectField v-model="sessionForm.repositoryId" :label="t('repository')" required>
-                <option value="" disabled>{{ t("selectRepository") }}</option>
-                <option v-for="repo in repositories" :key="repo.id" :value="repo.id">
-                  {{ repo.owner }}/{{ repo.name }}
-                </option>
-              </SelectField>
-              <TextField v-model="sessionForm.baseRef" required>{{ t("baseBranch") }}</TextField>
-              <SelectField
-                :model-value="sessionForm.permission"
-                :label="t('permission')"
-                @update:model-value="sessionForm.permission = oneOf(permissions, $event, 'write')"
+            </div>
+          </form>
+        </FluentDialog>
+        <FluentDialog
+          :open="showSessionForm"
+          :label="t('createAgentSession')"
+          close-on-outside
+          @close="closeSessionForm"
+        >
+          <template #title>
+            <h2>{{ t("createAgentSession") }}</h2>
+          </template>
+          <p class="muted">{{ t("sessionScopeHint") }}</p>
+          <form class="form-stack" @submit.prevent="createSession">
+            <SelectField v-model="sessionForm.repositoryId" :label="t('repository')" required>
+              <option value="" disabled>{{ t("selectRepository") }}</option>
+              <option v-for="repo in repositories" :key="repo.id" :value="repo.id">
+                {{ repo.owner }}/{{ repo.name }}
+              </option>
+            </SelectField>
+            <TextField v-model="sessionForm.baseRef" required>{{ t("baseBranch") }}</TextField>
+            <SelectField
+              :model-value="sessionForm.permission"
+              :label="t('permission')"
+              @update:model-value="sessionForm.permission = oneOf(permissions, $event, 'write')"
+            >
+              <option value="read">{{ t("readOnly") }}</option>
+              <option value="write">{{ t("writeAccess") }}</option>
+            </SelectField>
+            <SelectField
+              :model-value="String(sessionForm.ttlSeconds)"
+              :label="t('sessionLifetime')"
+              @update:model-value="sessionForm.ttlSeconds = Number($event)"
+            >
+              <option value="3600">1 {{ t("hour") }}</option>
+              <option value="86400">1 {{ t("day") }}</option>
+              <option value="604800">7 {{ t("days") }}</option>
+            </SelectField>
+            <NoticeBar v-if="sessionFormError" intent="error">{{ sessionFormError }}</NoticeBar>
+            <div class="form-actions">
+              <button class="btn" type="button" @click="closeSessionForm">
+                {{ t("cancel") }}</button
+              ><button
+                class="btn btn-primary"
+                type="submit"
+                :disabled="saving || !repositories.length"
               >
-                <option value="read">{{ t("readOnly") }}</option>
-                <option value="write">{{ t("writeAccess") }}</option>
-              </SelectField>
-              <SelectField
-                :model-value="String(sessionForm.ttlSeconds)"
-                :label="t('sessionLifetime')"
-                @update:model-value="sessionForm.ttlSeconds = Number($event)"
-              >
-                <option value="3600">1 {{ t("hour") }}</option>
-                <option value="86400">1 {{ t("day") }}</option>
-                <option value="604800">7 {{ t("days") }}</option>
-              </SelectField>
-              <p v-if="error" class="workspace-form-error">{{ error }}</p>
-              <div class="form-actions">
-                <button class="btn" type="button" @click="showSessionForm = false">
-                  {{ t("cancel") }}</button
-                ><button
-                  class="btn btn-primary"
-                  type="submit"
-                  :disabled="saving || !repositories.length"
-                >
-                  {{ saving ? t("loading") : t("createAgentSession") }}
-                </button>
-              </div>
-            </form>
-          </section>
-        </div>
+                {{ saving ? t("loading") : t("createAgentSession") }}
+              </button>
+            </div>
+          </form>
+        </FluentDialog>
       </template>
     </div>
   </section>

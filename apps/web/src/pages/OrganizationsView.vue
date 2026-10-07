@@ -117,7 +117,7 @@ onMounted(load);
       </p>
     </aside>
 
-    <main class="organization-list-content">
+    <div class="organization-list-content">
       <header class="workspace-page-heading">
         <div>
           <p class="workspace-eyebrow">{{ t("workspace") }}</p>
@@ -186,29 +186,24 @@ onMounted(load);
           </button>
         </div>
       </section>
-    </main>
-
-    <div v-if="showForm" class="workspace-modal-backdrop" @click.self="closeForm">
-      <section
-        class="workspace-modal"
-        role="dialog"
-        aria-modal="true"
-        :aria-labelledby="'new-organization-title'"
-      >
-        <header class="workspace-modal-heading">
-          <h2 id="new-organization-title">{{ t("newOrganization") }}</h2>
-          <button class="icon-button" type="button" :aria-label="t('close')" @click="closeForm">
-            <AppIcon name="close" />
-          </button>
-        </header>
-        <p class="muted">{{ t("organizationCreateHint") }}</p>
-        <form class="form-stack" @submit.prevent="create">
-          <TextField v-model="form.slug" required>{{ t("slug") }}</TextField>
-          <TextField v-model="form.displayName" required>{{ t("displayName") }}</TextField>
-          <TextAreaField v-model="form.description" rows="3" :label="t('description')" />
-          <FormActions :saving="saving" :error="formError" @cancel="closeForm" />
-        </form>
-      </section>
     </div>
+
+    <FluentDialog
+      :open="showForm"
+      :label="t('newOrganization')"
+      close-on-outside
+      @close="closeForm"
+    >
+      <template #title>
+        <h2>{{ t("newOrganization") }}</h2>
+      </template>
+      <p class="muted">{{ t("organizationCreateHint") }}</p>
+      <form class="form-stack" @submit.prevent="create">
+        <TextField v-model="form.slug" required>{{ t("slug") }}</TextField>
+        <TextField v-model="form.displayName" required>{{ t("displayName") }}</TextField>
+        <TextAreaField v-model="form.description" rows="3" :label="t('description')" />
+        <FormActions :saving="saving" :error="formError" @cancel="closeForm" />
+      </form>
+    </FluentDialog>
   </section>
 </template>

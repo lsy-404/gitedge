@@ -14,17 +14,21 @@ const loading = ref(true);
 const error = ref("");
 const owner = computed(() => String(route.params.owner ?? ""));
 const handle = computed(() => String(route.params.handle ?? "").replace(/^@/, ""));
+let loadVersion = 0;
 async function load() {
+  const version = ++loadVersion;
   loading.value = true;
   error.value = "";
   profile.value = null;
   try {
-    profile.value = await api.agentProfile(owner.value, handle.value);
+    const result = await api.agentProfile(owner.value, handle.value);
+    if (version === loadVersion) profile.value = result;
   } catch (cause) {
+    if (version !== loadVersion) return;
     error.value =
       cause instanceof ApiError && cause.status === 404 ? t("agentProfileNotFound") : t("apiError");
   } finally {
-    loading.value = false;
+    if (version === loadVersion) loading.value = false;
   }
 }
 watch([owner, handle], () => void load(), { immediate: true });
