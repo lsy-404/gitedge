@@ -30,6 +30,7 @@ import {
   CreateReviewInputSchema,
   PutCheckRunInputSchema,
   UpdateDiscussionInputSchema,
+  MergeAuthorizationInputSchema,
   MergePullRequestInputSchema,
   type Actor,
   type Repository,
@@ -494,6 +495,8 @@ async function publicRepositoryRead(
       .first<Record<string, unknown>>();
     if (!pull) return errorResponse(404, "not_found", "Pull request was not found.");
     if (parts[6] === "diff") {
+      if (pull.state === "closed" && pull.head_session_id)
+        return errorResponse(404, "not_found", "Pull request head was not found.");
       const gitUrl = new URL(`/repositories/${repository.id}/compare`, request.url);
       gitUrl.searchParams.set(
         "base",
@@ -1530,26 +1533,20 @@ export default {
     if (url.pathname === "/internal/merge-authorization") {
       if (url.hostname !== "forge.internal" || request.method !== "POST" || !user)
         return errorResponse(404, "not_found", "Endpoint was not found.");
-      const value = await parseJson(request);
-      if (
-        !value ||
-        typeof value !== "object" ||
-        !("pullRequestId" in value) ||
-        typeof value.pullRequestId !== "string" ||
-        !("leaseAt" in value) ||
-        typeof value.leaseAt !== "number"
-      )
-        return errorResponse(400, "bad_request", "Invalid merge authorization.");
-      const input = MergePullRequestInputSchema.safeParse(value);
+      const input = MergeAuthorizationInputSchema.safeParse(await parseJson(request));
       if (!input.success) return errorResponse(400, "bad_request", "Invalid merge authorization.");
       const pull = await env.DB.prepare("SELECT * FROM forge_pull_requests WHERE id=?")
-        .bind(value.pullRequestId)
+        .bind(input.data.pullRequestId)
         .first<Record<string, unknown>>();
       if (
         !pull ||
         pull.state !== "open" ||
-        pull.merge_started_at !== value.leaseAt ||
-        value.leaseAt < Date.now() - 300_000 ||
+        pull.repository_id !== input.data.repositoryId ||
+        pull.base_ref !== input.data.baseRef ||
+        pull.head_ref !== input.data.headRef ||
+        (pull.head_session_id ?? null) !== (input.data.headSessionId ?? null) ||
+        pull.merge_started_at !== input.data.leaseAt ||
+        input.data.leaseAt < Date.now() - 300_000 ||
         pull.merge_base_oid !== input.data.expectedBaseOid ||
         pull.merge_head_oid !== input.data.expectedHeadOid
       )

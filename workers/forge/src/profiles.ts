@@ -6,6 +6,7 @@ import {
 import { readTextLimited } from "../../../src/worker/common/readText";
 import { repoResponse, type ForgeEnv, type RepositoryRow } from "./common";
 import { z } from "zod";
+import { createLogger } from "../../../src/worker/common/logger";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 export async function publicProfile(
   env: ForgeEnv,
@@ -45,13 +46,16 @@ export async function publicProfile(
     const response = await env.GIT.fetch(
       new Request(url, { headers: trustedHeaders(user ?? undefined) })
     );
+    const logger = createLogger(env.LOG_LEVEL, { service: "forge" });
     if (response.ok) {
       const text = await readTextLimited(response.body, 1_100_000);
       if (text) {
         let data: unknown = null;
         try {
           data = JSON.parse(text);
-        } catch {}
+        } catch {
+          logger.warn("forge:profile-readme-parse-failed", { repositoryId: sameName.id });
+        }
         const file = z
           .object({ data: z.object({ content: z.string().nullable(), binary: z.boolean() }) })
           .safeParse(data);
@@ -62,7 +66,13 @@ export async function publicProfile(
             path: "README.md",
           };
       }
-    } else await response.body?.cancel();
+    } else {
+      logger.warn("forge:profile-readme-unavailable", {
+        repositoryId: sameName.id,
+        status: response.status,
+      });
+      await response.body?.cancel();
+    }
   }
   return dataResponse({
     ...profile,

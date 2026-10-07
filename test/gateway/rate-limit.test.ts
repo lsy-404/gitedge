@@ -10,36 +10,40 @@ function service(handler: (request: Request) => Response | Promise<Response>): G
   return { fetch: async (request) => handler(request) };
 }
 
+function createLimiter(): SharedRateLimitDurableObject {
+  const hits: Array<{ key: string; at: number }> = [];
+  const sql = {
+    exec<T>(query: string, ...values: unknown[]) {
+      if (query.startsWith("DELETE FROM")) {
+        const cutoff = Number(values[0]);
+        hits.splice(0, hits.length, ...hits.filter((hit) => hit.at > cutoff));
+      } else if (query.startsWith("INSERT INTO")) {
+        hits.push({ key: String(values[0]), at: Number(values[1]) });
+      }
+      const key = String(values[0]);
+      const cutoff = Number(values[1]);
+      const matching = hits.filter((hit) => hit.key === key && hit.at > cutoff);
+      const rows = query.startsWith("SELECT COUNT")
+        ? [{ count: matching.length }]
+        : query.startsWith("SELECT at")
+          ? matching.sort((left, right) => left.at - right.at).slice(0, 1)
+          : [];
+      return {
+        one: () => rows[0] as T,
+        toArray: () => rows as T[],
+      };
+    },
+  };
+  const ctx = {
+    storage: { sql },
+    blockConcurrencyWhile: (task: () => Promise<void>) => task(),
+  } as unknown as DurableObjectState;
+  return new SharedRateLimitDurableObject(ctx, {} as Env);
+}
+
 describe("Gateway strict rate limits", () => {
   it("enforces an exact rolling window per key and releases expired hits", async () => {
-    const hits: Array<{ key: string; at: number }> = [];
-    const sql = {
-      exec<T>(query: string, ...values: unknown[]) {
-        if (query.startsWith("DELETE FROM")) {
-          const cutoff = Number(values[0]);
-          hits.splice(0, hits.length, ...hits.filter((hit) => hit.at > cutoff));
-        } else if (query.startsWith("INSERT INTO")) {
-          hits.push({ key: String(values[0]), at: Number(values[1]) });
-        }
-        const key = String(values[0]);
-        const cutoff = Number(values[1]);
-        const matching = hits.filter((hit) => hit.key === key && hit.at > cutoff);
-        const rows = query.startsWith("SELECT COUNT")
-          ? [{ count: matching.length }]
-          : query.startsWith("SELECT at")
-            ? matching.sort((left, right) => left.at - right.at).slice(0, 1)
-            : [];
-        return {
-          one: () => rows[0] as T,
-          toArray: () => rows as T[],
-        };
-      },
-    };
-    const ctx = {
-      storage: { sql },
-      blockConcurrencyWhile: (task: () => Promise<void>) => task(),
-    } as unknown as DurableObjectState;
-    const limiter = new SharedRateLimitDurableObject(ctx, {} as Env);
+    const limiter = createLimiter();
 
     expect(await limiter.consume("ip-a", 2, 100_000)).toEqual({
       allowed: true,
@@ -57,6 +61,17 @@ describe("Gateway strict rate limits", () => {
       allowed: true,
       retryAfter: 0,
     });
+  });
+
+  it("denies a zero or non-finite limit without recording a hit", async () => {
+    const limiter = createLimiter();
+    for (const limit of [0, -3, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(await limiter.consume("ip-b", limit, 100_000)).toEqual({
+        allowed: false,
+        retryAfter: 60,
+      });
+    }
+    expect(await limiter.consume("ip-b", 1, 100_001)).toEqual({ allowed: true, retryAfter: 0 });
   });
 
   it("returns JSON 429 and Retry-After when an IP window is full", async () => {

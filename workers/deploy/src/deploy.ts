@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { repositoryRole } from "../../../src/worker/common/repositories";
 import { readTextLimited } from "../../../src/worker/common/readText";
 import { DeployManifestSchema, type DeployManifest } from "../../../packages/contracts/src/deploy";
@@ -47,15 +48,45 @@ interface DeploymentSession {
   expiresAt: number;
   completed: Record<string, string>;
 }
+const CfAccountSchema = z.object({ id: z.string(), name: z.string() });
+const CfRawResourceSchema = z.object({
+  id: z.string().optional(),
+  uuid: z.string().optional(),
+  name: z.string().optional(),
+  title: z.string().optional(),
+});
+const CfBucketListSchema = z.object({ buckets: z.array(CfRawResourceSchema).optional() });
+const CfQueryResultSchema = z.array(
+  z.object({ results: z.array(z.object({ name: z.string() })).optional() })
+);
+const WorkerScriptSchema = z.object({
+  subdomain: z
+    .object({
+      enabled: z.boolean().optional(),
+      previews_enabled: z.boolean().optional(),
+      url: z.string().optional(),
+    })
+    .optional(),
+});
+const CfResultInfoSchema = z.object({
+  cursor: z.string().nullish(),
+  total_pages: z.number().optional(),
+});
+type CfAccount = z.infer<typeof CfAccountSchema>;
+type CfRawResource = z.infer<typeof CfRawResourceSchema>;
 interface CfEnvelope<T> {
-  success: boolean;
   result: T;
-  errors?: Array<{ code: number; message: string }>;
-  result_info?: { cursor?: string; page?: number; total_pages?: number };
+  result_info?: z.infer<typeof CfResultInfoSchema>;
 }
-interface CfAccount {
-  id: string;
+type ResourceKind = "d1" | "r2" | "kv";
+interface ResourceTarget {
+  key: string;
+  resourceId: string;
+  kind: ResourceKind;
   name: string;
+  list: string;
+  create: string;
+  body: Record<string, string>;
 }
 interface CfNamedResource {
   id: string;
@@ -65,17 +96,6 @@ interface CheckedDeploymentPlan {
   manifest: DeployManifest;
   digest: string;
   sourceDigests: Record<string, string>;
-}
-interface CfRawResource {
-  id?: string;
-  uuid?: string;
-  name?: string;
-  title?: string;
-}
-interface WorkerSubdomain {
-  enabled?: boolean;
-  previews_enabled?: boolean;
-  url?: string;
 }
 
 async function activationFailure(
@@ -344,6 +364,7 @@ function sameOrigin(request: Request, env: DeployEnv): boolean {
 async function cfEnvelope<T>(
   token: string,
   path: string,
+  resultSchema: z.ZodType<T>,
   init: RequestInit = {}
 ): Promise<CfEnvelope<T>> {
   const controller = new AbortController();
@@ -358,20 +379,36 @@ async function cfEnvelope<T>(
     if (!response.ok) throw new Error("Cloudflare API request failed");
     const text = await readTextLimited(response.body, MAX_CF_BODY_BYTES);
     if (text === null) throw new Error("Cloudflare API response exceeded limit");
-    const envelope = JSON.parse(text) as CfEnvelope<T>;
-    if (!envelope.success) throw new Error("Cloudflare API rejected the request");
-    return envelope;
+    const parsed = z
+      .object({
+        success: z.boolean(),
+        result: resultSchema,
+        result_info: CfResultInfoSchema.optional(),
+      })
+      .safeParse(JSON.parse(text));
+    if (!parsed.success || !parsed.data.success)
+      throw new Error("Cloudflare API rejected the request");
+    return parsed.data;
   } finally {
     clearTimeout(timeout);
   }
 }
-async function cf<T>(token: string, path: string, init: RequestInit = {}): Promise<T> {
-  return (await cfEnvelope<T>(token, path, init)).result;
+async function cf<T>(
+  token: string,
+  path: string,
+  resultSchema: z.ZodType<T>,
+  init: RequestInit = {}
+): Promise<T> {
+  return (await cfEnvelope(token, path, resultSchema, init)).result;
 }
 async function listAccounts(token: string): Promise<CfAccount[]> {
   const accounts: CfAccount[] = [];
   for (let page = 1; page <= 20; page += 1) {
-    const envelope = await cfEnvelope<CfAccount[]>(token, `/accounts?per_page=50&page=${page}`);
+    const envelope = await cfEnvelope(
+      token,
+      `/accounts?per_page=50&page=${page}`,
+      z.array(CfAccountSchema)
+    );
     accounts.push(...envelope.result);
     if (page >= (envelope.result_info?.total_pages ?? 1)) return accounts;
   }
@@ -405,46 +442,38 @@ function resourceEndpoints(
   manifest: DeployManifest,
   accountId: string,
   names: Record<string, string> = {}
-): Array<{
-  key: string;
-  resourceId: string;
-  kind: "d1" | "r2" | "kv";
-  name: string;
-  list: string;
-  create: string;
-  body: Record<string, string>;
-}> {
+): ResourceTarget[] {
   return [
-    ...manifest.resources.d1.map((item) => {
+    ...manifest.resources.d1.map((item): ResourceTarget => {
       const name = names[item.id] ?? item.name;
       return {
         key: `d1:${item.id}`,
         resourceId: item.id,
-        kind: "d1" as const,
+        kind: "d1",
         name,
         list: `${cfPath(accountId, "d1/database")}?name=${encodeURIComponent(name)}&per_page=1000`,
         create: cfPath(accountId, "d1/database"),
         body: { name, primary_location_hint: "wnam" },
       };
     }),
-    ...manifest.resources.r2.map((item) => {
+    ...manifest.resources.r2.map((item): ResourceTarget => {
       const name = names[item.id] ?? item.name;
       return {
         key: `r2:${item.id}`,
         resourceId: item.id,
-        kind: "r2" as const,
+        kind: "r2",
         name,
         list: `${cfPath(accountId, "r2/buckets")}?name_contains=${encodeURIComponent(name)}&per_page=1000`,
         create: cfPath(accountId, "r2/buckets"),
         body: { name, locationHint: "wnam" },
       };
     }),
-    ...manifest.resources.kv.map((item) => {
+    ...manifest.resources.kv.map((item): ResourceTarget => {
       const name = names[item.id] ?? item.name;
       return {
         key: `kv:${item.id}`,
         resourceId: item.id,
-        kind: "kv" as const,
+        kind: "kv",
         name,
         list: `${cfPath(accountId, "storage/kv/namespaces")}?order=title&per_page=1000&page=1`,
         create: cfPath(accountId, "storage/kv/namespaces"),
@@ -475,7 +504,7 @@ function validResourceNames(
   return Object.fromEntries(entries) as Record<string, string>;
 }
 function normalizeResource(
-  kind: "d1" | "r2" | "kv",
+  kind: ResourceKind,
   item: CfRawResource,
   fallbackName: string
 ): CfNamedResource {
@@ -484,12 +513,9 @@ function normalizeResource(
     kind === "d1" ? (item.uuid ?? item.id ?? name) : kind === "kv" ? (item.id ?? name) : name;
   return { id, name };
 }
-async function listResources(
-  token: string,
-  target: ReturnType<typeof resourceEndpoints>[number]
-): Promise<CfNamedResource[]> {
+async function listResources(token: string, target: ResourceTarget): Promise<CfNamedResource[]> {
   if (target.kind === "d1") {
-    const result = await cf<CfRawResource[]>(token, target.list);
+    const result = await cf(token, target.list, z.array(CfRawResourceSchema));
     return result.map((item) => normalizeResource("d1", item, ""));
   }
   if (target.kind === "r2") {
@@ -497,12 +523,12 @@ async function listResources(
     let cursor: string | undefined;
     for (let page = 0; page < 50; page += 1) {
       const path = cursor ? `${target.list}&cursor=${encodeURIComponent(cursor)}` : target.list;
-      const envelope = await cfEnvelope<{ buckets?: CfRawResource[] }>(token, path);
+      const envelope = await cfEnvelope(token, path, CfBucketListSchema);
       resources.push(
         ...(envelope.result.buckets ?? []).map((item) => normalizeResource("r2", item, ""))
       );
       if (resources.some((item) => item.name === target.name)) return resources;
-      cursor = envelope.result_info?.cursor;
+      cursor = envelope.result_info?.cursor ?? undefined;
       if (!cursor) return resources;
     }
     throw new Error("R2 resource lookup exceeded the page limit");
@@ -511,7 +537,11 @@ async function listResources(
   for (let page = 1; page <= 50; page += 1) {
     const url = new URL(target.list, API);
     url.searchParams.set("page", String(page));
-    const envelope = await cfEnvelope<CfRawResource[]>(token, `${url.pathname}${url.search}`);
+    const envelope = await cfEnvelope(
+      token,
+      `${url.pathname}${url.search}`,
+      z.array(CfRawResourceSchema)
+    );
     resources.push(...envelope.result.map((item) => normalizeResource("kv", item, "")));
     if (resources.some((item) => item.name === target.name)) return resources;
     if (page >= (envelope.result_info?.total_pages ?? 1)) return resources;
@@ -520,7 +550,7 @@ async function listResources(
 }
 async function ensureResource(
   session: DeploymentSession,
-  target: ReturnType<typeof resourceEndpoints>[number],
+  target: ResourceTarget,
   existing: CfNamedResource[]
 ): Promise<CfNamedResource> {
   const match = existing.find((item) => item.name === target.name);
@@ -530,7 +560,7 @@ async function ensureResource(
   }
   const created = normalizeResource(
     target.kind,
-    await cf<CfRawResource>(session.token, target.create, {
+    await cf(session.token, target.create, CfRawResourceSchema, {
       method: "POST",
       body: JSON.stringify(target.body),
     }),
@@ -572,6 +602,7 @@ async function applyD1Migrations(
       await cf(
         session.token,
         cfPath(session.accountId!, `d1/database/${encodeURIComponent(databaseId)}/query`),
+        z.unknown(),
         {
           method: "POST",
           body: JSON.stringify({
@@ -579,9 +610,10 @@ async function applyD1Migrations(
           }),
         }
       );
-      const prior = await cf<Array<{ results?: Array<{ name: string }> }>>(
+      const prior = await cf(
         session.token,
         cfPath(session.accountId!, `d1/database/${encodeURIComponent(databaseId)}/query`),
+        CfQueryResultSchema,
         {
           method: "POST",
           body: JSON.stringify({
@@ -596,6 +628,7 @@ async function applyD1Migrations(
         await cf(
           session.token,
           cfPath(session.accountId!, `d1/database/${encodeURIComponent(databaseId)}/query`),
+          z.unknown(),
           {
             method: "POST",
             body: JSON.stringify({
@@ -682,6 +715,7 @@ async function handleDeployRequest(
     try {
       accounts = await listAccounts(body.token);
     } catch {
+      logger.warn("deploy:token-rejected", { repositoryId });
       return errorResponse(403, "token_invalid", "Cloudflare token could not list accounts.");
     }
     if (accounts.length === 0)
@@ -745,6 +779,7 @@ async function handleDeployRequest(
     try {
       accounts = await listAccounts(session.token);
     } catch {
+      logger.warn("deploy:account-lookup-failed", { repositoryId });
       return errorResponse(
         502,
         "account_lookup_failed",
@@ -996,6 +1031,7 @@ async function handleDeployRequest(
       await cf(
         selected.session.token,
         cfPath(selected.session.accountId, `workers/scripts/${encodeURIComponent(workerName)}`),
+        z.unknown(),
         { method: "PUT", body: form }
       );
     } catch {
@@ -1011,7 +1047,7 @@ async function handleDeployRequest(
       `workers/scripts/${encodeURIComponent(workerName)}/subdomain`
     );
     try {
-      await cf(selected.session.token, subdomainPath, {
+      await cf(selected.session.token, subdomainPath, z.unknown(), {
         method: "POST",
         headers: { "Cloudflare-Workers-Script-Api-Date": "2025-08-01" },
         body: JSON.stringify({ enabled: true, previews_enabled: false }),
@@ -1026,10 +1062,14 @@ async function handleDeployRequest(
         "activation_api_rejected"
       );
     }
-    const script = await cf<{ subdomain?: WorkerSubdomain }>(
+    const script = await cf(
       selected.session.token,
-      cfPath(selected.session.accountId, `workers/workers/${encodeURIComponent(workerName)}`)
-    ).catch(() => null);
+      cfPath(selected.session.accountId, `workers/workers/${encodeURIComponent(workerName)}`),
+      WorkerScriptSchema
+    ).catch(() => {
+      logger.warn("deploy:worker-lookup-failed", { repositoryId, workerName });
+      return null;
+    });
     const workerUrl = script?.subdomain?.url;
     if (script?.subdomain?.enabled !== true || typeof workerUrl !== "string")
       return activationFailure(

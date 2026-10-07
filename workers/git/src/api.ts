@@ -22,7 +22,11 @@ import {
 } from "./write";
 import { repositorySnapshot } from "./snapshot";
 import { createLogger } from "../../../src/worker/common/logger";
-import { GitOidSchema, sha256Hex } from "../../../packages/contracts/src/index";
+import {
+  GitMergeInputSchema,
+  GitOidSchema,
+  sha256Hex,
+} from "../../../packages/contracts/src/index";
 import { listRepositorySessions, resolveGitAccess, resolveWorkspace, type GitEnv } from "./access";
 import {
   artifactGraph,
@@ -36,7 +40,7 @@ import {
 } from "./read";
 import { readCommitSignature, verifyCommitSignature } from "./signatures";
 import { compareArtifacts } from "./compare";
-import { GitMergeInputSchema, mergeArtifacts } from "./merge";
+import { mergeArtifacts } from "./merge";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 
 function pageNumber(value: string | null, fallback: number, maximum: number): number {
@@ -279,7 +283,7 @@ export async function handleGitApi(
             new Request("https://forge.internal/internal/merge-authorization", {
               method: "POST",
               headers,
-              body: JSON.stringify(input.data),
+              body: JSON.stringify({ ...input.data, repositoryId }),
             })
           );
           await authorization.body?.cancel();

@@ -897,3 +897,90 @@ INSERT INTO repositories (id,namespace_id,created_by,slug,do_name,visibility,des
     expect(body.data).not.toHaveProperty("remote");
   });
 });
+
+describe("Merge authorization binding and closed pull request heads", () => {
+  const baseOid = "1".repeat(40);
+  const headOid = "2".repeat(40);
+  const leaseAt = Date.now();
+
+  async function seedPull(id: string, number: number, state: string, sessionId: string | null) {
+    await env.DB.prepare(
+      "INSERT INTO forge_pull_requests (id,repository_id,number,author_id,actor_json,title,body,base_ref,head_ref,head_session_id,state,merge_started_at,merge_base_oid,merge_head_oid,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+    )
+      .bind(
+        id,
+        "r1",
+        number,
+        "u1",
+        "{}",
+        id,
+        "",
+        "main",
+        `topic-${id}`,
+        sessionId,
+        state,
+        leaseAt,
+        baseOid,
+        headOid,
+        1,
+        1
+      )
+      .run();
+  }
+
+  function authorize(overrides: Record<string, unknown>): Promise<Response> {
+    return forge.fetch(
+      new Request("https://forge.internal/internal/merge-authorization", {
+        method: "POST",
+        headers: auth("u1", "alice"),
+        body: JSON.stringify({
+          pullRequestId: "auth-pr",
+          repositoryId: "r1",
+          leaseAt,
+          method: "merge",
+          baseRef: "main",
+          headRef: "topic-auth-pr",
+          headSessionId: null,
+          expectedBaseOid: baseOid,
+          expectedHeadOid: headOid,
+          author: { name: "alice", email: "alice@users.gitedge.invalid" },
+          message: "Merge",
+          ...overrides,
+        }),
+      }),
+      forgeEnv
+    );
+  }
+
+  it("rejects a callback whose refs, head session or repository differ from the pull request", async () => {
+    await seedPull("auth-pr", 900, "open", null);
+    expect((await authorize({})).status).toBe(200);
+    for (const override of [
+      { baseRef: "release" },
+      { headRef: "other" },
+      { headSessionId: "s1" },
+      { repositoryId: "r2" },
+    ]) {
+      const response = await authorize(override);
+      expect(response.status, JSON.stringify(override)).toBe(409);
+      expect(await response.json()).toMatchObject({ error: { code: "merge_changed" } });
+    }
+    expect((await authorize({ pullRequestId: undefined })).status).toBe(400);
+  });
+
+  it("answers anonymous diff reads of closed session pull requests with 404 and no Git call", async () => {
+    await seedPull("closed-pr", 901, "closed", "s1");
+    const before = gitRequests.length;
+    const response = await forge.fetch(
+      new Request("https://forge.test/repositories/r1/pull-requests/901/diff"),
+      forgeEnv
+    );
+    expect(response.status).toBe(404);
+    expect(gitRequests).toHaveLength(before);
+  });
+
+  it("marks Forge API responses as non-cacheable", async () => {
+    const response = await forge.fetch(new Request("https://forge.test/repositories/r1"), forgeEnv);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+  });
+});

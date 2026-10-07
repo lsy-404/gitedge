@@ -93,13 +93,12 @@ export async function nextNumber(
   return row.number;
 }
 
+// Invalid or schema-mismatched actor_json (including the '{}' column default) resolves to the stored author identity.
 export function parseActor(value: unknown, authorId: unknown): Actor {
   try {
     const parsed = ActorSchema.safeParse(JSON.parse(String(value)));
     if (parsed.success) return parsed.data;
-  } catch {
-    /* malformed legacy actor data falls back to the stored user identity */
-  }
+  } catch {}
   const id = typeof authorId === "string" ? authorId : "unknown";
   return { kind: "user", id, name: id };
 }
