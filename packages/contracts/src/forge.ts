@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { RepositoryRole } from "./repository-controls";
 
 export const ActorSchema = z.object({
   kind: z.enum(["user", "agent", "ci"]),
@@ -49,6 +50,8 @@ export interface Repository {
   requirePassingChecks: boolean;
   createdAt: number;
   updatedAt: number;
+  /** The viewer's effective role, null when unknown or anonymous. */
+  viewerRole: RepositoryRole | null;
   canWrite: boolean;
 }
 

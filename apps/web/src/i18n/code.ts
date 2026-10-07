@@ -4,6 +4,9 @@ export const codeMessages = {
     pushExistingRepository: "或推送已有仓库",
     codeSearchPlaceholder: "按名称筛选文件…",
     goToFile: "转到文件",
+    comparisonTruncated: "比较范围过大，仅显示部分变更文件与差异。",
+    diffTooLarge: "差异已省略：比较超出了大小限制。",
+    unsavedChangesConfirm: "有未保存的更改，确定要放弃吗？",
     codeMenu: "代码",
     cloneWithHttps: "使用 HTTPS 克隆",
     cloneHelp: "复制地址以克隆此仓库。需要身份验证时，请签发短期令牌。",
@@ -63,6 +66,10 @@ export const codeMessages = {
     pushExistingRepository: "Or push an existing repository",
     codeSearchPlaceholder: "Filter files by name…",
     goToFile: "Go to file",
+    comparisonTruncated:
+      "This comparison is too large; only part of the changed files and diffs is shown.",
+    diffTooLarge: "Diff omitted because the comparison exceeded its size budget.",
+    unsavedChangesConfirm: "You have unsaved changes. Discard them?",
     codeMenu: "Code",
     cloneWithHttps: "Clone with HTTPS",
     cloneHelp:

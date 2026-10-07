@@ -128,17 +128,6 @@
   overflow: hidden;
   padding: 0;
 }
-.file-table-head {
-  display: flex;
-  justify-content: space-between;
-  padding: 12px 16px;
-  background: var(--subtle, #f6f8fa);
-  border-bottom: 1px solid var(--border, #d1d9e0);
-  font-size: 13px;
-}
-.file-table-head span {
-  color: var(--muted, #656d76);
-}
 .file-entry {
   display: flex;
   align-items: center;
@@ -323,9 +312,6 @@
 }
 .code-section > .latest-commit + .file-panel {
   border-radius: 0 0 6px 6px;
-}
-.file-panel > .file-table-head {
-  display: none;
 }
 .file-entry .folder-icon {
   color: light-dark(#54aeff, #54aeff);

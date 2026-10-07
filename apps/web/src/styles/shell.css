@@ -506,6 +506,15 @@ details.user-menu {
   margin-top: 4px;
   color: var(--muted);
 }
+.repo-session-scroll {
+  overflow-x: auto;
+}
+.repo-session-table td a {
+  white-space: nowrap;
+}
+.repo-session-refresh {
+  margin-left: auto;
+}
 .repo-session-table {
   width: 100%;
   border-collapse: collapse;

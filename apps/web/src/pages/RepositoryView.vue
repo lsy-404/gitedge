@@ -300,7 +300,7 @@ watch(
             <div class="box-header">
               <AppIcon name="branch" />{{ t("sessions")
               }}<span class="badge">{{ sessions.length }}</span
-              ><button class="btn btn-sm" style="margin-left: auto" @click="loadSessions">
+              ><button class="btn btn-sm repo-session-refresh" @click="loadSessions">
                 {{ t("ghRefresh") }}
               </button>
             </div>
@@ -319,58 +319,60 @@ watch(
               ></StatusState
             >
             <NoticeBar v-if="revokeError" intent="error">{{ revokeError }}</NoticeBar>
-            <table
+            <div
               v-if="!sessionsLoading && !sessionsError && sessions.length"
-              class="repo-session-table"
+              class="repo-session-scroll"
             >
-              <thead>
-                <tr>
-                  <th>{{ t("ghSession") }}</th>
-                  <th>{{ t("ghBranch") }}</th>
-                  <th>{{ t("permission") }}</th>
-                  <th>{{ t("expiresAt") }}</th>
-                  <th>
-                    <span class="visually-hidden">{{ t("agentSessionActions") }}</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="session in sessions" :key="session.id">
-                  <td>
-                    <strong>{{ session.agentName }}</strong>
-                    <p class="muted">
-                      <code>{{ session.workspaceName }}</code>
-                    </p>
-                    <p>
-                      <StatusBadge
-                        :tone="sessionStatus(session) === 'active' ? 'success' : 'neutral'"
-                        >{{ t(sessionStatus(session)) }}</StatusBadge
+              <table class="repo-session-table">
+                <thead>
+                  <tr>
+                    <th>{{ t("ghSession") }}</th>
+                    <th>{{ t("ghBranch") }}</th>
+                    <th>{{ t("permission") }}</th>
+                    <th>{{ t("expiresAt") }}</th>
+                    <th>
+                      <span class="visually-hidden">{{ t("agentSessionActions") }}</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="session in sessions" :key="session.id">
+                    <td>
+                      <strong>{{ session.agentName }}</strong>
+                      <p class="muted">
+                        <code>{{ session.workspaceName }}</code>
+                      </p>
+                      <p>
+                        <StatusBadge
+                          :tone="sessionStatus(session) === 'active' ? 'success' : 'neutral'"
+                          >{{ t(sessionStatus(session)) }}</StatusBadge
+                        >
+                      </p>
+                    </td>
+                    <td>
+                      <RouterLink
+                        v-if="repository.graphEnabled"
+                        :to="{ path: `${base}/commits`, query: { ref: session.baseRef } }"
+                        ><AppIcon name="branch" />{{ session.baseRef }}</RouterLink
                       >
-                    </p>
-                  </td>
-                  <td>
-                    <RouterLink
-                      v-if="repository.graphEnabled"
-                      :to="{ path: `${base}/commits`, query: { ref: session.baseRef } }"
-                      ><AppIcon name="branch" />{{ session.baseRef }}</RouterLink
-                    >
-                  </td>
-                  <td>{{ t(session.permission === "read" ? "ghReadOnly" : "ghReadWrite") }}</td>
-                  <td class="muted">{{ d(session.expiresAt, "long") }}</td>
-                  <td>
-                    <button
-                      v-if="sessionStatus(session) === 'active'"
-                      class="btn btn-sm"
-                      type="button"
-                      :disabled="revokingSessionId !== null"
-                      @click="revokeSession(session)"
-                    >
-                      {{ t("revokeSession") }}
-                    </button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+                    </td>
+                    <td>{{ t(session.permission === "read" ? "ghReadOnly" : "ghReadWrite") }}</td>
+                    <td class="muted">{{ d(session.expiresAt, "long") }}</td>
+                    <td>
+                      <button
+                        v-if="sessionStatus(session) === 'active'"
+                        class="btn btn-sm"
+                        type="button"
+                        :disabled="revokingSessionId !== null"
+                        @click="revokeSession(session)"
+                      >
+                        {{ t("revokeSession") }}
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div></template
         >
         <RepositoryTasks

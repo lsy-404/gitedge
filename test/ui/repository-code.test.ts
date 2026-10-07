@@ -5,9 +5,13 @@ import { i18n } from "../../apps/web/src/i18n";
 import { router } from "../../apps/web/src/router";
 import { clearSession, setSession } from "../../apps/web/src/lib/session";
 import { fluentUi } from "../../apps/web/src/ui/fluent";
-import type { RepositoryBranch } from "../../packages/contracts/src/repository-controls";
+import type { Repository } from "../../packages/contracts/src/forge";
+import type {
+  RepositoryBranch,
+  RepositoryRole,
+} from "../../packages/contracts/src/repository-controls";
 
-const repository = {
+const repository: Repository = {
   id: "repo-1",
   namespaceId: "namespace-1",
   owner: "example",
@@ -19,6 +23,7 @@ const repository = {
   createdAt: 1,
   updatedAt: 1,
   canWrite: false,
+  viewerRole: null,
   archived: false,
   issuesEnabled: true,
   pullsEnabled: true,
@@ -42,6 +47,12 @@ const commitOid = "a".repeat(40);
 const createdCommitOid = "b".repeat(40);
 const nativeShowModal = HTMLDialogElement.prototype.showModal;
 const nativeDialogClose = HTMLDialogElement.prototype.close;
+
+function editorRoot(root: HTMLElement) {
+  const editor = root.querySelector<HTMLElement>(".file-editor");
+  if (!editor) throw new Error("File editor was not rendered.");
+  return editor;
+}
 
 async function settle() {
   for (let index = 0; index < 5; index += 1) {
@@ -773,5 +784,261 @@ describe("repository Code view", () => {
       ).toBe(false);
       gatedMounted.unmount();
     }
+  });
+});
+
+describe("repository Code view interactions", () => {
+  function button(root: HTMLElement, text: string) {
+    return Array.from(root.querySelectorAll<HTMLElement>("button")).find((item) =>
+      item.textContent?.includes(text)
+    );
+  }
+  function press(target: Element, key: string) {
+    target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+  }
+
+  it("offers read collaborators a read-only clone token", async () => {
+    i18n.global.locale.value = "en";
+    mockCodeApi();
+    const mounted = await mountCode("/example/sample", "code", {
+      visibility: "private",
+      viewerRole: "read",
+      canWrite: false,
+    });
+    button(mounted.root, "Code")?.click();
+    await settle();
+
+    expect(mounted.root.querySelector("#clone-menu")).not.toBeNull();
+    expect(mounted.root.textContent).toContain("Token name");
+    const write = mounted.root.querySelector<HTMLOptionElement>('option[value="write"]');
+    expect(write?.disabled).toBe(true);
+    mounted.unmount();
+  });
+
+  it("hides clone token creation from viewers without a role", async () => {
+    i18n.global.locale.value = "en";
+    mockCodeApi();
+    const mounted = await mountCode("/example/sample", "code");
+    button(mounted.root, "Code")?.click();
+    await settle();
+
+    expect(mounted.root.querySelector("#clone-menu")).not.toBeNull();
+    expect(mounted.root.querySelector('option[value="write"]')).toBeNull();
+    mounted.unmount();
+  });
+
+  it("returns focus to the clone toggle and the file search trigger on Escape", async () => {
+    i18n.global.locale.value = "en";
+    mockCodeApi();
+    const mounted = await mountCode("/example/sample", "code");
+    const toggle = button(mounted.root, "Code");
+    toggle?.click();
+    await settle();
+    expect(toggle?.getAttribute("aria-controls")).toBe("clone-menu");
+    press(document.body, "Escape");
+    await settle();
+    expect(mounted.root.querySelector("#clone-menu")).toBeNull();
+    expect(document.activeElement).toBe(toggle);
+
+    button(mounted.root, "Go to file")?.click();
+    await settle();
+    const input = mounted.root.querySelector<HTMLInputElement>(".file-search input");
+    expect(input?.getAttribute("aria-label")).toBe("Go to file");
+    expect(document.activeElement).toBe(input);
+    if (input) press(input, "Escape");
+    await settle();
+    expect(mounted.root.querySelector(".file-search")).toBeNull();
+    expect(document.activeElement).toBe(mounted.root.querySelector(".search-trigger"));
+    mounted.unmount();
+  });
+
+  it("announces the copied clone URL", async () => {
+    i18n.global.locale.value = "en";
+    mockCodeApi();
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    const mounted = await mountCode("/example/sample", "code");
+    button(mounted.root, "Code")?.click();
+    await settle();
+    mounted.root.querySelector<HTMLElement>(".clone-url fluent-button, .clone-url button")?.click();
+    await settle();
+
+    expect(writeText).toHaveBeenCalledOnce();
+    expect(mounted.root.querySelector("[role=status]")?.textContent).toBe("Copied");
+    mounted.unmount();
+  });
+
+  it("keeps listed commits mounted while loading more and disables the button", async () => {
+    i18n.global.locale.value = "en";
+    const pending: Array<(response: Response) => void> = [];
+    const graphLimits: string[] = [];
+    const commit = (index: number) => ({
+      oid: index.toString(16).padStart(40, "0"),
+      message: `commit ${index}`,
+      parents: [],
+      author: { name: "A", email: "a@example.test", timestamp: 1 },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(String(input), "https://gitedge.test");
+        if (url.pathname.endsWith("/refs"))
+          return jsonResponse([{ name: "refs/heads/main", oid: commitOid }]);
+        if (url.pathname.endsWith("/commits")) return jsonResponse([commit(1)]);
+        if (url.pathname.endsWith("/graph")) {
+          graphLimits.push(url.searchParams.get("limit") ?? "");
+          const count = Number(url.searchParams.get("limit"));
+          const body = {
+            commits: Array.from({ length: count === 100 ? 2 : 3 }, (_, i) => commit(i + 1)),
+            refs: [],
+            sessions: [],
+            truncated: true,
+          };
+          if (count === 100) return jsonResponse(body);
+          return new Promise<Response>((resolve) =>
+            pending.push(() => resolve(jsonResponse(body)))
+          );
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      })
+    );
+    const mounted = await mountCode("/example/sample/commits?ref=main", "commits");
+    expect(mounted.root.querySelectorAll(".commit-row")).toHaveLength(2);
+    const more = button(mounted.root, "Load more");
+    if (!more) throw new Error("Load more button was not rendered.");
+    more.click();
+    more.click();
+    await settle();
+
+    expect(mounted.root.querySelectorAll(".commit-row")).toHaveLength(2);
+    expect(mounted.root.querySelector(".state-loading, [aria-busy=true]")).toBeNull();
+    expect(button(mounted.root, "Load more")?.hasAttribute("disabled")).toBe(true);
+    expect(graphLimits).toEqual(["100", "150"]);
+    pending[0]?.(jsonResponse({}));
+    await settle();
+    expect(mounted.root.querySelectorAll(".commit-row")).toHaveLength(3);
+    mounted.unmount();
+  });
+
+  it("reports truncated comparisons and omitted diffs", async () => {
+    i18n.global.locale.value = "en";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(String(input), "https://gitedge.test");
+        if (url.pathname.endsWith("/refs"))
+          return jsonResponse([{ name: "refs/heads/main", oid: commitOid }]);
+        if (url.pathname.endsWith("/compare"))
+          return jsonResponse({
+            base: commitOid,
+            head: createdCommitOid,
+            commits: [],
+            truncated: true,
+            files: [
+              { path: "big.txt", type: "modified", binary: false, patch: null },
+              { path: "logo.png", type: "added", binary: true, patch: null },
+            ],
+          });
+        throw new Error(`Unexpected request: ${url}`);
+      })
+    );
+    const mounted = await mountCode("/example/sample/compare?base=main&head=main", "compare");
+    const text = mounted.root.textContent ?? "";
+
+    expect(text).toContain("This comparison is too large");
+    expect(text).toContain("Diff omitted because the comparison exceeded its size budget.");
+    expect(text).toContain("Binary files do not have a text preview");
+    mounted.unmount();
+  });
+
+  it("asks before discarding an edited file", async () => {
+    i18n.global.locale.value = "en";
+    mockCodeApi();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const mounted = await mountCode("/example/sample/blob/readme.md?ref=main", "code", {
+      canWrite: true,
+      onlineEditingEnabled: true,
+    });
+    button(mounted.root, "Edit")?.click();
+    await settle();
+    const textarea = mounted.root.querySelector<HTMLTextAreaElement>(".file-editor textarea");
+    if (!textarea) throw new Error("File editor did not open.");
+    fill(textarea, "changed");
+    await settle();
+    button(editorRoot(mounted.root), "Cancel")?.click();
+    await settle();
+
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(mounted.root.querySelector(".file-editor")).not.toBeNull();
+    confirm.mockReturnValue(true);
+    button(editorRoot(mounted.root), "Cancel")?.click();
+    await settle();
+    expect(mounted.root.querySelector(".file-editor")).toBeNull();
+    mounted.unmount();
+  });
+
+  it("keeps the page mounted when copying fails", async () => {
+    i18n.global.locale.value = "en";
+    mockCodeApi();
+    const writeText = vi.fn(async () => {
+      throw new Error("denied");
+    });
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    const mounted = await mountCode("/example/sample", "code");
+    button(mounted.root, "Code")?.click();
+    await settle();
+    mounted.root.querySelector<HTMLElement>(".clone-url fluent-button, .clone-url button")?.click();
+    await settle();
+
+    expect(mounted.root.querySelector("[role=alert]")?.textContent).toContain("Could not copy");
+    expect(mounted.root.querySelector(".clone-url")).not.toBeNull();
+    expect(mounted.root.querySelector(".state-error")).toBeNull();
+    mounted.unmount();
+  });
+
+  it("re-enables Load more after changing ref mid-request", async () => {
+    i18n.global.locale.value = "en";
+    const pending: Array<() => void> = [];
+    const commit = (index: number) => ({
+      oid: index.toString(16).padStart(40, "0"),
+      message: `commit ${index}`,
+      parents: [],
+      author: { name: "A", email: "a@example.test", timestamp: 1 },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(String(input), "https://gitedge.test");
+        if (url.pathname.endsWith("/refs"))
+          return jsonResponse([
+            { name: "refs/heads/main", oid: commitOid },
+            { name: "refs/heads/dev", oid: commitOid },
+          ]);
+        if (url.pathname.endsWith("/commits")) return jsonResponse([commit(1)]);
+        if (url.pathname.endsWith("/graph")) {
+          const body = {
+            commits: [commit(1), commit(2)],
+            refs: [],
+            sessions: [],
+            truncated: true,
+          };
+          if (url.searchParams.get("limit") === "100") return jsonResponse(body);
+          return new Promise<Response>((resolve) =>
+            pending.push(() => resolve(jsonResponse(body)))
+          );
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      })
+    );
+    const mounted = await mountCode("/example/sample/commits?ref=main", "commits");
+    button(mounted.root, "Load more")?.click();
+    await settle();
+    expect(pending).toHaveLength(1);
+    await router.push("/example/sample/commits?ref=dev");
+    await settle();
+    pending[0]?.();
+    await settle();
+    expect(button(mounted.root, "Load more")?.hasAttribute("disabled")).toBe(false);
+    mounted.unmount();
   });
 });

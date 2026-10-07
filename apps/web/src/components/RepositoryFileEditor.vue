@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { repositoryCodeLocation } from "../lib/gitGraphView";
 import { computed, ref, watch } from "vue";
+import { useUnsavedGuard } from "../lib/unsavedGuard";
 import { useI18n } from "vue-i18n";
 import {
   EditRepositoryFileSchema,
@@ -47,6 +48,14 @@ const pullSaving = ref(false);
 const pullError = ref("");
 const deleteOpen = ref(false);
 const isNew = computed(() => props.file === null);
+const dirty = computed(
+  () =>
+    saved.value === null &&
+    (content.value !== (props.file?.content ?? "") ||
+      message.value.trim() !== "" ||
+      (isNew.value && path.value !== (props.initialPath ?? "")))
+);
+const { confirmDiscard } = useUnsavedGuard(dirty);
 const regularTextFile = computed(() => {
   if (isNew.value) return true;
   return Boolean(
@@ -213,6 +222,7 @@ async function deleteFile() {
   }
 }
 function close() {
+  if (!confirmDiscard()) return;
   emit("close");
 }
 </script>
