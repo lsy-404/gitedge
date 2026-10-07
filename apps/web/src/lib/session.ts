@@ -25,12 +25,8 @@ export function refreshSession(): Promise<User | null> {
         sessionState.view = view.kind;
         setExpectedIdentity(user?.id ?? null, view.kind);
       }
-    } catch {
-      if (version === refreshVersion) {
-        sessionState.user = null;
-        sessionState.view = "account";
-        setExpectedIdentity(null);
-      }
+    } catch (cause) {
+      console.warn("session-refresh-failed", cause);
     } finally {
       if (version === refreshVersion) {
         sessionState.checked = true;

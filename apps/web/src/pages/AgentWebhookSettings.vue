@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute } from "vue-router";
-import { ApiError, api } from "../lib/api";
+import { ApiError, api, errorMessage } from "../lib/api";
 import type {
   AgentWebhookDelivery,
   AgentWebhookEvent,
@@ -12,7 +12,7 @@ import AppIcon from "../components/AppIcon.vue";
 import StatusState from "../components/StatusState.vue";
 import TextField from "../components/TextField.vue";
 
-const { t } = useI18n();
+const { t, d } = useI18n();
 const route = useRoute();
 const agentId = computed(() => String(route.params.id ?? ""));
 const emptySettings = (): AgentWebhookSettings => ({ url: "", events: [], enabled: false });
@@ -55,8 +55,8 @@ async function load() {
       ? { url: saved.url, events: saved.events, enabled: saved.enabled }
       : emptySettings();
     deliveries.value = rows;
-  } catch {
-    error.value = t("apiError");
+  } catch (cause) {
+    error.value = errorMessage(cause, t);
   } finally {
     loading.value = false;
   }
@@ -86,8 +86,8 @@ async function test() {
     await api.testAgentWebhook(agentId.value);
     notice.value = t("agentWebhookTestSent");
     await load();
-  } catch {
-    error.value = t("apiError");
+  } catch (cause) {
+    error.value = errorMessage(cause, t);
     await load();
   }
 }
@@ -96,8 +96,8 @@ async function retry(delivery: AgentWebhookDelivery) {
   try {
     await api.retryAgentWebhookDelivery(agentId.value, delivery.id);
     await load();
-  } catch {
-    error.value = t("apiError");
+  } catch (cause) {
+    error.value = errorMessage(cause, t);
     await load();
   }
 }
@@ -170,7 +170,7 @@ watch(agentId, () => void load(), { immediate: true });
                   ><span>{{ delivery.status }}</span
                   ><span v-if="delivery.responseStatus">HTTP {{ delivery.responseStatus }}</span
                   ><span v-if="delivery.errorCode">{{ delivery.errorCode }}</span
-                  ><span>{{ new Date(delivery.createdAt).toLocaleString() }}</span>
+                  ><span>{{ d(delivery.createdAt, "long") }}</span>
                 </div>
               </div>
               <button

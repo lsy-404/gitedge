@@ -181,4 +181,52 @@ describe("Cloudflare deployment wizard", () => {
 
     mounted.unmount();
   });
+
+  it("reports a non-JSON gateway failure without leaking parser errors", async () => {
+    i18n.global.locale.value = "en";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("<html>Bad gateway</html>", { status: 502 }))
+    );
+    const mounted = mountWizard();
+
+    submitForm(mounted.root, ".deploy-read-form");
+    await settle();
+
+    expect(mounted.root.querySelector("[role='alert']")).not.toBeNull();
+    expect(mounted.root.textContent).not.toContain("Unexpected token");
+    mounted.unmount();
+  });
+
+  it("does not claim resources will be created when availability could not be checked", async () => {
+    i18n.global.locale.value = "en";
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const action = new URL(String(input), "https://gitedge.test").pathname.split("/").at(-1);
+      if (action === "plan") return new Response(JSON.stringify({ data: plan }), { status: 200 });
+      if (action === "session")
+        return new Response(
+          JSON.stringify({
+            data: { accounts: [{ id: "account-1", name: "Account" }], nonce: "nonce" },
+          }),
+          { status: 200 }
+        );
+      if (action === "resources") return new Response("unavailable", { status: 502 });
+      return new Response(JSON.stringify({ data: {} }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const mounted = mountWizard();
+
+    submitForm(mounted.root, ".deploy-read-form");
+    await settle();
+    const tokenInput = mounted.root.querySelector<HTMLElement>("#deploy-token");
+    if (!tokenInput) throw new Error("Token field was not rendered");
+    Reflect.set(tokenInput, "value", "temporary-test-token");
+    tokenInput.dispatchEvent(new Event("input", { bubbles: true }));
+    submitForm(mounted.root, ".deploy-token-form");
+    await settle();
+
+    expect(mounted.root.textContent).toContain("Could not verify");
+    expect(mounted.root.textContent).not.toContain("Will create");
+    mounted.unmount();
+  });
 });

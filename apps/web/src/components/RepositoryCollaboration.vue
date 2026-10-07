@@ -14,7 +14,7 @@ import type {
   Review,
   WikiPage,
 } from "../lib/api";
-import { ApiError, api } from "../lib/api";
+import { ApiError, api, errorMessage } from "../lib/api";
 import { sessionState } from "../lib/session";
 import { oneOf } from "../ui/formEvents";
 import AppIcon from "./AppIcon.vue";
@@ -54,7 +54,7 @@ const checkConclusions = [
 ] as const satisfies readonly NonNullable<CheckRun["conclusion"]>[];
 
 const props = defineProps<{ repository: Repository; section: string }>();
-const { t } = useI18n();
+const { t, d } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const issues = ref<Issue[]>([]);
@@ -228,10 +228,24 @@ function itemStatus(value: Issue | PullRequest | Discussion | WikiPage): string 
 function itemCreatedAt(value: Issue | PullRequest | Discussion | WikiPage): number {
   return "createdAt" in value ? value.createdAt : value.updatedAt;
 }
+const mergePolicyCodes = [
+  "changes_requested",
+  "approvals_required",
+  "checks_incomplete",
+  "checks_required",
+  "required_checks_missing",
+  "protected_branch",
+  "repository_readonly",
+  "merge_method_disabled",
+] as const;
 function userMessage(cause: unknown): string {
-  if (cause instanceof ApiError && cause.status === 404) return t("resourceNotFound");
-  if (cause instanceof ApiError && cause.status === 403) return t("permissionDenied");
-  return t("apiError");
+  if (cause instanceof ApiError) {
+    if (cause.code === "merge_changed") return t("mergeStateChanged");
+    if (cause.code === "conflict") return `${t("mergeStateChanged")} ${cause.message}`;
+    const policyCode = mergePolicyCodes.find((code) => code === cause.code);
+    if (policyCode) return t(`mergeError_${policyCode}`);
+  }
+  return errorMessage(cause, t);
 }
 function goTo(number: number) {
   return router.push(
@@ -527,6 +541,7 @@ async function restoreWiki(page: WikiPage) {
 }
 async function addReview() {
   if (!detailNumber.value || !diff.value) return;
+  saving.value = true;
   try {
     await api.createReview(props.repository.id, detailNumber.value, {
       commitOid: diff.value.headOid,
@@ -534,12 +549,16 @@ async function addReview() {
       body: reviewForm.value.body,
     });
     reviews.value = await api.reviews(props.repository.id, detailNumber.value);
+    reviewForm.value.body = "";
   } catch (cause) {
     error.value = userMessage(cause);
+  } finally {
+    saving.value = false;
   }
 }
 async function addCheck() {
   if (!detailNumber.value) return;
+  saving.value = true;
   try {
     await api.createCheck(props.repository.id, detailNumber.value, {
       ...checkForm.value,
@@ -548,6 +567,8 @@ async function addCheck() {
     checks.value = await api.checks(props.repository.id, detailNumber.value);
   } catch (cause) {
     error.value = userMessage(cause);
+  } finally {
+    saving.value = false;
   }
 }
 async function mergePull() {
@@ -561,6 +582,7 @@ async function mergePull() {
     });
     await load();
   } catch (cause) {
+    if (cause instanceof ApiError && cause.status === 409) await load();
     error.value = userMessage(cause);
   } finally {
     saving.value = false;
@@ -568,12 +590,15 @@ async function mergePull() {
 }
 async function markAnswer(comment: Comment | null) {
   if (!detailNumber.value) return;
+  saving.value = true;
   try {
     item.value = await api.updateDiscussion(props.repository.id, detailNumber.value, {
       answerCommentId: comment?.id ?? null,
     });
   } catch (cause) {
     error.value = userMessage(cause);
+  } finally {
+    saving.value = false;
   }
 }
 function toggleAnswer(comment: Comment) {
@@ -802,7 +827,7 @@ watch(
               ></span
             ><span class="collab-row-meta"
               >#{{ row.number }} · {{ t("openedBy", { author: actorName(row) }) }} ·
-              {{ new Date(row.createdAt).toLocaleDateString() }}</span
+              {{ d(row.createdAt, "short") }}</span
             ></span
           ></RouterLink
         >
@@ -863,7 +888,7 @@ watch(
               }}</StatusBadge></span
             ><span class="collab-row-meta"
               >#{{ row.number }} · {{ actorName(row) }} · {{ t(`category${row.category}`) }} ·
-              {{ new Date(row.createdAt).toLocaleDateString() }}</span
+              {{ d(row.createdAt, "short") }}</span
             ></span
           ></RouterLink
         >
@@ -922,7 +947,7 @@ watch(
               >{{ t("mergedCommit") }} {{ item.mergedOid.slice(0, 8) }}</code
             ><span class="muted"
               >{{ t("openedBy", { author: actorName(item) }) }} ·
-              {{ new Date(itemCreatedAt(item)).toLocaleDateString() }}</span
+              {{ d(itemCreatedAt(item), "short") }}</span
             >
           </div>
         </div>
@@ -955,14 +980,13 @@ watch(
       >
         <div v-if="'actor' in item" class="actor-line">
           <span class="avatar avatar-sm">{{ actorName(item).slice(0, 2).toUpperCase() }}</span
-          ><strong>{{ actorName(item) }}</strong> ·
-          {{ new Date(itemCreatedAt(item)).toLocaleString()
+          ><strong>{{ actorName(item) }}</strong> · {{ d(itemCreatedAt(item), "long")
           }}<StatusBadge v-if="item.actor.kind === 'agent'" tone="brand">{{
             t("agentAuthored")
           }}</StatusBadge>
         </div>
         <p v-else-if="'author' in item" class="actor-line">
-          {{ item.author }} · {{ new Date(itemCreatedAt(item)).toLocaleString() }}
+          {{ item.author }} · {{ d(itemCreatedAt(item), "long") }}
         </p>
         <form v-if="editMode" class="form-stack inline-form item-edit" @submit.prevent="saveItem">
           <TextField v-model="editDraft.title" required>{{ t("issueTitle") }}</TextField>
@@ -1033,8 +1057,7 @@ watch(
             class="item-row"
           >
             <strong>r{{ revision.revision }} · {{ revision.title }}</strong
-            ><small
-              >{{ revision.updatedBy }} · {{ new Date(revision.updatedAt).toLocaleString() }}</small
+            ><small>{{ revision.updatedBy }} · {{ d(revision.updatedAt, "long") }}</small
             ><FluentButton
               v-if="showEditActions"
               type="button"
@@ -1195,7 +1218,7 @@ watch(
             :label="t('reviewBody')"
           />
           <div class="form-actions">
-            <FluentButton type="submit">{{ t("submitReview") }}</FluentButton>
+            <FluentButton type="submit" :disabled="saving">{{ t("submitReview") }}</FluentButton>
           </div>
         </form>
       </section>
@@ -1255,7 +1278,7 @@ watch(
             :label="t('summary')"
           />
           <div class="form-actions">
-            <FluentButton type="submit">{{ t("addCheck") }}</FluentButton>
+            <FluentButton type="submit" :disabled="saving">{{ t("addCheck") }}</FluentButton>
           </div>
         </form>
       </section>
@@ -1274,6 +1297,7 @@ watch(
           <FluentButton
             v-if="showEditActions && discussionItem.answerCommentId"
             type="button"
+            :disabled="saving"
             @click="markAnswer(null)"
           >
             {{ t("clearAnswer") }}
@@ -1292,7 +1316,7 @@ watch(
             ><StatusBadge v-if="comment.actor.kind === 'agent'" tone="brand">{{
               t("agentAuthored")
             }}</StatusBadge
-            ><small>{{ new Date(comment.createdAt).toLocaleString() }}</small
+            ><small>{{ d(comment.createdAt, "long") }}</small
             ><FluentButton
               v-if="showEditActions"
               type="button"
@@ -1314,6 +1338,7 @@ watch(
               type="button"
               tone="subtle"
               size="small"
+              :disabled="saving"
               @click="toggleAnswer(comment)"
             >
               {{

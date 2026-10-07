@@ -4,26 +4,19 @@ import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 import { FluentButton } from "@platform-kit/fluent/vue";
 import type { BrowserSession } from "../../../../packages/contracts/src/credentials";
-import { api } from "../lib/api";
-import { errorMessage } from "../lib/tasks";
+import { api, errorMessage } from "../lib/api";
 import { clearSession } from "../lib/session";
 import NoticeBar from "./NoticeBar.vue";
 import StatusBadge from "./StatusBadge.vue";
 import StatusState from "./StatusState.vue";
 
-const { t, locale } = useI18n();
+const { t, d } = useI18n();
 const router = useRouter();
 const sessions = ref<BrowserSession[]>([]);
 const loading = ref(true);
 const loadingError = ref("");
 const actionError = ref("");
 const revokingId = ref("");
-
-function formatDate(timestamp: number): string {
-  return new Intl.DateTimeFormat(locale.value, { dateStyle: "medium", timeStyle: "short" }).format(
-    new Date(timestamp)
-  );
-}
 
 async function load(): Promise<void> {
   loading.value = true;
@@ -82,10 +75,10 @@ onMounted(load);
           <div>
             <h3>{{ t("settingsOtherSession") }}</h3>
             <p class="muted">
-              {{ t("settingsSessionCreated") }} · {{ formatDate(session.createdAt) }}
+              {{ t("settingsSessionCreated") }} · {{ d(session.createdAt, "long") }}
             </p>
             <p class="muted">
-              {{ t("settingsSessionExpires") }} · {{ formatDate(session.expiresAt) }}
+              {{ t("settingsSessionExpires") }} · {{ d(session.expiresAt, "long") }}
             </p>
             <StatusBadge :tone="session.isCurrent ? 'brand' : 'neutral'">
               {{ session.isCurrent ? t("settingsCurrentSession") : t("settingsOtherSession") }}

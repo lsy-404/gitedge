@@ -6,7 +6,7 @@ import AppLink from "../components/AppLink.vue";
 import NoticeBar from "../components/NoticeBar.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import AppIcon from "../components/AppIcon.vue";
-import { api } from "../lib/api";
+import { api, errorMessage } from "../lib/api";
 import type { SsoProviderSummary } from "../lib/api";
 import { setSession, sessionState } from "../lib/session";
 import { notifyBrowserIdentityChanged } from "../lib/browserIdentity";
@@ -91,8 +91,14 @@ async function submit() {
       return;
     }
     await router.push(returnTo.value);
-  } catch {
-    error.value = t("apiError");
+  } catch (cause) {
+    error.value = errorMessage(
+      cause,
+      t,
+      register.value
+        ? { 400: "registerInvalid", 403: "registrationDisabled", 409: "identifierTaken" }
+        : { 401: "invalidCredentials" }
+    );
   } finally {
     busy.value = false;
   }

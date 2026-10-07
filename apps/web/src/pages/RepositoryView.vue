@@ -4,7 +4,6 @@ import { useI18n } from "vue-i18n";
 import { useRoute } from "vue-router";
 import type { AgentSession, Repository, RepositorySettings } from "../lib/api";
 import { ApiError, api } from "../lib/api";
-import { sessionState } from "../lib/session";
 import AppIcon, { type IconName } from "../components/AppIcon.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import NoticeBar from "../components/NoticeBar.vue";
@@ -16,7 +15,7 @@ import RepositorySettingsPanel from "../components/RepositorySettings.vue";
 import RepositoryTasks from "../components/RepositoryTasks.vue";
 const RepositoryActions = defineAsyncComponent(() => import("../components/RepositoryActions.vue"));
 const route = useRoute();
-const { t, locale } = useI18n();
+const { t, d } = useI18n();
 const owner = computed(() => String(route.params.owner));
 const repoName = computed(() => String(route.params.repo));
 const base = computed(() => `/${owner.value}/${repoName.value}`);
@@ -166,11 +165,6 @@ function sessionStatus(session: AgentSession) {
   return session.status === "active" && session.expiresAt <= Date.now()
     ? "expired"
     : session.status;
-}
-function formatDate(value: number) {
-  return new Intl.DateTimeFormat(locale.value, { dateStyle: "medium", timeStyle: "short" }).format(
-    value
-  );
 }
 watch(() => [route.params.owner, route.params.repo], load, { immediate: true });
 watch(() => [section.value, repository.value?.id], loadSessions);
@@ -333,7 +327,7 @@ watch(
                     >
                   </td>
                   <td>{{ t(session.permission === "read" ? "ghReadOnly" : "ghReadWrite") }}</td>
-                  <td class="muted">{{ formatDate(session.expiresAt) }}</td>
+                  <td class="muted">{{ d(session.expiresAt, "long") }}</td>
                 </tr>
               </tbody>
             </table>

@@ -48,7 +48,6 @@ export default {
     repoSettingsArchived: "仓库已归档，写入、合并和新建写入凭证均不可用。你仍可在此取消归档。",
     repoSettingsSaveRejected: "部分仓库设置无效，请检查名称、分支和合并规则。",
     repoSettingsSaveConflict: "仓库名称已被占用，或仓库状态已更改。请刷新后重试。",
-    repoSettingsSavedRoute: "设置已保存，仓库地址已更新。",
   },
   en: {
     repositorySettingsTitle: "Repository settings",
@@ -110,6 +109,5 @@ export default {
       "Some repository settings are invalid. Check the name, branch, and merge rules.",
     repoSettingsSaveConflict:
       "That repository name is taken, or its state changed. Refresh and try again.",
-    repoSettingsSavedRoute: "Settings saved and repository address updated.",
   },
 };

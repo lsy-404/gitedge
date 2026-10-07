@@ -69,7 +69,6 @@ const repositoryControlsMessages = {
     collaboratorDeleteError: "无法移除仓库协作者。",
     collaboratorSaved: "协作者权限已保存。",
     collaboratorDeleted: "协作者已移除。",
-    collaboratorRolePlaceholder: "选择权限",
     repositoryInitializeReadme: "使用 README 初始化仓库",
     repositoryInitializeReadmeHint: "创建一个包含 README 的初始提交。",
     repositoryNameInvalid: "仓库名称无效。名称可以包含字母、数字、点、连字符和下划线。",
@@ -150,7 +149,6 @@ const repositoryControlsMessages = {
     collaboratorDeleteError: "Could not remove the repository collaborator.",
     collaboratorSaved: "Collaborator access saved.",
     collaboratorDeleted: "Collaborator removed.",
-    collaboratorRolePlaceholder: "Choose access",
     repositoryInitializeReadme: "Initialize repository with a README",
     repositoryInitializeReadmeHint: "Create the initial commit with a README file.",
     repositoryNameInvalid:

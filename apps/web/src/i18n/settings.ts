@@ -18,7 +18,6 @@ export const settingsMessages = {
     settingsWebsite: "网站",
     settingsRenameNotice:
       "修改用户名会改变个人仓库的网址和 Git remote。仓库、权限和登录身份会保留；请同步更新本地 remote。",
-    settingsReadableName: "请为账户选择一个可读的公开用户名。",
     settingsPreferenceDescription: "这些偏好保存在账户中，并应用到代码查看器和界面。",
     settingsTheme: "主题",
     settingsThemeSystem: "跟随系统",
@@ -73,7 +72,6 @@ export const settingsMessages = {
     settingsDetachedSignature: "分离签名",
     settingsFinishKey: "完成登记",
     settingsNoKeys: "尚未登记签名公钥。",
-    settingsFingerprint: "指纹",
     settingsSignatureValid: "签名有效",
     settingsSignatureInvalid: "签名无效",
     settingsSignatureUnknown: "公钥尚未登记",
@@ -106,7 +104,6 @@ export const settingsMessages = {
     settingsWebsite: "Website",
     settingsRenameNotice:
       "Changing your username changes personal repository URLs and Git remotes. Repositories, permissions and linked identities are retained; update your local remotes.",
-    settingsReadableName: "Choose a readable public username for your account.",
     settingsPreferenceDescription:
       "Preferences are saved to your account and applied to the interface and code viewer.",
     settingsTheme: "Theme",
@@ -164,7 +161,6 @@ export const settingsMessages = {
     settingsDetachedSignature: "Detached signature",
     settingsFinishKey: "Register key",
     settingsNoKeys: "No signing keys registered.",
-    settingsFingerprint: "Fingerprint",
     settingsSignatureValid: "Valid signature",
     settingsSignatureInvalid: "Invalid signature",
     settingsSignatureUnknown: "Unknown signing key",

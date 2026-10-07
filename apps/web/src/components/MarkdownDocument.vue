@@ -2,13 +2,8 @@
 import { computed, ref, useId } from "vue";
 import { useI18n } from "vue-i18n";
 import type { DocumentRevisionSummary } from "../lib/api";
-import { ApiError } from "../lib/api";
-import {
-  errorMessage,
-  revisionActorLabel,
-  revisionActorTone,
-  type DocumentView,
-} from "../lib/tasks";
+import { ApiError, errorMessage } from "../lib/api";
+import { revisionActorLabel, revisionActorTone, type DocumentView } from "../lib/tasks";
 import MarkdownContent from "./MarkdownContent.vue";
 import NoticeBar from "./NoticeBar.vue";
 import StatusBadge from "./StatusBadge.vue";
@@ -31,7 +26,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ update: [document: DocumentView] }>();
 
-const { t } = useI18n();
+const { t, d } = useI18n();
 const headingId = useId();
 const editing = ref(false);
 const draft = ref("");
@@ -137,9 +132,7 @@ async function viewRevision(revision: number) {
       <slot name="meta" />
       <span v-if="shown.actor" class="doc-byline muted">
         {{ revisionActorLabel(shown.actor, t) }}
-        <template v-if="shown.updatedAt">
-          · {{ new Date(shown.updatedAt).toLocaleString() }}</template
-        >
+        <template v-if="shown.updatedAt"> · {{ d(shown.updatedAt, "long") }}</template>
       </span>
       <div class="doc-actions">
         <FluentButton
@@ -217,7 +210,7 @@ async function viewRevision(revision: number) {
           }}</StatusBadge>
           <small class="muted"
             >{{ t("docSize", { size: revision.size }) }} ·
-            {{ new Date(revision.updatedAt).toLocaleString() }}</small
+            {{ d(revision.updatedAt, "long") }}</small
           >
           <FluentButton
             type="button"

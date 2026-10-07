@@ -11,8 +11,7 @@ import {
   type FluentSelectOption,
 } from "@platform-kit/fluent/vue";
 import type { Repository, RepositorySettings } from "../lib/api";
-import { ApiError, api } from "../lib/api";
-import { errorMessage } from "../lib/tasks";
+import { ApiError, api, errorMessage } from "../lib/api";
 import { oneOf } from "../ui/formEvents";
 import NoticeBar from "./NoticeBar.vue";
 import StatusState from "./StatusState.vue";

@@ -1,4 +1,4 @@
-import { ApiError } from "./api";
+import { ApiError, type Translate } from "./api";
 import type {
   Assignee,
   AssigneeCandidate,
@@ -66,8 +66,6 @@ export function parseAssigneeKey(
   return match ? assigneeRef(match) : null;
 }
 
-type Translate = (key: string, values?: Record<string, string | number>) => string;
-
 /** Human-readable writer of a revision; platform entries are labelled as such. */
 export function revisionActorLabel(actor: RevisionActor | null, t: Translate): string {
   if (!actor) return "";
@@ -78,25 +76,6 @@ export function revisionActorLabel(actor: RevisionActor | null, t: Translate): s
 export function revisionActorTone(actor: RevisionActor | null): BadgeTone {
   if (actor?.kind === "agent") return "brand";
   return "neutral";
-}
-
-/**
- * Maps a failed request to localized text. `overrides` replaces the generic message for a status
- * with a message key that explains the failure in the context of the action.
- */
-export function errorMessage(
-  cause: unknown,
-  t: Translate,
-  overrides: Partial<Record<number, string>> = {}
-): string {
-  if (cause instanceof ApiError) {
-    const override = overrides[cause.status];
-    if (override) return t(override);
-    if (cause.status === 403) return t("permissionDenied");
-    if (cause.status === 404) return t("resourceNotFound");
-    if (cause.status === 409) return t("conflictError");
-  }
-  return t("apiError");
 }
 
 export function isUnavailable(cause: unknown): boolean {
