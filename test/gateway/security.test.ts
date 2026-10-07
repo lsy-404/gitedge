@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import gateway, {
   handleGatewayRequest,
@@ -112,11 +113,11 @@ describe("Gateway address limiting", () => {
     const keys: string[] = [];
     const env = environment({
       RATE_LIMITER: {
-        getByName: (name: string) => {
+        getByName: (name) => {
           keys.push(name);
           return { consume: async () => ({ allowed: true, retryAfter: 0 }) };
         },
-      } as GatewayEnv["RATE_LIMITER"],
+      },
     });
     for (const ip of ["2001:db8:1:2::5", "2001:db8:1:2:ffff::1"]) {
       await handleGatewayRequest(
@@ -127,5 +128,14 @@ describe("Gateway address limiting", () => {
       );
     }
     expect(new Set(keys).size).toBe(1);
+  });
+});
+
+describe("Static asset headers", () => {
+  it("applies the frame-denying policy to assets served without the Worker", () => {
+    const rules = readFileSync("apps/web/public/_headers", "utf8");
+    expect(rules).toMatch(/^\/\*$/m);
+    expect(rules).toContain("frame-ancestors 'none'");
+    expect(rules).toContain("X-Content-Type-Options: nosniff");
   });
 });

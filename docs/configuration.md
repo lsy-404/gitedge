@@ -8,18 +8,18 @@ pnpm exec wrangler secret put <NAME> --config workers/<worker>/wrangler.jsonc
 
 ## Auth
 
-| Name                     | Kind   | Default                  | Purpose                                                                           |
-| ------------------------ | ------ | ------------------------ | --------------------------------------------------------------------------------- |
-| `GITHUB_CLIENT_ID`       | secret | none                     | GitHub OAuth application client ID. GitHub sign-in is unavailable without it.     |
-| `GITHUB_CLIENT_SECRET`   | secret | none                     | GitHub OAuth application client secret.                                           |
-| `WEBHOOK_ENCRYPTION_KEY` | secret | none                     | Base64-encoded 32-byte key that encrypts agent webhook signing secrets.           |
-| `SSO_SECRETS_JSON`       | secret | none                     | Client secrets for configured SSO providers. See [SSO configuration](sso.md).     |
-| `GITHUB_OAUTH_BASE`      | var    | `https://github.com`     | GitHub OAuth origin; override only for GitHub Enterprise or test doubles.         |
-| `GITHUB_API_BASE`        | var    | `https://api.github.com` | GitHub API origin; override only for GitHub Enterprise or test doubles.           |
-| `ALLOW_PUBLIC_SIGNUP`    | var    | none (`true` shipped)    | Public registration is open only when the value is exactly `true`.                |
-| `DEFAULT_USER_GROUP`     | var    | `free` for SSO signups   | User group assigned to new accounts; its limits come from the group limits table. |
-| `LOG_LEVEL`              | var    | logger default           | Minimum structured log level.                                                     |
-| `SSO_PROVIDERS_JSON`     | var    | none                     | Provider list. See [SSO configuration](sso.md).                                   |
+| Name                     | Kind   | Default                  | Purpose                                                                                  |
+| ------------------------ | ------ | ------------------------ | ---------------------------------------------------------------------------------------- |
+| `GITHUB_CLIENT_ID`       | secret | none                     | GitHub OAuth application client ID. GitHub sign-in is unavailable without it.            |
+| `GITHUB_CLIENT_SECRET`   | secret | none                     | GitHub OAuth application client secret.                                                  |
+| `WEBHOOK_ENCRYPTION_KEY` | secret | none                     | Base64-encoded 32-byte key that encrypts agent webhook signing secrets.                  |
+| `SSO_SECRETS_JSON`       | secret | none                     | Client secrets for configured SSO providers. See [SSO configuration](sso.md).            |
+| `GITHUB_OAUTH_BASE`      | var    | `https://github.com`     | GitHub OAuth origin; override only for GitHub Enterprise or test doubles.                |
+| `GITHUB_API_BASE`        | var    | `https://api.github.com` | GitHub API origin; override only for GitHub Enterprise or test doubles.                  |
+| `ALLOW_PUBLIC_SIGNUP`    | var    | none (`true` shipped)    | Public registration is open only when the value is exactly `true`.                       |
+| `DEFAULT_USER_GROUP`     | var    | none (`free` shipped)    | Required. User group for new accounts; SSO identity creation alone falls back to `free`. |
+| `LOG_LEVEL`              | var    | logger default           | Minimum structured log level.                                                            |
+| `SSO_PROVIDERS_JSON`     | var    | none                     | Provider list. See [SSO configuration](sso.md).                                          |
 
 Generate the webhook key with `openssl rand -base64 32`. Agent webhooks return an error while it is missing.
 

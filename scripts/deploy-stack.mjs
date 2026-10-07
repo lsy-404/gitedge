@@ -67,9 +67,9 @@ function assertProductionResourceIds() {
   return false;
 }
 
-function run(command, args, { cloudflare = false, quiet = false } = {}) {
+function run(command, args, { cloudflare = false } = {}) {
   const result = spawnSync(command, args, {
-    stdio: quiet ? "ignore" : "inherit",
+    stdio: "inherit",
     env: cloudflare ? cloudflareEnvironment() : process.env,
   });
   if (result.error) {
@@ -89,9 +89,12 @@ function workerExists(service) {
   const result = spawnSync(
     "pnpm",
     ["exec", "wrangler", "deployments", "list", "--config", `workers/${service}/wrangler.jsonc`],
-    { stdio: "ignore", env: cloudflareEnvironment() }
+    { encoding: "utf8", env: cloudflareEnvironment() }
   );
-  return result.status === 0;
+  if (result.status === 0) return true;
+  const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+  if (/10007|does not exist|not found/i.test(output)) return false;
+  throw new Error(`Cannot determine whether ${service} is deployed:\n${output}`);
 }
 
 // Git, Forge and Actions bind each other, so a fresh account needs placeholders before the real deploys.

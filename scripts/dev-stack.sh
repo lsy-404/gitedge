@@ -3,7 +3,8 @@ set -euo pipefail
 
 root_dir="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root_dir"
-export CLOUDFLARE_ACCOUNT_ID="$(node --input-type=module -e "import { accountId } from './scripts/deploy-stack.mjs'; console.log(accountId())")"
+CLOUDFLARE_ACCOUNT_ID="$(node --input-type=module -e "import { accountId } from './scripts/deploy-stack.mjs'; console.log(accountId())")"
+export CLOUDFLARE_ACCOUNT_ID
 pnpm --dir apps/web run build
 pnpm run db:migrate:local
 
