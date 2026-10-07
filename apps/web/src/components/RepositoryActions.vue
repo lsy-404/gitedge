@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { FluentButton } from "@platform-kit/fluent/vue";
 import type { ActionRun, ActionRunSummary, ActionWorkflowFile, GitRef } from "../lib/api";
 import { ApiError, api, errorMessage } from "../lib/api";
+import NoticeBar from "./NoticeBar.vue";
 import ConfirmButton from "./ConfirmButton.vue";
 import SelectField from "./SelectField.vue";
 import StatusBadge from "./StatusBadge.vue";
@@ -285,13 +286,18 @@ onUnmounted(() => clearInterval(pollingTimer));
     <StatusState v-else-if="error && !runs.length" :loading="false" :error="error" @retry="load" />
 
     <div v-else class="actions-layout">
-      <div v-if="error" class="actions-load-error" role="alert">
-        <p>{{ error }}</p>
-        <FluentButton type="button" @click="load">{{ t("actionsRefresh") }}</FluentButton>
-      </div>
-      <p v-if="actionsNetworkEnabled === false" class="actions-warning actions-network-notice">
-        {{ t("actionsNetworkDisabled") }}
-      </p>
+      <NoticeBar v-if="error" class="actions-load-error" intent="error">
+        {{ error }}
+        <template #actions>
+          <FluentButton type="button" @click="load">{{ t("actionsRefresh") }}</FluentButton>
+        </template>
+      </NoticeBar>
+      <NoticeBar
+        v-if="actionsNetworkEnabled === false"
+        class="actions-network-notice"
+        intent="warning"
+        >{{ t("actionsNetworkDisabled") }}</NoticeBar
+      >
       <section class="box actions-panel" :aria-label="t('actionsWorkflows')">
         <header class="box-header">
           <h3>{{ t("actionsWorkflows") }}</h3>
@@ -339,16 +345,16 @@ onUnmounted(() => clearInterval(pollingTimer));
           <p v-if="chosenWorkflow" class="actions-muted">
             {{ t("actionsTriggers", { triggers: chosenWorkflow.triggers.join(", ") || "-" }) }}
           </p>
-          <p v-if="chosenWorkflow && !chosenWorkflow.supported" class="actions-warning">
-            {{ t("actionsUnsupported", { reason: chosenWorkflow.unsupportedReason }) }}
-          </p>
+          <NoticeBar v-if="chosenWorkflow && !chosenWorkflow.supported" intent="warning">{{
+            t("actionsUnsupported", { reason: chosenWorkflow.unsupportedReason })
+          }}</NoticeBar>
           <p
             v-else-if="chosenWorkflow && !chosenWorkflow.triggers.includes('workflow_dispatch')"
             class="actions-muted"
           >
             {{ t("actionsPushOnly") }}
           </p>
-          <p v-if="runError" class="actions-error" role="alert">{{ runError }}</p>
+          <NoticeBar v-if="runError" class="actions-error" intent="error">{{ runError }}</NoticeBar>
           <p v-if="workflowOid" class="actions-oid">
             {{ t("actionsCommit") }} <code>{{ workflowOid }}</code>
           </p>
@@ -421,9 +427,9 @@ onUnmounted(() => clearInterval(pollingTimer));
               </StatusBadge>
             </header>
             <pre>{{ step.log || t("actionsNoLogs") }}</pre>
-            <p v-if="step.outputTruncated" class="actions-warning">
-              {{ t("actionsOutputTruncated") }}
-            </p>
+            <NoticeBar v-if="step.outputTruncated" intent="warning">{{
+              t("actionsOutputTruncated")
+            }}</NoticeBar>
           </article>
         </div>
       </section>
@@ -493,34 +499,8 @@ onUnmounted(() => clearInterval(pollingTimer));
 }
 .actions-empty,
 .actions-muted,
-.actions-warning,
-.actions-error,
 .actions-oid {
   margin: 0;
-}
-.actions-warning,
-.actions-error,
-.actions-load-error {
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid;
-  border-radius: var(--radius-md);
-}
-.actions-warning {
-  color: var(--warning-fg);
-  background: var(--warning-subtle);
-  border-color: var(--warning-border);
-}
-.actions-error,
-.actions-load-error {
-  color: var(--danger-fg);
-  background: var(--danger-subtle);
-  border-color: var(--danger-border);
-}
-.actions-load-error {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
 }
 .actions-oid code,
 .actions-run-header code {
@@ -547,6 +527,9 @@ onUnmounted(() => clearInterval(pollingTimer));
   border: 0;
   border-radius: 0;
   box-shadow: none;
+}
+.actions-run-button:focus-visible {
+  outline-offset: -2px;
 }
 .actions-run-button:hover {
   background: var(--bg-subtle);

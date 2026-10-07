@@ -1180,8 +1180,7 @@ onUnmounted(() => {
 .file-type {
   color: var(--accent-fg);
 }
-.text-preview,
-.diff-preview {
+.text-preview {
   overflow: auto;
   max-height: 70vh;
   margin: 0;
@@ -1285,12 +1284,6 @@ onUnmounted(() => {
   align-items: flex-end;
   gap: var(--space-3);
   flex-wrap: wrap;
-}
-.diff-preview {
-  flex-basis: 100%;
-  width: 100%;
-  max-height: 320px;
-  padding: 0;
 }
 .item-row {
   display: flex;

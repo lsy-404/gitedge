@@ -286,13 +286,20 @@ interface MergeStatusRow {
 /** Reviews and checks bound to the current head, summarized next to the merge controls. */
 const mergeStatusRows = computed<MergeStatusRow[]>(() => {
   const head = diff.value?.headOid ?? "";
-  const verdicts = new Map<string, Review["state"]>();
+  const latest = new Map<string, Review>();
   for (const review of [...reviews.value].sort((a, b) => a.createdAt - b.createdAt))
-    if (review.commitOid === head && review.state !== "commented")
-      verdicts.set(`${review.actor.kind}:${review.actor.id}`, review.state);
-  const approvals = [...verdicts.values()].filter((state) => state === "approved").length;
+    if (review.commitOid === head) latest.set(`${review.actor.kind}:${review.actor.id}`, review);
+  const verdicts = [...latest.values()];
+  const subject = item.value;
+  const author = subject && "headRef" in subject ? subject.actor : null;
+  const approvals = verdicts.filter(
+    (review) =>
+      review.state === "approved" &&
+      review.actor.kind === "user" &&
+      !(author?.kind === "user" && review.actor.id === author.id)
+  ).length;
   const rows: MergeStatusRow[] = [];
-  if (verdicts.size > approvals)
+  if (verdicts.some((review) => review.state === "changes_requested"))
     rows.push({ key: "reviews", icon: "alert", tone: "danger", text: t("mergeReviewsChanges") });
   else if (approvals)
     rows.push({
@@ -1152,7 +1159,11 @@ watch(
               :key="row.number"
               class="box-row item-link"
               :to="`/${repository.owner}/${repository.name}/discussions/${row.number}`"
-              ><AppIcon class="state-icon" name="discussion" /><span class="collab-row-content"
+              ><AppIcon
+                class="state-icon"
+                :class="`state-${stateMark(row).tone}`"
+                :name="stateMark(row).icon"
+              /><span class="collab-row-content"
                 ><span class="collab-row-title"
                   ><strong>{{ row.title }}</strong
                   ><StatusBadge v-if="row.answerCommentId" tone="success">{{

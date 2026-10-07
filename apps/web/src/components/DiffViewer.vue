@@ -85,10 +85,10 @@ const hunks = computed(() => {
 table {
   min-width: 100%;
   border-collapse: collapse;
-  font: 12px/20px var(--font-mono);
+  font: var(--font-size-meta) / 20px var(--font-mono);
 }
 td {
-  padding: 0 10px;
+  padding: 0 var(--space-2);
   vertical-align: top;
 }
 .diff-number {
@@ -124,11 +124,10 @@ code {
   background: light-dark(#ddf4ff, #182b40);
 }
 .diff-hunk td {
-  padding-top: 5px;
-  padding-bottom: 5px;
+  padding-block: var(--space-1);
 }
 pre {
   margin: 0;
-  padding: 12px;
+  padding: var(--space-3);
 }
 </style>
