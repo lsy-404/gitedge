@@ -13,6 +13,7 @@ import type {
   Repository,
   Review,
   WikiPage,
+  WikiPageSummary,
 } from "../lib/api";
 import { ApiError, api } from "../lib/api";
 import { sessionState } from "../lib/session";
@@ -21,6 +22,7 @@ import AppIcon from "./AppIcon.vue";
 import AppLink from "./AppLink.vue";
 import AssignmentPanel from "./AssignmentPanel.vue";
 import FormActions from "./FormActions.vue";
+import NoticeBar from "./NoticeBar.vue";
 import SelectField from "./SelectField.vue";
 import StatusBadge from "./StatusBadge.vue";
 import StatusState from "./StatusState.vue";
@@ -60,9 +62,10 @@ const router = useRouter();
 const issues = ref<Issue[]>([]);
 const pulls = ref<PullRequest[]>([]);
 const discussions = ref<Discussion[]>([]);
-const pages = ref<WikiPage[]>([]);
+const pages = ref<WikiPageSummary[]>([]);
 const item = ref<Issue | PullRequest | Discussion | WikiPage | null>(null);
 const comments = ref<Comment[]>([]);
+const listTruncated = ref(false);
 const reviews = ref<Review[]>([]);
 const checks = ref<CheckRun[]>([]);
 const mergeMethod = ref<"merge" | "squash" | "rebase">("merge");
@@ -78,7 +81,7 @@ watch(
   },
   { immediate: true }
 );
-const wikiHistory = ref<WikiPage[]>([]);
+const wikiHistory = ref<WikiPageSummary[]>([]);
 const wikiEditing = ref(false);
 const wikiDraft = ref({ title: "", content: "" });
 const diff = ref<GitComparison | null>(null);
@@ -222,10 +225,10 @@ function actorName(value: {
     ? `${value.actor.name}${value.actor.kind === "agent" ? ` · ${t("agent")}` : value.actor.kind === "ci" ? ` · ${t("ciActor")}` : ""}`
     : value.author || value.updatedBy || "";
 }
-function itemStatus(value: Issue | PullRequest | Discussion | WikiPage): string {
+function itemStatus(value: Issue | PullRequest | Discussion | WikiPageSummary): string {
   return "state" in value ? t(value.state) : `r${value.revision}`;
 }
-function itemCreatedAt(value: Issue | PullRequest | Discussion | WikiPage): number {
+function itemCreatedAt(value: Issue | PullRequest | Discussion | WikiPageSummary): number {
   return "createdAt" in value ? value.createdAt : value.updatedAt;
 }
 function userMessage(cause: unknown): string {
@@ -253,6 +256,7 @@ async function load() {
   error.value = "";
   notFound.value = false;
   item.value = null;
+  listTruncated.value = false;
   try {
     if (props.section === "issues") {
       if (detailNumber.value) {
@@ -268,8 +272,14 @@ async function load() {
           labels: detail.labels.join(", "),
           draft: false,
         };
-        comments.value = rows;
-      } else issues.value = await api.issues(props.repository.id);
+        comments.value = rows.items;
+        listTruncated.value = rows.truncated;
+      } else {
+        const page = await api.issues(props.repository.id);
+        if (version !== loadVersion) return;
+        issues.value = page.items;
+        listTruncated.value = page.truncated;
+      }
     } else if (props.section === "pulls") {
       if (detailNumber.value) {
         const [detail, rows, reviewRows, checkRows, comparison] = await Promise.all([
@@ -287,7 +297,8 @@ async function load() {
           labels: "",
           draft: detail.draft,
         };
-        comments.value = rows;
+        comments.value = rows.items;
+        listTruncated.value = rows.truncated;
         reviews.value = reviewRows;
         checks.value = checkRows;
         diff.value = comparison;
@@ -299,7 +310,8 @@ async function load() {
             : Promise.resolve([]),
         ]);
         if (version !== loadVersion) return;
-        pulls.value = pullRows;
+        pulls.value = pullRows.items;
+        listTruncated.value = pullRows.truncated;
         agentSessions.value = sessionRows;
       }
     } else if (props.section === "discussions") {
@@ -316,8 +328,14 @@ async function load() {
           labels: "",
           draft: false,
         };
-        comments.value = rows;
-      } else discussions.value = await api.discussions(props.repository.id);
+        comments.value = rows.items;
+        listTruncated.value = rows.truncated;
+      } else {
+        const page = await api.discussions(props.repository.id);
+        if (version !== loadVersion) return;
+        discussions.value = page.items;
+        listTruncated.value = page.truncated;
+      }
     } else if (props.section === "wiki") {
       if (wikiSlug.value) {
         const [detail, history, pageRows] = await Promise.all([
@@ -329,9 +347,15 @@ async function load() {
         item.value = detail;
         wikiDraft.value = { title: detail.title, content: detail.content };
         wikiEditing.value = false;
-        wikiHistory.value = history;
-        pages.value = pageRows;
-      } else pages.value = await api.wiki(props.repository.id);
+        wikiHistory.value = history.items;
+        pages.value = pageRows.items;
+        listTruncated.value = history.truncated || pageRows.truncated;
+      } else {
+        const page = await api.wiki(props.repository.id);
+        if (version !== loadVersion) return;
+        pages.value = page.items;
+        listTruncated.value = page.truncated;
+      }
     } else {
       error.value = t("unknownSection");
     }
@@ -472,7 +496,9 @@ async function postComment() {
       );
     commentBody.value = "";
     editCommentId.value = "";
-    comments.value = await api.comments(props.repository.id, resource.value, detailNumber.value);
+    const page = await api.comments(props.repository.id, resource.value, detailNumber.value);
+    comments.value = page.items;
+    listTruncated.value = page.truncated;
   } catch (cause) {
     error.value = userMessage(cause);
   } finally {
@@ -508,11 +534,12 @@ async function saveWiki() {
     saving.value = false;
   }
 }
-async function restoreWiki(page: WikiPage) {
+async function restoreWiki(summary: WikiPageSummary) {
   const current = item.value;
   if (!current || !("revision" in current)) return;
   saving.value = true;
   try {
+    const page = await api.wikiRevision(props.repository.id, wikiSlug.value, summary.revision);
     item.value = await api.updateWikiPage(props.repository.id, wikiSlug.value, {
       title: page.title,
       content: page.content,
@@ -630,6 +657,9 @@ watch(
 
 <template>
   <section class="collab-section">
+    <NoticeBar v-if="!loading && !error && listTruncated" intent="warning">{{
+      t("listTruncated")
+    }}</NoticeBar>
     <div v-if="loading || error || notFound" class="box">
       <StatusState :loading="loading" :error="error" :empty="notFound" @retry="load"
         ><template #empty>{{ t("resourceNotFound") }}</template></StatusState

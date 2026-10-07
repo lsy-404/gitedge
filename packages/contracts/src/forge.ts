@@ -26,8 +26,6 @@ export interface Repository {
   owner: string;
   name: string;
   slug: string;
-  artifactName: string;
-  remote: string;
   description: string;
   visibility: "public" | "private";
   defaultBranch: string;
@@ -109,13 +107,21 @@ export interface Discussion {
   updatedAt: number;
 }
 
-export interface WikiPage {
+export interface WikiPageSummary {
   slug: string;
   title: string;
-  content: string;
   revision: number;
   updatedBy: string;
   updatedAt: number;
+}
+
+export interface WikiPage extends WikiPageSummary {
+  content: string;
+}
+
+export interface ListPage<T> {
+  items: T[];
+  truncated: boolean;
 }
 
 export interface Review {

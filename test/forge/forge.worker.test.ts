@@ -36,6 +36,7 @@ INSERT INTO forge_pull_requests (id,repository_id,number,author_id,title,body,ba
 const artifacts = new FixtureArtifacts();
 const gitCalls: Array<Record<string, unknown>> = [];
 const gitRequests: Array<{ method: string; url: string }> = [];
+let compareHead = "d".repeat(40);
 let mergeGate: Promise<void> | null = null;
 let onMergeStarted: (() => void) | null = null;
 const forgeEnv: Parameters<typeof forge.fetch>[1] = {
@@ -44,6 +45,8 @@ const forgeEnv: Parameters<typeof forge.fetch>[1] = {
   GIT: {
     async fetch(request: Request) {
       gitRequests.push({ method: request.method, url: request.url });
+      if (request.method === "GET" && new URL(request.url).pathname.endsWith("/compare"))
+        return Response.json({ data: { headOid: compareHead } });
       const body =
         request.method === "POST" ? ((await request.json()) as Record<string, unknown>) : {};
       gitCalls.push(body);
@@ -155,13 +158,18 @@ describe("Forge collaboration", () => {
     ]);
     expect(edits.map((result) => result.status).sort()).toEqual([200, 409]);
     const wikiIndex = await call("/repositories/r1/wiki", "GET", "u2", "bob");
-    expect(await wikiIndex.json()).toMatchObject({
-      data: [{ slug: "home", content: expect.any(String) }],
-    });
+    const indexBody = (await wikiIndex.json()) as {
+      data: Array<Record<string, unknown>>;
+      truncated: boolean;
+    };
+    expect(indexBody).toMatchObject({ data: [{ slug: "home", revision: 2 }], truncated: false });
+    expect(indexBody.data[0]).not.toHaveProperty("content");
     const history = await call("/repositories/r1/wiki/home/history", "GET", "u2", "bob");
-    const historyPages = ((await history.json()) as { data: Array<{ content: string }> }).data;
+    const historyPages = ((await history.json()) as { data: Array<Record<string, unknown>> }).data;
     expect(historyPages).toHaveLength(2);
-    expect(historyPages.every((page) => typeof page.content === "string")).toBe(true);
+    expect(historyPages.every((page) => !("content" in page))).toBe(true);
+    const revision = await call("/repositories/r1/wiki/home/revisions/1", "GET", "u2", "bob");
+    expect(await revision.json()).toMatchObject({ data: { content: "one" } });
     const restored = await call("/repositories/r1/wiki/home/restore/1", "POST", "u1", "alice", {
       expectedRevision: 2,
     });
@@ -363,6 +371,7 @@ describe("Forge collaboration", () => {
     );
     const body = await created.json();
     const head = "d".repeat(40);
+    compareHead = head;
     const review = await call(
       `/repositories/r1/pull-requests/${body.data.number}/reviews`,
       "POST",
@@ -398,6 +407,7 @@ describe("Forge collaboration", () => {
     const pr = ((await created.json()) as { data: { number: number } }).data;
     const head = "f".repeat(40),
       base = "1".repeat(40);
+    compareHead = head;
     await call(`/repositories/r1/pull-requests/${pr.number}/checks`, "POST", "u1", "alice", {
       name: "CI",
       commitOid: head,
@@ -476,6 +486,7 @@ describe("Forge collaboration", () => {
     const pr = ((await created.json()) as { data: { number: number } }).data;
     const head = "a".repeat(40),
       base = "b".repeat(40);
+    compareHead = head;
     await call(`/repositories/r1/pull-requests/${pr.number}/checks`, "POST", "u1", "alice", {
       name: "CI",
       commitOid: head,
@@ -668,4 +679,156 @@ it("keeps merged pull request diffs bound to the reviewed commits", async () => 
     expect(url.searchParams.get("base")).toBe(merged.base);
     expect(url.searchParams.get("head")).toBe(merged.head);
   }
+});
+
+describe("Forge list bounds, answers and head pinning", () => {
+  const session = {
+    id: "s1",
+    agentId: "a1",
+    agentName: "reviewer",
+    repositoryId: "r1",
+    workspaceName: "review",
+    permission: "write",
+  };
+
+  it("rejects reviews and checks recorded against a commit that is not the pull request head", async () => {
+    const created = await call("/repositories/r1/pull-requests", "POST", "u1", "alice", {
+      title: "Pinned head",
+      baseRef: "main",
+      headRef: "pinned",
+    });
+    const pr = ((await created.json()) as { data: { number: number } }).data;
+    const head = "9".repeat(40);
+    const stale = "8".repeat(40);
+    compareHead = head;
+    const base = `/repositories/r1/pull-requests/${pr.number}`;
+    for (const [route, payload] of [
+      ["reviews", { state: "approved" }],
+      ["checks", { name: "CI", status: "completed", conclusion: "success" }],
+    ] as const) {
+      const rejected = await call(`${base}/${route}`, "POST", "u2", "bob", {
+        ...payload,
+        commitOid: stale,
+      });
+      expect(rejected.status, route).toBe(409);
+      expect(await rejected.json()).toMatchObject({ error: { code: "stale_commit" } });
+      const accepted = await call(`${base}/${route}`, "POST", "u2", "bob", {
+        ...payload,
+        commitOid: head,
+      });
+      expect(accepted.status, route).toBe(201);
+    }
+  });
+
+  it("clears the accepted answer when its comment is deleted", async () => {
+    const created = await call("/repositories/r1/discussions", "POST", "u1", "alice", {
+      title: "Question",
+      category: "q-and-a",
+    });
+    const number = ((await created.json()) as { data: { number: number } }).data.number;
+    const path = `/repositories/r1/discussions/${number}`;
+    const comment = await call(`${path}/comments`, "POST", "u2", "bob", { body: "Try this" });
+    const commentId = ((await comment.json()) as { data: { id: string } }).data.id;
+    const marked = await call(path, "PATCH", "u1", "alice", { answerCommentId: commentId });
+    expect(await marked.json()).toMatchObject({ data: { answerCommentId: commentId } });
+    expect((await call(`${path}/comments/${commentId}`, "DELETE", "u2", "bob")).status).toBe(204);
+    const detail = await call(path, "GET", "u1", "alice");
+    expect(await detail.json()).toMatchObject({ data: { answerCommentId: null } });
+  });
+
+  it("bounds repository-wide lists and reports truncation", async () => {
+    await runSqlScript(
+      env.DB,
+      `INSERT INTO repositories (id,namespace_id,created_by,slug,do_name,visibility,description,created_at,updated_at,artifact_name,remote) VALUES ('r9','n1','u1','bulk','repo:r9','public','',1,1,'repo-r9','artifact://repo-r9');
+INSERT INTO forge_counters (repository_id, conversation_number) VALUES ('r9', 0);
+WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 501)
+INSERT INTO forge_issues (id,repository_id,number,author_id,title,body,state,created_at,updated_at) SELECT 'bulk-' || n,'r9',n,'u1','Bulk ' || n,'','open',n,n FROM seq;`
+    );
+    const bulk = (await (await call("/repositories/r9/issues", "GET", "u1", "alice")).json()) as {
+      data: Array<{ number: number }>;
+      truncated: boolean;
+    };
+    expect(bulk.truncated).toBe(true);
+    expect(bulk.data).toHaveLength(500);
+    expect(bulk.data[0]?.number).toBe(501);
+    const small = (await (await call("/repositories/r1/issues", "GET", "u1", "alice")).json()) as {
+      truncated: boolean;
+    };
+    expect(small.truncated).toBe(false);
+  });
+
+  it("hides repository existence from agent sessions outside their repository", async () => {
+    await runSqlScript(
+      env.DB,
+      `INSERT INTO namespaces (id, slug, created_by, created_at, kind, display_name, description) VALUES ('n2','team','u2',1,'personal','Team','');
+INSERT INTO namespace_memberships (namespace_id,user_id,created_at,role) VALUES ('n2','u2',1,'owner');
+INSERT INTO repositories (id,namespace_id,created_by,slug,do_name,visibility,description,created_at,updated_at,artifact_name,remote) VALUES ('r2','n2','u2','hidden','repo:r2','private','',1,1,'repo-r2','artifact://repo-r2'), ('r3','n2','u2','open','repo:r3','public','',1,1,'repo-r3','artifact://repo-r3');`
+    );
+    const probe = async (owner: string, slug: string) => {
+      const response = await call(
+        `/repositories/by-name/${owner}/${slug}`,
+        "GET",
+        "u2",
+        "bob",
+        undefined,
+        session
+      );
+      return { status: response.status, body: await response.text() };
+    };
+    const privateMember = await probe("team", "hidden");
+    const publicOther = await probe("team", "open");
+    const missing = await probe("team", "missing");
+    expect(missing.status).toBe(404);
+    expect(privateMember).toEqual(missing);
+    expect(publicOther).toEqual(missing);
+    expect((await probe("alice", "demo")).status).toBe(200);
+  });
+
+  it("manages organization members with owner-only mutation and a last-owner guard", async () => {
+    const created = await call("/organizations", "POST", "u1", "alice", {
+      slug: "acme",
+      displayName: "Acme",
+    });
+    expect(created.status).toBe(201);
+    const members = (user: string, name: string) =>
+      call("/organizations/acme/members", "GET", user, name);
+    const listed = (await (await members("u1", "alice")).json()) as {
+      data: Array<{ identifier: string; role: string }>;
+    };
+    expect(listed.data).toEqual([expect.objectContaining({ identifier: "alice", role: "owner" })]);
+    expect((await members("u3", "eve")).status).toBe(403);
+    const add = (user: string, name: string, identifier: string) =>
+      call("/organizations/acme/members", "POST", user, name, { identifier });
+    expect((await add("u1", "alice", "bob")).status).toBe(201);
+    expect((await add("u1", "alice", "bob")).status).toBe(409);
+    expect((await add("u2", "bob", "eve")).status).toBe(403);
+    expect((await members("u2", "bob")).status).toBe(200);
+    expect((await call("/organizations/acme/members/alice", "DELETE", "u1", "alice")).status).toBe(
+      409
+    );
+    expect((await call("/organizations/acme/members/bob", "DELETE", "u2", "bob")).status).toBe(403);
+    expect((await call("/organizations/acme/members/bob", "DELETE", "u1", "alice")).status).toBe(
+      204
+    );
+  });
+
+  it("serves public profiles without exposing internal storage fields", async () => {
+    const response = await forge.fetch(new Request("https://forge.test/profiles/alice"), forgeEnv);
+    expect(response.status).toBe(200);
+    const profile = (await response.json()) as {
+      data: { owner: string; repositories: Array<Record<string, unknown>> };
+    };
+    expect(profile.data.owner).toBe("alice");
+    expect(profile.data.repositories.length).toBeGreaterThan(0);
+    for (const repository of profile.data.repositories) {
+      expect(repository).not.toHaveProperty("artifactName");
+      expect(repository).not.toHaveProperty("remote");
+    }
+    const missing = await forge.fetch(new Request("https://forge.test/profiles/nobody"), forgeEnv);
+    expect(missing.status).toBe(404);
+    const repository = await call("/repositories/by-name/alice/demo", "GET", "u1", "alice");
+    const body = (await repository.json()) as { data: Record<string, unknown> };
+    expect(body.data).not.toHaveProperty("artifactName");
+    expect(body.data).not.toHaveProperty("remote");
+  });
 });

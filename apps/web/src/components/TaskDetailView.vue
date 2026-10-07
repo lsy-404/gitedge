@@ -228,12 +228,12 @@ function openLinkForm() {
       ]);
       const linked = new Set(task.value?.links.map((link) => `${link.kind}:${link.number}`));
       linkOptions.value = [
-        ...issues.map((row: Issue) => ({
+        ...issues.items.map((row: Issue) => ({
           kind: "issue" as const,
           number: row.number,
           title: row.title,
         })),
-        ...pulls.map((row: PullRequest) => ({
+        ...pulls.items.map((row: PullRequest) => ({
           kind: "pull_request" as const,
           number: row.number,
           title: row.title,

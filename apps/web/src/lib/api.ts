@@ -34,10 +34,12 @@ import type {
   GitTree,
   GitTreeEntry,
   Issue,
+  ListPage,
   PullRequest,
   Repository,
   Review,
   WikiPage,
+  WikiPageSummary,
   CreatedAgentSession,
 } from "../../../../packages/contracts/src/forge";
 import type {
@@ -110,10 +112,12 @@ export type {
   GitTree,
   GitTreeEntry,
   Issue,
+  ListPage,
   PullRequest,
   Repository,
   Review,
   WikiPage,
+  WikiPageSummary,
   CreatedAgentSession,
 };
 export type {
@@ -185,6 +189,7 @@ export interface SsoLogoutResponse {
 
 interface ApiEnvelope<T> {
   data: T;
+  truncated?: boolean;
 }
 
 let expectedUserId: string | null = null;
@@ -215,6 +220,22 @@ async function request<T>(
   init?: RequestInit,
   allowNoContent = false
 ): Promise<T | void> {
+  const envelope = await requestEnvelope<T>(path, init, allowNoContent);
+  return envelope ? envelope.data : undefined;
+}
+
+async function requestPage<T>(path: string): Promise<ListPage<T>> {
+  const envelope = await requestEnvelope<T[]>(path);
+  if (!envelope || typeof envelope.truncated !== "boolean")
+    throw new ApiError(200, "Invalid list response");
+  return { items: envelope.data, truncated: envelope.truncated };
+}
+
+async function requestEnvelope<T>(
+  path: string,
+  init?: RequestInit,
+  allowNoContent = false
+): Promise<ApiEnvelope<T> | void> {
   const response = await fetch(path, {
     ...init,
     credentials: "include",
@@ -252,7 +273,7 @@ async function request<T>(
   if (!envelope || typeof envelope !== "object" || !("data" in envelope)) {
     throw new ApiError(response.status, "Invalid response envelope");
   }
-  return envelope.data;
+  return envelope;
 }
 
 function query(values: Record<string, string | number | undefined>): string {
@@ -444,7 +465,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  issues: (repositoryId: string) => request<Issue[]>(repositoryPath(repositoryId, "issues")),
+  issues: (repositoryId: string) => requestPage<Issue>(repositoryPath(repositoryId, "issues")),
   issue: (repositoryId: string, number: number) =>
     request<Issue>(repositoryPath(repositoryId, `issues/${number}`)),
   createIssue: (
@@ -465,7 +486,7 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   pulls: (repositoryId: string) =>
-    request<PullRequest[]>(repositoryPath(repositoryId, "pull-requests")),
+    requestPage<PullRequest>(repositoryPath(repositoryId, "pull-requests")),
   pull: (repositoryId: string, number: number) =>
     request<PullRequest>(repositoryPath(repositoryId, `pull-requests/${number}`)),
   createPullRequest: (
@@ -508,7 +529,7 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   discussions: (repositoryId: string) =>
-    request<Discussion[]>(repositoryPath(repositoryId, "discussions")),
+    requestPage<Discussion>(repositoryPath(repositoryId, "discussions")),
   discussion: (repositoryId: string, number: number) =>
     request<Discussion>(repositoryPath(repositoryId, `discussions/${number}`)),
   createDiscussion: (
@@ -528,11 +549,18 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
-  wiki: (repositoryId: string) => request<WikiPage[]>(repositoryPath(repositoryId, "wiki")),
+  wiki: (repositoryId: string) =>
+    requestPage<WikiPageSummary>(repositoryPath(repositoryId, "wiki")),
   wikiPage: (repositoryId: string, slug: string) =>
     request<WikiPage>(repositoryPath(repositoryId, `wiki/${encodeURIComponent(slug)}`)),
   wikiHistory: (repositoryId: string, slug: string) =>
-    request<WikiPage[]>(repositoryPath(repositoryId, `wiki/${encodeURIComponent(slug)}/history`)),
+    requestPage<WikiPageSummary>(
+      repositoryPath(repositoryId, `wiki/${encodeURIComponent(slug)}/history`)
+    ),
+  wikiRevision: (repositoryId: string, slug: string, revision: number) =>
+    request<WikiPage>(
+      repositoryPath(repositoryId, `wiki/${encodeURIComponent(slug)}/revisions/${revision}`)
+    ),
   updateWikiPage: (
     repositoryId: string,
     slug: string,
@@ -546,7 +574,7 @@ export const api = {
     repositoryId: string,
     resource: "issues" | "pull-requests" | "discussions",
     number: number
-  ) => request<Comment[]>(repositoryPath(repositoryId, `${resource}/${number}/comments`)),
+  ) => requestPage<Comment>(repositoryPath(repositoryId, `${resource}/${number}/comments`)),
   createComment: (
     repositoryId: string,
     resource: "issues" | "pull-requests" | "discussions",

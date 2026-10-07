@@ -20,8 +20,6 @@ export const repository: Repository = {
   owner: "acme",
   name: "project",
   slug: "project",
-  artifactName: "acme/project",
-  remote: "https://git.example/acme/project.git",
   description: "A test repository",
   visibility: "public",
   defaultBranch: "main",

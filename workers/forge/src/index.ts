@@ -33,6 +33,7 @@ import {
   MergePullRequestInputSchema,
   type Actor,
   type Repository,
+  type WikiPageSummary,
 } from "../../../packages/contracts/src/index";
 import { createLogger } from "../../../src/worker/common/logger";
 import { assignmentsColumn, parseAssignments, replaceAssignments } from "./assignments";
@@ -195,6 +196,54 @@ async function publicRepositoryForOwnerAndSlug(
   const resolved = await resolveRepositoryPath(env.DB, owner, slug);
   if (resolved?.visibility === "private") return repositoryAccessDenied();
   return resolved ? repositoryById(env, resolved.id) : null;
+}
+
+const MAX_LIST_ROWS = 500;
+
+function boundedList<T>(rows: T[], present: (row: T) => unknown = (row) => row): Response {
+  return json({
+    data: rows.slice(0, MAX_LIST_ROWS).map(present),
+    truncated: rows.length > MAX_LIST_ROWS,
+  });
+}
+
+function compareRequest(
+  requestUrl: string,
+  repository: RepositoryRow,
+  pull: Record<string, unknown>,
+  user: TrustedUser
+): Request {
+  const merged = pull.state === "merged";
+  const gitUrl = new URL(`/repositories/${repository.id}/compare`, requestUrl);
+  gitUrl.searchParams.set("base", String(merged ? pull.merge_base_oid : pull.base_ref));
+  gitUrl.searchParams.set("head", String(merged ? pull.merge_head_oid : pull.head_ref));
+  if (pull.head_session_id) gitUrl.searchParams.set("headSessionId", String(pull.head_session_id));
+  return new Request(gitUrl, { headers: trustedHeaders(user) });
+}
+
+async function pullRequestHeadOid(
+  env: ForgeEnv,
+  requestUrl: string,
+  repository: RepositoryRow,
+  pull: Record<string, unknown>,
+  user: TrustedUser
+): Promise<string | Response> {
+  const response = await env.GIT.fetch(compareRequest(requestUrl, repository, pull, user));
+  const body: unknown = response.ok ? await response.json().catch(() => null) : null;
+  const data = body && typeof body === "object" && "data" in body ? body.data : null;
+  const headOid =
+    data && typeof data === "object" && "headOid" in data && typeof data.headOid === "string"
+      ? data.headOid
+      : null;
+  if (!headOid) {
+    createLogger(env.LOG_LEVEL, { service: "forge" }).warn("forge:pull-request-head-unresolved", {
+      repositoryId: repository.id,
+      pullRequestId: pull.id,
+      status: response.status,
+    });
+    return error(502, "git_unavailable", "The pull request head could not be resolved.");
+  }
+  return headOid;
 }
 
 function mergeResultOid(value: unknown): string | null {
@@ -375,27 +424,27 @@ async function publicRepositoryRead(
     return error(409, "repository_archived", "Archived repositories are read-only.");
   if (resource === "issues" && parts.length === 5) {
     const rows = await env.DB.prepare(
-      `SELECT forge_issues.*, users.identifier AS author${assignmentsSelect("forge_issues", "forge_issues")} FROM forge_issues JOIN users ON users.id = forge_issues.author_id WHERE forge_issues.repository_id = ? ORDER BY forge_issues.number DESC`
+      `SELECT forge_issues.*, users.identifier AS author${assignmentsSelect("forge_issues", "forge_issues")} FROM forge_issues JOIN users ON users.id = forge_issues.author_id WHERE forge_issues.repository_id = ? ORDER BY forge_issues.number DESC LIMIT ?`
     )
-      .bind(repository.id)
+      .bind(repository.id, MAX_LIST_ROWS + 1)
       .all<Record<string, unknown>>();
-    return json({ data: rows.results.map((row) => presentForgeRow("issues", row)) });
+    return boundedList(rows.results, (row) => presentForgeRow("issues", row));
   }
   if (resource === "pull-requests" && parts.length === 5) {
     const rows = await env.DB.prepare(
-      `SELECT forge_pull_requests.*, users.identifier AS author${assignmentsSelect("forge_pull_requests", "forge_pull_requests")} FROM forge_pull_requests JOIN users ON users.id = forge_pull_requests.author_id WHERE forge_pull_requests.repository_id = ? ORDER BY forge_pull_requests.number DESC`
+      `SELECT forge_pull_requests.*, users.identifier AS author${assignmentsSelect("forge_pull_requests", "forge_pull_requests")} FROM forge_pull_requests JOIN users ON users.id = forge_pull_requests.author_id WHERE forge_pull_requests.repository_id = ? ORDER BY forge_pull_requests.number DESC LIMIT ?`
     )
-      .bind(repository.id)
+      .bind(repository.id, MAX_LIST_ROWS + 1)
       .all<Record<string, unknown>>();
-    return json({ data: rows.results.map((row) => presentForgeRow("pull-requests", row)) });
+    return boundedList(rows.results, (row) => presentForgeRow("pull-requests", row));
   }
   if (resource === "wiki" && parts.length === 5) {
     const rows = await env.DB.prepare(
-      "SELECT slug, title, content, revision, updated_by AS updatedBy, updated_at AS updatedAt FROM forge_wiki_pages WHERE repository_id = ? ORDER BY slug ASC"
+      "SELECT slug, title, revision, updated_by AS updatedBy, updated_at AS updatedAt FROM forge_wiki_pages WHERE repository_id = ? ORDER BY slug ASC LIMIT ?"
     )
-      .bind(repository.id)
+      .bind(repository.id, MAX_LIST_ROWS + 1)
       .all();
-    return json({ data: rows.results });
+    return boundedList(rows.results);
   }
   if (resource === "wiki" && parts.length === 6) {
     const page = await env.DB.prepare(
@@ -407,11 +456,11 @@ async function publicRepositoryRead(
   }
   if (resource === "wiki" && parts[5] && parts[6] === "history" && parts.length === 7) {
     const rows = await env.DB.prepare(
-      "SELECT slug, title, content, revision, updated_by AS updatedBy, updated_at AS updatedAt FROM forge_wiki_revisions WHERE repository_id = ? AND slug = ? ORDER BY revision DESC"
+      "SELECT slug, title, revision, updated_by AS updatedBy, updated_at AS updatedAt FROM forge_wiki_revisions WHERE repository_id = ? AND slug = ? ORDER BY revision DESC LIMIT ?"
     )
-      .bind(repository.id, parts[5])
+      .bind(repository.id, parts[5], MAX_LIST_ROWS + 1)
       .all();
-    return json({ data: rows.results });
+    return boundedList(rows.results);
   }
   if (resource === "wiki" && parts[6] === "revisions" && parts.length === 8) {
     const page = await env.DB.prepare(
@@ -460,11 +509,11 @@ async function publicRepositoryRead(
   }
   if (resource === "discussions" && parts.length === 5) {
     const rows = await env.DB.prepare(
-      "SELECT forge_discussions.*, users.identifier AS author FROM forge_discussions JOIN users ON users.id = forge_discussions.author_id WHERE forge_discussions.repository_id = ? ORDER BY forge_discussions.number DESC"
+      "SELECT forge_discussions.*, users.identifier AS author FROM forge_discussions JOIN users ON users.id = forge_discussions.author_id WHERE forge_discussions.repository_id = ? ORDER BY forge_discussions.number DESC LIMIT ?"
     )
-      .bind(repository.id)
+      .bind(repository.id, MAX_LIST_ROWS + 1)
       .all<Record<string, unknown>>();
-    return json({ data: rows.results.map((row) => presentForgeRow("discussions", row)) });
+    return boundedList(rows.results, (row) => presentForgeRow("discussions", row));
   }
   if (
     (resource === "issues" || resource === "pull-requests" || resource === "discussions") &&
@@ -513,11 +562,11 @@ async function publicRepositoryRead(
       .first<{ id: string }>();
     if (!target) return error(404, "not_found", "Resource was not found.");
     const rows = await env.DB.prepare(
-      "SELECT * FROM forge_comments WHERE repository_id = ? AND target_kind = ? AND target_id = ? ORDER BY created_at ASC"
+      "SELECT * FROM forge_comments WHERE repository_id = ? AND target_kind = ? AND target_id = ? ORDER BY created_at ASC LIMIT ?"
     )
-      .bind(repository.id, targetKind, target.id)
+      .bind(repository.id, targetKind, target.id, MAX_LIST_ROWS + 1)
       .all<Record<string, unknown>>();
-    return json({ data: rows.results.map((row) => presentForgeRow("comments", row)) });
+    return boundedList(rows.results, (row) => presentForgeRow("comments", row));
   }
   const memory = await memoryTaskRequest(env, request, repository, ANONYMOUS_VIEWER, suffix);
   if (memory) return memory;
@@ -568,11 +617,11 @@ async function featureRequest(
   if (targetTable && (request.method === "GET" || request.method === "POST") && !item) {
     if (request.method === "GET") {
       const rows = await env.DB.prepare(
-        `SELECT resource.*, users.identifier AS author${assignmentsSelect(targetTable, "resource")} FROM ${targetTable} AS resource JOIN users ON users.id = resource.author_id WHERE resource.repository_id = ? ORDER BY resource.number DESC`
+        `SELECT resource.*, users.identifier AS author${assignmentsSelect(targetTable, "resource")} FROM ${targetTable} AS resource JOIN users ON users.id = resource.author_id WHERE resource.repository_id = ? ORDER BY resource.number DESC LIMIT ?`
       )
-        .bind(repository.id)
+        .bind(repository.id, MAX_LIST_ROWS + 1)
         .all<Record<string, unknown>>();
-      return json({ data: rows.results.map((row) => presentForgeRow(resource, row)) });
+      return boundedList(rows.results, (row) => presentForgeRow(resource, row));
     }
     const denied = requireWrite();
     if (denied) return denied;
@@ -764,13 +813,11 @@ async function featureRequest(
     if (action === "comments" && (request.method === "GET" || request.method === "POST")) {
       if (request.method === "GET") {
         const comments = await env.DB.prepare(
-          "SELECT * FROM forge_comments WHERE repository_id = ? AND target_kind = ? AND target_id = ? ORDER BY created_at ASC"
+          "SELECT * FROM forge_comments WHERE repository_id = ? AND target_kind = ? AND target_id = ? ORDER BY created_at ASC LIMIT ?"
         )
-          .bind(repository.id, targetKind, String(current.id))
+          .bind(repository.id, targetKind, String(current.id), MAX_LIST_ROWS + 1)
           .all<Record<string, unknown>>();
-        return json({
-          data: comments.results.map((comment) => presentForgeRow("comments", comment)),
-        });
+        return boundedList(comments.results, (comment) => presentForgeRow("comments", comment));
       }
       const denied = requireWrite();
       if (denied) return denied;
@@ -837,7 +884,16 @@ async function featureRequest(
       const denied = requireWrite();
       if (denied) return denied;
       if (request.method === "DELETE") {
-        await env.DB.prepare("DELETE FROM forge_comments WHERE id = ?").bind(subitem).run();
+        await env.DB.batch([
+          env.DB.prepare("DELETE FROM forge_comments WHERE id = ?").bind(subitem),
+          ...(targetKind === "discussion"
+            ? [
+                env.DB.prepare(
+                  "UPDATE forge_discussions SET answer_comment_id = NULL, updated_at = ? WHERE id = ? AND answer_comment_id = ?"
+                ).bind(Date.now(), String(current.id), subitem),
+              ]
+            : []),
+        ]);
         return new Response(null, { status: 204 });
       }
       const parsed = CreateCommentInputSchema.safeParse(await parseJson(request));
@@ -1029,6 +1085,10 @@ async function featureRequest(
       if (!parsed.success) return error(400, "bad_request", "Invalid review payload.");
       if (actor.kind === "agent" && !user.agentSession)
         return error(403, "forbidden", "Trusted agent session is required.");
+      const reviewHead = await pullRequestHeadOid(env, request.url, repository, current, user);
+      if (reviewHead instanceof Response) return reviewHead;
+      if (parsed.data.commitOid !== reviewHead)
+        return error(409, "stale_commit", "The commit is no longer the pull request head.");
       const id = crypto.randomUUID(),
         now = Date.now();
       await env.DB.prepare(
@@ -1085,6 +1145,10 @@ async function featureRequest(
           "reserved_check",
           "Workflow check names are reserved for Container Actions."
         );
+      const checkHead = await pullRequestHeadOid(env, request.url, repository, current, user);
+      if (checkHead instanceof Response) return checkHead;
+      if (parsed.data.commitOid !== checkHead)
+        return error(409, "stale_commit", "The commit is no longer the pull request head.");
       const id = crypto.randomUUID(),
         now = Date.now(),
         key = actorKey(actor);
@@ -1120,23 +1184,12 @@ async function featureRequest(
       return json({ data: presentForgeRow("checks", check) }, check.id === id ? 201 : 200);
     }
     if (targetTable === "forge_pull_requests" && action === "diff" && request.method === "GET") {
-      const baseRef = String(
-          current.state === "merged" ? current.merge_base_oid : current.base_ref
-        ),
-        headRef = String(current.state === "merged" ? current.merge_head_oid : current.head_ref),
-        headSessionId = String(current.head_session_id ?? "");
-      const gitUrl = new URL(`/repositories/${repository.id}/compare`, request.url);
       logger.debug("forge:pull-request-diff", {
         repositoryId: repository.id,
         pullRequestNumber: number,
-        baseRef,
-        headRef,
-        hasAgentSession: Boolean(headSessionId),
+        hasAgentSession: Boolean(current.head_session_id),
       });
-      gitUrl.searchParams.set("base", baseRef);
-      gitUrl.searchParams.set("head", headRef);
-      if (headSessionId) gitUrl.searchParams.set("headSessionId", headSessionId);
-      return env.GIT.fetch(new Request(gitUrl, { headers: trustedHeaders(user) }));
+      return env.GIT.fetch(compareRequest(request.url, repository, current, user));
     }
     if (targetTable === "forge_pull_requests" && action === "merge" && request.method === "POST") {
       const denied = requireMember();
@@ -1312,18 +1365,11 @@ async function featureRequest(
     if (request.method === "GET") {
       if (action === "history") {
         const rows = await env.DB.prepare(
-          "SELECT slug, title, content, revision, updated_by AS updatedBy, updated_at AS updatedAt FROM forge_wiki_revisions WHERE repository_id = ? AND slug = ? ORDER BY revision DESC"
+          "SELECT slug, title, revision, updated_by AS updatedBy, updated_at AS updatedAt FROM forge_wiki_revisions WHERE repository_id = ? AND slug = ? ORDER BY revision DESC LIMIT ?"
         )
-          .bind(repository.id, item)
-          .all<{
-            slug: string;
-            title: string;
-            content: string;
-            revision: number;
-            updatedBy: string;
-            updatedAt: number;
-          }>();
-        return json({ data: rows.results });
+          .bind(repository.id, item, MAX_LIST_ROWS + 1)
+          .all<WikiPageSummary>();
+        return boundedList(rows.results);
       }
       if (action === "revisions" && subitem) {
         const page = await env.DB.prepare(
@@ -1765,13 +1811,13 @@ export default {
       const path = await resolveRepositoryPath(env.DB, parts[2], parts[3]);
       const named = path ? await repositoryById(env, path.id) : null;
       if (!named) return repositoryNotFound();
+      if (user.agentSession && named.id !== user.agentSession.repositoryId)
+        return repositoryNotFound();
       if (
         named.visibility === "private" &&
         (await repositoryRole(env.DB, named.id, user.id)) === null
       )
         return repositoryAccessDenied();
-      if (user.agentSession && named.id !== user.agentSession.repositoryId)
-        return error(403, "forbidden", "Agent session is limited to its repository.");
       if (!named.artifact_name || !named.remote)
         return error(503, "internal_error", "Repository storage is unavailable.");
       const member = await isMember(env, named.id, user.id);
@@ -1798,11 +1844,11 @@ export default {
       if (repository.wiki_enabled === 0)
         return error(404, "feature_disabled", "Repository wiki is disabled.");
       const rows = await env.DB.prepare(
-        "SELECT slug, title, content, revision, updated_by AS updatedBy, updated_at AS updatedAt FROM forge_wiki_pages WHERE repository_id = ? ORDER BY slug ASC"
+        "SELECT slug, title, revision, updated_by AS updatedBy, updated_at AS updatedAt FROM forge_wiki_pages WHERE repository_id = ? ORDER BY slug ASC LIMIT ?"
       )
-        .bind(repositoryId)
-        .all();
-      return json({ data: rows.results });
+        .bind(repositoryId, MAX_LIST_ROWS + 1)
+        .all<WikiPageSummary>();
+      return boundedList(rows.results);
     }
     if (["memory", "tasks", "settings", "assignee-candidates"].includes(parts[2] ?? "")) {
       const viewer: Viewer = {

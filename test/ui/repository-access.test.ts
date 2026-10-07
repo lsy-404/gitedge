@@ -29,8 +29,6 @@ const repository: Repository = {
   owner: "octocat",
   name: "sample",
   slug: "sample",
-  artifactName: "octocat/sample",
-  remote: "https://git.example/octocat/sample.git",
   description: "A sample project",
   visibility: "private",
   defaultBranch: "main",
@@ -130,9 +128,9 @@ describe("repository access states", () => {
       .spyOn(api, "repository")
       .mockResolvedValueOnce(repository)
       .mockRejectedValueOnce(new ApiError(403, "Repository access is denied."));
-    vi.spyOn(api, "issues").mockResolvedValue([]);
-    vi.spyOn(api, "pulls").mockResolvedValue([]);
-    vi.spyOn(api, "discussions").mockResolvedValue([]);
+    vi.spyOn(api, "issues").mockResolvedValue({ items: [], truncated: false });
+    vi.spyOn(api, "pulls").mockResolvedValue({ items: [], truncated: false });
+    vi.spyOn(api, "discussions").mockResolvedValue({ items: [], truncated: false });
     const mounted = await mount("/octocat/sample");
 
     expect(mounted.root.textContent).toContain("octocat / sample");

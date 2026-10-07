@@ -28,10 +28,10 @@ describe("GitEdge API client", () => {
 
   it("uses repository ids and unwraps Forge list responses", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ data: [] }), { status: 200 })
+      new Response(JSON.stringify({ data: [], truncated: false }), { status: 200 })
     );
 
-    await api.issues("repo-7");
+    await expect(api.issues("repo-7")).resolves.toEqual({ items: [], truncated: false });
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "/api/forge/repositories/repo-7/issues",
@@ -46,8 +46,6 @@ describe("GitEdge API client", () => {
       owner: "example-owner",
       name: "edge",
       slug: "edge",
-      artifactName: "example-owner/edge",
-      remote: "https://git.example/example-owner/edge.git",
       description: "",
       visibility: "public",
       defaultBranch: "main",

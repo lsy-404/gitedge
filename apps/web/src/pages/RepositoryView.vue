@@ -108,13 +108,13 @@ async function loadCounts(current: Repository, version: number) {
   if (version !== loadVersion) return;
   counts.value = {
     ...(issues.status === "fulfilled"
-      ? { issues: (issues.value ?? []).filter((item) => item.state === "open").length }
+      ? { issues: (issues.value?.items ?? []).filter((item) => item.state === "open").length }
       : {}),
     ...(pulls.status === "fulfilled"
-      ? { pulls: (pulls.value ?? []).filter((item) => item.state === "open").length }
+      ? { pulls: (pulls.value?.items ?? []).filter((item) => item.state === "open").length }
       : {}),
     ...(discussions.status === "fulfilled" && discussions.value
-      ? { discussions: discussions.value.length }
+      ? { discussions: discussions.value.items.length }
       : {}),
   };
 }

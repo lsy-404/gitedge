@@ -65,7 +65,6 @@ try {
     201
   );
   report.repositoryId = repo.id;
-  report.artifactName = repo.artifactName;
   const root = `/api/git/repositories/${repo.id}`;
   const forge = `/api/forge/repositories/${repo.id}`;
   const branches = () => api(root + "/branches");

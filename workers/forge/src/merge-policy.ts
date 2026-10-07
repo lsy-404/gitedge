@@ -65,10 +65,10 @@ export async function authorizeMerge(
   )
     return error(409, "approvals_required", "The current commit needs more human approvals.");
   const checks = await env.DB.prepare(
-    "SELECT name,status,conclusion FROM forge_check_runs WHERE pull_request_id=? AND commit_oid=? LIMIT 101"
+    "SELECT name,status,conclusion,actor_json FROM forge_check_runs WHERE pull_request_id=? AND commit_oid=? LIMIT 101"
   )
     .bind(pull.id, input.expectedHeadOid)
-    .all<{ name: string; status: string; conclusion: string | null }>();
+    .all<{ name: string; status: string; conclusion: string | null; actor_json: string }>();
   if (checks.results.length > 100)
     return error(413, "check_limit", "Check history exceeds the supported merge limit.");
   if (
@@ -78,9 +78,11 @@ export async function authorizeMerge(
     )
   )
     return error(409, "checks_incomplete", "Current commit checks are incomplete or unsuccessful.");
-  const passing = checks.results.filter(
-    (check) => check.status === "completed" && check.conclusion === "success"
-  );
+  const passing = checks.results.filter((check) => {
+    if (check.status !== "completed" || check.conclusion !== "success") return false;
+    const poster = parseActor(check.actor_json, null);
+    return !(poster.kind === pullActor.kind && poster.id === pullActor.id);
+  });
   if (
     (repository.require_passing_checks === 1 || rules.some((rule) => rule.requirePassingChecks)) &&
     !passing.length
