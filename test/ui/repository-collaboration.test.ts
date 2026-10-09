@@ -175,7 +175,11 @@ function submit(form: HTMLFormElement): void {
 }
 
 beforeEach(() => {
-  vi.spyOn(api, "issueReferences").mockResolvedValue({ pullRequests: [], events: [] });
+  vi.spyOn(api, "issueReferences").mockResolvedValue({
+    pullRequests: [],
+    events: [],
+    truncated: false,
+  });
   vi.spyOn(api, "reviewComments").mockResolvedValue({ items: [], truncated: false });
   vi.spyOn(api, "repositoryCommunity").mockResolvedValue({
     files: [],
@@ -1195,8 +1199,45 @@ describe("RepositoryCollaboration review threads", () => {
       "repo-1",
       12,
       "head-current-oid",
-      expect.objectContaining({ startLine: 2, line: 3, pending: false })
+      expect.objectContaining({
+        startLine: 2,
+        line: 3,
+        pending: false,
+        diffHunk: "@@ -1,2 +1,3 @@\n keep\n-old\n+new\n+added",
+      })
     );
+    mounted.unmount();
+  });
+
+  it("extends a range from the keyboard and keeps the draft when posting fails", async () => {
+    mockPull([]);
+    const createSpy = vi
+      .spyOn(api, "createReviewThread")
+      .mockRejectedValueOnce(
+        new ApiError(409, "The commit is no longer the pull request head.", "stale_commit")
+      );
+    const mounted = await mountSection("/_verify/pulls/12", "pulls");
+    await openFiles(mounted);
+
+    const gutter = mounted.root.querySelectorAll<HTMLButtonElement>(".diff-comment-button");
+    gutter[0]?.click();
+    await settle();
+    gutter[3]?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true })
+    );
+    await settle();
+    const composer = mounted.root.querySelector<HTMLFormElement>(".review-composer");
+    if (!composer) throw new Error("Composer did not open.");
+    expect(composer.textContent).toContain("Comment on lines 1-3");
+    fill(control(composer, "textarea"), "Keep me");
+    submit(composer);
+    await settle();
+    expect(createSpy).toHaveBeenCalledTimes(1);
+    expect(mounted.root.querySelector(".review-composer textarea")).toHaveProperty(
+      "value",
+      "Keep me"
+    );
+    expect(mounted.root.textContent).toContain("The content changed. Refresh and try again.");
     mounted.unmount();
   });
 
@@ -1221,9 +1262,9 @@ describe("RepositoryCollaboration review threads", () => {
     await openFiles(mounted);
 
     const summary = mounted.root.querySelector(".thread-summary");
-    expect(summary?.textContent).toContain("2 unresolved conversations");
+    expect(summary?.textContent).toContain("Unresolved conversations: 2");
     expect(mounted.root.querySelector(".merge-status")?.textContent).toContain(
-      "2 review conversations are unresolved"
+      "Unresolved review conversations: 2"
     );
     expect(summary?.textContent).toContain("Outdated");
     const inline = mounted.root.querySelectorAll(".diff-thread .review-thread");
@@ -1255,7 +1296,7 @@ describe("RepositoryCollaboration review threads", () => {
     await openFiles(mounted);
 
     expect(mounted.root.querySelector(".pending-review")?.textContent).toContain(
-      "You have 1 pending comments"
+      "Pending comments: 1."
     );
     expect(mounted.root.querySelector(".merge-status")?.textContent).toContain(
       "All review conversations are resolved"
@@ -1263,7 +1304,7 @@ describe("RepositoryCollaboration review threads", () => {
     findButton(mounted.root, "Finish your review").click();
     await settle();
     expect(mounted.root.querySelector(".review-panel")?.textContent).toContain(
-      "1 pending comments are published with this review."
+      "Pending comments published with this review: 1"
     );
     mounted.unmount();
   });
@@ -1285,6 +1326,7 @@ describe("RepositoryCollaboration review threads", () => {
           createdAt: 100,
         },
       ],
+      truncated: false,
     });
     const mounted = await mountSection("/_verify/issues/7", "issues");
     const sidebar = mounted.root.querySelector(".detail-sidebar");

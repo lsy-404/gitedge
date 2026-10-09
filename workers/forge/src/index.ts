@@ -11,6 +11,7 @@ import {
   syncLinkStatements,
 } from "./issue-links";
 import {
+  announcePublishedComments,
   listReviewComments,
   publishPendingStatements,
   reviewCommentRequest,
@@ -246,12 +247,19 @@ function compareRequest(
   requestUrl: string,
   repository: RepositoryRow,
   pull: Record<string, unknown>,
-  user: TrustedUser
+  user: TrustedUser,
+  range?: { base: string; head: string }
 ): Request {
   const merged = pull.state === "merged";
   const gitUrl = new URL(`/repositories/${repository.id}/compare`, requestUrl);
-  gitUrl.searchParams.set("base", String(merged ? pull.merge_base_oid : pull.base_ref));
-  gitUrl.searchParams.set("head", String(merged ? pull.merge_head_oid : pull.head_ref));
+  gitUrl.searchParams.set(
+    "base",
+    range?.base ?? String(merged ? pull.merge_base_oid : pull.base_ref)
+  );
+  gitUrl.searchParams.set(
+    "head",
+    range?.head ?? String(merged ? pull.merge_head_oid : pull.head_ref)
+  );
   if (pull.head_session_id) gitUrl.searchParams.set("headSessionId", String(pull.head_session_id));
   return new Request(gitUrl, { headers: trustedHeaders(user) });
 }
@@ -308,6 +316,10 @@ async function reviewCommentHead(
   if (data && typeof data === "object" && "oid" in data && typeof data.oid === "string")
     return data.oid;
   if (!response.ok) await response.body?.cancel();
+  createLogger(env.LOG_LEVEL, { service: "forge", repoId: repository.id }).warn(
+    "forge:review-comment-head-unavailable",
+    { pullRequestId: String(pull.id), status: response.status }
+  );
   return null;
 }
 
@@ -553,7 +565,12 @@ async function publicRepositoryRead(
       ? issueReferences(env, issue.id)
       : errorResponse(404, "not_found", "Resource was not found.");
   }
-  if (resource === "pull-requests" && parts.length === 7 && parts[6] === "review-comments") {
+  if (
+    resource === "pull-requests" &&
+    parts.length === 7 &&
+    parts[6] === "review-comments" &&
+    Number.isSafeInteger(Number(parts[5]))
+  ) {
     const pull = await env.DB.prepare(
       "SELECT * FROM forge_pull_requests WHERE repository_id = ? AND number = ?"
     )
@@ -1257,6 +1274,7 @@ async function featureRequest(
         ),
         ...publishPendingStatements(env, String(current.id), id, actor),
       ]);
+      await announcePublishedComments(env, repository, user, String(current.id), id);
       logger.info("forge:review-submitted", {
         repositoryId: repository.id,
         pullRequestNumber: number,
@@ -1411,19 +1429,25 @@ async function featureRequest(
         await releaseLease();
         return rejected;
       }
-      const comparison = await env.GIT.fetch(
-        compareRequest(request.url, repository, current, user)
-      );
-      const commitMessages = comparison.ok
-        ? comparisonMessages(await comparison.json().catch(() => null))
-        : [];
-      if (!comparison.ok) {
-        await comparison.body?.cancel();
-        logger.warn("forge:merge-commit-messages-unavailable", {
-          repositoryId: repository.id,
-          pullRequestNumber: number,
-          status: comparison.status,
-        });
+      let commitMessages: string[] = [];
+      // Only merges into the default branch close issues, so other targets skip the comparison.
+      if (current.base_ref === (repository.default_branch ?? "main")) {
+        const comparison = await env.GIT.fetch(
+          compareRequest(request.url, repository, current, user, {
+            base: parsed.data.expectedBaseOid,
+            head: parsed.data.expectedHeadOid,
+          })
+        );
+        if (comparison.ok)
+          commitMessages = comparisonMessages(await comparison.json().catch(() => null));
+        else {
+          await comparison.body?.cancel();
+          logger.warn("forge:merge-commit-messages-unavailable", {
+            repositoryId: repository.id,
+            pullRequestNumber: number,
+            status: comparison.status,
+          });
+        }
       }
       const gitUrl = new URL(`/repositories/${repository.id}/merge`, request.url);
       const headSessionId =

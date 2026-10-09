@@ -3,11 +3,14 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { parsePatch } from "diff";
 import type { ReviewComment, ReviewThreadDraft } from "../lib/api";
+import {
+  REVIEW_COMMENT_HUNK_MAX,
+  type ReviewCommentSide,
+} from "../../../../packages/contracts/src/review-comments";
 import type { ReviewThreadGroup } from "../lib/reviewThreads";
 import ReviewComposer from "./ReviewComposer.vue";
 import ReviewThread from "./ReviewThread.vue";
 
-type Side = "LEFT" | "RIGHT";
 const props = defineProps<{
   patch: string;
   path?: string;
@@ -21,24 +24,24 @@ const props = defineProps<{
     hasPendingReview: boolean;
     busy: boolean;
   };
+  /** Each handler resolves true once saved, so a failed request keeps the typed text. */
+  onCreate?: (draft: ReviewThreadDraft) => Promise<boolean>;
+  onReply?: (root: ReviewComment, body: string) => Promise<boolean>;
+  onEdit?: (comment: ReviewComment, body: string) => Promise<boolean>;
 }>();
 const emit = defineEmits<{
-  create: [draft: ReviewThreadDraft];
-  reply: [root: ReviewComment, body: string];
-  edit: [comment: ReviewComment, body: string];
   remove: [comment: ReviewComment];
   resolve: [root: ReviewComment, resolved: boolean];
 }>();
 const { t } = useI18n();
-const HUNK_CONTEXT_LINES = 6;
+const CONTEXT_BEFORE_LINES = 5;
 interface DiffLine {
   oldNumber: number | null;
   newNumber: number | null;
   text: string;
   kind: string;
   /** Side and number a comment on this row attaches to. */
-  anchor: { side: Side; line: number } | null;
-  context: string;
+  anchor: { side: ReviewCommentSide; line: number } | null;
 }
 const hunks = computed(() => {
   try {
@@ -63,15 +66,7 @@ const hunks = computed(() => {
               : newNumber !== null
                 ? { side: "RIGHT" as const, line: newNumber }
                 : null;
-          return { text, kind, oldNumber, newNumber, anchor, context: "" };
-        });
-        lines.forEach((line, index) => {
-          line.context = [
-            header,
-            ...lines
-              .slice(Math.max(0, index - HUNK_CONTEXT_LINES + 1), index + 1)
-              .map((row) => row.text),
-          ].join("\n");
+          return { text, kind, oldNumber, newNumber, anchor };
         });
         return { header, lines };
       })
@@ -82,24 +77,51 @@ const hunks = computed(() => {
 });
 
 interface Compose {
-  side: Side;
+  side: ReviewCommentSide;
   line: number;
   startLine?: number;
-  context: string;
+  hunkIndex: number;
+  /** Rows of the selection inside the hunk, inclusive. */
+  firstRow: number;
+  lastRow: number;
 }
 const compose = ref<Compose | null>(null);
 
-function startCompose(line: DiffLine, event: MouseEvent) {
+/** Original diff context kept with the thread: the hunk header, a few lines before, the selection. */
+function selectionContext(selection: Compose): string {
+  const hunk = hunks.value[selection.hunkIndex];
+  if (!hunk) return "";
+  const rows = hunk.lines
+    .slice(Math.max(0, selection.firstRow - CONTEXT_BEFORE_LINES), selection.lastRow + 1)
+    .map((row) => row.text);
+  while (rows.length > 1 && [hunk.header, ...rows].join("\n").length > REVIEW_COMMENT_HUNK_MAX)
+    rows.shift();
+  return [hunk.header, ...rows].join("\n").slice(-REVIEW_COMMENT_HUNK_MAX);
+}
+
+function startCompose(line: DiffLine, hunkIndex: number, row: number, extend: boolean) {
   const anchor = line.anchor;
   if (!anchor || !props.review?.canComment) return;
   const current = compose.value;
-  if (event.shiftKey && current && current.side === anchor.side) {
+  if (extend && current && current.side === anchor.side) {
     const start = Math.min(current.startLine ?? current.line, anchor.line);
     const end = Math.max(current.line, anchor.line);
-    compose.value = { ...current, startLine: start === end ? undefined : start, line: end };
+    const range = { side: anchor.side, startLine: start === end ? undefined : start, line: end };
+    // A range across hunks keeps the context of the hunk holding its last line.
+    compose.value =
+      current.hunkIndex === hunkIndex
+        ? {
+            ...range,
+            hunkIndex,
+            firstRow: Math.min(current.firstRow, row),
+            lastRow: Math.max(current.lastRow, row),
+          }
+        : end === anchor.line
+          ? { ...range, hunkIndex, firstRow: row, lastRow: row }
+          : { ...current, ...range };
     return;
   }
-  compose.value = { side: anchor.side, line: anchor.line, context: line.context.slice(-4000) };
+  compose.value = { side: anchor.side, line: anchor.line, hunkIndex, firstRow: row, lastRow: row };
 }
 function composeAt(line: DiffLine): Compose | null {
   const current = compose.value;
@@ -116,19 +138,19 @@ function threadsAt(line: DiffLine): ReviewThreadGroup[] {
       !thread.root.outdated && thread.root.side === anchor.side && thread.root.line === anchor.line
   );
 }
-function submit(body: string, pending: boolean) {
+async function submit(body: string, pending: boolean) {
   const current = compose.value;
-  if (!current || !props.path) return;
-  emit("create", {
+  if (!current || !props.path || !props.onCreate) return;
+  const saved = await props.onCreate({
     body,
     path: props.path,
     side: current.side,
     line: current.line,
     startLine: current.startLine,
-    diffHunk: current.context,
+    diffHunk: selectionContext(current),
     pending,
   });
-  compose.value = null;
+  if (saved && compose.value === current) compose.value = null;
 }
 function composeLabelAt(line: DiffLine): string {
   const current = composeAt(line);
@@ -136,6 +158,12 @@ function composeLabelAt(line: DiffLine): string {
   return current.startLine === undefined
     ? t("commentOnLine", { line: current.line })
     : t("commentOnRange", { start: current.startLine, end: current.line });
+}
+function reply(root: ReviewComment, body: string): Promise<boolean> {
+  return props.onReply ? props.onReply(root, body) : Promise.resolve(false);
+}
+function edit(comment: ReviewComment, body: string): Promise<boolean> {
+  return props.onEdit ? props.onEdit(comment, body) : Promise.resolve(false);
 }
 </script>
 <template>
@@ -148,7 +176,7 @@ function composeLabelAt(line: DiffLine): string {
           <th scope="col">{{ t("diffChange") }}</th>
         </tr>
       </thead>
-      <tbody v-for="(hunk, index) in hunks" :key="index">
+      <tbody v-for="(hunk, hunkIndex) in hunks" :key="hunkIndex">
         <tr class="diff-hunk">
           <td></td>
           <td></td>
@@ -164,7 +192,9 @@ function composeLabelAt(line: DiffLine): string {
                 type="button"
                 class="diff-comment-button"
                 :aria-label="t('addLineComment', { line: line.anchor.line })"
-                @click="startCompose(line, $event)"
+                :aria-keyshortcuts="'Shift+Enter'"
+                @click="startCompose(line, hunkIndex, lineIndex, $event.shiftKey)"
+                @keydown.enter.shift.prevent="startCompose(line, hunkIndex, lineIndex, true)"
               >
                 +
               </button>
@@ -176,7 +206,9 @@ function composeLabelAt(line: DiffLine): string {
                 type="button"
                 class="diff-comment-button"
                 :aria-label="t('addLineComment', { line: line.anchor.line })"
-                @click="startCompose(line, $event)"
+                :aria-keyshortcuts="'Shift+Enter'"
+                @click="startCompose(line, hunkIndex, lineIndex, $event.shiftKey)"
+                @keydown.enter.shift.prevent="startCompose(line, hunkIndex, lineIndex, true)"
               >
                 +
               </button>
@@ -197,8 +229,8 @@ function composeLabelAt(line: DiffLine): string {
                   :can-moderate="review.canModerate"
                   :is-pull-author="review.isPullAuthor"
                   :busy="review.busy"
-                  @reply="(root, body) => emit('reply', root, body)"
-                  @edit="(comment, body) => emit('edit', comment, body)"
+                  @reply="reply"
+                  @edit="edit"
                   @remove="(comment) => emit('remove', comment)"
                   @resolve="(root, resolved) => emit('resolve', root, resolved)"
                 />

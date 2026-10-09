@@ -2,7 +2,8 @@
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type { ReviewComment } from "../lib/api";
-import { splitSuggestions, type ReviewThreadGroup } from "../lib/reviewThreads";
+import { splitSuggestions, suggestedLines, type ReviewThreadGroup } from "../lib/reviewThreads";
+import { reviewActorKey } from "../../../../packages/contracts/src/review-comments";
 import ConfirmButton from "./ConfirmButton.vue";
 import MarkdownContent from "./MarkdownContent.vue";
 import StatusBadge from "./StatusBadge.vue";
@@ -19,10 +20,11 @@ const props = defineProps<{
   isPullAuthor: boolean;
   busy: boolean;
   showContext?: boolean;
+  /** Resolve true once saved; the typed text stays when saving fails. */
+  onReply?: (root: ReviewComment, body: string) => Promise<boolean>;
+  onEdit?: (comment: ReviewComment, body: string) => Promise<boolean>;
 }>();
 const emit = defineEmits<{
-  reply: [root: ReviewComment, body: string];
-  edit: [comment: ReviewComment, body: string];
   remove: [comment: ReviewComment];
   resolve: [root: ReviewComment, resolved: boolean];
 }>();
@@ -49,30 +51,26 @@ const canResolve = computed(
   () =>
     props.canComment &&
     !root.value.pending &&
-    (props.canModerate ||
-      props.isPullAuthor ||
-      (props.viewerKey !== null && ownKey(root.value) === props.viewerKey))
+    (props.canModerate || props.isPullAuthor || own(root.value))
 );
+/** Lines a suggestion replaces, taken from the stored diff context of the thread. */
+const replacedLines = computed(() => suggestedLines(root.value));
 
-function ownKey(comment: ReviewComment): string {
-  return `${comment.actor.kind}:${comment.actor.id}`;
-}
 function own(comment: ReviewComment): boolean {
-  return props.viewerKey !== null && ownKey(comment) === props.viewerKey;
+  return props.viewerKey !== null && reviewActorKey(comment.actor) === props.viewerKey;
 }
 function startEdit(comment: ReviewComment) {
   editingId.value = comment.id;
   editBody.value = comment.body;
 }
-function saveEdit(comment: ReviewComment) {
-  if (!editBody.value.trim()) return;
-  emit("edit", comment, editBody.value);
-  editingId.value = "";
+async function saveEdit(comment: ReviewComment) {
+  if (!editBody.value.trim() || !props.onEdit) return;
+  if (await props.onEdit(comment, editBody.value)) editingId.value = "";
 }
-function sendReply() {
-  if (!replyBody.value.trim()) return;
-  emit("reply", root.value, replyBody.value);
-  replyBody.value = "";
+async function sendReply() {
+  const body = replyBody.value;
+  if (!body.trim() || !props.onReply) return;
+  if (await props.onReply(root.value, body)) replyBody.value = "";
 }
 function actorLabel(comment: ReviewComment): string {
   return comment.actor.kind === "agent"
@@ -166,9 +164,15 @@ function actorLabel(comment: ReviewComment): string {
             <figure v-else class="thread-suggestion">
               <figcaption>{{ t("suggestedChange") }}</figcaption>
               <p v-if="!segment.lines.length" class="muted">{{ t("emptySuggestion") }}</p>
-              <pre
-                v-else
-              ><code v-for="(line, lineIndex) in segment.lines" :key="lineIndex">+ {{ line }}</code></pre>
+              <pre><code
+                v-for="(line, lineIndex) in replacedLines"
+                :key="`old-${lineIndex}`"
+                class="suggestion-removed"
+              >- {{ line }}</code><code
+                v-for="(line, lineIndex) in segment.lines"
+                :key="`new-${lineIndex}`"
+                class="suggestion-added"
+              >+ {{ line }}</code></pre>
             </figure>
           </template>
         </template>
@@ -270,16 +274,22 @@ function actorLabel(comment: ReviewComment): string {
 }
 .thread-suggestion pre {
   margin: 0;
-  padding: var(--space-2) var(--space-3);
   overflow: auto;
-  background: var(--success-subtle);
-  color: var(--success-fg);
   font: var(--font-size-meta) / 20px var(--font-mono);
 }
 .thread-suggestion code {
   display: block;
+  padding-inline: var(--space-3);
   font: inherit;
   white-space: pre;
+}
+.suggestion-removed {
+  background: var(--danger-subtle);
+  color: var(--danger-fg);
+}
+.suggestion-added {
+  background: var(--success-subtle);
+  color: var(--success-fg);
 }
 .thread-reply {
   padding-top: var(--space-2);

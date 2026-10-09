@@ -2,8 +2,10 @@ import {
   CreateReviewCommentInputSchema,
   MAX_PENDING_REVIEW_COMMENTS,
   UpdateReviewCommentInputSchema,
+  reviewActorKey,
   type Actor,
   type ReviewComment,
+  type ReviewCommentSide,
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
 import { dataResponse, errorResponse, jsonResponse } from "../../../src/worker/common/http";
@@ -23,7 +25,7 @@ type ReviewCommentRow = {
   author_id: string;
   commit_oid: string;
   path: string;
-  side: "LEFT" | "RIGHT";
+  side: ReviewCommentSide;
   line: number;
   start_line: number | null;
   diff_hunk: string;
@@ -42,16 +44,11 @@ export interface ReviewCommentScope {
   /** Null for anonymous readers, who only see published comments. */
   user: TrustedUser | null;
   actor: Actor | null;
-  /** Repository write role combined with a writable session. */
+  /** The viewer holds a repository write role. */
   member: boolean;
   writeAllowed: boolean;
   mergeLeased: boolean;
   resolveHead: () => Promise<string | null>;
-}
-
-/** Stable per-identity key; an agent keeps its pending comments across sessions. */
-export function reviewCommentActorKey(actor: Actor): string {
-  return `${actor.kind}:${actor.id}`;
 }
 
 function presentReviewComment(row: ReviewCommentRow, headOid: string | null): ReviewComment {
@@ -89,7 +86,7 @@ async function fetchRow(
 
 /** A pending comment is visible only to the identity that wrote it. */
 function visibleTo(row: ReviewCommentRow, actor: Actor | null): boolean {
-  return row.pending === 0 || (actor !== null && row.actor_key === reviewCommentActorKey(actor));
+  return row.pending === 0 || (actor !== null && row.actor_key === reviewActorKey(actor));
 }
 
 export async function listReviewComments(scope: ReviewCommentScope): Promise<Response> {
@@ -97,7 +94,7 @@ export async function listReviewComments(scope: ReviewCommentScope): Promise<Res
   const rows = await env.DB.prepare(
     "SELECT * FROM forge_review_comments WHERE pull_request_id = ? AND (pending = 0 OR actor_key = ?) ORDER BY created_at ASC, rowid ASC LIMIT ?"
   )
-    .bind(String(pull.id), actor ? reviewCommentActorKey(actor) : "", MAX_COMMENT_ROWS + 1)
+    .bind(String(pull.id), actor ? reviewActorKey(actor) : "", MAX_COMMENT_ROWS + 1)
     .all<ReviewCommentRow>();
   const headOid = await scope.resolveHead();
   return jsonResponse({
@@ -135,7 +132,7 @@ export async function reviewCommentRequest(
     );
   const logger = createLogger(env.LOG_LEVEL, { service: "forge", repoId: repository.id });
   const pullRequestId = String(pull.id);
-  const key = reviewCommentActorKey(actor);
+  const key = reviewActorKey(actor);
 
   if (method === "POST" && !id) {
     if (pull.state !== "open")
@@ -250,6 +247,7 @@ export async function reviewCommentRequest(
     await env.DB.prepare("UPDATE forge_review_comments SET body = ?, updated_at = ? WHERE id = ?")
       .bind(parsed.data.body, Date.now(), id)
       .run();
+    logger.info("forge:review-comment-edited", { pullRequestId, actorKind: actor.kind });
     const updated = await fetchRow(env, pullRequestId, id);
     return updated
       ? dataResponse(presentReviewComment(updated, await resolveHead()))
@@ -257,13 +255,25 @@ export async function reviewCommentRequest(
   }
 
   if (method === "DELETE" && !operation) {
-    if (!own && !(scope.member && actor.kind === "user"))
+    const moderator = scope.member && actor.kind === "user";
+    if (!own && !moderator)
       return errorResponse(
         403,
         "forbidden",
         "Only the comment author or a repository member may delete it."
       );
-    await env.DB.prepare("DELETE FROM forge_review_comments WHERE id = ?").bind(id).run();
+    // Deleting a root removes its replies, so replies by others need a repository member.
+    const deleted = await env.DB.prepare(
+      "DELETE FROM forge_review_comments WHERE id = ? AND (? = 1 OR NOT EXISTS (SELECT 1 FROM forge_review_comments AS reply WHERE reply.in_reply_to = ? AND reply.actor_key != ?)) RETURNING id"
+    )
+      .bind(id, moderator ? 1 : 0, id, key)
+      .first<{ id: string }>();
+    if (!deleted)
+      return errorResponse(
+        409,
+        "thread_has_replies",
+        "Only a repository member may delete a thread with replies from others."
+      );
     logger.info("forge:review-comment-deleted", { pullRequestId, actorKind: actor.kind });
     return new Response(null, { status: 204 });
   }
@@ -315,8 +325,29 @@ export function publishPendingStatements(
   return [
     env.DB.prepare(
       "UPDATE forge_review_comments SET pending = 0, review_id = ? WHERE pull_request_id = ? AND actor_key = ? AND pending = 1"
-    ).bind(reviewId, pullRequestId, reviewCommentActorKey(actor)),
+    ).bind(reviewId, pullRequestId, reviewActorKey(actor)),
   ];
+}
+
+/** Notifies agents mentioned in the comments a review just published, in one bounded pass. */
+export async function announcePublishedComments(
+  env: ForgeEnv,
+  repository: RepositoryRow,
+  user: TrustedUser,
+  pullRequestId: string,
+  reviewId: string
+): Promise<void> {
+  const rows = await env.DB.prepare(
+    "SELECT body FROM forge_review_comments WHERE pull_request_id = ? AND review_id = ? ORDER BY created_at ASC LIMIT ?"
+  )
+    .bind(pullRequestId, reviewId, MAX_PENDING_REVIEW_COMMENTS)
+    .all<{ body: string }>();
+  if (!rows.results.length) return;
+  await mentionAgents(env, repository, user, rows.results.map((row) => row.body).join("\n"), {
+    targetKind: "pull_request",
+    targetId: pullRequestId,
+    reviewId,
+  });
 }
 
 export async function unresolvedThreadCount(env: ForgeEnv, pullRequestId: string): Promise<number> {

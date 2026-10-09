@@ -1,15 +1,10 @@
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { api, errorMessage, type Actor, type ReviewComment, type ReviewThreadDraft } from "./api";
+import { api, errorMessage, type ReviewComment, type ReviewThreadDraft } from "./api";
 
 export interface ReviewThreadGroup {
   root: ReviewComment;
   replies: ReviewComment[];
-}
-
-/** Identity key shared with the Forge worker: kind and id, never the agent session. */
-export function actorIdentity(actor: Actor): string {
-  return `${actor.kind}:${actor.id}`;
 }
 
 export function groupThreads(comments: readonly ReviewComment[]): ReviewThreadGroup[] {
@@ -40,6 +35,22 @@ export function splitSuggestions(body: string): ReviewTextSegment[] {
   return segments;
 }
 
+/**
+ * Source lines a thread covers, read from the end of its stored diff context, which closes on the
+ * last selected row. Empty when the context does not reach back far enough.
+ */
+export function suggestedLines(
+  root: Pick<ReviewComment, "diffHunk" | "side" | "line" | "startLine">
+): string[] {
+  const count = root.line - (root.startLine ?? root.line) + 1;
+  const skipped = root.side === "RIGHT" ? "-" : "+";
+  const rows = root.diffHunk
+    .split("\n")
+    .slice(1)
+    .filter((row) => !row.startsWith(skipped) && !row.startsWith("\\"));
+  return rows.length >= count ? rows.slice(-count).map((row) => row.slice(1)) : [];
+}
+
 /** State and actions for the line comments of one pull request. */
 export function useReviewThreads(
   repositoryId: () => string,
@@ -57,13 +68,24 @@ export function useReviewThreads(
     threads.value.filter((thread) => !thread.root.pending && thread.root.resolvedAt === null)
   );
 
+  let version = 0;
+  /** Loads the comments; a response for an earlier pull request is dropped. */
   async function refresh(): Promise<void> {
+    const current = ++version;
     const page = await api.reviewComments(repositoryId(), number());
+    if (current !== version) return;
     comments.value = page.items;
     truncated.value = page.truncated;
   }
 
+  let loadedFor = "";
   async function load(): Promise<void> {
+    const target = `${repositoryId()}#${number()}`;
+    if (target !== loadedFor) {
+      comments.value = [];
+      truncated.value = false;
+      loadedFor = target;
+    }
     error.value = "";
     try {
       await refresh();
@@ -72,17 +94,25 @@ export function useReviewThreads(
     }
   }
 
-  async function run(action: () => Promise<unknown>): Promise<void> {
+  /** Runs a change and reloads; resolves false on failure so callers can keep typed text. */
+  async function run(action: () => Promise<unknown>): Promise<boolean> {
     busy.value = true;
     error.value = "";
     try {
       await action();
+    } catch (cause) {
+      error.value = errorMessage(cause, t);
+      busy.value = false;
+      return false;
+    }
+    try {
       await refresh();
     } catch (cause) {
       error.value = errorMessage(cause, t);
     } finally {
       busy.value = false;
     }
+    return true;
   }
 
   return {

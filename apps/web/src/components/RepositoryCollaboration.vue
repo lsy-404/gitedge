@@ -36,6 +36,7 @@ import MarkdownContent from "./MarkdownContent.vue";
 import DiffViewer from "./DiffViewer.vue";
 import ReviewThread from "./ReviewThread.vue";
 import { useReviewThreads } from "../lib/reviewThreads";
+import { reviewActorKey } from "../../../../packages/contracts/src/review-comments";
 import CommunityTemplatePicker from "./CommunityTemplatePicker.vue";
 
 const discussionCategories = [
@@ -232,7 +233,9 @@ const reviewContext = computed(() => {
     canComment: canCreate.value && pullIsOpen.value && Boolean(diff.value?.headOid),
     canModerate: showEditActions.value,
     isPullAuthor: pull !== null && ownedByViewer(pull.actor),
-    viewerKey: sessionState.user ? `user:${sessionState.user.id}` : null,
+    viewerKey: sessionState.user
+      ? reviewActorKey({ kind: "user", id: sessionState.user.id })
+      : null,
     hasPendingReview: reviewThreads.pendingCount.value > 0,
     busy: reviewThreads.busy.value,
   };
@@ -2032,6 +2035,7 @@ watch(
               </li>
             </ul>
             <p v-else class="muted">{{ t("linkedPullRequestsEmpty") }}</p>
+            <p v-if="issueLinks.truncated" class="muted">{{ t("linkedPullRequestsTruncated") }}</p>
           </section>
           <AssignmentPanel
             v-if="(section === 'issues' || section === 'pulls') && 'assignees' in item"

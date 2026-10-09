@@ -146,6 +146,8 @@ export interface IssueEvent {
 export interface IssueReferences {
   pullRequests: IssueLinkedPullRequest[];
   events: IssueEvent[];
+  /** More than the returned pull requests or events exist. */
+  truncated: boolean;
 }
 
 export interface Review {

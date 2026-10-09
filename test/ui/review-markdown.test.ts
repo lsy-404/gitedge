@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { renderMarkdown } from "../../apps/web/src/lib/markdown";
-import { groupThreads, splitSuggestions } from "../../apps/web/src/lib/reviewThreads";
+import {
+  groupThreads,
+  splitSuggestions,
+  suggestedLines,
+} from "../../apps/web/src/lib/reviewThreads";
 import type { ReviewComment } from "../../packages/contracts/src/review-comments";
 
 const repository = { owner: "acme", slug: "project" };
@@ -80,5 +84,14 @@ describe("review thread helpers", () => {
     ]);
     expect(splitSuggestions("```suggestion\n```")).toEqual([{ kind: "suggestion", lines: [] }]);
     expect(splitSuggestions("plain")).toEqual([{ kind: "markdown", text: "plain" }]);
+  });
+
+  it("reads the lines a suggestion replaces from the stored context", () => {
+    const diffHunk = "@@ -1,3 +1,3 @@\n keep\n-old\n+new\n+added";
+    expect(suggestedLines({ ...base, diffHunk, line: 3, startLine: 2 })).toEqual(["new", "added"]);
+    expect(
+      suggestedLines({ ...base, diffHunk: "@@ -1 +1 @@\n-old", side: "LEFT", line: 1 })
+    ).toEqual(["old"]);
+    expect(suggestedLines({ ...base, diffHunk, line: 9, startLine: 1 })).toEqual([]);
   });
 });

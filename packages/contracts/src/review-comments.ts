@@ -42,6 +42,11 @@ export type CreateReviewCommentInput = z.infer<typeof CreateReviewCommentInputSc
 
 export const UpdateReviewCommentInputSchema = z.object({ body: commentBody });
 
+/** Identity that owns a review comment; an agent keeps its comments across sessions. */
+export function reviewActorKey(actor: Pick<Actor, "kind" | "id">): string {
+  return `${actor.kind}:${actor.id}`;
+}
+
 export interface ReviewComment {
   id: string;
   /** Root comment of the thread; null on the root itself. */

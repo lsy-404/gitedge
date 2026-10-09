@@ -17,19 +17,26 @@ const BASE = "e".repeat(40);
 let head = HEAD_A;
 let commitMessages: string[] = [];
 const mergeBodies: Array<Record<string, unknown>> = [];
+const compareRanges: Array<{ base: string | null; head: string | null }> = [];
 
 const forgeEnv: Parameters<typeof forge.fetch>[1] = {
   DB: env.DB,
   ARTIFACTS: artifacts,
   GIT: {
     async fetch(request: Request) {
-      const path = new URL(request.url).pathname;
+      const url = new URL(request.url);
+      const path = url.pathname;
       if (request.method === "GET" && path.endsWith("/pull-head"))
         return Response.json({ data: { oid: head } });
-      if (request.method === "GET" && path.endsWith("/compare"))
+      if (request.method === "GET" && path.endsWith("/compare")) {
+        compareRanges.push({
+          base: url.searchParams.get("base"),
+          head: url.searchParams.get("head"),
+        });
         return Response.json({
           data: { headOid: head, commits: commitMessages.map((message) => ({ message })) },
         });
+      }
       mergeBodies.push((await request.json()) as Record<string, unknown>);
       return Response.json({ data: { oid: "c".repeat(40) } });
     },
@@ -162,6 +169,22 @@ describe("Review comment threads", () => {
     expect((await call(`${base}/${root.id}`, "DELETE", bob)).status).toBe(204);
     const remaining = await data<Thread[]>(await call(base, "GET", alice));
     expect(remaining).toHaveLength(0);
+  });
+
+  it("keeps replies by others when a non-member deletes the thread root", async () => {
+    const number = await openPull();
+    const base = `/repositories/r1/pull-requests/${number}/review-comments`;
+    const root = await data<Thread>(await call(base, "POST", eve, threadInput()));
+    const own = await data<Thread>(await call(base, "POST", eve, threadInput({ line: 20 })));
+    await call(base, "POST", eve, { body: "Self reply", inReplyTo: own.id });
+    await call(base, "POST", bob, { body: "Member reply", inReplyTo: root.id });
+
+    const refused = await call(`${base}/${root.id}`, "DELETE", eve);
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ error: { code: "thread_has_replies" } });
+    expect((await call(`${base}/${own.id}`, "DELETE", eve)).status).toBe(204);
+    expect((await call(`${base}/${root.id}`, "DELETE", bob)).status).toBe(204);
+    expect(await data<Thread[]>(await call(base, "GET", alice))).toHaveLength(0);
   });
 
   it("validates thread positions and the reviewed commit", async () => {
@@ -323,12 +346,14 @@ describe("Issue linking on merge", () => {
       body: `closes #${fromBody}\nSee #${mentioned}. Resolves other/repo#${foreign}`,
     });
     commitMessages = [`Update\n\nresolved #${fromCommit}`];
+    compareRanges.length = 0;
     try {
       const merged = await merge(pull);
       expect(merged.status).toBe(200);
     } finally {
       commitMessages = [];
     }
+    expect(compareRanges).toEqual([{ base: BASE, head }]);
     expect(await state(fromBody)).toBe("closed");
     expect(await state(fromTitle)).toBe("closed");
     expect(await state(fromCommit)).toBe("closed");
@@ -367,7 +392,9 @@ describe("Issue linking on merge", () => {
       body: `Fixes #${target}`,
     });
     expect((await references()).pullRequests).toHaveLength(1);
+    compareRanges.length = 0;
     expect((await merge(pull)).status).toBe(200);
+    expect(compareRanges).toHaveLength(0);
     expect(await state(target)).toBe("open");
   });
 });
