@@ -93,7 +93,7 @@ export function agentSessionDisplayStatus(
 export function repositoryCodeLocation(
   owner: string,
   repository: string,
-  view: "tree" | "blob",
+  view: "tree" | "blob" | "history" | "blame",
   path: string,
   ref: string
 ): { path: string; query: { ref: string } } {

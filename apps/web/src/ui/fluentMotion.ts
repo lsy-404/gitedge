@@ -1,7 +1,7 @@
 const FOCUSABLE_SELECTOR =
   'a[href], button, input:not([type="hidden"]), select, textarea, summary, [tabindex]';
 
-const SEARCH_WRAPPER_SELECTOR = ".global-search, .workspace-search, .file-search, .search-field";
+const SEARCH_WRAPPER_SELECTOR = ".global-search, .workspace-search, .search-field";
 
 function focusFrame(target: HTMLElement): HTMLElement {
   return target.closest<HTMLElement>(SEARCH_WRAPPER_SELECTOR) ?? target;

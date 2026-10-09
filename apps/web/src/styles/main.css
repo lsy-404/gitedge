@@ -214,13 +214,13 @@ button:disabled {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
-:is(.global-search, .workspace-search, .file-search, .search-field):has(
+:is(.global-search, .workspace-search, .search-field):has(
   input:focus-visible:not(.fluent-focus-target--tracked)
 ) {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
-:is(.global-search, .workspace-search, .file-search, .search-field) input:focus-visible {
+:is(.global-search, .workspace-search, .search-field) input:focus-visible {
   outline: none;
 }
 

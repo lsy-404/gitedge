@@ -9,7 +9,10 @@ import StatusBadge from "../components/StatusBadge.vue";
 import NoticeBar from "../components/NoticeBar.vue";
 import StatusState from "../components/StatusState.vue";
 import DeployWizard from "../components/DeployWizard.vue";
+import RepositoryBlame from "../components/RepositoryBlame.vue";
 import RepositoryCode from "../components/RepositoryCode.vue";
+import RepositoryCommit from "../components/RepositoryCommit.vue";
+import RepositoryHistory from "../components/RepositoryHistory.vue";
 import RepositoryCollaboration from "../components/RepositoryCollaboration.vue";
 import RepositorySettingsPanel from "../components/RepositorySettings.vue";
 import RepositoryTasks from "../components/RepositoryTasks.vue";
@@ -23,7 +26,8 @@ const base = computed(() => `/${owner.value}/${repoName.value}`);
 const section = computed(() =>
   route.params.view ? "code" : String(route.params.section || route.path.split("/")[3] || "code")
 );
-const activeTab = computed(() => section.value);
+const codeView = computed(() => String(route.params.view || ""));
+const activeTab = computed(() => (section.value === "commit" ? "commits" : section.value));
 const titleTag = computed(() =>
   ["issues", "pulls", "discussions", "wiki"].includes(section.value) ? "p" : "h1"
 );
@@ -278,6 +282,13 @@ watch(
           t("settingsRepositoryArchived")
         }}</NoticeBar>
         <div v-if="!sectionEnabled(section)" class="state">{{ t("settingsFeatureDisabled") }}</div>
+        <RepositoryHistory v-else-if="codeView === 'history'" :repository="repository" />
+        <RepositoryBlame v-else-if="codeView === 'blame'" :repository="repository" />
+        <RepositoryCommit
+          v-else-if="section === 'commit'"
+          :repository="repository"
+          :oid="String(route.params.oid)"
+        />
         <RepositoryCode
           v-else-if="['code', 'commits', 'compare'].includes(section)"
           :repository="repository"

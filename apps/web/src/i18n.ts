@@ -6,6 +6,7 @@ import { createI18n } from "vue-i18n";
 import github from "./i18n/github";
 import workspace from "./i18n/workspace";
 import codeMessages from "./i18n/code";
+import { codeNavigationMessages } from "./i18n/codeNavigation";
 import collaborationMessages from "./i18n/collaboration";
 import avatarMessages from "./i18n/avatar";
 import agentsMessages from "./i18n/agents";
@@ -848,6 +849,7 @@ export const i18n = createI18n({
       ...github["zh-CN"],
       ...workspace["zh-CN"],
       ...codeMessages["zh-CN"],
+      ...codeNavigationMessages["zh-CN"],
       ...collaborationMessages["zh-CN"],
       ...settingsMessages["zh-CN"],
       ...repositorySettingsMessages["zh-CN"],
@@ -867,6 +869,7 @@ export const i18n = createI18n({
       ...github.en,
       ...workspace.en,
       ...codeMessages.en,
+      ...codeNavigationMessages.en,
       ...collaborationMessages.en,
       ...settingsMessages.en,
       ...repositorySettingsMessages.en,
