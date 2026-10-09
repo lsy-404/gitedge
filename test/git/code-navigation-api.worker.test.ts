@@ -100,15 +100,21 @@ describe("code navigation endpoints", () => {
 
   it("caches commit-addressed reads immutably for public repositories only", async () => {
     const publicOid = await call("public-id", `files?ref=${baseOid}`);
-    expect(publicOid.headers.get("Cache-Control")).toBe("public, max-age=3600, immutable");
+    expect(publicOid.headers.get("Cache-Control")).toBe(
+      "public, max-age=86400, s-maxage=3600, immutable"
+    );
     const privateOid = await call("private-id", `files?ref=${baseOid}`, owner);
     expect(privateOid.headers.get("Cache-Control")).toBe("private, max-age=3600");
     expect(privateOid.headers.get("Vary")).toBe("Cookie, Authorization");
     expect(publicOid.headers.get("Vary")).toBeNull();
     const branch = await call("public-id", "files?ref=main");
-    expect(branch.headers.get("Cache-Control")).toBe("no-store");
+    expect(branch.headers.get("Cache-Control")).toBe(
+      "public, max-age=0, s-maxage=30, must-revalidate"
+    );
     const detail = await call("public-id", `commit-diff?oid=${baseOid}`);
-    expect(detail.headers.get("Cache-Control")).toBe("public, max-age=3600, immutable");
+    expect(detail.headers.get("Cache-Control")).toBe(
+      "public, max-age=86400, s-maxage=3600, immutable"
+    );
   });
 
   it("validates cursors, oids and required paths", async () => {

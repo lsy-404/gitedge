@@ -31,6 +31,13 @@ import { CommitRequestError, commitFromEdit, readCommitRequest } from "./commit-
 import { repositorySnapshot } from "./snapshot";
 import { GitTagExists, createRepositoryTag, deleteRepositoryTag, listRepositoryTags } from "./tags";
 import { serveRaw, splitRawSpec } from "./raw";
+import { edgeAddress, edgeReference } from "./edge-reference";
+import {
+  edgeDownloadHeaders,
+  matchesEtag,
+  repositoryCacheScope,
+  serveEdgeRead,
+} from "./edge-cache";
 import {
   ArchiveError,
   archiveContentType,
@@ -114,20 +121,6 @@ function validPath(path: string): boolean {
     !path.includes("\0") &&
     path.split("/").every((part) => part !== ".." && part !== ".")
   );
-}
-/**
- * Responses addressed by a full commit id never change; others must be revalidated. Private
- * entries vary by credentials so a browser never replays them after sign-out or to another user.
- */
-function oidCacheHeaders(
-  ref: string,
-  access: { repository: { visibility: string } },
-  scopedToSession: boolean
-): HeadersInit | undefined {
-  if (!GitOidSchema.safeParse(ref).success) return undefined;
-  return scopedToSession || access.repository.visibility !== "public"
-    ? { "Cache-Control": "private, max-age=3600", Vary: "Cookie, Authorization" }
-    : { "Cache-Control": "public, max-age=3600, immutable" };
 }
 export async function handleGitApi(
   request: Request,
@@ -509,290 +502,311 @@ export async function handleGitApi(
   }
   if (request.method !== "GET" && request.method !== "HEAD")
     return errorResponse(405, "method_not_allowed", "Method is not allowed.");
-  if (resource === "community")
-    return dataResponse(await repositoryCommunity(env, access.repository, repo, ref));
-  if (resource === "refs") return dataResponse(await listArtifactRefs(repo, env.LOG_LEVEL));
-  if (resource === "branches") {
-    const rules = await branchRules(env.DB, repositoryId),
-      refs = await listArtifactRefs(repo, env.LOG_LEVEL);
-    return dataResponse(
-      refs
-        .filter((item) => item.name.startsWith("refs/heads/"))
-        .map((item) => {
-          const name = item.name.slice(11),
-            matching = session ? [] : matchingBranchRules(rules, name);
-          return {
-            name,
-            oid: item.oid,
-            protected: matching.length > 0,
-            rules: matching.map((rule) => rule.pattern),
-            isDefault: name === access.repository.defaultBranch,
-          };
-        })
-    );
-  }
-  if (resource === "snapshot") {
-    const oid = url.searchParams.get("oid") ?? (await resolveCommit(repo, ref))?.hash ?? "";
-    if (!GitOidSchema.safeParse(oid).success || !(await refContainsCommit(repo, ref, oid)))
-      return errorResponse(404, "not_found", "The selected commit is unavailable.");
-    return dataResponse(await repositorySnapshot(repo, oid));
-  }
-  if (resource === "signature") {
-    const oid = url.searchParams.get("oid") ?? "";
-    const commitRef = url.searchParams.get("ref");
-    if (!GitOidSchema.safeParse(oid).success || !commitRef)
-      return errorResponse(400, "bad_request", "Invalid commit oid or ref.");
-    if (!(await refContainsCommit(repo, commitRef, oid)))
-      return errorResponse(404, "not_found", "Commit was not found in this repository ref.");
-    return dataResponse(await readCommitSignature(repo, env.DB, oid, env.LOG_LEVEL));
-  }
-  if (resource === "commit") {
-    const oid = url.searchParams.get("oid") ?? "";
-    const commitRef = url.searchParams.get("ref");
-    if (!GitOidSchema.safeParse(oid).success || !commitRef)
-      return errorResponse(400, "bad_request", "Invalid commit oid or ref.");
-    const commit = (await refContainsCommit(repo, commitRef, oid))
-      ? await repo.readCommit(oid)
-      : null;
-    logger.debug("artifacts:commit-lookup", { oid, ref: commitRef, found: commit !== null });
-    return commit
-      ? dataResponse(commitResponse(commit))
-      : errorResponse(404, "not_found", "Commit was not found.");
-  }
-  if (resource === "commit-diff") {
-    const oid = url.searchParams.get("oid") ?? "";
-    if (!GitOidSchema.safeParse(oid).success)
-      return errorResponse(400, "bad_request", "Invalid commit oid.");
-    const detail = await commitDetail(repo, oid);
-    logger.debug("artifacts:commit-diff", {
-      oid,
-      found: detail !== null,
-      files: detail?.files.length,
-      truncated: detail?.truncated,
-    });
-    return detail
-      ? dataResponse(detail, 200, oidCacheHeaders(oid, access, false))
-      : errorResponse(404, "not_found", "Commit was not found.");
-  }
-  if (resource === "files") {
-    const list = await listFiles(repo, ref);
-    if (!list) return errorResponse(404, "not_found", "Ref was not found.");
-    if (list.truncated) logger.warn("artifacts:file-list-truncated", { paths: list.paths.length });
-    return dataResponse(list, 200, oidCacheHeaders(ref, access, session !== null));
-  }
-  if (resource === "history") {
-    const cursor = url.searchParams.get("cursor");
-    if (cursor !== null && !GitOidSchema.safeParse(cursor).success)
-      return errorResponse(400, "bad_request", "Invalid history cursor.");
-    if (!path) return errorResponse(400, "bad_request", "A file or directory path is required.");
-    const history = await pathHistory(repo, cursor ?? ref, path);
-    logger.debug("artifacts:path-history", {
-      inspected: history.inspected,
-      matches: history.commits.length,
-      truncated: history.truncated,
-    });
-    return dataResponse(history, 200, oidCacheHeaders(cursor ?? ref, access, session !== null));
-  }
-  if (resource === "blame") {
-    const result = path ? await blameFile(repo, ref, path) : { status: "not_found" as const };
-    if (result.status === "not_found")
-      return errorResponse(404, "not_found", "File was not found.");
-    if (result.status === "unsupported")
-      return errorResponse(
-        422,
-        result.reason === "binary" ? "binary_file" : "file_too_large",
-        result.reason === "binary"
-          ? "Blame is unavailable for binary files."
-          : "File is too large to blame."
-      );
-    if (result.blame.partial)
-      logger.warn("artifacts:blame-partial", { inspected: result.blame.inspected });
-    return dataResponse(result.blame, 200, oidCacheHeaders(ref, access, session !== null));
-  }
-  if (resource === "commits")
-    return dataResponse(
-      (
-        await repo.log({
-          ref,
-          limit: Math.max(1, pageNumber(url.searchParams.get("limit"), 30, 100)),
-          offset: pageNumber(url.searchParams.get("offset"), 0, 10000),
-        })
-      ).map(commitResponse)
-    );
-  if (resource === "tree") {
-    const tree = await readArtifactTree(repo, ref, path);
-    return tree ? dataResponse(tree) : errorResponse(404, "not_found", "Directory was not found.");
-  }
-  if (resource === "file") {
-    const file = path ? await readArtifactFile(repo, ref, path) : null;
-    return file ? dataResponse(file) : errorResponse(404, "not_found", "File was not found.");
-  }
-  if (resource === "tags") {
-    const name = url.searchParams.get("name");
-    if (name !== null && !GitTagNameSchema.safeParse(name).success)
-      return errorResponse(400, "bad_request", "Invalid tag name.");
-    const { tags, truncated } = await listRepositoryTags(repo, env.LOG_LEVEL, name);
-    return jsonResponse({ data: tags, truncated });
-  }
-  if (resource === "archive") {
-    const format: ArchiveFormat | null =
-      url.searchParams.get("format") === "tar.gz"
-        ? "tar.gz"
-        : url.searchParams.get("format") === "zip"
-          ? "zip"
-          : null;
-    if (!format) return errorResponse(400, "bad_request", "Archive format must be zip or tar.gz.");
-    const commit = await resolveCommit(repo, ref);
-    if (!commit) return errorResponse(404, "not_found", "The selected ref was not found.");
-    const label = GitOidSchema.safeParse(ref).success ? ref.slice(0, 7) : ref;
-    const name = `${access.repository.slug}-${label.replace(/[^A-Za-z0-9._-]+/g, "-")}`;
-    const etag = `"${commit.hash}-${format}"`;
-    const publicRepository = access.repository.visibility === "public";
-    const headers = {
-      ETag: etag,
-      "Cache-Control": publicRepository
-        ? GitOidSchema.safeParse(ref).success
-          ? "public, max-age=300"
-          : "public, max-age=0, must-revalidate"
-        : "private, no-store",
-      "X-Content-Type-Options": "nosniff",
-    };
-    if (
-      request.headers
-        .get("If-None-Match")
-        ?.split(",")
-        .some((value) => value.trim() === etag)
-    )
-      return new Response(null, { status: 304, headers });
-    try {
-      const plan = await planArchive(repo, commit.treeHash);
-      logger.info("git:archive-started", {
-        format,
-        files: plan.files.length,
-        directories: plan.directories.length,
-      });
-      // HEAD must not start the producer, and the stream outlives this function's `repo`
-      // handle, so it reads through its own handle that is released when the stream settles.
-      const body =
-        request.method === "HEAD"
-          ? null
-          : releaseWhenSettled(await env.ARTIFACTS.get(access.repository.artifactName), (handle) =>
-              archiveStream(handle, plan, format, {
-                root: name,
-                mtime: new Date(commit.committedAt * 1000),
-                onError: (cause) =>
-                  logger.warn("git:archive-aborted", {
-                    format,
-                    code: cause instanceof ArchiveError ? cause.code : "stream_failed",
-                    error: cause instanceof Error ? cause.message : "unknown",
-                  }),
-              })
-            );
-      return new Response(body, {
-        headers: {
-          ...headers,
-          "Content-Type": archiveContentType(format),
-          "Content-Disposition": contentDisposition("attachment", `${name}.${format}`),
-          "Content-Security-Policy": "default-src 'none'; sandbox",
-        },
-      });
-    } catch (cause) {
-      if (!(cause instanceof ArchiveError)) throw cause;
-      logger.warn("git:archive-refused", { format, code: cause.code });
-      return errorResponse(
-        cause.code === "archive_too_large" ? 413 : 422,
-        cause.code,
-        cause.message
-      );
-    }
-  }
-  if (resource === "raw") {
-    const spec = url.searchParams.get("spec");
-    const target = spec
-      ? await splitRawSpec(spec, access.repository.defaultBranch, async () => {
-          const names = new Set<string>();
-          for (const item of await listArtifactRefs(repo, env.LOG_LEVEL))
-            names.add(item.name.replace(/^refs\/(?:heads|tags)\//, ""));
-          return names;
-        })
-      : { ref, path };
-    if (!target?.path || !validPath(target.path) || target.ref.length > 255)
-      return errorResponse(404, "not_found", "File was not found.");
-    const served = await serveRaw(repo, target, {
-      publicRepository: access.repository.visibility === "public" && !session,
-      forceDownload: url.searchParams.get("download") === "1",
-      head: request.method === "HEAD",
-      ifNoneMatch: request.headers.get("If-None-Match"),
-    });
-    if (served.status === 413) logger.warn("git:raw-refused", { reason: "file_too_large" });
-    return served;
-  }
-  if (resource === "graph") {
-    const refs = await listArtifactRefs(repo, env.LOG_LEVEL);
-    const sessions = await listRepositorySessions(env, access);
-    const limit = Math.max(1, pageNumber(url.searchParams.get("limit"), 100, 250));
-    const graph = await artifactGraph(repo, refs, sessions, limit);
-    for (const workspace of sessions
-      .filter((item) => item.id !== session?.id && item.status !== "revoked")
-      .slice(0, 10)) {
-      using fork = await env.ARTIFACTS.get(workspace.workspaceName);
-      const forkRefs = await listArtifactRefs(fork, env.LOG_LEVEL);
-      const forkGraph = await artifactGraph(fork, forkRefs, [], 30);
-      const existing = new Set(graph.commits.map((commit) => commit.oid));
-      graph.commits.push(...forkGraph.commits.filter((commit) => !existing.has(commit.oid)));
-      graph.refs.push(
-        ...forkRefs
+  const artifactName = access.repository.artifactName;
+  const dispatch = async (): Promise<Response> => {
+    if (resource === "community")
+      return dataResponse(await repositoryCommunity(env, access.repository, repo, ref));
+    if (resource === "refs") return dataResponse(await listArtifactRefs(repo, env.LOG_LEVEL));
+    if (resource === "branches") {
+      const rules = await branchRules(env.DB, repositoryId),
+        refs = await listArtifactRefs(repo, env.LOG_LEVEL);
+      return dataResponse(
+        refs
           .filter((item) => item.name.startsWith("refs/heads/"))
-          .map((item) => ({
-            name: `session/${workspace.id}/${item.name.slice(11)}`,
-            oid: item.oid,
-          }))
+          .map((item) => {
+            const name = item.name.slice(11),
+              matching = session ? [] : matchingBranchRules(rules, name);
+            return {
+              name,
+              oid: item.oid,
+              protected: matching.length > 0,
+              rules: matching.map((rule) => rule.pattern),
+              isDefault: name === access.repository.defaultBranch,
+            };
+          })
       );
-      graph.truncated ||= forkGraph.truncated;
     }
-    graph.commits = orderCommits(graph.commits);
-    logger.debug("artifacts:graph-read", {
-      commits: graph.commits.length,
-      sessions: sessions.length,
-    });
-    return dataResponse(graph);
-  }
-  if (resource === "pull-head") {
-    const headSessionId = url.searchParams.get("headSessionId");
-    const head = url.searchParams.get("head") ?? "HEAD";
-    const headSession = headSessionId
-      ? await resolveWorkspace(env, access, headSessionId, head)
-      : null;
-    if (headSessionId && !headSession)
-      return errorResponse(404, "not_found", "Head session was not found.");
-    using headRepo = await env.ARTIFACTS.get(
-      headSession?.workspaceName ?? access.repository.artifactName
-    );
-    const commit = await resolveCommit(headRepo, head);
-    return commit
-      ? dataResponse({ oid: commit.hash })
-      : errorResponse(404, "not_found", "Head ref was not found.");
-  }
-  if (resource === "compare") {
-    const headSessionId = url.searchParams.get("headSessionId");
-    const head = url.searchParams.get("head") ?? "HEAD";
-    const headSession = headSessionId
-      ? await resolveWorkspace(env, access, headSessionId, head)
-      : null;
-    if (headSessionId && !headSession)
-      return errorResponse(404, "not_found", "Head session was not found.");
-    using headRepo = await env.ARTIFACTS.get(
-      headSession?.workspaceName ?? access.repository.artifactName
-    );
-    const comparison = await compareArtifacts(
-      repo,
-      headRepo,
-      url.searchParams.get("base") ?? access.repository.defaultBranch,
-      head
-    );
-    return comparison
-      ? dataResponse(comparison)
-      : errorResponse(404, "not_found", "Comparison ref was not found.");
-  }
-  return errorResponse(404, "not_found", "Endpoint was not found.");
+    if (resource === "snapshot") {
+      const oid = url.searchParams.get("oid") ?? (await resolveCommit(repo, ref))?.hash ?? "";
+      if (!GitOidSchema.safeParse(oid).success || !(await refContainsCommit(repo, ref, oid)))
+        return errorResponse(404, "not_found", "The selected commit is unavailable.");
+      return dataResponse(await repositorySnapshot(repo, oid));
+    }
+    if (resource === "signature") {
+      const oid = url.searchParams.get("oid") ?? "";
+      const commitRef = url.searchParams.get("ref");
+      if (!GitOidSchema.safeParse(oid).success || !commitRef)
+        return errorResponse(400, "bad_request", "Invalid commit oid or ref.");
+      if (!(await refContainsCommit(repo, commitRef, oid)))
+        return errorResponse(404, "not_found", "Commit was not found in this repository ref.");
+      return dataResponse(await readCommitSignature(repo, env.DB, oid, env.LOG_LEVEL));
+    }
+    if (resource === "commit") {
+      const oid = url.searchParams.get("oid") ?? "";
+      const commitRef = url.searchParams.get("ref");
+      if (!GitOidSchema.safeParse(oid).success || !commitRef)
+        return errorResponse(400, "bad_request", "Invalid commit oid or ref.");
+      const commit = (await refContainsCommit(repo, commitRef, oid))
+        ? await repo.readCommit(oid)
+        : null;
+      logger.debug("artifacts:commit-lookup", { oid, ref: commitRef, found: commit !== null });
+      return commit
+        ? dataResponse(commitResponse(commit))
+        : errorResponse(404, "not_found", "Commit was not found.");
+    }
+    if (resource === "commit-diff") {
+      const oid = url.searchParams.get("oid") ?? "";
+      if (!GitOidSchema.safeParse(oid).success)
+        return errorResponse(400, "bad_request", "Invalid commit oid.");
+      const detail = await commitDetail(repo, oid);
+      logger.debug("artifacts:commit-diff", {
+        oid,
+        found: detail !== null,
+        files: detail?.files.length,
+        truncated: detail?.truncated,
+      });
+      return detail
+        ? dataResponse(detail)
+        : errorResponse(404, "not_found", "Commit was not found.");
+    }
+    if (resource === "files") {
+      const list = await listFiles(repo, ref);
+      if (!list) return errorResponse(404, "not_found", "Ref was not found.");
+      if (list.truncated)
+        logger.warn("artifacts:file-list-truncated", { paths: list.paths.length });
+      return dataResponse(list);
+    }
+    if (resource === "history") {
+      const cursor = url.searchParams.get("cursor");
+      if (cursor !== null && !GitOidSchema.safeParse(cursor).success)
+        return errorResponse(400, "bad_request", "Invalid history cursor.");
+      if (!path) return errorResponse(400, "bad_request", "A file or directory path is required.");
+      const history = await pathHistory(repo, cursor ?? ref, path);
+      logger.debug("artifacts:path-history", {
+        inspected: history.inspected,
+        matches: history.commits.length,
+        truncated: history.truncated,
+      });
+      return dataResponse(history);
+    }
+    if (resource === "blame") {
+      const result = path ? await blameFile(repo, ref, path) : { status: "not_found" as const };
+      if (result.status === "not_found")
+        return errorResponse(404, "not_found", "File was not found.");
+      if (result.status === "unsupported")
+        return errorResponse(
+          422,
+          result.reason === "binary" ? "binary_file" : "file_too_large",
+          result.reason === "binary"
+            ? "Blame is unavailable for binary files."
+            : "File is too large to blame."
+        );
+      if (result.blame.partial)
+        logger.warn("artifacts:blame-partial", { inspected: result.blame.inspected });
+      return dataResponse(result.blame);
+    }
+    if (resource === "commits")
+      return dataResponse(
+        (
+          await repo.log({
+            ref,
+            limit: Math.max(1, pageNumber(url.searchParams.get("limit"), 30, 100)),
+            offset: pageNumber(url.searchParams.get("offset"), 0, 10000),
+          })
+        ).map(commitResponse)
+      );
+    if (resource === "tree") {
+      const tree = await readArtifactTree(repo, ref, path);
+      return tree
+        ? dataResponse(tree)
+        : errorResponse(404, "not_found", "Directory was not found.");
+    }
+    if (resource === "file") {
+      const file = path ? await readArtifactFile(repo, ref, path) : null;
+      return file ? dataResponse(file) : errorResponse(404, "not_found", "File was not found.");
+    }
+    if (resource === "tags") {
+      const name = url.searchParams.get("name");
+      if (name !== null && !GitTagNameSchema.safeParse(name).success)
+        return errorResponse(400, "bad_request", "Invalid tag name.");
+      const { tags, truncated } = await listRepositoryTags(repo, env.LOG_LEVEL, name);
+      return jsonResponse({ data: tags, truncated });
+    }
+    if (resource === "archive") {
+      const format: ArchiveFormat | null =
+        url.searchParams.get("format") === "tar.gz"
+          ? "tar.gz"
+          : url.searchParams.get("format") === "zip"
+            ? "zip"
+            : null;
+      if (!format)
+        return errorResponse(400, "bad_request", "Archive format must be zip or tar.gz.");
+      const commit = await resolveCommit(repo, ref);
+      if (!commit) return errorResponse(404, "not_found", "The selected ref was not found.");
+      const label = GitOidSchema.safeParse(ref).success ? ref.slice(0, 7) : ref;
+      const name = `${access.repository.slug}-${label.replace(/[^A-Za-z0-9._-]+/g, "-")}`;
+      const etag = `"${commit.hash}-${format}"`;
+      const headers = {
+        ETag: etag,
+        ...edgeDownloadHeaders(
+          { kind: GitOidSchema.safeParse(ref).success ? "immutable" : "ref", oid: commit.hash },
+          {
+            shared: access.repository.visibility === "public" && !session,
+            anonymous: !access.user,
+          }
+        ),
+        "X-Content-Type-Options": "nosniff",
+      };
+      if (matchesEtag(request.headers.get("If-None-Match"), etag))
+        return new Response(null, { status: 304, headers });
+      try {
+        const plan = await planArchive(repo, commit.treeHash);
+        logger.info("git:archive-started", {
+          format,
+          files: plan.files.length,
+          directories: plan.directories.length,
+        });
+        // HEAD must not start the producer, and the stream outlives this function's `repo`
+        // handle, so it reads through its own handle that is released when the stream settles.
+        const body =
+          request.method === "HEAD"
+            ? null
+            : releaseWhenSettled(await env.ARTIFACTS.get(artifactName), (handle) =>
+                archiveStream(handle, plan, format, {
+                  root: name,
+                  mtime: new Date(commit.committedAt * 1000),
+                  onError: (cause) =>
+                    logger.warn("git:archive-aborted", {
+                      format,
+                      code: cause instanceof ArchiveError ? cause.code : "stream_failed",
+                      error: cause instanceof Error ? cause.message : "unknown",
+                    }),
+                })
+              );
+        return new Response(body, {
+          headers: {
+            ...headers,
+            "Content-Type": archiveContentType(format),
+            "Content-Disposition": contentDisposition("attachment", `${name}.${format}`),
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+          },
+        });
+      } catch (cause) {
+        if (!(cause instanceof ArchiveError)) throw cause;
+        logger.warn("git:archive-refused", { format, code: cause.code });
+        return errorResponse(
+          cause.code === "archive_too_large" ? 413 : 422,
+          cause.code,
+          cause.message
+        );
+      }
+    }
+    if (resource === "raw") {
+      const spec = url.searchParams.get("spec");
+      const target = spec
+        ? await splitRawSpec(spec, access.repository.defaultBranch, async () => {
+            const names = new Set<string>();
+            for (const item of await listArtifactRefs(repo, env.LOG_LEVEL))
+              names.add(item.name.replace(/^refs\/(?:heads|tags)\//, ""));
+            return names;
+          })
+        : { ref, path };
+      if (!target?.path || !validPath(target.path) || target.ref.length > 255)
+        return errorResponse(404, "not_found", "File was not found.");
+      const served = await serveRaw(repo, target, {
+        audience: {
+          shared: access.repository.visibility === "public" && !session,
+          anonymous: !access.user,
+        },
+        forceDownload: url.searchParams.get("download") === "1",
+        head: request.method === "HEAD",
+        ifNoneMatch: request.headers.get("If-None-Match"),
+      });
+      if (served.status === 413) logger.warn("git:raw-refused", { reason: "file_too_large" });
+      return served;
+    }
+    if (resource === "graph") {
+      const refs = await listArtifactRefs(repo, env.LOG_LEVEL);
+      const sessions = await listRepositorySessions(env, access);
+      const limit = Math.max(1, pageNumber(url.searchParams.get("limit"), 100, 250));
+      const graph = await artifactGraph(repo, refs, sessions, limit);
+      for (const workspace of sessions
+        .filter((item) => item.id !== session?.id && item.status !== "revoked")
+        .slice(0, 10)) {
+        using fork = await env.ARTIFACTS.get(workspace.workspaceName);
+        const forkRefs = await listArtifactRefs(fork, env.LOG_LEVEL);
+        const forkGraph = await artifactGraph(fork, forkRefs, [], 30);
+        const existing = new Set(graph.commits.map((commit) => commit.oid));
+        graph.commits.push(...forkGraph.commits.filter((commit) => !existing.has(commit.oid)));
+        graph.refs.push(
+          ...forkRefs
+            .filter((item) => item.name.startsWith("refs/heads/"))
+            .map((item) => ({
+              name: `session/${workspace.id}/${item.name.slice(11)}`,
+              oid: item.oid,
+            }))
+        );
+        graph.truncated ||= forkGraph.truncated;
+      }
+      graph.commits = orderCommits(graph.commits);
+      logger.debug("artifacts:graph-read", {
+        commits: graph.commits.length,
+        sessions: sessions.length,
+      });
+      return dataResponse(graph);
+    }
+    if (resource === "pull-head") {
+      const headSessionId = url.searchParams.get("headSessionId");
+      const head = url.searchParams.get("head") ?? "HEAD";
+      const headSession = headSessionId
+        ? await resolveWorkspace(env, access, headSessionId, head)
+        : null;
+      if (headSessionId && !headSession)
+        return errorResponse(404, "not_found", "Head session was not found.");
+      using headRepo = await env.ARTIFACTS.get(headSession?.workspaceName ?? artifactName);
+      const commit = await resolveCommit(headRepo, head);
+      return commit
+        ? dataResponse({ oid: commit.hash })
+        : errorResponse(404, "not_found", "Head ref was not found.");
+    }
+    if (resource === "compare") {
+      const headSessionId = url.searchParams.get("headSessionId");
+      const head = url.searchParams.get("head") ?? "HEAD";
+      const headSession = headSessionId
+        ? await resolveWorkspace(env, access, headSessionId, head)
+        : null;
+      if (headSessionId && !headSession)
+        return errorResponse(404, "not_found", "Head session was not found.");
+      using headRepo = await env.ARTIFACTS.get(headSession?.workspaceName ?? artifactName);
+      const comparison = await compareArtifacts(
+        repo,
+        headRepo,
+        url.searchParams.get("base") ?? access.repository.defaultBranch,
+        head
+      );
+      return comparison
+        ? dataResponse(comparison)
+        : errorResponse(404, "not_found", "Comparison ref was not found.");
+    }
+    return errorResponse(404, "not_found", "Endpoint was not found.");
+  };
+  const scope = repositoryCacheScope(access.repository);
+  const reference = scope ? edgeReference(resource, url, ref, path) : null;
+  if (!scope || !reference) return await dispatch();
+  const audience = {
+    shared: access.repository.visibility === "public" && !session,
+    anonymous: !access.user,
+  };
+  return await serveEdgeRead({
+    request,
+    cache: caches.default,
+    waitUntil: ctx ? (promise) => ctx.waitUntil(promise) : undefined,
+    logger,
+    scope,
+    resource,
+    address: await edgeAddress(repo, reference, audience.shared),
+    audience,
+    params: reference.params,
+    compute: dispatch,
+  });
 }

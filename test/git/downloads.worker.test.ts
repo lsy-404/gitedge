@@ -108,7 +108,9 @@ describe("raw blobs", () => {
     expect(response.headers.get("Content-Type")).toBe("text/plain; charset=utf-8");
     expect(response.headers.get("Content-Disposition")).toMatch(/^inline;/);
     expect(response.headers.get("ETag")).toMatch(/^"[0-9a-f]{40}"$/);
-    expect(response.headers.get("Cache-Control")).toBe("public, max-age=300");
+    expect(response.headers.get("Cache-Control")).toBe(
+      "public, max-age=86400, s-maxage=3600, immutable"
+    );
   });
 
   it("serves images inline and downloads binaries", async () => {

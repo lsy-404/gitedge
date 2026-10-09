@@ -62,6 +62,47 @@ describe("Gateway response headers", () => {
     expect(cached.headers.get("Cache-Control")).toBe("public, max-age=60");
   });
 
+  it("never lets a response that sets a cookie be shared", async () => {
+    const response = await gateway.fetch(
+      new Request("https://gitedge.example.com/api/forge/repositories"),
+      environment({
+        FORGE: service(
+          () =>
+            new Response("ok", {
+              headers: { "Cache-Control": "public, max-age=60", "Set-Cookie": "a=b" },
+            })
+        ),
+      })
+    );
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+  });
+
+  it("passes edge cache validators and status through for public Git reads", async () => {
+    let received: string | null = null;
+    const response = await gateway.fetch(
+      new Request("https://gitedge.example.com/api/git/repositories/r1/tree?ref=main", {
+        headers: { "If-None-Match": '"abc"' },
+      }),
+      environment({
+        GIT: service((request) => {
+          received = request.headers.get("If-None-Match");
+          return new Response(null, {
+            status: 304,
+            headers: {
+              ETag: '"abc"',
+              "Cache-Control": "public, max-age=0, s-maxage=30, must-revalidate",
+              "X-GitEdge-Cache": "revalidated",
+            },
+          });
+        }),
+      })
+    );
+    expect(received).toBe('"abc"');
+    expect(response.status).toBe(304);
+    expect(response.headers.get("X-GitEdge-Cache")).toBe("revalidated");
+    expect(response.headers.get("Cache-Control")).toContain("s-maxage=30");
+  });
+
   it("keeps a stricter policy set by a downstream service", async () => {
     const response = await gateway.fetch(
       new Request("https://gitedge.example.com/api/forge/repositories"),
