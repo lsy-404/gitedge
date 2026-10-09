@@ -77,6 +77,7 @@ const dynamicKeys: Record<string, readonly string[]> = {
     "pull_request",
     "pull_request_review",
     "check_run",
+    "release",
     "ping",
   ],
   webhookStatus_: ["pending", "success", "failed"],

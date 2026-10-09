@@ -7,6 +7,7 @@ export const RepositoryWebhookEvents = [
   "pull_request",
   "pull_request_review",
   "check_run",
+  "release",
 ] as const;
 export const RepositoryWebhookEventSchema = z.enum(RepositoryWebhookEvents);
 export type RepositoryWebhookEvent = z.infer<typeof RepositoryWebhookEventSchema>;

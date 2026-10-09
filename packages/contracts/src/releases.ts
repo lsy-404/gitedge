@@ -112,7 +112,7 @@ export const ReleaseEventTypes = [
 ] as const;
 export type ReleaseEventType = (typeof ReleaseEventTypes)[number];
 
-/** Event emitted after a release changes; a future webhook dispatcher subscribes to it. */
+/** Event emitted after a release changes. */
 export interface ReleaseEvent {
   type: ReleaseEventType;
   repositoryId: string;

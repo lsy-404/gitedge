@@ -275,7 +275,7 @@ describe("webhook URL safety", () => {
   });
 
   it("rejects unsupported events, empty event lists and a missing encryption key", async () => {
-    for (const events of [[], ["release"], ["push", "push"]])
+    for (const events of [[], ["deployment"], ["push", "push"]])
       expect(
         (
           await call("/repositories/rp/webhooks", "POST", "owner", {
@@ -735,5 +735,35 @@ describe("push events", () => {
     ).toEqual({
       queued: 0,
     });
+  });
+});
+
+describe("webhook audit", () => {
+  it("records creation and deletion with the host only", async () => {
+    const hook = await json<SavedRepositoryWebhook>(
+      await call("/repositories/rp/webhooks", "POST", "owner", {
+        url: "https://hooks.example.com/services/T000/very-secret-path",
+        events: ["push", "release"],
+      }),
+      201
+    );
+    expect((await call(`/repositories/rp/webhooks/${hook.id}`, "DELETE", "owner")).status).toBe(
+      200
+    );
+    const rows = await env.DB.prepare(
+      "SELECT action, actor_name AS actor, target_label AS label, metadata_json AS metadata FROM audit_events WHERE repository_id = 'rp' AND target_id = ? ORDER BY created_at, action"
+    )
+      .bind(hook.id)
+      .all<{ action: string; actor: string; label: string; metadata: string }>();
+    expect(rows.results.map((row) => [row.action, row.actor, row.label])).toEqual([
+      ["repository_webhook.created", "owner", "hooks.example.com"],
+      ["repository_webhook.deleted", "owner", "hooks.example.com"],
+    ]);
+    expect(JSON.parse(rows.results[0].metadata)).toEqual({
+      host: "hooks.example.com",
+      events: ["push", "release"],
+      active: true,
+    });
+    expect(JSON.stringify(rows.results)).not.toContain("very-secret-path");
   });
 });

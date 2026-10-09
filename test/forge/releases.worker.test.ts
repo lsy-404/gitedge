@@ -529,3 +529,46 @@ describe("repository purge", () => {
     expect(await env.RELEASE_ASSETS.get(`${id}/orphan`)).toBeNull();
   });
 });
+
+describe("release publication side effects", () => {
+  it("queues a release webhook and records an audit event once per publication", async () => {
+    await env.DB.prepare(
+      "INSERT INTO forge_webhooks (id, repository_id, url, content_type, events_json, active, secret_ciphertext, secret_iv, created_by, created_at, updated_at) VALUES ('hook-release', ?, 'https://hooks.example.com/release', 'json', '[\"release\"]', 1, 'c', 'i', 'owner-id', 1, 1)"
+    )
+      .bind(repositoryId)
+      .run();
+    const draft = await created({
+      tagName: "v-hooked-1",
+      target: "main",
+      draft: true,
+      body: "Notes",
+    });
+    await call(`/repositories/${repositoryId}/releases/${draft.id}`, "PATCH", {
+      body: { title: "Nine" },
+    });
+    const published = await call(`/repositories/${repositoryId}/releases/${draft.id}`, "PATCH", {
+      body: { draft: false },
+    });
+    expect(published.status).toBe(200);
+    await call(`/repositories/${repositoryId}/releases/${draft.id}`, "PATCH", {
+      body: { body: "Edited" },
+    });
+
+    const deliveries = await env.DB.prepare(
+      "SELECT event, action, payload FROM forge_webhook_deliveries WHERE webhook_id = 'hook-release'"
+    ).all<{ event: string; action: string; payload: string }>();
+    expect(deliveries.results).toHaveLength(1);
+    expect(deliveries.results[0]).toMatchObject({ event: "release", action: "published" });
+    expect(JSON.parse(deliveries.results[0].payload)).toMatchObject({
+      action: "published",
+      release: { tag_name: "v-hooked-1", name: "Nine", body: "Notes", draft: false },
+      sender: { login: "owner" },
+    });
+    const audits = await env.DB.prepare(
+      "SELECT target_label AS label FROM audit_events WHERE action = 'release.published' AND target_id = ?"
+    )
+      .bind(draft.id)
+      .all<{ label: string }>();
+    expect(audits.results).toEqual([{ label: "v-hooked-1" }]);
+  });
+});

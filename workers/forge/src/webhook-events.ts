@@ -197,6 +197,40 @@ export function checkRunWebhook(
   };
 }
 
+export function releaseWebhook(
+  repository: RepositoryRow,
+  user: Pick<TrustedUser, "id" | "identifier">,
+  release: {
+    readonly id: string;
+    readonly tagName: string;
+    readonly title: string;
+    readonly body: string;
+    readonly prerelease: boolean;
+    readonly target: string | null;
+    readonly author: string;
+    readonly publishedAt: number | null;
+  }
+): WebhookEvent {
+  return {
+    event: "release",
+    action: "published",
+    body: envelope(repository, user, "published", {
+      release: {
+        id: release.id,
+        tag_name: release.tagName,
+        target_commitish: release.target,
+        name: clipText(release.title),
+        body: clipText(release.body),
+        draft: false,
+        prerelease: release.prerelease,
+        author: { login: release.author },
+        published_at:
+          release.publishedAt === null ? null : new Date(release.publishedAt).toISOString(),
+      },
+    }),
+  };
+}
+
 export function pushWebhook(
   repository: RepositoryRow,
   user: Pick<TrustedUser, "id" | "identifier">,

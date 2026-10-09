@@ -12,6 +12,7 @@ import {
   type SavedRepositoryWebhook,
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
+import { auditActor, recordAudit } from "../../../src/worker/common/audit";
 import { randomHex } from "../../../src/worker/common/encoding";
 import { dataResponse, errorResponse, requireRecentAuth } from "../../../src/worker/common/http";
 import { createLogger } from "../../../src/worker/common/logger";
@@ -429,6 +430,14 @@ export async function handleRepositoryWebhooks(
       )
       .run();
     logger.info("webhook:created", { webhookId: id, userId: user.id, events: input.events.length });
+    await recordAudit(env, {
+      action: "repository_webhook.created",
+      actor: auditActor(user),
+      target: { type: "webhook", id, label: new URL(input.url).host },
+      repositoryId: repository.id,
+      namespaceId: repository.namespace_id,
+      metadata: { host: new URL(input.url).host, events: input.events, active: input.active },
+    });
     const saved: SavedRepositoryWebhook = {
       id,
       url: input.url,
@@ -449,6 +458,14 @@ export async function handleRepositoryWebhooks(
     if (method === "DELETE") {
       await env.DB.prepare("DELETE FROM forge_webhooks WHERE id = ?").bind(hook.id).run();
       logger.info("webhook:deleted", { webhookId: hook.id, userId: user.id });
+      await recordAudit(env, {
+        action: "repository_webhook.deleted",
+        actor: auditActor(user),
+        target: { type: "webhook", id: hook.id, label: new URL(hook.url).host },
+        repositoryId: repository.id,
+        namespaceId: repository.namespace_id,
+        metadata: { host: new URL(hook.url).host },
+      });
       return dataResponse({ deleted: true });
     }
     if (method === "PATCH") {

@@ -3,7 +3,7 @@ import { createLogger } from "../../../src/worker/common/logger";
 
 const handlers = new Set<ReleaseEventHandler>();
 
-/** Registers a consumer such as a future webhook dispatcher; returns an unsubscribe function. */
+/** Registers an in-process consumer; returns an unsubscribe function. */
 export function onReleaseEvent(handler: ReleaseEventHandler): () => void {
   handlers.add(handler);
   return () => handlers.delete(handler);

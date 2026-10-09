@@ -15,6 +15,7 @@ import {
   type ReleaseEventType,
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
+import { auditActor, recordAudit } from "../../../src/worker/common/audit";
 import { contentDisposition } from "../../../src/worker/common/content-disposition";
 import {
   dataResponse,
@@ -25,6 +26,7 @@ import {
 import { createLogger, type Logger } from "../../../src/worker/common/logger";
 import { parseJson, isMember, type ForgeEnv, type RepositoryRow } from "./common";
 import { emitReleaseEvent } from "./release-events";
+import { queueWebhookEvent, releaseWebhook } from "./webhook-events";
 
 interface ReleaseRow {
   id: string;
@@ -316,7 +318,7 @@ async function emit(
   repository: RepositoryRow,
   user: TrustedUser,
   type: ReleaseEventType,
-  row: Pick<ReleaseRow, "id" | "tag_name" | "draft" | "prerelease">
+  row: ReleaseRow
 ): Promise<void> {
   await emitReleaseEvent(
     {
@@ -331,6 +333,24 @@ async function emit(
     },
     env.LOG_LEVEL
   );
+  if (type !== "release.published") return;
+  const release = presentRelease(row, []);
+  try {
+    await queueWebhookEvent(env.DB, repository.id, releaseWebhook(repository, user, release)).run();
+  } catch (cause) {
+    createLogger(env.LOG_LEVEL, { service: "releases", repoId: repository.id }).warn(
+      "release:webhook-queue-failed",
+      { releaseId: row.id, error: cause instanceof Error ? cause.message : "unknown" }
+    );
+  }
+  await recordAudit(env, {
+    action: "release.published",
+    actor: auditActor(user),
+    target: { type: "release", id: row.id, label: row.tag_name },
+    repositoryId: repository.id,
+    namespaceId: repository.namespace_id,
+    metadata: { tagName: row.tag_name, prerelease: release.prerelease },
+  });
 }
 
 async function deleteObjects(
