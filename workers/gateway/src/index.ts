@@ -414,7 +414,17 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
       const authHeaders = new Headers();
       authHeaders.set("Authorization", request.headers.get("Authorization") ?? "");
       const response = await env.AUTH.fetch(new Request(authUrl, { headers: authHeaders }));
-      if (!response.ok) return gitAuthChallenge("Git authentication failed.\n");
+      if (response.status === 401) {
+        await response.body?.cancel();
+        return gitAuthChallenge("Git authentication failed.\n");
+      }
+      // A valid credential without access must not be challenged, or Git erases it from its helper.
+      if (response.status === 403 || response.status === 404)
+        return presentRepositoryResponse(response, env);
+      if (!response.ok) {
+        await response.body?.cancel();
+        return Response.json({ error: "Authentication service unavailable" }, { status: 502 });
+      }
       const payload: unknown = await response.json();
       if (
         !payload ||

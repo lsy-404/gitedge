@@ -98,15 +98,16 @@ function clearOneTime(): void {
 async function load(): Promise<void> {
   loading.value = true;
   loadingError.value = "";
-  try {
-    const [tokenRows, repositoryRows] = await Promise.all([api.accessTokens(), api.repositories()]);
-    tokens.value = tokenRows;
-    repositories.value = repositoryRows;
-  } catch (cause) {
-    loadingError.value = errorMessage(cause, t);
-  } finally {
-    loading.value = false;
-  }
+  const [tokenRows, repositoryRows] = await Promise.allSettled([
+    api.accessTokens(),
+    api.repositories(),
+  ]);
+  if (tokenRows.status === "fulfilled") tokens.value = tokenRows.value;
+  if (repositoryRows.status === "fulfilled") repositories.value = repositoryRows.value;
+  for (const result of [tokenRows, repositoryRows])
+    if (result.status === "rejected" && !loadingError.value)
+      loadingError.value = errorMessage(result.reason, t);
+  loading.value = false;
 }
 
 async function createToken(): Promise<void> {

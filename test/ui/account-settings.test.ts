@@ -175,6 +175,27 @@ describe("Account settings using Platform Kit", () => {
     expect(revoke).toHaveBeenCalledWith("pat-old");
     expect(list.mock.calls.length).toBeGreaterThan(1);
   });
+  it("still lists access tokens when the repository picker cannot load", async () => {
+    vi.spyOn(api, "repositories").mockRejectedValue(new Error("Repository listing failed"));
+    vi.spyOn(api, "accessTokens").mockResolvedValue([
+      {
+        id: "pat-kept",
+        name: "Deploy key",
+        prefix: "gep_cafebabe",
+        scopes: ["repo:read"],
+        repositories: null,
+        createdAt: 1,
+        expiresAt: Date.now() + 86_400_000,
+        lastUsedAt: null,
+        revokedAt: null,
+      },
+    ]);
+    const mounted = await mountAt("/_verify/account/tokens", "/_verify/account/tokens", () =>
+      h(AccessTokenSettings)
+    );
+    expect(mounted.root.textContent).toContain("Request failed");
+    expect(mounted.root.textContent).toContain("Deploy key");
+  });
   it("revokes the current browser session and clears local identity", async () => {
     vi.spyOn(api, "browserSessions").mockResolvedValue([
       { id: "current", createdAt: 1, expiresAt: Date.now() + 100000, isCurrent: true },

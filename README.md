@@ -95,7 +95,7 @@ Configure `PRIVATE_REPOSITORY_RESPONSE` in `workers/gateway/wrangler.jsonc` and 
 - `not_found` (default): unauthorized private repositories return the same 404 response as missing repositories.
 - `forbidden`: unauthorized private repositories return 403 with an explicit access-denied message. This discloses repository existence, but never its contents.
 
-Unset or invalid values use `not_found`. The policy covers browser repository routes and the Forge and Git APIs. Anonymous Git HTTPS requests that cannot be served, whether the repository is private or missing, receive the same Basic authentication challenge so Git prompts for a token; authenticated callers without access follow the policy. Missing repositories remain 404 in both modes elsewhere. Repository listings continue to omit inaccessible repositories. Invalid Git credentials still receive an authentication challenge.
+Unset or invalid values use `not_found`. The policy covers browser repository routes and the Forge and Git APIs. Anonymous Git HTTPS requests that cannot be served, whether the repository is private or missing, receive the same Basic authentication challenge so Git prompts for a token; authenticated callers without access follow the policy. A valid token outside its scopes or repository allowlist receives 403, and a read-only credential that pushes receives 403, so Git keeps working credentials in its helper. Missing repositories remain 404 in both modes elsewhere. Repository listings continue to omit inaccessible repositories. Invalid Git credentials still receive an authentication challenge.
 
 ## License
 

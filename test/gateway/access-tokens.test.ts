@@ -6,6 +6,7 @@ import {
 } from "../../workers/gateway/src/index";
 import {
   AccessTokenIdentitySchema,
+  REPOSITORY_ACCESS_DENIED_HEADER,
   TRUSTED_USER_HEADERS,
   type AccessTokenIdentity,
 } from "../../packages/contracts/src/index";
@@ -164,6 +165,39 @@ describe("Gateway Git authentication", () => {
 
     const open = await handleGatewayRequest(new Request(gitUrl), environment());
     expect(open.status).toBe(200);
+  });
+
+  it("answers valid tokens without access with 404 or 403 instead of a challenge", async () => {
+    const denied = await handleGatewayRequest(
+      new Request(gitUrl, { headers: { Authorization: basic(TOKEN) } }),
+      environment({
+        auth: service(() => {
+          const response = Response.json({ error: { code: "not_found" } }, { status: 404 });
+          response.headers.set(REPOSITORY_ACCESS_DENIED_HEADER, "1");
+          return response;
+        }),
+      })
+    );
+    expect(denied.status).toBe(404);
+    expect(denied.headers.has("WWW-Authenticate")).toBe(false);
+    expect(denied.headers.has(REPOSITORY_ACCESS_DENIED_HEADER)).toBe(false);
+
+    const scope = await handleGatewayRequest(
+      new Request(gitUrl, { headers: { Authorization: basic(TOKEN) } }),
+      environment({
+        auth: service(() =>
+          Response.json({ error: { code: "insufficient_scope" } }, { status: 403 })
+        ),
+      })
+    );
+    expect(scope.status).toBe(403);
+    expect(scope.headers.has("WWW-Authenticate")).toBe(false);
+
+    const unavailable = await handleGatewayRequest(
+      new Request(gitUrl, { headers: { Authorization: basic(TOKEN) } }),
+      environment({ auth: service(() => new Response("boom", { status: 500 })) })
+    );
+    expect(unavailable.status).toBe(502);
   });
 
   it("does not let forged grant headers through", async () => {

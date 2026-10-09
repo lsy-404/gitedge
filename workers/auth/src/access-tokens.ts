@@ -14,7 +14,6 @@ import { randomHex } from "../../../src/worker/common/encoding";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 import { createLogger } from "../../../src/worker/common/logger";
 import { readJsonLimited, SMALL_JSON_BYTES } from "../../../src/worker/common/readText";
-import { repositoryRole } from "../../../src/worker/common/repositories";
 import { z } from "zod";
 
 export interface AccessTokenEnv {
@@ -35,6 +34,7 @@ interface AccessTokenRow {
 }
 interface AuthenticatedAccessTokenRow {
   id: string;
+  lastUsedAt: number | null;
   scopesJson: string;
   repositoryIdsJson: string | null;
   userId: string;
@@ -46,6 +46,7 @@ interface TokenRepositoryRow extends AccessTokenRepository {
 }
 
 const MAX_ACTIVE_TOKENS = 100;
+const LIST_LIMIT = 200;
 const LAST_USED_RESOLUTION_MS = 60_000;
 const DISPLAY_PREFIX_LENGTH = ACCESS_TOKEN_PREFIX.length + 8;
 const TOKEN_PATTERN = new RegExp(`^${ACCESS_TOKEN_PREFIX}[0-9a-f]{64}$`);
@@ -75,7 +76,7 @@ export async function authenticateAccessToken(
   if (!isAccessToken(token)) return null;
   const now = Date.now();
   const row = await env.DB.prepare(
-    "SELECT t.id, t.scopes_json AS scopesJson, t.repository_ids_json AS repositoryIdsJson, u.id AS userId, u.identifier, u.group_key AS groupKey FROM auth_access_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ? AND t.revoked_at IS NULL AND t.expires_at > ?"
+    "SELECT t.id, t.last_used_at AS lastUsedAt, t.scopes_json AS scopesJson, t.repository_ids_json AS repositoryIdsJson, u.id AS userId, u.identifier, u.group_key AS groupKey FROM auth_access_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ? AND t.revoked_at IS NULL AND t.expires_at > ?"
   )
     .bind(await sha256Hex(token), now)
     .first<AuthenticatedAccessTokenRow>();
@@ -83,16 +84,17 @@ export async function authenticateAccessToken(
   const scopes = parseScopes(row.scopesJson);
   if (scopes.length === 0) return null;
   const repositoryIds = parseRepositoryIds(row.repositoryIdsJson);
-  await env.DB.prepare(
-    "UPDATE auth_access_tokens SET last_used_at = ? WHERE id = ? AND (last_used_at IS NULL OR last_used_at <= ?)"
-  )
-    .bind(now, row.id, now - LAST_USED_RESOLUTION_MS)
-    .run()
-    .catch(() => {
-      createLogger(env.LOG_LEVEL, { service: "auth" }).warn("auth:access-token-touch-failed", {
-        tokenId: row.id,
+  if (row.lastUsedAt === null || row.lastUsedAt <= now - LAST_USED_RESOLUTION_MS)
+    await env.DB.prepare(
+      "UPDATE auth_access_tokens SET last_used_at = ? WHERE id = ? AND (last_used_at IS NULL OR last_used_at <= ?)"
+    )
+      .bind(now, row.id, now - LAST_USED_RESOLUTION_MS)
+      .run()
+      .catch(() => {
+        createLogger(env.LOG_LEVEL, { service: "auth" }).warn("auth:access-token-touch-failed", {
+          tokenId: row.id,
+        });
       });
-    });
   const identity: AccessTokenIdentity = {
     id: row.id,
     scopes,
@@ -118,20 +120,29 @@ function tokenResponse(
   };
 }
 
+async function tokenRepositories(
+  env: AccessTokenEnv,
+  userId: string,
+  tokenId: string | null
+): Promise<Map<string, AccessTokenRepository[]>> {
+  const rows = await env.DB.prepare(
+    `SELECT t.id AS tokenId, r.id, n.slug AS owner, r.slug FROM auth_access_tokens t, json_each(t.repository_ids_json) j JOIN repositories r ON r.id = j.value JOIN namespaces n ON n.id = r.namespace_id WHERE t.id IN (SELECT id FROM auth_access_tokens WHERE user_id = ? AND (? IS NULL OR id = ?) ORDER BY created_at DESC LIMIT ${LIST_LIMIT}) AND t.repository_ids_json IS NOT NULL`
+  )
+    .bind(userId, tokenId, tokenId)
+    .all<TokenRepositoryRow>();
+  const repositories = new Map<string, AccessTokenRepository[]>();
+  for (const { tokenId: owner, ...repository } of rows.results)
+    repositories.set(owner, [...(repositories.get(owner) ?? []), repository]);
+  return repositories;
+}
+
 async function listTokens(env: AccessTokenEnv, userId: string): Promise<AccessToken[]> {
   const rows = await env.DB.prepare(
-    "SELECT id, name, prefix, scopes_json AS scopesJson, repository_ids_json AS repositoryIdsJson, created_at AS createdAt, expires_at AS expiresAt, last_used_at AS lastUsedAt, revoked_at AS revokedAt FROM auth_access_tokens WHERE user_id = ? ORDER BY created_at DESC LIMIT 200"
+    `SELECT id, name, prefix, scopes_json AS scopesJson, repository_ids_json AS repositoryIdsJson, created_at AS createdAt, expires_at AS expiresAt, last_used_at AS lastUsedAt, revoked_at AS revokedAt FROM auth_access_tokens WHERE user_id = ? ORDER BY created_at DESC LIMIT ${LIST_LIMIT}`
   )
     .bind(userId)
     .all<AccessTokenRow>();
-  const repositoryRows = await env.DB.prepare(
-    "SELECT t.id AS tokenId, r.id, n.slug AS owner, r.slug FROM auth_access_tokens t, json_each(t.repository_ids_json) j JOIN repositories r ON r.id = j.value JOIN namespaces n ON n.id = r.namespace_id WHERE t.user_id = ? AND t.repository_ids_json IS NOT NULL"
-  )
-    .bind(userId)
-    .all<TokenRepositoryRow>();
-  const repositories = new Map<string, AccessTokenRepository[]>();
-  for (const { tokenId, ...repository } of repositoryRows.results)
-    repositories.set(tokenId, [...(repositories.get(tokenId) ?? []), repository]);
+  const repositories = await tokenRepositories(env, userId, null);
   return rows.results.map((row) => tokenResponse(row, repositories));
 }
 
@@ -145,23 +156,24 @@ async function createToken(
   );
   if (!parsed.success) return errorResponse(400, "bad_request", "Invalid access token payload.");
   const input = parsed.data;
-  for (const repositoryId of input.repositoryIds ?? [])
-    if ((await repositoryRole(env.DB, repositoryId, user.id)) === null)
+  const repositoryIdsJson = input.repositoryIds ? JSON.stringify(input.repositoryIds) : null;
+  if (repositoryIdsJson && input.repositoryIds) {
+    const accessible = await env.DB.prepare(
+      "SELECT COUNT(DISTINCT r.id) AS total FROM json_each(?) j JOIN repositories r ON r.id = j.value LEFT JOIN namespace_memberships m ON m.namespace_id = r.namespace_id AND m.user_id = ? LEFT JOIN repository_collaborators c ON c.repository_id = r.id AND c.user_id = ? WHERE m.role IN ('owner', 'member') OR c.role IN ('admin', 'write', 'read')"
+    )
+      .bind(repositoryIdsJson, user.id, user.id)
+      .first<{ total: number }>();
+    if ((accessible?.total ?? 0) !== input.repositoryIds.length)
       return errorResponse(404, "not_found", "Repository was not found.");
+  }
   const now = Date.now();
-  const active = await env.DB.prepare(
-    "SELECT COUNT(*) AS total FROM auth_access_tokens WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?"
-  )
-    .bind(user.id, now)
-    .first<{ total: number }>();
-  if ((active?.total ?? 0) >= MAX_ACTIVE_TOKENS)
-    return errorResponse(409, "conflict", "Revoke an existing token before creating another.");
   const token = ACCESS_TOKEN_PREFIX + randomHex(32);
   const id = crypto.randomUUID();
   const expiresAt = now + input.expiresInDays * 86_400_000;
   const prefix = token.slice(0, DISPLAY_PREFIX_LENGTH);
-  await env.DB.prepare(
-    "INSERT INTO auth_access_tokens (id, user_id, name, token_hash, prefix, scopes_json, repository_ids_json, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  // The count guard lives in the INSERT so concurrent requests cannot exceed the active limit.
+  const inserted = await env.DB.prepare(
+    "INSERT INTO auth_access_tokens (id, user_id, name, token_hash, prefix, scopes_json, repository_ids_json, expires_at, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM auth_access_tokens WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?) < ?"
   )
     .bind(
       id,
@@ -170,23 +182,30 @@ async function createToken(
       await sha256Hex(token),
       prefix,
       JSON.stringify(input.scopes),
-      input.repositoryIds ? JSON.stringify(input.repositoryIds) : null,
+      repositoryIdsJson,
       expiresAt,
-      now
+      now,
+      user.id,
+      now,
+      MAX_ACTIVE_TOKENS
     )
     .run();
+  if (inserted.meta.changes !== 1)
+    return errorResponse(409, "conflict", "Revoke an existing token before creating another.");
   createLogger(env.LOG_LEVEL, { service: "auth" }).info("auth:access-token-created", {
     userId: user.id,
     tokenId: id,
     scopes: input.scopes,
   });
-  const created = (await listTokens(env, user.id)).find((item) => item.id === id);
+  const repositories = repositoryIdsJson
+    ? ((await tokenRepositories(env, user.id, id)).get(id) ?? [])
+    : null;
   const response: CreatedAccessToken = {
     id,
     name: input.name,
     prefix,
     scopes: input.scopes,
-    repositories: created?.repositories ?? null,
+    repositories,
     createdAt: now,
     expiresAt,
     lastUsedAt: null,

@@ -28,6 +28,10 @@ import {
   handleAgentProfile,
 } from "./agents";
 import { dataResponse, errorResponse, jsonResponse } from "../../../src/worker/common/http";
+import {
+  repositoryAccessDenied,
+  repositoryNotFound,
+} from "../../../src/worker/common/repository-response";
 import { base64ToBytes, bytesToBase64 } from "../../../src/worker/common/encoding";
 import { readJsonLimited, SMALL_JSON_BYTES } from "../../../src/worker/common/readText";
 import { handleAccountProfile, handleWebSessions } from "./profile";
@@ -670,10 +674,17 @@ export default {
       return handleSigningKeys(request, env, active.data);
     }
     if (request.method === "GET" && path === "/git-session") {
-      const authenticated = await authenticateGitToken(request, env);
-      return authenticated
-        ? dataResponse(authenticated)
-        : errorResponse(401, "unauthorized", "Invalid Git credential.");
+      const result = await authenticateGitToken(request, env);
+      if (result.outcome === "granted") return dataResponse(result.grant);
+      if (result.outcome === "not_found")
+        return result.privateRepository ? repositoryAccessDenied() : repositoryNotFound();
+      if (result.outcome === "insufficient_scope")
+        return errorResponse(
+          403,
+          "insufficient_scope",
+          "Access token does not grant access to this repository."
+        );
+      return errorResponse(401, "unauthorized", "Invalid Git credential.");
     }
     if (request.method === "GET" && path === "/github/start") return startGithubOAuth(request, env);
     if (request.method === "GET" && path === "/github/callback")

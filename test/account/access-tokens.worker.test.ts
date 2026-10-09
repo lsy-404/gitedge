@@ -6,7 +6,10 @@ import {
   sha256Hex,
   type AccessTokenIdentity,
 } from "../../packages/contracts/src/index";
-import { trustedHeaders } from "../../packages/contracts/src/trust";
+import {
+  REPOSITORY_ACCESS_DENIED_HEADER,
+  trustedHeaders,
+} from "../../packages/contracts/src/trust";
 import actions from "../../workers/actions/src/index";
 import auth from "../../workers/auth/src/index";
 import { parseGitAuthorization } from "../../workers/auth/src/agents";
@@ -289,6 +292,30 @@ describe("personal access token lifecycle", () => {
     expect(denied.status).toBe(403);
     expect((await account("/access-tokens", "POST", "gitedge_session=none", {})).status).toBe(401);
   });
+
+  it("caps active tokens per user", async () => {
+    const now = Date.now();
+    const rows = Array.from(
+      { length: 100 },
+      (_, index) =>
+        `('cap-${index}','bob-id','cap','cap-hash-${index}','gep_cap','["repo:read"]',NULL,${now + 86_400_000},NULL,NULL,${now})`
+    ).join(",");
+    await runSqlScript(
+      env.DB,
+      `INSERT INTO auth_access_tokens (id,user_id,name,token_hash,prefix,scopes_json,repository_ids_json,expires_at,last_used_at,revoked_at,created_at) VALUES ${rows};`
+    );
+    const refused = await account("/access-tokens", "POST", bobCookie, {
+      name: "x",
+      scopes: ["repo:read"],
+      expiresInDays: 7,
+    });
+    expect(refused.status).toBe(409);
+    await env.DB.prepare("UPDATE auth_access_tokens SET revoked_at = ? WHERE id = 'cap-0'")
+      .bind(now)
+      .run();
+    await mint(bobCookie, ["repo:read"]);
+    await env.DB.prepare("DELETE FROM auth_access_tokens WHERE id LIKE 'cap-%'").run();
+  });
 });
 
 describe("Git credentials from personal access tokens", () => {
@@ -331,13 +358,28 @@ describe("Git credentials from personal access tokens", () => {
       grant.parse(await (await gitSession(basic("x", issuesOnly.token), "demo")).json()).data
         .permission
     ).toBe("read");
-    expect((await gitSession(basic("x", scoped.token), "demo")).status).toBe(401);
     expect((await gitSession(basic("x", scoped.token), "other")).status).toBe(200);
     expect((await gitSession(`Bearer ${writer.token}`, "demo")).status).toBe(200);
+  });
+
+  it("challenges only invalid credentials so Git keeps valid tokens in its helper", async () => {
+    const scoped = await mint(aliceCookie, ["repo:write"], { repositoryIds: ["r2"] });
+    const orgOnly = await mint(aliceCookie, ["org:read"]);
+    const outsideAllowlist = await gitSession(basic("x", scoped.token), "demo");
+    expect(outsideAllowlist.status).toBe(403);
+    expect(await outsideAllowlist.json()).toMatchObject({ error: { code: "insufficient_scope" } });
+    expect((await gitSession(basic("x", orgOnly.token), "demo")).status).toBe(403);
     expect((await gitSession(basic("x", `gep_${"1".repeat(64)}`), "demo")).status).toBe(401);
+    expect((await gitSession(basic("x", `gep_${"1".repeat(64)}`), "missing")).status).toBe(401);
 
     const bobToken = await mint(bobCookie, ["repo:write"]);
-    expect((await gitSession(basic("bob", bobToken.token), "demo")).status).toBe(401);
+    const privateRepository = await gitSession(basic("bob", bobToken.token), "demo");
+    const missingRepository = await gitSession(basic("bob", bobToken.token), "missing");
+    expect(privateRepository.status).toBe(404);
+    expect(missingRepository.status).toBe(404);
+    expect(privateRepository.headers.get(REPOSITORY_ACCESS_DENIED_HEADER)).toBe("1");
+    expect(missingRepository.headers.has(REPOSITORY_ACCESS_DENIED_HEADER)).toBe(false);
+    expect(await privateRepository.json()).toEqual(await missingRepository.json());
   });
 });
 
@@ -439,8 +481,19 @@ describe("scope enforcement in privileged services", () => {
       }),
       gitEnv
     );
-    expect(push.status).toBe(401);
+    expect(push.status).toBe(403);
+    expect(push.headers.has("WWW-Authenticate")).toBe(false);
     expect(await push.text()).toContain("write credential");
+
+    await env.DB.prepare("UPDATE repositories SET visibility = 'public' WHERE id = 'r2'").run();
+    const anonymousPush = await git.fetch(
+      new Request("https://git.test/alice/other.git/info/refs?service=git-receive-pack"),
+      gitEnv
+    );
+    await env.DB.prepare("UPDATE repositories SET visibility = 'private' WHERE id = 'r2'").run();
+    expect(anonymousPush.status).toBe(401);
+    expect(anonymousPush.headers.get("WWW-Authenticate")).toBe('Basic realm="GitEdge"');
+    await anonymousPush.body?.cancel();
 
     const otherRepo = trustedHeaders(identity(limited));
     const blocked = await git.fetch(

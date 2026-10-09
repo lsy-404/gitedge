@@ -155,35 +155,64 @@ export function parseGitAuthorization(header: string | null): GitCredentials | n
   }
 }
 
+/**
+ * A valid credential that cannot reach a repository must not answer 401, because Git then erases
+ * the stored credential from its helper. Missing and inaccessible private repositories stay alike.
+ */
+export type GitAuthenticationResult =
+  | { outcome: "granted"; grant: GitAuthentication }
+  | { outcome: "invalid" }
+  | { outcome: "not_found"; privateRepository: boolean }
+  | { outcome: "insufficient_scope" };
+
+const INVALID_GIT_CREDENTIAL: GitAuthenticationResult = { outcome: "invalid" };
+
 async function authenticateAccessTokenForRepository(
   env: AgentAuthEnv,
   token: string,
-  path: { id: string; visibility: "public" | "private" }
-): Promise<GitAuthentication | null> {
+  owner: string,
+  slug: string
+): Promise<GitAuthenticationResult> {
   const user = await authenticateAccessToken(env, token);
   const identity = user?.token;
-  if (!user || !identity) return null;
-  if (!accessTokenAllows(identity, "repo:read") || !accessTokenAllowsRepository(identity, path.id))
-    return null;
+  if (!user || !identity) return INVALID_GIT_CREDENTIAL;
+  const path = await resolveRepositoryPath(env.DB, owner, slug);
+  if (!path) return { outcome: "not_found", privateRepository: false };
   const role = await repositoryRole(env.DB, path.id, user.id);
-  if (role === null && path.visibility !== "public") return null;
+  if (role === null && path.visibility !== "public")
+    return { outcome: "not_found", privateRepository: true };
+  if (!accessTokenAllows(identity, "repo:read") || !accessTokenAllowsRepository(identity, path.id))
+    return { outcome: "insufficient_scope" };
   const write = accessTokenAllows(identity, "repo:write") && writableRole(role);
-  return { user, repositoryId: path.id, permission: write ? "write" : "read" };
+  return {
+    outcome: "granted",
+    grant: { user, repositoryId: path.id, permission: write ? "write" : "read" },
+  };
 }
 
 export async function authenticateGitToken(
   request: Request,
   env: AgentAuthEnv
-): Promise<GitAuthentication | null> {
+): Promise<GitAuthenticationResult> {
   const credentials = parseGitAuthorization(request.headers.get("Authorization"));
-  if (!credentials) return null;
-  const { username, token } = credentials;
+  if (!credentials) return INVALID_GIT_CREDENTIAL;
   const owner = new URL(request.url).searchParams.get("owner");
   const slug = new URL(request.url).searchParams.get("repo");
-  if (!owner || !slug) return null;
+  if (!owner || !slug) return INVALID_GIT_CREDENTIAL;
+  if (isAccessToken(credentials.token))
+    return authenticateAccessTokenForRepository(env, credentials.token, owner, slug);
+  const grant = await authenticateRepositoryCredential(env, credentials, owner, slug);
+  return grant ? { outcome: "granted", grant } : INVALID_GIT_CREDENTIAL;
+}
+
+async function authenticateRepositoryCredential(
+  env: AgentAuthEnv,
+  { username, token }: GitCredentials,
+  owner: string,
+  slug: string
+): Promise<GitAuthentication | null> {
   const path = await resolveRepositoryPath(env.DB, owner, slug);
   if (!path) return null;
-  if (isAccessToken(token)) return authenticateAccessTokenForRepository(env, token, path);
   const agent = await authenticateAgentSession(env, token);
   if (agent?.agentSession) {
     if (
