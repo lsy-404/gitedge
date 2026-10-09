@@ -11,6 +11,7 @@ import StatusBadge from "../components/StatusBadge.vue";
 import { oneOf } from "../ui/formEvents";
 import StatusState from "../components/StatusState.vue";
 import TextField from "../components/TextField.vue";
+import RepositoryImportDialog from "../components/RepositoryImportDialog.vue";
 import "../styles/workspace.css";
 const route = useRoute();
 const router = useRouter();
@@ -28,6 +29,7 @@ const saving = ref(false);
 const removingIdentifier = ref("");
 const memberNotice = ref("");
 const revocationIncomplete = ref(false);
+const showImport = ref(false);
 let loadVersion = 0;
 const form = ref<{ identifier: string; role: "owner" | "member" }>({
   identifier: "",
@@ -112,10 +114,24 @@ watch(
         :tone="organization.role === 'owner' ? 'brand' : 'neutral'"
         >{{ organization.role === "owner" ? t("ownerRole") : t("memberRole") }}</StatusBadge
       >
+      <button
+        v-if="organization?.role === 'owner'"
+        class="btn btn-sm"
+        type="button"
+        @click="showImport = true"
+      >
+        <AppIcon name="repo" />{{ t("importRepository") }}
+      </button>
       <RouterLink class="btn btn-sm" to="/organizations"
         ><AppIcon name="arrowLeft" />{{ t("organizations") }}</RouterLink
       >
     </header>
+    <RepositoryImportDialog
+      :open="showImport"
+      :owners="[{ value: slug, label: organization?.displayName || slug }]"
+      :default-owner="slug"
+      @close="showImport = false"
+    />
     <StatusState :loading="loading" :error="error" @retry="load" />
     <div v-if="!loading && !error" class="organization-layout">
       <nav class="box organization-nav" :aria-label="t('organizationNavigation')">

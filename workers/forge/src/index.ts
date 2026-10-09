@@ -37,6 +37,7 @@ import {
   type WikiPageSummary,
 } from "../../../packages/contracts/src/index";
 import { createLogger } from "../../../src/worker/common/logger";
+import { handleRepositoryImports } from "./imports";
 import { assignmentsColumn, parseAssignments, replaceAssignments } from "./assignments";
 import {
   canWriteSession,
@@ -1523,7 +1524,7 @@ async function featureRequest(
 }
 
 export default {
-  async fetch(request: Request, env: ForgeEnv): Promise<Response> {
+  async fetch(request: Request, env: ForgeEnv, ctx?: ExecutionContext): Promise<Response> {
     const logger = createLogger(env.LOG_LEVEL, { service: "forge" });
     const url = new URL(request.url);
     const parts = url.pathname.split("/").filter(Boolean);
@@ -1587,6 +1588,25 @@ export default {
         "forbidden",
         "Agent sessions cannot resolve repositories by name for writes."
       );
+
+    const imported = await handleRepositoryImports({
+      request,
+      env,
+      user,
+      parts,
+      resolveOwner: async (slug) => {
+        const namespace = await namespaceForUser(env, user.id, slug);
+        return namespace
+          ? {
+              id: namespace.id,
+              slug: namespace.slug,
+              canCreate: canCreateRepository(namespace, user.id),
+            }
+          : null;
+      },
+      defer: (task) => (ctx ? ctx.waitUntil(task) : void task),
+    });
+    if (imported) return imported;
 
     if (request.method === "GET" && url.pathname === "/organizations") {
       const rows = await env.DB.prepare(

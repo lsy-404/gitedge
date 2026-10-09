@@ -21,6 +21,11 @@
   justify-content: space-between;
   gap: var(--space-3);
 }
+.workspace-heading-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
 .workspace-sidebar-title {
   font-size: var(--font-size-body);
   font-weight: var(--font-weight-semibold);

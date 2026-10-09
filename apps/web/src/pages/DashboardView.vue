@@ -11,6 +11,7 @@ import SelectField from "../components/SelectField.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import { oneOf } from "../ui/formEvents";
 import TextField from "../components/TextField.vue";
+import RepositoryImportDialog from "../components/RepositoryImportDialog.vue";
 import { FluentCheckbox } from "@platform-kit/fluent/vue";
 import { RepositorySlugSchema } from "../../../../packages/contracts/src/repository-controls";
 import "../styles/workspace.css";
@@ -25,6 +26,17 @@ const error = ref("");
 const organizationsError = ref("");
 let loadVersion = 0;
 const showForm = ref(false);
+const showImport = ref(false);
+const ownerOptions = computed(() => [
+  {
+    value: sessionState.user?.identifier ?? "",
+    label: `${sessionState.user?.identifier ?? ""} (${t("personal")})`,
+  },
+  ...organizations.value.map((organization) => ({
+    value: organization.slug,
+    label: organization.displayName,
+  })),
+]);
 const saving = ref(false);
 const formError = ref("");
 const form = ref<{
@@ -191,13 +203,18 @@ onMounted(load);
           <h1>{{ t("welcomeBack", { name: sessionState.user?.identifier || "" }) }}</h1>
           <p class="muted">{{ t("dashboardIntro") }}</p>
         </div>
-        <button
-          class="btn btn-primary"
-          type="button"
-          @click="router.replace({ path: '/dashboard', query: { ...route.query, new: '1' } })"
-        >
-          <AppIcon name="plus" />{{ t("newRepo") }}
-        </button>
+        <div class="workspace-heading-actions">
+          <button class="btn" type="button" @click="showImport = true">
+            <AppIcon name="repo" />{{ t("importRepository") }}
+          </button>
+          <button
+            class="btn btn-primary"
+            type="button"
+            @click="router.replace({ path: '/dashboard', query: { ...route.query, new: '1' } })"
+          >
+            <AppIcon name="plus" />{{ t("newRepo") }}
+          </button>
+        </div>
       </header>
 
       <div class="dashboard-columns">
@@ -384,5 +401,13 @@ onMounted(load);
         <FormActions :saving="saving" :error="formError" @cancel="closeForm" />
       </form>
     </FluentDialog>
+
+    <RepositoryImportDialog
+      :open="showImport"
+      :owners="ownerOptions"
+      :default-owner="owner || sessionState.user?.identifier || ''"
+      @close="showImport = false"
+      @imported="load"
+    />
   </section>
 </template>

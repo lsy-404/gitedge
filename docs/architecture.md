@@ -12,4 +12,6 @@ Deploy reads a strict manifest and its declared files from Git. It binds the rev
 
 Actions parses `.github/workflows/*.yml` from a bounded source snapshot and runs each run in its own Container, limited in time, logs and input, with networking off by default. Git notifies it on push through `/internal/push`. Its Durable Objects use only their own storage and container. Only Actions may publish workflow check records; Forge stores them keyed to the exact commit OID.
 
+Repository import is a Forge job in `repository_imports`. Forge calls an internal Git endpoint that runs the native Artifacts import from a validated public https URL, revokes the initial token, and only then inserts the repository row, so a failed import leaves no repository. Running jobs idle for ten minutes are marked failed and can be retried. Artifacts exposes no size cap or credential option for imports; its own memory limit is the size bound and private sources are unsupported.
+
 Rate limiting uses sharded SQLite Durable Objects. Repository storage and refs remain entirely under Artifacts.

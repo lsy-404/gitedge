@@ -38,6 +38,16 @@ const dynamicKeys: Record<string, readonly string[]> = {
     "merge_method_disabled",
   ],
   "deployWizard.steps.": ["provision", "migrate", "deploy"],
+  importError_: [
+    "invalid_url",
+    "remote_auth_required",
+    "remote_not_found",
+    "upstream_unavailable",
+    "size_limit",
+    "name_taken",
+    "timed_out",
+    "import_failed",
+  ],
 };
 
 function flatten(value: unknown, prefix = ""): Record<string, string> {
