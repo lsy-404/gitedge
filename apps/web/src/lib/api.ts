@@ -13,6 +13,7 @@ import type {
   OrganizationMember,
   User,
 } from "../../../../packages/contracts/src/account";
+import type { QuotaDetail, Usage } from "../../../../packages/contracts/src/ops";
 import type { DeployPlan } from "../../../../packages/contracts/src/deploy";
 import type {
   AgentProfile,
@@ -157,13 +158,24 @@ export type {
   TaskTable,
 };
 
+export interface ApiErrorDetail {
+  /** Seconds to wait before retrying, from Retry-After or the rate-limit body. */
+  retryAfter?: number | null;
+  quota?: QuotaDetail | null;
+}
+
 export class ApiError extends Error {
+  public readonly retryAfter: number | null;
+  public readonly quota: QuotaDetail | null;
   constructor(
     public readonly status: number,
     message: string,
-    public readonly code: string | null = null
+    public readonly code: string | null = null,
+    detail: ApiErrorDetail = {}
   ) {
     super(message);
+    this.retryAfter = detail.retryAfter ?? null;
+    this.quota = detail.quota ?? null;
   }
 }
 
@@ -181,6 +193,14 @@ export function errorMessage(
   fallbackKey = "apiError"
 ): string {
   if (cause instanceof ApiError) {
+    if (cause.quota)
+      return t("quotaReached", {
+        resource: t(`quotaResource_${cause.quota.resource}`),
+        used: formatQuotaValue(cause.quota.resource, cause.quota.used),
+        limit: formatQuotaValue(cause.quota.resource, cause.quota.limit),
+      });
+    if (cause.status === 429 && cause.retryAfter !== null)
+      return t("rateLimitedRetry", { seconds: cause.retryAfter });
     const override = overrides[cause.status];
     if (override) return t(override);
     if (cause.status === 403) return t("permissionDenied");
@@ -261,6 +281,82 @@ async function requestPage<T>(path: string): Promise<ListPage<T>> {
   return { items: envelope.data, truncated: envelope.truncated };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseRetryAfter(value: unknown): number | null {
+  const seconds = typeof value === "string" ? Number(value.trim()) : value;
+  return typeof seconds === "number" && Number.isSafeInteger(seconds) && seconds > 0
+    ? seconds
+    : null;
+}
+
+function parseQuota(value: unknown): QuotaDetail | null {
+  if (!isRecord(value)) return null;
+  const { resource, used, limit } = value;
+  if (
+    (resource === "repositories" || resource === "storage") &&
+    typeof used === "number" &&
+    Number.isSafeInteger(used) &&
+    used >= 0 &&
+    typeof limit === "number" &&
+    Number.isSafeInteger(limit) &&
+    limit > 0
+  )
+    return { resource, used, limit };
+  return null;
+}
+
+interface ParsedErrorBody {
+  message: string;
+  code: string | null;
+  retryAfter: number | null;
+  quota: QuotaDetail | null;
+}
+
+/** Reads both the `{ error: { code, message } }` envelope and the Gateway's flat rate-limit body. */
+function parseErrorBody(body: string, statusText: string): ParsedErrorBody {
+  const failure: ParsedErrorBody = {
+    message: body || statusText,
+    code: null,
+    retryAfter: null,
+    quota: null,
+  };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return failure;
+  }
+  if (!isRecord(parsed)) return failure;
+  failure.retryAfter = parseRetryAfter(parsed.retryAfter);
+  const error = parsed.error;
+  if (typeof error === "string") failure.message = error;
+  else if (isRecord(error)) {
+    if (typeof error.message === "string") failure.message = error.message;
+    if (typeof error.code === "string") failure.code = error.code;
+    failure.quota = parseQuota(error.quota);
+  }
+  return failure;
+}
+
+/** Storage quotas are bytes; repository counts are shown as plain numbers. */
+export function formatQuotaValue(resource: QuotaDetail["resource"], value: number): string {
+  return resource === "storage" ? formatBytes(value) : String(value);
+}
+
+export function formatBytes(value: number): string {
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let size = value;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  return `${unit === 0 ? size : size.toFixed(size >= 10 ? 0 : 1)} ${units[unit]}`;
+}
+
 async function requestEnvelope<T>(
   path: string,
   init?: RequestInit,
@@ -277,34 +373,11 @@ async function requestEnvelope<T>(
   });
   if (!response.ok) {
     const body = await response.text();
-    let message = body || response.statusText;
-    let code: string | null = null;
-    try {
-      const parsed: unknown = JSON.parse(body);
-      if (
-        typeof parsed === "object" &&
-        parsed !== null &&
-        "error" in parsed &&
-        typeof parsed.error === "object" &&
-        parsed.error !== null &&
-        "message" in parsed.error &&
-        typeof parsed.error.message === "string"
-      )
-        message = parsed.error.message;
-      if (
-        typeof parsed === "object" &&
-        parsed !== null &&
-        "error" in parsed &&
-        typeof parsed.error === "object" &&
-        parsed.error !== null &&
-        "code" in parsed.error &&
-        typeof parsed.error.code === "string"
-      )
-        code = parsed.error.code;
-    } catch {
-      message = body || response.statusText;
-    }
-    throw new ApiError(response.status, message, code);
+    const failure = parseErrorBody(body, response.statusText);
+    throw new ApiError(response.status, failure.message, failure.code, {
+      retryAfter: parseRetryAfter(response.headers.get("Retry-After")) ?? failure.retryAfter,
+      quota: failure.quota,
+    });
   }
   if (response.status === 204) {
     if (allowNoContent) return;
@@ -376,6 +449,7 @@ export const api = {
     ),
   logoutAllBrowserAccounts: () =>
     request<{ loggedOut: boolean }>("/api/auth/accounts/logout-all", { method: "POST" }),
+  usage: () => request<Usage>("/api/forge/usage"),
   accountProfile: () => request<AccountProfile>("/api/auth/profile"),
   updateAccountProfile: (
     payload: Partial<Omit<AccountProfile, "preferences">> & {

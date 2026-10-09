@@ -859,6 +859,8 @@ export default {
     const logger = createLogger(env.LOG_LEVEL, { service: "actions" });
     try {
       const url = new URL(request.url);
+      if (request.method === "GET" && url.pathname === "/internal/health")
+        return dataResponse({ ok: true });
       if (url.pathname === "/internal/push") return await handleInternalPush(request, env);
       const user = readTrustedUser(request);
       const parts = url.pathname.split("/").filter(Boolean);

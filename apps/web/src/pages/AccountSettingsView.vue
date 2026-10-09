@@ -7,6 +7,7 @@ import CredentialSettings from "../components/CredentialSettings.vue";
 import SettingsSidebar from "../components/SettingsSidebar.vue";
 import SigningKeySettings from "../components/SigningKeySettings.vue";
 import BrowserSessions from "../components/BrowserSessions.vue";
+import AccountUsage from "../components/AccountUsage.vue";
 import "../styles/settings.css";
 const route = useRoute();
 const sections = [
@@ -15,6 +16,7 @@ const sections = [
   "credentials",
   "signing",
   "sessions",
+  "usage",
   "connections",
 ] as const;
 const section = computed(() =>
@@ -34,6 +36,7 @@ const section = computed(() =>
       <CredentialSettings v-else-if="section === 'credentials'" />
       <SigningKeySettings v-else-if="section === 'signing'" />
       <BrowserSessions v-else-if="section === 'sessions'" />
+      <AccountUsage v-else-if="section === 'usage'" />
       <AccountConnections v-else />
     </div>
   </section>

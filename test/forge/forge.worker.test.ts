@@ -1003,4 +1003,53 @@ describe("Merge authorization binding and closed pull request heads", () => {
     const response = await forge.fetch(new Request("https://forge.test/repositories/r1"), forgeEnv);
     expect(response.headers.get("Cache-Control")).toBe("no-store");
   });
+  it("reports repository usage against the caller's group quota", async () => {
+    const created = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM repositories WHERE created_by = 'u1'"
+    ).first<{ count: number }>();
+    const response = await call("/usage", "GET", "u1", "alice");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      data: {
+        groupKey: "free",
+        repositories: { used: created?.count, limit: 10 },
+        storage: { usedBytes: null, limitBytes: 5_368_709_120 },
+        rpm: 120,
+      },
+    });
+    const anonymous = await forge.fetch(new Request("https://forge.test/usage"), forgeEnv);
+    expect(anonymous.status).toBe(401);
+  });
+
+  it("rejects repository creation with structured quota details at the limit", async () => {
+    const created = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM repositories WHERE created_by = 'u1'"
+    ).first<{ count: number }>();
+    const limited: typeof forgeEnv = {
+      ...forgeEnv,
+      USER_GROUP_LIMITS_JSON: JSON.stringify({ free: { maxRepositories: created?.count } }),
+    };
+    const response = await forge.fetch(
+      new Request("https://forge.test/repositories", {
+        method: "POST",
+        headers: auth("u1", "alice"),
+        body: JSON.stringify({ owner: "alice", slug: "another", visibility: "public" }),
+      }),
+      limited
+    );
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({
+      error: {
+        code: "quota_exceeded",
+        quota: { resource: "repositories", used: created?.count, limit: created?.count },
+      },
+    });
+  });
+
+  it("answers the internal health probes without a user context", async () => {
+    for (const path of ["/internal/health", "/internal/health/d1"]) {
+      const response = await forge.fetch(new Request(`https://forge.test${path}`), forgeEnv);
+      expect(response.status, path).toBe(200);
+    }
+  });
 });

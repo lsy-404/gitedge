@@ -25,6 +25,8 @@ import {
   UpdatePullRequestInputSchema,
   parseUserGroupLimits,
   type TrustedUser,
+  type Usage,
+  type UserGroupLimits,
   CreateCommentInputSchema,
   CreateDiscussionInputSchema,
   CreateReviewInputSchema,
@@ -36,7 +38,7 @@ import {
   type Repository,
   type WikiPageSummary,
 } from "../../../packages/contracts/src/index";
-import { createLogger } from "../../../src/worker/common/logger";
+import { createLogger, type Logger } from "../../../src/worker/common/logger";
 import { assignmentsColumn, parseAssignments, replaceAssignments } from "./assignments";
 import {
   canWriteSession,
@@ -59,7 +61,12 @@ import {
   readTrustedUser,
   trustedHeaders,
 } from "../../../packages/contracts/src/trust";
-import { dataResponse, errorResponse, jsonResponse } from "../../../src/worker/common/http";
+import {
+  dataResponse,
+  errorResponse,
+  jsonResponse,
+  quotaExceededResponse,
+} from "../../../src/worker/common/http";
 
 type NamespaceKind = "personal" | "organization";
 type OrganizationRole = "owner" | "member";
@@ -1522,11 +1529,42 @@ async function featureRequest(
   return null;
 }
 
+function groupLimitsFor(env: ForgeEnv, user: TrustedUser): UserGroupLimits {
+  const limits = parseUserGroupLimits(env.USER_GROUP_LIMITS_JSON);
+  return limits[user.groupKey] ?? limits.free;
+}
+
+async function countCreatedRepositories(env: ForgeEnv, userId: string): Promise<number> {
+  const row = await env.DB.prepare(
+    "SELECT COUNT(*) AS count FROM repositories WHERE created_by = ?"
+  )
+    .bind(userId)
+    .first<{ count: number }>();
+  return row?.count ?? 0;
+}
+
+async function databaseHealth(env: ForgeEnv, logger: Logger) {
+  try {
+    await env.DB.prepare("SELECT 1").first();
+    return dataResponse({ ok: true });
+  } catch (cause) {
+    logger.error("forge:health-d1-failed", {
+      reason: cause instanceof Error ? cause.message : "unknown",
+    });
+    return errorResponse(503, "service_unavailable", "Database is unavailable.");
+  }
+}
+
 export default {
   async fetch(request: Request, env: ForgeEnv): Promise<Response> {
     const logger = createLogger(env.LOG_LEVEL, { service: "forge" });
     const url = new URL(request.url);
     const parts = url.pathname.split("/").filter(Boolean);
+
+    if (request.method === "GET" && url.pathname === "/internal/health")
+      return dataResponse({ ok: true });
+    if (request.method === "GET" && url.pathname === "/internal/health/d1")
+      return databaseHealth(env, logger);
 
     if (url.pathname === "/internal/actions-check") return actionsCheck(request, env);
     const user = trustedUser(request);
@@ -1715,6 +1753,21 @@ export default {
       return errorResponse(405, "method_not_allowed", "Method is not allowed for this endpoint.");
     }
 
+    if (request.method === "GET" && url.pathname === "/usage") {
+      const groupLimits = groupLimitsFor(env, user);
+      const usage: Usage = {
+        groupKey: user.groupKey,
+        repositories: {
+          used: await countCreatedRepositories(env, user.id),
+          limit: groupLimits.maxRepositories,
+        },
+        storage: { usedBytes: null, limitBytes: groupLimits.maxStorageBytes },
+        maxPushBytes: groupLimits.maxPushBytes,
+        maxRepositoryBytes: groupLimits.maxRepositoryBytes,
+        rpm: groupLimits.rpm,
+      };
+      return dataResponse(usage);
+    }
     if (request.method === "GET" && url.pathname === "/repositories") {
       const rows = await env.DB.prepare(
         "SELECT repositories.*, namespaces.slug AS owner, CASE WHEN m.user_id IS NOT NULL OR c.role IN ('write','admin') THEN 1 ELSE 0 END AS can_write FROM repositories JOIN namespaces ON namespaces.id = repositories.namespace_id LEFT JOIN namespace_memberships m ON m.namespace_id=repositories.namespace_id AND m.user_id=? LEFT JOIN repository_collaborators c ON c.repository_id=repositories.id AND c.user_id=? WHERE m.user_id IS NOT NULL OR c.user_id IS NOT NULL ORDER BY repositories.updated_at DESC LIMIT 1001"
@@ -1734,15 +1787,14 @@ export default {
     if (request.method === "POST" && url.pathname === "/repositories") {
       const parsed = CreateRepositoryInputSchema.safeParse(await parseJson(request));
       if (!parsed.success) return errorResponse(400, "bad_request", "Invalid repository payload.");
-      const limits = parseUserGroupLimits(env.USER_GROUP_LIMITS_JSON);
-      const groupLimits = limits[user.groupKey] ?? limits.free;
-      const repositoryCount = await env.DB.prepare(
-        "SELECT COUNT(*) AS count FROM repositories WHERE created_by = ?"
-      )
-        .bind(user.id)
-        .first<{ count: number }>();
-      if ((repositoryCount?.count ?? 0) >= groupLimits.maxRepositories)
-        return errorResponse(403, "forbidden", "Repository limit reached for this user group.");
+      const groupLimits = groupLimitsFor(env, user);
+      const repositoryCount = await countCreatedRepositories(env, user.id);
+      if (repositoryCount >= groupLimits.maxRepositories)
+        return quotaExceededResponse("Repository limit reached for this user group.", {
+          resource: "repositories",
+          used: repositoryCount,
+          limit: groupLimits.maxRepositories,
+        });
       const namespace = await namespaceForUser(env, user.id, parsed.data.owner);
       if (!namespace) return errorResponse(404, "not_found", "Repository owner was not found.");
       if (!canCreateRepository(namespace, user.id))

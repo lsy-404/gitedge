@@ -603,6 +603,7 @@ export default {
   async fetch(request: Request, env: AuthEnv): Promise<Response> {
     const logger = createLogger(env.LOG_LEVEL, { service: "auth" });
     const path = new URL(request.url).pathname;
+    if (request.method === "GET" && path === "/internal/health") return dataResponse({ ok: true });
     let humanSession: Promise<ServiceResult<SessionData>> | undefined;
     const getHumanSession = () => (humanSession ??= session(env, readCookie(request)));
     if (path === "/accounts" || path.startsWith("/accounts/"))

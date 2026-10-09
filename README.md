@@ -30,7 +30,7 @@ pnpm run build
 pnpm run format:check
 ```
 
-`pnpm run test:auth` runs only the Auth worker tests (agents, accounts, SSO and signatures).
+`pnpm run check:migrations` checks migration numbering and runs in CI. `pnpm run test:auth` runs only the Auth worker tests (agents, accounts, SSO and signatures).
 
 With the local stack running, `node test/e2e/api-git.mjs` verifies account creation, native Git push/clone, two isolated agent forks, reviews/checks/merges, collaboration edits, deployment plan parsing and session revocation. It creates remote Artifacts verification repositories and stores temporary credentials only under ignored `work/` with private file permissions.
 
@@ -39,6 +39,10 @@ Run `node test/e2e/git-boundaries.mjs <fixture-directory>` after that Git check 
 The remaining e2e scripts need these inputs. `test/e2e/browser-accounts.mjs` runs against the local stack (`GITEDGE_API`, loopback only) and creates two accounts to check browser identity switching. `test/e2e/seed-ui.mjs` and `test/e2e/settings-signatures.mjs` run against the local stack and require `GITEDGE_FIXTURE` pointing at an `api-git.mjs` fixture directory and `GITEDGE_API=http://localhost:8877`. `test/e2e/production-smoke.mjs` runs against the production Gateway (`GITEDGE_PRODUCTION_URL`, defaulting to the configured custom domain; optional `GITEDGE_REPOSITORY_VISIBILITY`). `test/e2e/production-actions.mjs` runs against production and requires `GITEDGE_WEBHOOK_RECEIVER` and `GITEDGE_WEBHOOK_RECEIVER_NAME` for an owned verification receiver.
 
 `build` builds the Vue interface and bundles every Worker with Wrangler's dry-run mode. Dry-run builds do not check that service binding targets exist. Production deployment is a separate `pnpm run deploy` operation that applies D1 migrations and deploys internal services before the Gateway. The first deploy into an empty account creates placeholder Workers for the cyclic bindings (Git, Forge and Actions) and then replaces them with the real deploys.
+
+## Operations
+
+See [operations](docs/operations.md) for D1 Time Travel restore, scheduled exports, Git mirrors, the pre-migration checklist, deploy order and the incident checklist. `GET /api/health` reports the status of every internal service and D1; Account settings shows repository usage against the group quota.
 
 ## Git and agents
 
