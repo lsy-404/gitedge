@@ -5,7 +5,7 @@ import forge from "../../workers/forge/src/index";
 import { runImport } from "../../workers/forge/src/imports";
 import gitWorker from "../../workers/git/src/index";
 import { handleInternalImports } from "../../workers/git/src/imports";
-import type { HostResolver } from "../../workers/git/src/public-host";
+import type { HostResolver } from "../../src/worker/common/public-host";
 import { trustedHeaders } from "../../packages/contracts/src/trust";
 import type { RepositoryImport } from "../../packages/contracts/src/index";
 import { runSqlScript } from "../support/database";

@@ -1,4 +1,4 @@
-import { base64ToBytes, bytesToBase64 } from "../../../src/worker/common/encoding";
+import { base64ToBytes, bytesToBase64 } from "./encoding";
 
 export interface SealedText {
   ciphertext: string;

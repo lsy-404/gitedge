@@ -6,8 +6,15 @@ import {
 } from "../../../packages/contracts/src/index";
 import { createLogger } from "../../../src/worker/common/logger";
 import { repositoryRole, writableRole } from "../../../src/worker/common/repositories";
-import { bytesToHex, randomHex } from "../../../src/worker/common/encoding";
-import { importSealingKey, openText, sealText } from "./secret-box";
+import { randomHex } from "../../../src/worker/common/encoding";
+import { importSealingKey, openText, sealText } from "../../../src/worker/common/secret-box";
+import {
+  WEBHOOK_MAX_ATTEMPTS,
+  isPublicWebhookUrl,
+  sendWebhook,
+  signWebhookBody,
+  webhookRetryDelay,
+} from "../../../src/worker/common/webhooks";
 import {
   dataResponse as response,
   errorResponse as failure,
@@ -66,26 +73,11 @@ type DeliveryClaimMode = "initial" | "manual-retry" | "outbox";
 class DeliveryClaimConflict extends Error {}
 
 const MAX_BODY_BYTES = 64 * 1024;
-const MAX_RESPONSE_BYTES = 4 * 1024;
-const REQUEST_TIMEOUT_MS = 5_000;
-const MAX_DELIVERY_ATTEMPTS = 5;
+const MAX_DELIVERY_ATTEMPTS = WEBHOOK_MAX_ATTEMPTS;
 const MAX_OUTBOX_EVENTS_PER_RUN = 10;
 const MAX_PENDING_EVENTS_PER_AGENT = 1_000;
 const OUTBOX_LEASE_MS = 60_000;
 const ALLOWED_EVENTS = ["agent.assigned", "agent.mentioned", "pull_request.updated"] as const;
-const PRIVATE_HOST_SUFFIXES = [
-  ".localhost",
-  ".local",
-  ".localdomain",
-  ".internal",
-  ".test",
-  ".home",
-  ".home.arpa",
-  ".lan",
-  ".intranet",
-  ".corp",
-  ".private",
-] as const;
 const SETTINGS_SELECT =
   "SELECT agent_id AS agentId, url, events_json AS eventsJson, enabled, secret_ciphertext AS secretCiphertext, secret_iv AS secretIv, updated_at AS updatedAt FROM auth_agent_webhooks";
 const EVENT_SELECT =
@@ -104,34 +96,6 @@ async function encryptSecret(
 }
 async function decryptSecret(env: AgentWebhookEnv, row: SettingsRow): Promise<string> {
   return openText(await encryptionKey(env), { ciphertext: row.secretCiphertext, iv: row.secretIv });
-}
-function validWebhookUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    const host = url.hostname
-      .toLowerCase()
-      .replace(/^\[|\]$/g, "")
-      .replace(/\.+$/g, "");
-    if (
-      url.protocol !== "https:" ||
-      url.username ||
-      url.password ||
-      url.hash ||
-      (url.port && url.port !== "443")
-    )
-      return false;
-    if (
-      !host.includes(".") ||
-      host === "localhost" ||
-      PRIVATE_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix))
-    )
-      return false;
-    if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(host) || host.includes(":")) return false;
-    if (host === "0.0.0.0" || host === "metadata.google.internal") return false;
-    return true;
-  } catch {
-    return false;
-  }
 }
 function parseEvents(value: string): AgentWebhookEvent[] {
   let parsed: unknown;
@@ -169,43 +133,6 @@ function publicSettings(
 }
 async function loadSettings(env: AgentWebhookEnv, agentId: string): Promise<SettingsRow | null> {
   return env.DB.prepare(`${SETTINGS_SELECT} WHERE agent_id = ?`).bind(agentId).first<SettingsRow>();
-}
-async function sign(secret: string, body: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const bytes = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body));
-  return bytesToHex(new Uint8Array(bytes));
-}
-async function limitedText(response: Response): Promise<void> {
-  const reader = response.body?.getReader();
-  if (!reader) return;
-  let bytes = 0;
-  let completed = false;
-  try {
-    while (true) {
-      const part = await reader.read();
-      if (part.done) {
-        completed = true;
-        return;
-      }
-      bytes += part.value.byteLength;
-      if (bytes > MAX_RESPONSE_BYTES) throw new Error("response_too_large");
-    }
-  } finally {
-    if (!completed) {
-      try {
-        await reader.cancel();
-      } catch {
-        // A failed stream may reject cancellation; release its lock regardless.
-      }
-    }
-    reader.releaseLock();
-  }
 }
 async function deliver(
   env: AgentWebhookEnv,
@@ -252,35 +179,18 @@ async function deliver(
     .bind(id, agentId)
     .first<{ attemptCount: number }>();
   if (!attempt) throw new Error("delivery_already_final");
-  let responseStatus: number | null = null;
-  let errorCode: string | null = null;
-  let deliveredAt: number | null = null;
-  try {
-    const result = await fetch(row.url, {
-      method: "POST",
-      redirect: "manual",
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      headers: {
-        "Content-Type": "application/json",
-        "GitEdge-Delivery": id,
-        "GitEdge-Event": event,
-        "X-GitEdge-Signature-256": `sha256=${await sign(secret, body)}`,
-      },
-      body,
-    });
-    responseStatus = result.status;
-    await limitedText(result);
-    if (result.status >= 200 && result.status < 300) deliveredAt = Date.now();
-    else
-      errorCode = result.status >= 300 && result.status < 400 ? "redirect_rejected" : "http_error";
-  } catch (error) {
-    errorCode =
-      error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")
-        ? "timeout"
-        : error instanceof Error && error.message === "response_too_large"
-          ? "response_too_large"
-          : "network_error";
-  }
+  const sent = await sendWebhook({
+    url: row.url,
+    body,
+    headers: {
+      "Content-Type": "application/json",
+      "GitEdge-Delivery": id,
+      "GitEdge-Event": event,
+      "X-GitEdge-Signature-256": await signWebhookBody(secret, body),
+    },
+  });
+  const { responseStatus, errorCode } = sent;
+  const deliveredAt = sent.delivered ? Date.now() : null;
   const status = deliveredAt ? "success" : "failed";
   await env.DB.prepare(
     "UPDATE auth_agent_webhook_deliveries SET status = ?, response_status = ?, error_code = ?, delivered_at = ? WHERE id = ? AND agent_id = ? AND status = 'pending'"
@@ -364,10 +274,6 @@ async function markDeliveryInvalid(
     .run();
 }
 
-function retryDelay(attempts: number): number {
-  return Math.min(60_000 * 2 ** Math.max(0, attempts - 1), 15 * 60_000);
-}
-
 async function rescheduleOutbox(
   env: AgentWebhookEnv,
   event: AgentEventRow,
@@ -379,7 +285,7 @@ async function rescheduleOutbox(
   await env.DB.prepare(
     "UPDATE auth_agent_events SET status = ?, lease_until = NULL, error_code = ?, next_attempt_at = ? WHERE id = ? AND status = 'processing'"
   )
-    .bind(exhausted ? "dead" : "pending", errorCode, now + retryDelay(attempts), event.id)
+    .bind(exhausted ? "dead" : "pending", errorCode, now + webhookRetryDelay(attempts), event.id)
     .run();
 }
 
@@ -509,7 +415,7 @@ export async function handleAgentWebhookManagement(
         events: value.events,
         enabled: value.enabled,
       });
-      if (!parsed.success || !validWebhookUrl(parsed.data.url))
+      if (!parsed.success || !isPublicWebhookUrl(parsed.data.url))
         return failure(400, "bad_request", "Webhook URL or settings are invalid.");
       if (!(await importSealingKey(env.WEBHOOK_ENCRYPTION_KEY)))
         return failure(503, "service_unavailable", "Webhook encryption is not configured.");

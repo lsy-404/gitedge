@@ -1,6 +1,6 @@
 import { Secret, TOTP } from "otpauth";
 import type { TotpEnrollment } from "../../../../packages/contracts/src/index";
-import { importSealingKey, openText, sealText } from "../secret-box";
+import { importSealingKey, openText, sealText } from "../../../../src/worker/common/secret-box";
 import type { SecurityEnv } from "./env";
 
 const PERIOD_SECONDS = 30;
