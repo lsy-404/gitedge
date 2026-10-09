@@ -84,6 +84,19 @@ Repository deployment accepts prebuilt JavaScript modules plus declared D1, R2 a
 
 [Cloudflare Artifacts](https://developers.cloudflare.com/artifacts/) supplies the Git foundation. Overture informed the permission-first deployment interaction; GitEdge's deployment implementation is independently written under MIT.
 
+## Signed commits and tags
+
+Register OpenPGP or SSH signing keys under Account settings, Signing keys. Registration proves possession of the private key by signing a ten-minute challenge (`gpg --armor --detach-sign` or `ssh-keygen -Y sign -n gitedge`). To sign with an SSH key:
+
+```sh
+git config --global gpg.format ssh
+git config --global user.signingkey ~/.ssh/id_ed25519.pub
+git config --global commit.gpgsign true
+git config --global tag.gpgsign true
+```
+
+Commit pages and release cards verify signatures on request and show, for example, "Verified (SSH)" with the key fingerprint and its owner. Supported SSH keys are `ssh-ed25519`, `ecdsa-sha2-nistp256` and `ssh-rsa` (2048-8192 bits, `rsa-sha2-256`/`rsa-sha2-512` signatures). A signature counts as verified when it was made by a registered, unrevoked key, regardless of the free-form author text, unless the committer or tagger email is verified by a different account. The "verified signatures" branch rule accepts only such commits; since direct pushes to rule-matched branches are refused, signed commits reach them through fast-forward pull request merges.
+
 ## Repository controls and Actions
 
 Repository settings independently enable collaboration areas, agents, deployments, commit graphs, Actions and online editing. Renaming preserves historical repository URLs. Branch patterns can require PRs, human approvals, named checks, linear history and verified signatures. Repository collaborators have read, write or admin access. Collaborators and organization members join by accepting an invitation (7-day expiry, username or one-time link); repository settings and organizations show an append-only audit log, and the account security log lists your own sensitive events. Site administrators (`SITE_ADMINS`) manage users, groups and see site statistics at `/admin`; users can export their data and delete their account from account settings.

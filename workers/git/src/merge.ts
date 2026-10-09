@@ -21,9 +21,40 @@ export type GitMergeResult =
 export interface GitMergePolicy {
   requireLinearHistory: boolean;
   requireSignedCommits: boolean;
-  verifySignature(payload: string, signature: string | undefined): Promise<boolean>;
+  /** Receives the raw commit object; true when its signature satisfies the branch rule. */
+  verifySignature(raw: Uint8Array): Promise<boolean>;
   beforePush(oid: string): Promise<void>;
 }
+type GitMergeFailure = Extract<GitMergeResult, { ok: false }>;
+
+/**
+ * Walks first parents from `head` back to `mergeBase` (at most 100 commits), requiring linear
+ * history and, when `verifySignature` is given, a satisfying signature on every commit.
+ */
+export async function walkIntroducedCommits(
+  fs: git.FsClient,
+  dir: string,
+  head: string,
+  mergeBase: string,
+  verifySignature: ((raw: Uint8Array) => Promise<boolean>) | null
+): Promise<{ ok: true; commits: git.ReadCommitResult[] } | GitMergeFailure> {
+  const commits: git.ReadCommitResult[] = [];
+  let cursor = head;
+  while (cursor !== mergeBase) {
+    if (commits.length >= 100) return { ok: false, reason: "commit_limit" };
+    const commit = await git.readCommit({ fs, dir, oid: cursor });
+    if (commit.commit.parent.length !== 1) return { ok: false, reason: "nonlinear_history" };
+    if (verifySignature) {
+      const raw = await git.readObject({ fs, dir, oid: cursor, format: "content" });
+      if (!(raw.object instanceof Uint8Array) || !(await verifySignature(raw.object)))
+        return { ok: false, reason: "unsigned_commits" };
+    }
+    commits.push(commit);
+    cursor = commit.commit.parent[0];
+  }
+  return { ok: true, commits };
+}
+
 export async function mergeArtifacts(
   baseRepo: ArtifactsRepo,
   headRepo: ArtifactsRepo,
@@ -75,21 +106,17 @@ export async function mergeArtifacts(
       const bases = await git.findMergeBase({ fs, dir, oids: [input.expectedBaseOid, localHead] });
       if (bases.length !== 1) return { ok: false, reason: "merge_conflict" };
       const mergeBase = bases[0];
-      const commits: git.ReadCommitResult[] = [];
-      let cursor = localHead;
+      let commits: git.ReadCommitResult[] = [];
       if (input.method === "rebase" || policy.requireSignedCommits) {
-        while (cursor !== mergeBase) {
-          if (commits.length >= 100) return { ok: false, reason: "commit_limit" };
-          const commit = await git.readCommit({ fs, dir, oid: cursor });
-          if (commit.commit.parent.length !== 1) return { ok: false, reason: "nonlinear_history" };
-          if (
-            policy.requireSignedCommits &&
-            !(await policy.verifySignature(commit.payload, commit.commit.gpgsig))
-          )
-            return { ok: false, reason: "unsigned_commits" };
-          commits.push(commit);
-          cursor = commit.commit.parent[0];
-        }
+        const walked = await walkIntroducedCommits(
+          fs,
+          dir,
+          localHead,
+          mergeBase,
+          policy.requireSignedCommits ? policy.verifySignature : null
+        );
+        if (!walked.ok) return walked;
+        commits = walked.commits;
       }
       if (
         policy.requireSignedCommits &&

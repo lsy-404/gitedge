@@ -5,7 +5,7 @@ import { useRoute } from "vue-router";
 import type { GitCommitDetail, Repository } from "../lib/api";
 import { api, errorMessage } from "../lib/api";
 import AppIcon from "./AppIcon.vue";
-import CommitSignatureStatus from "./CommitSignatureStatus.vue";
+import GitSignatureStatus from "./GitSignatureStatus.vue";
 import DiffViewer from "./DiffViewer.vue";
 import NoticeBar from "./NoticeBar.vue";
 import StatusBadge from "./StatusBadge.vue";
@@ -74,7 +74,7 @@ watch([() => props.repository.id, () => props.oid], load, { immediate: true });
             >{{ parent.slice(0, 8) }}</RouterLink
           >
         </span>
-        <CommitSignatureStatus
+        <GitSignatureStatus
           :repository-id="repository.id"
           :ref-name="signatureRef"
           :oid="detail.commit.oid"

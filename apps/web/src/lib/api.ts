@@ -11,7 +11,7 @@ import type { GitCredential, BrowserSession } from "../../../../packages/contrac
 import type {
   SigningKey,
   SigningKeyChallenge,
-  CommitSignature,
+  GitSignature,
 } from "../../../../packages/contracts/src/signatures";
 import type {
   Organization,
@@ -648,7 +648,9 @@ export const api = {
       method: "DELETE",
     }),
   commitSignature: (repositoryId: string, ref: string, oid: string) =>
-    request<CommitSignature>(gitPath(repositoryId, `signature${query({ ref, oid })}`)),
+    request<GitSignature>(gitPath(repositoryId, `signature${query({ ref, oid })}`)),
+  tagSignature: (repositoryId: string, tag: string) =>
+    request<GitSignature>(gitPath(repositoryId, `signature${query({ tag })}`)),
   login: (payload: { identifier: string; password: string }) =>
     request<LoginResponse>("/api/auth/login", { method: "POST", body: JSON.stringify(payload) }),
   completeLogin: (mfaToken: string, factor: SecondFactorInput) =>

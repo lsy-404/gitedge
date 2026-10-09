@@ -58,7 +58,8 @@ import {
   refContainsCommit,
   resolveCommit,
 } from "./read";
-import { readCommitSignature, verifyCommitSignature } from "./signatures";
+import { readObjectSignature, verifyObjectSignature } from "./signatures";
+import type { GitSignature } from "../../../packages/contracts/src/signatures";
 import { compareArtifacts } from "./compare";
 import { blameFile } from "./blame";
 import { commitDetail } from "./commit-diff";
@@ -431,8 +432,8 @@ export async function handleGitApi(
       {
         requireLinearHistory: rules.some((rule) => rule.requireLinearHistory),
         requireSignedCommits: rules.some((rule) => rule.requireSignedCommits),
-        verifySignature: async (payload, signature) =>
-          (await verifyCommitSignature(env.DB, payload, signature)).status === "valid",
+        verifySignature: async (raw) =>
+          (await verifyObjectSignature(env.DB, "commit", raw)).status === "valid",
         beforePush: async (oid) => {
           const latest = await resolveGitAccess(request, env, repositoryId);
           const latestRules = matchingBranchRules(
@@ -538,13 +539,32 @@ export async function handleGitApi(
     return dataResponse(await repositorySnapshot(repo, oid));
   }
   if (resource === "signature") {
+    const tagName = url.searchParams.get("tag");
+    if (tagName !== null) {
+      if (!GitTagNameSchema.safeParse(tagName).success)
+        return errorResponse(400, "bad_request", "Invalid tag name.");
+      const tag = (await listArtifactRefs(repo, env.LOG_LEVEL)).find(
+        (item) => item.name === `refs/tags/${tagName}`
+      );
+      if (!tag) return errorResponse(404, "not_found", "Tag was not found.");
+      // Lightweight tags have no tag object and therefore no signature of their own.
+      if (tag.peeledOid === undefined)
+        return dataResponse({
+          status: "unsigned",
+          format: null,
+          fingerprint: null,
+          signer: null,
+          verifiedAt: Date.now(),
+        } satisfies GitSignature);
+      return dataResponse(await readObjectSignature(repo, env.DB, "tag", tag.oid, env.LOG_LEVEL));
+    }
     const oid = url.searchParams.get("oid") ?? "";
     const commitRef = url.searchParams.get("ref");
     if (!GitOidSchema.safeParse(oid).success || !commitRef)
       return errorResponse(400, "bad_request", "Invalid commit oid or ref.");
     if (!(await refContainsCommit(repo, commitRef, oid)))
       return errorResponse(404, "not_found", "Commit was not found in this repository ref.");
-    return dataResponse(await readCommitSignature(repo, env.DB, oid, env.LOG_LEVEL));
+    return dataResponse(await readObjectSignature(repo, env.DB, "commit", oid, env.LOG_LEVEL));
   }
   if (resource === "commit") {
     const oid = url.searchParams.get("oid") ?? "";

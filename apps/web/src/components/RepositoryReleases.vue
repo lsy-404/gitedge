@@ -14,6 +14,7 @@ import { ApiError, api, archiveUrl, errorMessage, formatBytes, releaseAssetUrl }
 import { useReauthRetry } from "../lib/reauth";
 import AppIcon from "./AppIcon.vue";
 import ConfirmButton from "./ConfirmButton.vue";
+import GitSignatureStatus from "./GitSignatureStatus.vue";
 import MarkdownContent from "./MarkdownContent.vue";
 import NoticeBar from "./NoticeBar.vue";
 import ReauthPrompt from "./ReauthPrompt.vue";
@@ -365,6 +366,9 @@ watch(
                   date: d(release.publishedAt ?? release.createdAt, "short"),
                 })
           }}</span>
+        </div>
+        <div v-if="!release.draft" class="release-signature">
+          <GitSignatureStatus :repository-id="repository.id" :tag-name="release.tagName" />
         </div>
         <div class="release-notes">
           <MarkdownContent v-if="release.body" :source="release.body" />

@@ -6,15 +6,17 @@ import {
   SigningKeyChallengeInputSchema,
   type SigningKey,
   type SigningKeyChallenge,
+  type SigningKeyFormat,
 } from "../../../packages/contracts/src/signatures";
 import type { TrustedUser } from "../../../packages/contracts/src/index";
-import { inspectSigningKey, verifyDetachedSignature } from "../../../src/worker/common/signatures";
+import { inspectSigningKey, verifyKeyProof } from "../../../src/worker/common/signatures";
 import { createLogger } from "../../../src/worker/common/logger";
 
 type SigningEnvironment = Pick<AuthEnv, "DB" | "LOG_LEVEL">;
 interface KeyRow {
   id: string;
   title: string;
+  format: SigningKeyFormat;
   fingerprint: string;
   keyIdsJson: string;
   publicKey: string;
@@ -26,12 +28,13 @@ interface ChallengeRow extends SigningKeyChallenge {
   publicKey: string;
 }
 const keyColumns =
-  "id, title, fingerprint, key_ids_json AS keyIdsJson, public_key AS publicKey, created_at AS createdAt, revoked_at AS revokedAt";
+  "id, title, format, fingerprint, key_ids_json AS keyIdsJson, public_key AS publicKey, created_at AS createdAt, revoked_at AS revokedAt";
 function present(row: KeyRow): SigningKey {
   const ids: unknown = JSON.parse(row.keyIdsJson);
   return {
     id: row.id,
     title: row.title,
+    format: row.format,
     fingerprint: row.fingerprint,
     keyIds: Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [],
     publicKey: row.publicKey,
@@ -67,7 +70,11 @@ export async function handleSigningKeys(
     try {
       key = await inspectSigningKey(parsed.data.publicKey);
     } catch {
-      return fail(400, "bad_request", "A valid, unexpired OpenPGP public signing key is required.");
+      return fail(
+        400,
+        "bad_request",
+        "A valid OpenPGP signing key or a supported SSH public key is required."
+      );
     }
     const count = await env.DB.prepare(
       "SELECT COUNT(*) AS total FROM auth_signing_keys WHERE user_id = ?"
@@ -98,10 +105,14 @@ export async function handleSigningKeys(
         now + 600_000
       ),
     ]);
-    logger.info("signing-key:challenge-created", { fingerprint: key.fingerprint });
+    logger.info("signing-key:challenge-created", {
+      format: key.format,
+      fingerprint: key.fingerprint,
+    });
     return json(
       {
         id,
+        format: key.format,
         fingerprint: key.fingerprint,
         payload,
         expiresAt: now + 600_000,
@@ -120,22 +131,16 @@ export async function handleSigningKeys(
       .bind(parsed.data.challengeId, user.id, Date.now())
       .first<ChallengeRow>();
     if (!challenge) return fail(409, "challenge_expired", "Create a new signing challenge.");
-    if (
-      !(await verifyDetachedSignature(
-        challenge.publicKey,
-        parsed.data.signature,
-        challenge.payload
-      ))
-    )
-      return fail(400, "invalid_signature", "The signature does not prove ownership of this key.");
     const key = await inspectSigningKey(challenge.publicKey);
+    if (!(await verifyKeyProof(key, parsed.data.signature, challenge.payload)))
+      return fail(400, "invalid_signature", "The signature does not prove ownership of this key.");
     const id = crypto.randomUUID(),
       now = Date.now();
     try {
       const inserted = await env.DB.batch([
         env.DB.prepare(
-          "INSERT INTO auth_signing_keys (id,user_id,title,fingerprint,key_ids_json,public_key,created_at) SELECT ?,user_id,title,fingerprint,?,public_key,? FROM auth_signing_key_challenges WHERE id = ? AND user_id = ? AND expires_at > ? RETURNING id"
-        ).bind(id, JSON.stringify(key.keyIds), now, challenge.id, user.id, now),
+          "INSERT INTO auth_signing_keys (id,user_id,title,format,fingerprint,key_ids_json,public_key,created_at) SELECT ?,user_id,title,?,fingerprint,?,public_key,? FROM auth_signing_key_challenges WHERE id = ? AND user_id = ? AND expires_at > ? RETURNING id"
+        ).bind(id, key.format, JSON.stringify(key.keyIds), now, challenge.id, user.id, now),
         ...key.keyIds.map((keyId) =>
           env.DB.prepare(
             "INSERT INTO auth_signing_key_ids (key_id,signing_key_id) SELECT ?,id FROM auth_signing_keys WHERE id = ?"
@@ -152,7 +157,11 @@ export async function handleSigningKeys(
       logger.warn("signing-key:registration-conflict", { fingerprint: key.fingerprint });
       return fail(409, "conflict", "This signing key is already registered.");
     }
-    logger.info("signing-key:registered", { keyId: id, fingerprint: key.fingerprint });
+    logger.info("signing-key:registered", {
+      keyId: id,
+      format: key.format,
+      fingerprint: key.fingerprint,
+    });
     return json(
       { id, title: challenge.title, ...key, createdAt: now, revokedAt: null } satisfies SigningKey,
       201
