@@ -92,6 +92,11 @@ beforeAll(async () => {
   await createRepository("raced", "public");
   await createRepository("toggled", "public");
   await createRepository("renamed", "public");
+  await createRepository("fork-public", "public");
+  await createRepository("fork-private", "private");
+  await env.DB.prepare(
+    "UPDATE repositories SET fork_of='open' WHERE id IN ('fork-public','fork-private')"
+  ).run();
 });
 
 async function artifactName(repositoryId: string): Promise<string> {
@@ -224,6 +229,28 @@ describe("edge cache never leaks private data", () => {
         "bypass"
       );
       expect((await call("closed", resource)).status).toBe(404);
+    }
+  });
+
+  it("keeps forks in their own keyspace and never caches private forks or cross-repository reads", async () => {
+    await call("open", "tree?ref=main");
+    const fork = await call("fork-public", "tree?ref=main");
+    expect(fork.headers.get("X-GitEdge-Cache")).toBe("miss");
+    expect((await call("fork-public", "tree?ref=main")).headers.get("X-GitEdge-Cache")).toBe("hit");
+
+    const hidden = await call("fork-private", "tree?ref=main", { user: owner });
+    expect(hidden.status).toBe(200);
+    expect(hidden.headers.get("X-GitEdge-Cache")).toBe("bypass");
+    expect(hidden.headers.get("Cache-Control")).not.toContain("public");
+    expect((await call("fork-private", "tree?ref=main")).status).toBe(404);
+
+    for (const forkId of ["fork-public", "fork-private"]) {
+      const compare = await call("open", `compare?base=main&head=main&headRepositoryId=${forkId}`, {
+        user: owner,
+      });
+      expect(compare.status, forkId).toBe(200);
+      expect(compare.headers.get("Cache-Control"), forkId).not.toContain("public");
+      expect(compare.headers.get("X-GitEdge-Cache"), forkId).not.toBe("hit");
     }
   });
 

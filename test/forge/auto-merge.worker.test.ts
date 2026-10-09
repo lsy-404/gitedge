@@ -34,7 +34,9 @@ const forgeEnv: Parameters<typeof forge.fetch>[1] = {
     async fetch(request: Request) {
       const url = new URL(request.url);
       if (request.method === "GET" && url.pathname.endsWith("/pull-head")) {
-        const oid = heads.get(url.searchParams.get("head") ?? "");
+        const fork = url.searchParams.get("headRepositoryId");
+        const head = url.searchParams.get("head") ?? "";
+        const oid = heads.get(fork ? `${fork}:${head}` : head);
         return oid
           ? Response.json({ data: { oid } })
           : Response.json({ error: { code: "not_found" } }, { status: 404 });
@@ -232,7 +234,10 @@ INSERT INTO repository_collaborators (repository_id, user_id, role, created_at) 
 INSERT INTO forge_webhooks (id,repository_id,url,events_json,secret_ciphertext,secret_iv,created_by,created_at,updated_at) VALUES ('hook1','r1','https://hooks.example.test/in','["pull_request"]','x','x','u1',1,1);
 INSERT INTO auth_agents (id,user_id,name,description,created_at) VALUES ('a1','u2','helper','',1);
 INSERT INTO auth_git_tokens (id,user_id,repository_id,name,token_hash,permission,expires_at,created_at) VALUES ('gt1','u2','r1','test','git-hash','write',9999999999999,1);
-INSERT INTO auth_agent_sessions (id,agent_id,user_id,repository_id,token_hash,git_token_id,workspace_name,remote,base_ref,base_oid,permission,status,created_at,expires_at) VALUES ('s1','a1','u2','r1','session-hash','gt1','work','artifact://repo-r1','main',NULL,'write','active',1,9999999999999);`
+INSERT INTO auth_agent_sessions (id,agent_id,user_id,repository_id,token_hash,git_token_id,workspace_name,remote,base_ref,base_oid,permission,status,created_at,expires_at) VALUES ('s1','a1','u2','r1','session-hash','gt1','work','artifact://repo-r1','main',NULL,'write','active',1,9999999999999);
+INSERT INTO namespaces (id, slug, created_by, created_at, kind, display_name, description) VALUES ('n3','eve','u3',1,'personal','Eve','');
+INSERT INTO namespace_memberships (namespace_id,user_id,created_at,role) VALUES ('n3','u3',1,'owner');
+INSERT INTO repositories (id,namespace_id,created_by,slug,do_name,visibility,description,created_at,updated_at,artifact_name,remote,default_branch,fork_of) VALUES ('r2','n3','u3','demo','repo:r2','public','',1,1,'fork-r2','artifact://fork-r2','main','r1');`
   );
 });
 
@@ -719,5 +724,138 @@ describe("Merge queue", () => {
       .bind(pull.id)
       .first<{ count: number }>();
     expect(queued?.count).toBe(1);
+  });
+});
+
+describe("Merge automation across tracks", () => {
+  async function openForkPull(base: string): Promise<Fixture> {
+    const head = (++sequence).toString(16).padStart(40, "f");
+    const headRef = `fork-topic-${sequence}`;
+    heads.set(`r2:${headRef}`, head);
+    // The base repository has a same-named branch at another commit, which must never be used.
+    heads.set(headRef, "0".repeat(40));
+    if (!heads.has(base)) heads.set(base, BASE);
+    const response = await call("/repositories/r1/pull-requests", "POST", eve, {
+      title: `Fork ${headRef}`,
+      body: "",
+      baseRef: base,
+      headRef,
+      headRepositoryId: "r2",
+    });
+    expect(response.status).toBe(201);
+    const created = await json<{ number: number; id: string }>(response);
+    return { number: created.number, id: created.id, headRef, head };
+  }
+
+  it("never counts AI summaries or Pages previews as reviews or passing checks", async () => {
+    await rule("am-system", { approvals: 1, checks: ["GitEdge Pages preview"] });
+    const pull = await openPull("am-system");
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO forge_ai_summaries (id,repository_id,pull_request_id,requested_by,status,head_oid,model,summary_json,created_at,updated_at) VALUES (?,?,?,?,'succeeded',?,'model','{}',1,1)"
+      ).bind(`summary-${pull.id}`, "r1", pull.id, "u2", pull.head),
+      env.DB.prepare(
+        "INSERT INTO forge_check_runs (id,repository_id,pull_request_id,actor_json,actor_key,name,commit_oid,status,conclusion,summary,created_at,updated_at) VALUES (?,?,?,?,?,?,?,'completed','neutral','Preview ready',1,1)"
+      ).bind(
+        `preview-${pull.id}`,
+        "r1",
+        pull.id,
+        JSON.stringify({ kind: "ci", id: "gitedge-pages", name: "GitEdge Pages" }),
+        "ci:gitedge-pages",
+        "GitEdge Pages preview",
+        pull.head
+      ),
+    ]);
+    const enabled = await enable(pull);
+    expect(await json(enabled)).toMatchObject({ waitingOn: { code: "approvals_required" } });
+
+    const review = await call(
+      `/repositories/r1/pull-requests/${pull.number}/reviews`,
+      "POST",
+      bob,
+      { state: "approved", body: "", commitOid: pull.head }
+    );
+    expect(review.status).toBe(201);
+    await reconcileRepository(forgeEnv, "r1");
+    expect(mergeBodies).toHaveLength(0);
+    expect(
+      await json(await call(`/repositories/r1/pull-requests/${pull.number}/auto-merge`, "GET", bob))
+    ).toMatchObject({ enabled: true, waitingOn: { code: "checks_required" } });
+  });
+
+  it("auto-merges a fork pull request at the fork head it verified", async () => {
+    await rule("am-fork", { checks: ["CI"] });
+    const pull = await openForkPull("am-fork");
+    const enabled = await enable(pull);
+    expect(enabled.status).toBe(201);
+    expect(await json(enabled)).toMatchObject({ expectedHeadOid: pull.head });
+
+    const trigger = context();
+    expect((await passCheck(pull, trigger.ctx)).status).toBe(201);
+    await trigger.settled();
+
+    expect(mergeBodies).toHaveLength(1);
+    expect(mergeBodies[0]).toMatchObject({
+      headRef: pull.headRef,
+      headRepositoryId: "r2",
+      headSessionId: null,
+      expectedHeadOid: pull.head,
+    });
+    expect(await state(pull)).toBe("merged");
+  });
+
+  it("follows the enabler's pushes to the fork that holds the head", async () => {
+    await rule("am-fork-push", { checks: ["CI"] });
+    const pull = await openForkPull("am-fork-push");
+    await env.DB.prepare(
+      "INSERT OR IGNORE INTO repository_collaborators (repository_id, user_id, role, created_at) VALUES ('r2','u2','write',1)"
+    ).run();
+    await enable(pull);
+    const next = "8".repeat(40);
+    heads.set(`r2:${pull.headRef}`, next);
+    const push = (repositoryId: string) =>
+      forge.fetch(
+        new Request("https://forge.internal/internal/push-event", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            repositoryId,
+            pusherId: "u2",
+            updates: [{ ref: `refs/heads/${pull.headRef}`, before: pull.head, after: next }],
+          }),
+        }),
+        forgeEnv
+      );
+    expect((await push("r1")).status).toBe(200);
+    expect(await autoMergeRow(pull)).toMatchObject({ expected_head_oid: pull.head });
+    expect((await push("r2")).status).toBe(200);
+    expect(await autoMergeRow(pull)).toMatchObject({ expected_head_oid: next });
+  });
+
+  it("merges a queued fork pull request and ejects it when the fork head moves", async () => {
+    await rule("mq-fork", { queue: true });
+    const [kept, moved] = [await openForkPull("mq-fork"), await openForkPull("mq-fork")];
+    for (const pull of [kept, moved]) {
+      const queued = await call(
+        `/repositories/r1/pull-requests/${pull.number}/merge-queue`,
+        "POST",
+        bob,
+        { method: "merge", expectedHeadOid: pull.head }
+      );
+      expect(queued.status).toBe(201);
+    }
+    heads.set(`r2:${moved.headRef}`, "7".repeat(40));
+
+    await processMergeQueue(forgeEnv, "r1", "mq-fork", { merges: 10 });
+
+    expect(mergedHeads()).toEqual([kept.headRef]);
+    expect(mergeBodies[0]).toMatchObject({ headRepositoryId: "r2", expectedHeadOid: kept.head });
+    expect(await state(kept)).toBe("merged");
+    expect(await state(moved)).toBe("open");
+    expect(
+      await json(
+        await call(`/repositories/r1/pull-requests/${moved.number}/merge-queue`, "GET", bob)
+      )
+    ).toMatchObject({ position: null });
   });
 });

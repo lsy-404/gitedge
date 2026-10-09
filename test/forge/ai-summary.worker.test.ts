@@ -43,9 +43,11 @@ const AI = {
     return modelOutput;
   },
 };
+const compareUrls: URL[] = [];
 const GIT = {
   async fetch(request: Request) {
     const url = new URL(request.url);
+    if (url.pathname.endsWith("/compare")) compareUrls.push(url);
     if (url.pathname.endsWith("/pull-head")) return Response.json({ data: { oid: head } });
     if (url.pathname.endsWith("/compare"))
       return Response.json({
@@ -181,7 +183,11 @@ INSERT INTO repository_collaborators (repository_id, user_id, role, created_at) 
     ]
       .flatMap((id) => [`('${id}','u2','write',1)`, `('${id}','u3','read',1)`])
       .join(",")};
-INSERT INTO forge_counters (repository_id) VALUES ('r1'),('r2'),('r3'),('r4'),('r5');`
+INSERT INTO forge_counters (repository_id) VALUES ('r1'),('r2'),('r3'),('r4'),('r5');
+INSERT INTO namespaces (id, slug, created_by, created_at, kind, display_name, description) VALUES ('n2','writer','u2',1,'personal','Writer','');
+INSERT INTO namespace_memberships (namespace_id,user_id,created_at,role) VALUES ('n2','u2',1,'owner');
+INSERT INTO repositories (id,namespace_id,created_by,slug,do_name,visibility,description,created_at,updated_at,artifact_name,remote,default_branch,fork_of) VALUES ('r6','n2','u2','enabled','repo:r6','public','',1,1,'${source.name}','${source.remote}','main','r1');
+INSERT INTO forge_counters (repository_id) VALUES ('r6');`
   );
 });
 beforeEach(async () => {
@@ -195,6 +201,7 @@ beforeEach(async () => {
   comparisonTruncated = false;
   modelOutput = goodOutput;
   aiCalls.length = 0;
+  compareUrls.length = 0;
   siteEnv = { ...baseEnv, AI };
 });
 
@@ -483,5 +490,29 @@ describe("AI pull request summaries", () => {
     const states = [await state("r1", first), await state("r1", second)];
     expect(states.filter((entry) => entry.summary !== null)).toHaveLength(1);
     expect(states.filter((entry) => entry.job?.errorCode === "rate_limited")).toHaveLength(1);
+  });
+
+  it("summarizes fork pull requests from the fork and follows pushes to the fork", async () => {
+    const opened = await request("/repositories/r1/pull-requests", "POST", "writer", {
+      title: "From a fork",
+      body: "",
+      baseRef: "main",
+      headRef: "topic",
+      headRepositoryId: "r6",
+    });
+    expect(opened.status).toBe(201);
+    const number = z.object({ data: z.object({ number: z.number() }) }).parse(await opened.json())
+      .data.number;
+    await drainAiSummaries(siteEnv);
+    expect(aiCalls).toHaveLength(1);
+    expect(compareUrls.at(-1)?.searchParams.get("headRepositoryId")).toBe("r6");
+
+    head = HEAD_B;
+    expect((await pushEvent("r1")).status).toBe(200);
+    expect(await state("r1", number)).toMatchObject({ job: null });
+    expect((await pushEvent("r6")).status).toBe(200);
+    expect(await state("r1", number)).toMatchObject({ job: { status: "queued" } });
+    await drainAiSummaries(siteEnv);
+    expect((await state("r1", number)).summary).toMatchObject({ headOid: HEAD_B });
   });
 });

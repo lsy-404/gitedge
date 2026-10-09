@@ -392,6 +392,45 @@ describe("Pull request previews", () => {
     expect((await site("site", "/", { preview: "nothex" })).status).toBe(404);
   });
 
+  it("serves a fork pull request preview from the fork while the pull request is open", async () => {
+    const fork = await artifacts.create("pages-fork", { setDefaultBranch: "main" });
+    const forkHead = await artifacts.seedFiles(fork.name, { "index.html": "<h1>fork</h1>" });
+    await env.DB.prepare(
+      "INSERT INTO namespaces(id,slug,created_by,created_at,kind) VALUES('ns-writer','writer','writer-id',1,'personal')"
+    ).run();
+    await env.DB.prepare(
+      "INSERT INTO repositories(id,namespace_id,created_by,slug,do_name,visibility,description,created_at,updated_at,artifact_name,remote,default_branch,fork_of) VALUES('pages-fork-id','ns-writer','writer-id','site','repo:pages-fork','public','',1,1,?,?,'main',?)"
+    )
+      .bind(fork.name, fork.remote, ids.site)
+      .run();
+    await env.DB.prepare(
+      "INSERT INTO forge_pull_requests(id,repository_id,number,author_id,actor_json,title,body,base_ref,head_ref,head_repository_id,draft,state,created_at,updated_at) VALUES('fork-pull',?,900,'writer-id',?,'Fork','','main','main','pages-fork-id',0,'open',1,1)"
+    )
+      .bind(ids.site, JSON.stringify({ kind: "user", id: "writer-id", name: "writer" }))
+      .run();
+    await env.DB.prepare(
+      "INSERT INTO forge_check_runs(id,repository_id,pull_request_id,actor_json,actor_key,name,commit_oid,status,conclusion,summary,created_at,updated_at) VALUES('fork-preview',?,'fork-pull',?,'ci:gitedge-pages',?,?,'completed','neutral','Preview ready',1,1)"
+    )
+      .bind(
+        ids.site,
+        JSON.stringify({ kind: "ci", id: "gitedge-pages", name: "GitEdge Pages" }),
+        PAGES_CHECK_NAME,
+        forkHead
+      )
+      .run();
+    const preview = await site("site", "/", { preview: forkHead });
+    expect(preview.status).toBe(200);
+    expect(await preview.text()).toBe("<h1>fork</h1>");
+    await env.DB.prepare(
+      "UPDATE forge_pull_requests SET state='closed' WHERE id='fork-pull'"
+    ).run();
+    expect((await site("site", "/", { preview: forkHead })).status).toBe(404);
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM forge_check_runs WHERE pull_request_id='fork-pull'"),
+      env.DB.prepare("DELETE FROM forge_pull_requests WHERE id='fork-pull'"),
+    ]);
+  });
+
   it("reserves the preview check name for the Pages system actor", async () => {
     const number = z
       .object({ data: z.array(z.object({ number: z.number() })) })
