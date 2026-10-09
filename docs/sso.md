@@ -101,6 +101,8 @@ The last configured login method cannot be unlinked. Existing repositories, name
 
 Signed SAML logout requests from the IdP are accepted through POST and Redirect bindings at the logout callback. They invalidate only sessions matching the configured provider, subject and supplied SessionIndexes, consume the request once, and return a signed response to the configured IdP logout endpoint. Unrelated account sessions and pending login/logout browser flows remain intact.
 
+GitEdge two-step verification does not apply to SSO or GitHub sign-in: the identity provider is responsible for multi-factor policy. SSO sign-ins count as a recent authentication for 10 minutes, after which sensitive account changes ask for a password, authenticator code or passkey; an SSO-only account with none of these must sign in again.
+
 Identity-provider-initiated SAML login, OIDC back-channel logout notifications, SCIM provisioning and group-to-repository permission mapping are not implemented. Identity authentication does not grant organization membership or administrative access. Use explicit GitEdge memberships and account groups.
 
 Protocol tests use real signed JWT/XML fixtures inside Node and Cloudflare Workers, with D1 coverage for identity binding, browser proof, replay, expiry and concurrent unlinking. A production IdP still requires tenant configuration and a live login/logout acceptance test before being enabled for users.

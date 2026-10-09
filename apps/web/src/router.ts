@@ -1,5 +1,8 @@
 import { createRouter, createWebHistory } from "vue-router";
 const AuthView = () => import("./pages/AuthView.vue");
+const ForgotPasswordView = () => import("./pages/ForgotPasswordView.vue");
+const ResetPasswordView = () => import("./pages/ResetPasswordView.vue");
+const VerifyEmailView = () => import("./pages/VerifyEmailView.vue");
 const DashboardView = () => import("./pages/DashboardView.vue");
 const RepositoryView = () => import("./pages/RepositoryView.vue");
 const OrganizationsView = () => import("./pages/OrganizationsView.vue");
@@ -21,6 +24,9 @@ export const router = createRouter({
     { path: "/", redirect: "/dashboard" },
     { path: "/login", component: AuthView, meta: { public: true } },
     { path: "/register", component: AuthView, meta: { public: true } },
+    { path: "/forgot-password", component: ForgotPasswordView, meta: { public: true } },
+    { path: "/reset-password", component: ResetPasswordView, meta: { public: true } },
+    { path: "/verify-email", component: VerifyEmailView, meta: { public: true } },
     { path: "/dashboard", component: DashboardView },
     { path: "/organizations", component: OrganizationsView },
     { path: "/organizations/:slug", component: OrganizationView },

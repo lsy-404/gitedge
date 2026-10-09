@@ -8,20 +8,37 @@ pnpm exec wrangler secret put <NAME> --config workers/<worker>/wrangler.jsonc
 
 ## Auth
 
-| Name                     | Kind   | Default                  | Purpose                                                                                  |
-| ------------------------ | ------ | ------------------------ | ---------------------------------------------------------------------------------------- |
-| `GITHUB_CLIENT_ID`       | secret | none                     | GitHub OAuth application client ID. GitHub sign-in is unavailable without it.            |
-| `GITHUB_CLIENT_SECRET`   | secret | none                     | GitHub OAuth application client secret.                                                  |
-| `WEBHOOK_ENCRYPTION_KEY` | secret | none                     | Base64-encoded 32-byte key that encrypts agent webhook signing secrets.                  |
-| `SSO_SECRETS_JSON`       | secret | none                     | Client secrets for configured SSO providers. See [SSO configuration](sso.md).            |
-| `GITHUB_OAUTH_BASE`      | var    | `https://github.com`     | GitHub OAuth origin; override only for GitHub Enterprise or test doubles.                |
-| `GITHUB_API_BASE`        | var    | `https://api.github.com` | GitHub API origin; override only for GitHub Enterprise or test doubles.                  |
-| `ALLOW_PUBLIC_SIGNUP`    | var    | none (`true` shipped)    | Public registration is open only when the value is exactly `true`.                       |
-| `DEFAULT_USER_GROUP`     | var    | none (`free` shipped)    | Required. User group for new accounts; SSO identity creation alone falls back to `free`. |
-| `LOG_LEVEL`              | var    | logger default           | Minimum structured log level.                                                            |
-| `SSO_PROVIDERS_JSON`     | var    | none                     | Provider list. See [SSO configuration](sso.md).                                          |
+| Name                     | Kind    | Default                  | Purpose                                                                                                                  |
+| ------------------------ | ------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| `GITHUB_CLIENT_ID`       | secret  | none                     | GitHub OAuth application client ID. GitHub sign-in is unavailable without it.                                            |
+| `GITHUB_CLIENT_SECRET`   | secret  | none                     | GitHub OAuth application client secret.                                                                                  |
+| `WEBHOOK_ENCRYPTION_KEY` | secret  | none                     | Base64-encoded 32-byte key that encrypts agent webhook signing secrets.                                                  |
+| `SSO_SECRETS_JSON`       | secret  | none                     | Client secrets for configured SSO providers. See [SSO configuration](sso.md).                                            |
+| `GITHUB_OAUTH_BASE`      | var     | `https://github.com`     | GitHub OAuth origin; override only for GitHub Enterprise or test doubles.                                                |
+| `GITHUB_API_BASE`        | var     | `https://api.github.com` | GitHub API origin; override only for GitHub Enterprise or test doubles.                                                  |
+| `ALLOW_PUBLIC_SIGNUP`    | var     | none (`true` shipped)    | Public registration is open only when the value is exactly `true`.                                                       |
+| `DEFAULT_USER_GROUP`     | var     | none (`free` shipped)    | Required. User group for new accounts; SSO identity creation alone falls back to `free`.                                 |
+| `TOTP_ENCRYPTION_KEY`    | secret  | none                     | Base64-encoded 32-byte key that encrypts authenticator-app secrets. Authenticator apps are unavailable without it.       |
+| `PUBLIC_ORIGIN`          | var     | the request origin       | Public origin used in emailed links and as the passkey relying party (`https://git.example.com`).                        |
+| `EMAIL_FROM`             | var     | none                     | Sender address on a domain onboarded to Cloudflare Email Service. Required with the `EMAIL` binding.                     |
+| `EMAIL`                  | binding | none                     | Optional `send_email` binding. Enables email verification and emailed password reset; both are hidden when it is absent. |
+| `LOG_LEVEL`              | var     | logger default           | Minimum structured log level.                                                                                            |
+| `SSO_PROVIDERS_JSON`     | var     | none                     | Provider list. See [SSO configuration](sso.md).                                                                          |
 
 Generate the webhook key with `openssl rand -base64 32`. Agent webhooks return an error while it is missing.
+
+### Account security
+
+Generate the authenticator key with `openssl rand -base64 32` and store it with `wrangler secret put TOTP_ENCRYPTION_KEY`. Keep the key stable: enrolled authenticator secrets are encrypted with it, so replacing or removing it makes every enrolled authenticator code fail until the original key is restored. Set `PUBLIC_ORIGIN` when the public hostname differs from the Worker's request host, because the WebAuthn relying party ID is that hostname. Changing that hostname invalidates registered passkeys.
+
+Email is optional and ships disabled. To enable it, onboard a sending domain (`pnpm exec wrangler email sending enable <domain>`), then add the binding to `workers/auth/wrangler.jsonc` and `EMAIL_FROM` to its existing `vars` object:
+
+```jsonc
+"send_email": [{ "name": "EMAIL" }],
+"vars": { /* existing vars */ "EMAIL_FROM": "no-reply@<domain>" }
+```
+
+See the [Email Service Workers binding](https://developers.cloudflare.com/email-service/) documentation. See [account security](account-security.md) for behavior.
 
 ### GitHub OAuth
 

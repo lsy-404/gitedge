@@ -182,6 +182,9 @@ async function readSession(response: Response): Promise<SessionResult | Response
     groupKey: payload.data.groupKey,
     agentSession: payload.data.agentSession,
     token: payload.data.token,
+    ...(typeof payload.data.recentAuthAt === "number"
+      ? { recentAuthAt: payload.data.recentAuthAt }
+      : {}),
   };
 }
 

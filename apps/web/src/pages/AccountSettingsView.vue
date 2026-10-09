@@ -7,6 +7,7 @@ import AccessTokenSettings from "../components/AccessTokenSettings.vue";
 import CredentialSettings from "../components/CredentialSettings.vue";
 import SettingsSidebar from "../components/SettingsSidebar.vue";
 import SigningKeySettings from "../components/SigningKeySettings.vue";
+import AccountSecuritySettings from "../components/AccountSecuritySettings.vue";
 import BrowserSessions from "../components/BrowserSessions.vue";
 import AccountUsage from "../components/AccountUsage.vue";
 import "../styles/settings.css";
@@ -15,6 +16,7 @@ const sections = [
   "profile",
   "preferences",
   "tokens",
+  "security",
   "credentials",
   "signing",
   "sessions",
@@ -36,6 +38,7 @@ const section = computed(() =>
         :section="section"
       />
       <AccessTokenSettings v-else-if="section === 'tokens'" />
+      <AccountSecuritySettings v-else-if="section === 'security'" />
       <CredentialSettings v-else-if="section === 'credentials'" />
       <SigningKeySettings v-else-if="section === 'signing'" />
       <BrowserSessions v-else-if="section === 'sessions'" />

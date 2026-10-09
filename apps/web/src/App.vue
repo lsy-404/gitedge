@@ -29,12 +29,17 @@ const accountName = computed(
     ""
 );
 const initials = computed(() => accountName.value.slice(0, 2).toUpperCase());
-const authPage = computed(() => route.path === "/login" || route.path === "/register");
+const authPage = computed(() =>
+  ["/login", "/register", "/forgot-password", "/reset-password"].includes(route.path)
+);
 const repositoryPath = computed(() =>
   route.params.owner && route.params.repo ? `/${route.params.owner}/${route.params.repo}` : ""
 );
 const pageName = computed(() => {
-  if (authPage.value) return route.path === "/register" ? t("registerTitle") : t("signIn");
+  if (authPage.value) {
+    if (route.path === "/register") return t("registerTitle");
+    return route.path === "/login" ? t("signIn") : t("forgotPasswordTitle");
+  }
   if (route.params.owner && route.params.repo) return `${route.params.owner}/${route.params.repo}`;
   if (route.params.handle) return t("agentProfile");
   if (route.params.owner && !route.params.repo) return String(route.params.owner);
