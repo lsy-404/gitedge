@@ -25,6 +25,7 @@ export type ForgeEnv = {
   readonly RELEASE_ASSETS?: R2Bucket;
   readonly MERGE_QUEUE: DurableObjectNamespace<MergeQueueDurableObject>;
   readonly LOG_LEVEL?: string;
+  readonly SITES_HOST?: string;
   readonly WEBHOOK_ENCRYPTION_KEY?: string;
   readonly USER_GROUP_LIMITS_JSON?: string;
   readonly AI?: TextGenerationBinding;
@@ -51,6 +52,7 @@ export type RepositoryRow = {
   tasks_enabled?: number;
   agents_enabled?: number;
   deployments_enabled?: number;
+  pages_enabled?: number;
   graph_enabled?: number;
   actions_enabled?: number;
   actions_network_enabled?: number;
@@ -165,6 +167,7 @@ export function repoResponse(
     tasksEnabled: row.tasks_enabled !== 0,
     agentsEnabled: row.agents_enabled !== 0,
     deploymentsEnabled: row.deployments_enabled !== 0,
+    pagesEnabled: row.pages_enabled === 1,
     graphEnabled: row.graph_enabled !== 0,
     actionsEnabled: row.actions_enabled === 1,
     actionsNetworkEnabled: row.actions_network_enabled === 1,

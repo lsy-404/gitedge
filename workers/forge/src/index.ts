@@ -60,6 +60,7 @@ import {
 } from "../../../src/worker/common/repositories";
 import { repositoryControls } from "./controls";
 import { publicReleaseRead, repositoryReleases } from "./releases";
+import { handleRepositoryPages, recordPreviewCheck } from "./pages";
 import {
   deleteOrganization,
   deletedRepositories,
@@ -87,6 +88,7 @@ import {
   CreateDiscussionInputSchema,
   CreateReviewInputSchema,
   PutCheckRunInputSchema,
+  PAGES_CHECK_NAME,
   UpdateDiscussionInputSchema,
   MergeAuthorizationInputSchema,
   MergePullRequestInputSchema,
@@ -271,6 +273,25 @@ function boundedList<T>(
     data: (chronological ? kept.reverse() : kept).map(present),
     truncated: rows.length > MAX_LIST_ROWS,
   });
+}
+
+/** Best effort: a Git outage must not fail the pull request request that triggered the preview. */
+async function ensurePreviewCheck(
+  env: ForgeEnv,
+  requestUrl: string,
+  repository: RepositoryRow,
+  user: TrustedUser,
+  pull: Record<string, unknown>
+): Promise<void> {
+  try {
+    const head = await pullRequestHeadOid(env, requestUrl, repository, pull, user);
+    if (typeof head === "string") await recordPreviewCheck(env, repository, String(pull.id), head);
+  } catch (cause) {
+    createLogger(env.LOG_LEVEL, { service: "forge-pages", repoId: repository.id }).warn(
+      "pages:preview-check-failed",
+      { error: cause instanceof Error ? cause.message : "unknown" }
+    );
+  }
 }
 
 /** Head used to decide whether review comments are outdated; null when it cannot be resolved. */
@@ -905,6 +926,13 @@ async function featureRequest(
         !parsed.data.headRepositoryId
       )
         await attachActionChecks(env, repository.id, id, parsed.data.headRef);
+      if (repository.pages_enabled === 1)
+        await ensurePreviewCheck(env, request.url, repository, user, {
+          id,
+          head_ref: parsed.data.headRef,
+          head_session_id: parsed.data.headSessionId ?? null,
+          head_repository_id: parsed.data.headRepositoryId ?? null,
+        });
       await mentionAgents(env, repository, user, parsed.data.body, {
         targetKind: "pull_request",
         targetId: id,
@@ -1551,6 +1579,8 @@ async function featureRequest(
       (request.method === "GET" || request.method === "POST")
     ) {
       if (request.method === "GET") {
+        if (repository.pages_enabled === 1 && current.state === "open")
+          await ensurePreviewCheck(env, request.url, repository, user, current);
         const rows = await env.DB.prepare(
           "SELECT * FROM forge_check_runs WHERE pull_request_id = ? ORDER BY created_at DESC"
         )
@@ -1574,6 +1604,8 @@ async function featureRequest(
           "reserved_check",
           "Workflow check names are reserved for Container Actions."
         );
+      if (parsed.data.name === PAGES_CHECK_NAME)
+        return errorResponse(403, "reserved_check", "This check name is reserved for Pages.");
       const checkHead = await pullRequestHeadOid(env, request.url, repository, current, user);
       if (checkHead instanceof Response) return checkHead;
       if (parsed.data.commitOid !== checkHead)
@@ -2430,6 +2462,8 @@ const worker = {
     if (mergeAutomation) return mergeAutomation;
     const aiSummary = await aiSummaryRequest(env, request, repository, user, parts.slice(2));
     if (aiSummary) return aiSummary;
+    const pages = await handleRepositoryPages(env, request, repository, user, parts);
+    if (pages) return pages;
     const feature = await featureRequest(env, user, repository, parts, request);
     if (feature) return feature;
 

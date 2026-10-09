@@ -44,6 +44,7 @@
     "fflate": "^0.8.3",
     "isomorphic-git": "^1.42.6",
     "memfs": "^4.80.0",
+    "mime": "^4.1.0",
     "modern-tar": "^0.8.5",
     "openid-client": "^6.8.4",
     "openpgp": "^6.3.2",

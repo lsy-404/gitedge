@@ -90,6 +90,7 @@ function settingsUpdated(settings: RepositorySettings): void {
     tasksEnabled: settings.tasksEnabled,
     agentsEnabled: settings.agentsEnabled,
     deploymentsEnabled: settings.deploymentsEnabled,
+    pagesEnabled: settings.pagesEnabled,
     graphEnabled: settings.graphEnabled,
     actionsEnabled: settings.actionsEnabled,
     actionsNetworkEnabled: settings.actionsNetworkEnabled,
@@ -259,7 +260,12 @@ watch(
             }}</StatusBadge
           >
           <div class="repository-heading-actions">
-            <RepositorySocialBar :repository="repository" /><RouterLink
+            <RepositorySocialBar :repository="repository" /><a
+              v-if="repository.pagesEnabled && repository.visibility === 'public'"
+              class="btn btn-sm secondary-repo-action"
+              :href="`${base}/-/site/`"
+              ><AppIcon name="external" />{{ t("pagesSiteLink") }}</a
+            ><RouterLink
               v-if="repository.graphEnabled"
               class="btn btn-sm secondary-repo-action"
               :to="`${base}/commits`"

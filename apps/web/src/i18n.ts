@@ -24,6 +24,7 @@ import membershipMessages from "./i18n/membership";
 import { notificationMessages } from "./i18n/notifications";
 import { webhookMessages } from "./i18n/webhooks";
 import { socialMessages } from "./i18n/social";
+import { pagesMessages } from "./i18n/pages";
 
 const messages = {
   "zh-CN": {
@@ -873,6 +874,7 @@ export const i18n = createI18n({
       ...notificationMessages["zh-CN"],
       ...webhookMessages["zh-CN"],
       ...socialMessages["zh-CN"],
+      ...pagesMessages["zh-CN"],
     },
     en: {
       ...messages.en,
@@ -901,6 +903,7 @@ export const i18n = createI18n({
       ...notificationMessages.en,
       ...webhookMessages.en,
       ...socialMessages.en,
+      ...pagesMessages.en,
     },
   },
 });

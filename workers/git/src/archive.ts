@@ -63,7 +63,7 @@ function safeName(name: string): boolean {
     !/[\\/\x00-\x1f\x7f]/.test(name)
   );
 }
-function memoryLimit(cause: unknown): boolean {
+export function memoryLimit(cause: unknown): boolean {
   return (
     typeof cause === "object" && cause !== null && "code" in cause && cause.code === "MEMORY_LIMIT"
   );

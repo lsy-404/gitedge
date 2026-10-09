@@ -13,6 +13,7 @@ import {
   type SavedRepositoryWebhook,
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
+import { syncPagesAfterPush } from "./pages";
 import { auditActor, recordAudit } from "../../../src/worker/common/audit";
 import { randomHex } from "../../../src/worker/common/encoding";
 import { dataResponse, errorResponse, requireRecentAuth } from "../../../src/worker/common/http";
@@ -604,6 +605,13 @@ export async function handlePushEvent(
     pusher.id,
     updates.map((update) => update.ref)
   );
+  try {
+    await syncPagesAfterPush(env, repository, updates);
+  } catch (cause) {
+    logger.error("pages:push-sync-failed", {
+      error: cause instanceof Error ? cause.message : "unknown",
+    });
+  }
   return dataResponse({
     queued: events.length,
     truncated: parsed.data.updates.length > updates.length,

@@ -159,6 +159,7 @@ export interface RepositorySettings {
   tasksEnabled: boolean;
   agentsEnabled: boolean;
   deploymentsEnabled: boolean;
+  pagesEnabled: boolean;
   graphEnabled: boolean;
   actionsEnabled: boolean;
   actionsNetworkEnabled: boolean;
@@ -257,6 +258,7 @@ export const UpdateRepositorySettingsInputSchema = z
     tasksEnabled: z.boolean().optional(),
     agentsEnabled: z.boolean().optional(),
     deploymentsEnabled: z.boolean().optional(),
+    pagesEnabled: z.boolean().optional(),
     graphEnabled: z.boolean().optional(),
     actionsEnabled: z.boolean().optional(),
     actionsNetworkEnabled: z.boolean().optional(),
