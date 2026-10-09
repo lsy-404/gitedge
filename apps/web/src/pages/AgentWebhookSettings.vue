@@ -3,11 +3,17 @@ import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute } from "vue-router";
 import { ApiError, api, errorMessage } from "../lib/api";
-import type {
-  AgentWebhookDelivery,
-  AgentWebhookEvent,
-  AgentWebhookSettings,
+import {
+  AgentDeliveryModeSchema,
+  AgentWebhookEventSchema,
+  type AgentDeliveryMode,
+  type AgentWebhookDelivery,
+  type AgentWebhookEvent,
+  type AgentWebhookSettings,
 } from "../../../../packages/contracts/src/agents";
+import type { AgentFeedStatus } from "../../../../packages/contracts/src/agent-events";
+import SelectField from "../components/SelectField.vue";
+import { oneOf } from "../ui/formEvents";
 import AppIcon from "../components/AppIcon.vue";
 import NoticeBar from "../components/NoticeBar.vue";
 import SettingsSidebar from "../components/SettingsSidebar.vue";
@@ -30,11 +36,22 @@ let loadVersion = 0;
 const error = ref("");
 const loadError = ref("");
 const notice = ref("");
-const eventOptions: AgentWebhookEvent[] = [
-  "agent.assigned",
-  "agent.mentioned",
-  "pull_request.updated",
-];
+const eventOptions = AgentWebhookEventSchema.options;
+const deliveryModes = AgentDeliveryModeSchema.options;
+const deliveryMode = ref<AgentDeliveryMode>("webhook");
+const feedStatus = ref<AgentFeedStatus | null>(null);
+const feedError = ref("");
+const deliverySaving = ref(false);
+const deliveryNotice = ref("");
+const eventLabels: Record<AgentWebhookEvent, string> = {
+  "agent.assigned": "agentWebhookAssigned",
+  "agent.mentioned": "agentWebhookMentioned",
+  "pull_request.updated": "agentWebhookPullUpdated",
+  "review.requested": "agentWebhookReviewRequested",
+  "review.submitted": "agentWebhookReviewSubmitted",
+  "check.completed": "agentWebhookCheckCompleted",
+  "comment.created": "agentWebhookCommentCreated",
+};
 function toggleEvent(event: AgentWebhookEvent, checked: unknown) {
   if (typeof checked !== "boolean") return;
   settings.value.events = checked
@@ -42,13 +59,35 @@ function toggleEvent(event: AgentWebhookEvent, checked: unknown) {
     : settings.value.events.filter((item) => item !== event);
 }
 function eventLabel(event: AgentWebhookEvent) {
-  return t(
-    event === "agent.assigned"
-      ? "agentWebhookAssigned"
-      : event === "agent.mentioned"
-        ? "agentWebhookMentioned"
-        : "agentWebhookPullUpdated"
-  );
+  return t(eventLabels[event]);
+}
+async function loadDelivery(version: number) {
+  feedError.value = "";
+  try {
+    const [agent, status] = await Promise.all([
+      api.agent(agentId.value),
+      api.agentFeedStatus(agentId.value),
+    ]);
+    if (version !== loadVersion) return;
+    deliveryMode.value = agent.deliveryMode;
+    feedStatus.value = status;
+  } catch {
+    if (version === loadVersion) feedError.value = t("agentFeedLoadError");
+  }
+}
+async function saveDelivery() {
+  deliverySaving.value = true;
+  deliveryNotice.value = "";
+  error.value = "";
+  try {
+    await api.updateAgent(agentId.value, { deliveryMode: deliveryMode.value });
+    deliveryNotice.value = t("agentDeliverySaved");
+    await loadDelivery(loadVersion);
+  } catch (cause) {
+    error.value = errorMessage(cause, t);
+  } finally {
+    deliverySaving.value = false;
+  }
 }
 async function load() {
   const version = ++loadVersion;
@@ -64,6 +103,7 @@ async function load() {
       ? { url: saved.url, events: saved.events, enabled: saved.enabled }
       : emptySettings();
     deliveries.value = rows;
+    await loadDelivery(version);
   } catch (cause) {
     if (version !== loadVersion) return;
     loadError.value = errorMessage(cause, t);
@@ -138,15 +178,69 @@ watch(agentId, () => void load(), { immediate: true });
       >
       <header class="settings-header">
         <div>
-          <h2>{{ t("agentWebhook") }}</h2>
-          <p>{{ t("agentWebhookDescription") }}</p>
+          <h2>{{ t("agentDelivery") }}</h2>
+          <p>{{ t("agentDeliveryDescription") }}</p>
         </div>
       </header>
       <div v-if="loading || loadError" class="box">
         <StatusState :loading="loading" :error="loadError" :empty="false" @retry="load" />
       </div>
       <template v-else>
+        <form
+          class="box box-form form-stack"
+          aria-labelledby="agent-delivery-title"
+          @submit.prevent="saveDelivery"
+        >
+          <h3 id="agent-delivery-title">{{ t("agentDelivery") }}</h3>
+          <p class="field-hint">{{ t("agentDeliveryDescription") }}</p>
+          <SelectField
+            :model-value="deliveryMode"
+            :label="t('agentDeliveryMode')"
+            @update:model-value="deliveryMode = oneOf(deliveryModes, $event, 'webhook')"
+          >
+            <option v-for="mode in deliveryModes" :key="mode" :value="mode">
+              {{ t(`agentDeliveryMode_${mode}`) }}
+            </option>
+          </SelectField>
+          <p v-if="deliveryMode !== 'webhook'" class="field-hint">
+            {{ t("agentDeliveryPullHint") }}
+          </p>
+          <NoticeBar v-if="feedError" intent="warning">{{ feedError }}</NoticeBar>
+          <dl v-else-if="feedStatus" class="feed-status" :aria-label="t('agentFeedStatus')">
+            <div>
+              <dt>{{ t("agentFeedLastPoll") }}</dt>
+              <dd>
+                {{
+                  feedStatus.lastPolledAt
+                    ? d(feedStatus.lastPolledAt, "long")
+                    : t("agentFeedNeverPolled")
+                }}
+              </dd>
+            </div>
+            <div>
+              <dt>{{ t("agentFeedLatestCursor") }}</dt>
+              <dd>{{ feedStatus.latestCursor ?? "-" }}</dd>
+            </div>
+            <div>
+              <dt>{{ t("agentFeedRetained") }}</dt>
+              <dd>{{ feedStatus.retained }}</dd>
+            </div>
+          </dl>
+          <p v-if="feedStatus" class="field-hint">
+            {{
+              t("agentFeedRetention", { days: feedStatus.retentionDays, max: feedStatus.maxEvents })
+            }}
+          </p>
+          <NoticeBar v-if="deliveryNotice" intent="success">{{ deliveryNotice }}</NoticeBar>
+          <div class="form-actions">
+            <FluentButton type="submit" tone="primary" :disabled="deliverySaving">{{
+              t("save")
+            }}</FluentButton>
+          </div>
+        </form>
         <form class="box box-form form-stack" @submit.prevent="save()">
+          <h3>{{ t("agentWebhook") }}</h3>
+          <p class="field-hint">{{ t("agentWebhookDescription") }}</p>
           <TextField
             v-model="settings.url"
             type="url"
@@ -244,6 +338,20 @@ watch(agentId, () => void load(), { immediate: true });
   margin-left: auto;
   color: var(--fg-muted);
   font-size: var(--font-size-meta);
+}
+.feed-status {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+}
+.feed-status dt {
+  color: var(--fg-muted);
+  font-size: var(--font-size-meta);
+}
+.feed-status dd {
+  margin: 0;
+  font-weight: var(--font-weight-semibold);
 }
 .secret-card {
   display: grid;

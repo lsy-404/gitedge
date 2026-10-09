@@ -77,6 +77,8 @@ const CreatedSessionSchema = z.object({
     status: z.literal("active"),
     createdAt: z.number(),
     expiresAt: z.number(),
+    maxExpiresAt: z.number(),
+    renewalCount: z.number(),
     token: z.string(),
     gitToken: z.string(),
     instructions: z.string().nullable(),
@@ -955,4 +957,185 @@ describe("Auth agents, Artifact sessions, and Git credentials", () => {
     );
     expect(disabledAuth.status).toBe(401);
   }, 15_000);
+});
+
+describe("Agent delivery mode and session renewal", () => {
+  async function fixture() {
+    const identifier = `renew-${crypto.randomUUID().slice(0, 8)}`;
+    const registration = await auth.fetch(
+      new Request("https://auth.test/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Origin: "https://auth.test" },
+        body: JSON.stringify({ identifier, password: "a-long-test-password-2026" }),
+      }),
+      authEnv
+    );
+    const cookie = cookieFrom(registration);
+    const user = await env.DB.prepare("SELECT id FROM users WHERE identifier = ?")
+      .bind(identifier)
+      .first<{ id: string }>();
+    const namespace = await env.DB.prepare("SELECT id FROM namespaces WHERE slug = ?")
+      .bind(identifier)
+      .first<{ id: string }>();
+    if (!user || !namespace) throw new Error("Fixture account is missing.");
+    const source = await artifacts.create(`repo-${crypto.randomUUID()}`, {
+      setDefaultBranch: "main",
+    });
+    const repositoryId = crypto.randomUUID();
+    await env.DB.prepare(
+      "INSERT INTO repositories (id, namespace_id, created_by, slug, do_name, artifact_name, remote, default_branch, visibility, description, created_at, updated_at) VALUES (?, ?, ?, 'renewal', ?, ?, ?, 'main', 'private', '', 1, 1)"
+    )
+      .bind(repositoryId, namespace.id, user.id, `repo:${repositoryId}`, source.name, source.remote)
+      .run();
+    const agentResponse = await accountApi("/agents", "POST", cookie, { name: "Renewer" });
+    const agent = z.object({ data: AgentSchema }).parse(await agentResponse.json()).data;
+    const sessionResponse = await accountApi(`/agents/${agent.id}/sessions`, "POST", cookie, {
+      repositoryId,
+      baseRef: "main",
+      permission: "write",
+      ttlSeconds: 3600,
+    });
+    expect(sessionResponse.status).toBe(201);
+    const session = CreatedSessionSchema.parse(await sessionResponse.json()).data;
+    return { cookie, agent, session };
+  }
+
+  const renew = (token: string, body: unknown = {}) =>
+    auth.fetch(
+      new Request("https://auth.test/agent-session/renew", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+      authEnv
+    );
+  const RenewedSchema = z.object({
+    data: z.object({
+      id: z.string(),
+      gitToken: z.string(),
+      expiresAt: z.number(),
+      maxExpiresAt: z.number(),
+      renewalCount: z.number(),
+    }),
+  });
+
+  it("stores the delivery mode per agent and rejects unknown modes", async () => {
+    const { cookie, agent } = await fixture();
+    expect(agent.deliveryMode).toBe("webhook");
+    const updated = await accountApi(`/agents/${agent.id}`, "PATCH", cookie, {
+      deliveryMode: "both",
+    });
+    expect(z.object({ data: AgentSchema }).parse(await updated.json()).data.deliveryMode).toBe(
+      "both"
+    );
+    expect(
+      (await accountApi(`/agents/${agent.id}`, "PATCH", cookie, { deliveryMode: "smoke" })).status
+    ).toBe(400);
+  });
+
+  it("renews a session, keeps the fork and session token, and rotates the Git credential", async () => {
+    const { session } = await fixture();
+    const before = artifacts.snapshot(session.workspaceName).tokens;
+    expect(before.filter((token) => token.state === "active")).toHaveLength(1);
+    const response = await renew(session.token, { ttlSeconds: 7200 });
+    expect(response.status).toBe(200);
+    const renewed = RenewedSchema.parse(await response.json()).data;
+    expect(renewed.id).toBe(session.id);
+    expect(renewed.gitToken).not.toBe(session.gitToken);
+    expect(renewed.expiresAt).toBeGreaterThan(session.expiresAt);
+    expect(renewed.renewalCount).toBe(1);
+    const after = artifacts.snapshot(session.workspaceName).tokens;
+    expect(after.filter((token) => token.state === "revoked").map((token) => token.id)).toContain(
+      before.find((token) => token.state === "active")?.id
+    );
+    expect(after.filter((token) => token.state === "active")).toHaveLength(1);
+    const identity = await auth.fetch(
+      new Request("https://auth.test/session", {
+        headers: { Authorization: `Bearer ${session.token}` },
+      }),
+      authEnv
+    );
+    expect(identity.status).toBe(200);
+    const row = await env.DB.prepare(
+      "SELECT expires_at AS expiresAt, renewal_count AS renewals FROM auth_agent_sessions WHERE id = ?"
+    )
+      .bind(session.id)
+      .first();
+    expect(row).toEqual({ expiresAt: renewed.expiresAt, renewals: 1 });
+  });
+
+  it("caps renewal at the maximum session lifetime and then refuses", async () => {
+    const { session } = await fixture();
+    const created = await env.DB.prepare(
+      "SELECT created_at AS createdAt FROM auth_agent_sessions WHERE id = ?"
+    )
+      .bind(session.id)
+      .first<{ createdAt: number }>();
+    const maxLifetime = session.maxExpiresAt - (created?.createdAt ?? 0);
+    const newCreatedAt = Date.now() - maxLifetime + 2 * 3_600_000;
+    await env.DB.prepare("UPDATE auth_agent_sessions SET created_at = ? WHERE id = ?")
+      .bind(newCreatedAt, session.id)
+      .run();
+    const capped = RenewedSchema.parse(
+      await (await renew(session.token, { ttlSeconds: 86_400 })).json()
+    ).data;
+    expect(capped.maxExpiresAt).toBe(newCreatedAt + maxLifetime);
+    expect(capped.expiresAt).toBeLessThanOrEqual(newCreatedAt + maxLifetime);
+    expect(newCreatedAt + maxLifetime - capped.expiresAt).toBeLessThan(5_000);
+    await env.DB.prepare("UPDATE auth_agent_sessions SET expires_at = ? WHERE id = ?")
+      .bind(newCreatedAt + maxLifetime, session.id)
+      .run();
+    const refused = await renew(session.token);
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ error: { code: "session_lifetime_exceeded" } });
+  });
+
+  it("explains expired sessions and rejects revoked sessions and bad tokens", async () => {
+    const { cookie, agent, session } = await fixture();
+    expect((await renew("not-a-session-token")).status).toBe(401);
+    await env.DB.prepare("UPDATE auth_agent_sessions SET expires_at = ? WHERE id = ?")
+      .bind(Date.now() - 1000, session.id)
+      .run();
+    const expired = await renew(session.token);
+    expect(expired.status).toBe(401);
+    expect(await expired.json()).toMatchObject({
+      error: { code: "session_expired", message: expect.stringContaining("create a new session") },
+    });
+    const second = await fixture();
+    expect(
+      (
+        await accountApi(
+          `/agents/${second.agent.id}/sessions/${second.session.id}`,
+          "DELETE",
+          second.cookie
+        )
+      ).status
+    ).toBe(200);
+    expect((await renew(second.session.token)).status).toBe(401);
+    expect(agent.id).not.toBe(second.agent.id);
+    expect(cookie).not.toBe(second.cookie);
+  });
+
+  it("lets the agent owner renew a session from the account UI", async () => {
+    const { cookie, agent, session } = await fixture();
+    const response = await accountApi(
+      `/agents/${agent.id}/sessions/${session.id}/renew`,
+      "POST",
+      cookie,
+      { ttlSeconds: 7200 }
+    );
+    expect(response.status).toBe(200);
+    expect(RenewedSchema.parse(await response.json()).data.renewalCount).toBe(1);
+    const other = await fixture();
+    expect(
+      (
+        await accountApi(
+          `/agents/${agent.id}/sessions/${session.id}/renew`,
+          "POST",
+          other.cookie,
+          {}
+        )
+      ).status
+    ).toBe(404);
+  });
 });

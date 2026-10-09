@@ -58,3 +58,11 @@ export function closingIssueNumbers(
       if (reference.closes) numbers.add(reference.number);
   return [...numbers].slice(0, MAX_ISSUE_REFERENCES);
 }
+
+const TASK_REFERENCE = /(?<![\w/.-])task[ \t]+#(?<number>[1-9]\d{0,8})(?![\w-])/i;
+
+/** The task number a pull request title or body names with "task #n"; the first mention wins. */
+export function parseTaskReference(text: string): number | null {
+  const match = TASK_REFERENCE.exec(withoutCode(text));
+  return match?.groups?.number ? Number(match.groups.number) : null;
+}

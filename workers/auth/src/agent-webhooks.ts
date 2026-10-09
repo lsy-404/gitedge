@@ -1,5 +1,8 @@
 import {
+  AgentWebhookEventSchema,
   AgentWebhookSettingsSchema,
+  agentEventData,
+  type AgentEvent,
   type AgentWebhookEvent,
   type AgentWebhookSettings,
   type TrustedUser,
@@ -78,7 +81,6 @@ const MAX_DELIVERY_ATTEMPTS = WEBHOOK_MAX_ATTEMPTS;
 const MAX_OUTBOX_EVENTS_PER_RUN = 10;
 const MAX_PENDING_EVENTS_PER_AGENT = 1_000;
 const OUTBOX_LEASE_MS = 60_000;
-const ALLOWED_EVENTS = ["agent.assigned", "agent.mentioned", "pull_request.updated"] as const;
 const SETTINGS_SELECT =
   "SELECT agent_id AS agentId, url, events_json AS eventsJson, enabled, secret_ciphertext AS secretCiphertext, secret_iv AS secretIv, updated_at AS updatedAt FROM auth_agent_webhooks";
 const EVENT_SELECT =
@@ -105,7 +107,7 @@ function parseEvents(value: string): AgentWebhookEvent[] {
   } catch {
     throw new Error("invalid_webhook_events");
   }
-  const events = z.array(z.enum(ALLOWED_EVENTS)).safeParse(parsed);
+  const events = z.array(AgentWebhookEventSchema).safeParse(parsed);
   if (!events.success) throw new Error("invalid_webhook_events");
   return events.data;
 }
@@ -156,7 +158,8 @@ async function deliver(
     .first<DeliveryAttemptRow>();
   const now = Date.now();
   const createdAt = previous?.createdAt ?? requestedCreatedAt ?? now;
-  const body = JSON.stringify({ id, event, createdAt, data: payload });
+  const envelope: AgentEvent = { id, event, createdAt, data: payload };
+  const body = JSON.stringify(envelope);
   if (new TextEncoder().encode(body).byteLength > MAX_BODY_BYTES)
     throw new Error("payload_too_large");
   const serialized = JSON.stringify(payload);
@@ -570,7 +573,7 @@ const AgentEventInputSchema = z.object({
   agentId: z.string().min(1),
   repositoryId: z.string().min(1),
   actorUserId: z.string().min(1),
-  event: z.enum(ALLOWED_EVENTS),
+  event: AgentWebhookEventSchema,
   data: z.record(z.string(), z.unknown()),
 });
 export type AgentEventQueueResult = "queued" | "ignored" | "invalid" | "full";
@@ -595,7 +598,7 @@ export async function handleAgentEvent(
     const event = input.event;
     const row = await loadSettings(env, input.agentId);
     if (!row || row.enabled !== 1 || !parseEvents(row.eventsJson).includes(event)) return "ignored";
-    const payload = { ...input.data, repositoryId: input.repositoryId, agentId: input.agentId };
+    const payload = agentEventData(input.data, input.repositoryId, input.agentId);
     const serialized = JSON.stringify(payload);
     if (new TextEncoder().encode(serialized).byteLength > MAX_BODY_BYTES) return "invalid";
     const now = Date.now();

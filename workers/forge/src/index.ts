@@ -16,7 +16,8 @@ import {
   publishPendingStatements,
   reviewCommentRequest,
 } from "./review-comments";
-import { mentionAgents, pullRequestEvent, revokeAgentSessions } from "./agent-events";
+import { commentEvent, mentionAgents, pullRequestEvent, revokeAgentSessions } from "./agent-events";
+import { agentFeedStatus, handleAgentFeed, purgeAgentFeeds } from "./agent-feed";
 import { publicProfile } from "./profiles";
 import {
   handleNotifications,
@@ -102,8 +103,12 @@ import {
 } from "./common";
 import {
   mergeBindingStatements,
+  mergeCompletionStatements,
   memoryTaskRequest,
+  releaseExpiredTaskLeases,
   targetStateProgressStatements,
+  taskReferenceStatements,
+  type MergedPullRequest,
   type Viewer,
 } from "./tasks";
 import {
@@ -914,6 +919,15 @@ async function featureRequest(
           })
         ),
         ...syncLinkStatements(env, repository, id, parsed.data.title, parsed.data.body, now),
+        ...taskReferenceStatements(
+          env,
+          repository,
+          id,
+          parsed.data.title,
+          parsed.data.body,
+          actor,
+          now
+        ),
       ]);
       if (repository.actions_enabled === 1 && !parsed.data.headSessionId)
         await attachActionChecks(env, repository.id, id, parsed.data.headRef);
@@ -1074,11 +1088,12 @@ async function featureRequest(
               ),
             ]),
       ]);
-      await mentionAgents(env, repository, user, parsed.data.body, {
+      const mentioned = await mentionAgents(env, repository, user, parsed.data.body, {
         targetKind,
         targetId: String(current.id),
         commentId: id,
       });
+      await commentEvent(env, repository, user, commentTarget, id, mentioned);
       logger.info("forge:comment-created", {
         repositoryId: repository.id,
         targetKind,
@@ -1340,6 +1355,17 @@ async function featureRequest(
             ),
             updateApplied
           ),
+          ...((p.title !== undefined || p.body !== undefined) && current.state !== "merged"
+            ? taskReferenceStatements(
+                env,
+                repository,
+                String(current.id),
+                p.title ?? String(current.title),
+                p.body ?? String(current.body),
+                actor,
+                now
+              )
+            : []),
         ]);
         if (changed.meta.changes !== 1)
           return errorResponse(
@@ -1526,6 +1552,14 @@ async function featureRequest(
         { id: String(current.id), number },
         id
       );
+      await pullRequestEvent(
+        env,
+        repository,
+        user,
+        String(current.id),
+        { number, reviewId: id, state: parsed.data.state, commitOid: parsed.data.commitOid },
+        "review.submitted"
+      );
       logger.info("forge:review-submitted", {
         repositoryId: repository.id,
         pullRequestNumber: number,
@@ -1626,6 +1660,20 @@ async function featureRequest(
           409,
           "conflict",
           "Check run cannot move backwards from its current status."
+        );
+      if (parsed.data.status === "completed")
+        await pullRequestEvent(
+          env,
+          repository,
+          user,
+          String(current.id),
+          {
+            number,
+            name: parsed.data.name,
+            conclusion: parsed.data.conclusion,
+            commitOid: parsed.data.commitOid,
+          },
+          "check.completed"
         );
       logger.info("forge:check-run-recorded", {
         repositoryId: repository.id,
@@ -1774,7 +1822,18 @@ async function featureRequest(
         sql: "EXISTS (SELECT 1 FROM forge_pull_requests WHERE id = ? AND state = 'merged' AND merged_oid = ? AND updated_at = ?)",
         binds: [current.id, oid, now],
       };
-      // Task binding and the progress entry share the batch with the merge record.
+      const mergedPull: MergedPullRequest = {
+        repositoryId: repository.id,
+        pullRequestId: String(current.id),
+        number,
+        oid,
+        baseRef: String(current.base_ref),
+        summary: String(current.title),
+        author: user.identifier,
+        actor,
+        now,
+      };
+      // Task binding, task completion and the progress entries share the batch with the merge record.
       await env.DB.batch([
         env.DB.prepare(
           "UPDATE forge_pull_requests SET state = 'merged', merged_oid = ?, updated_at = ?, merge_started_at = NULL WHERE id = ? AND state = 'open' AND merge_started_at = ? AND merge_base_oid = ? AND merge_head_oid = ?"
@@ -1786,17 +1845,8 @@ async function featureRequest(
           parsed.data.expectedBaseOid,
           parsed.data.expectedHeadOid
         ),
-        ...mergeBindingStatements(env, {
-          repositoryId: repository.id,
-          pullRequestId: String(current.id),
-          number,
-          oid,
-          baseRef: String(current.base_ref),
-          summary: String(current.title),
-          author: user.identifier,
-          actor,
-          now,
-        }),
+        ...mergeBindingStatements(env, mergedPull),
+        ...mergeCompletionStatements(env, mergedPull, repository.default_branch ?? "main"),
         outcomeNotificationStatement(
           env.DB,
           repository,
@@ -2494,6 +2544,14 @@ const worker = {
       return dataResponse(repoResponse(created, "admin", true), 201);
     }
 
+    if (
+      request.method === "GET" &&
+      parts[0] === "agents" &&
+      parts[1] &&
+      parts[2] === "event-feed" &&
+      parts.length === 3
+    )
+      return agentFeedStatus(env, user, parts[1]);
     const repositoryId = parts[1];
     if (parts[0] !== "repositories" || !repositoryId)
       return errorResponse(404, "not_found", "Endpoint was not found.");
@@ -2556,6 +2614,10 @@ const worker = {
       const memory = await memoryTaskRequest(env, request, repository, viewer, parts.slice(2));
       if (memory) return memory;
     }
+    const agentFeed = await handleAgentFeed(env, request, repository, user, parts.slice(2), {
+      defer: (task) => (ctx ? ctx.waitUntil(task) : void task),
+    });
+    if (agentFeed) return agentFeed;
     const lifecycle = await repositoryLifecycle(env, request, repository, user, parts);
     if (lifecycle) return lifecycle;
     const controls = await repositoryControls(env, request, repository, user, parts);
@@ -2575,6 +2637,8 @@ const worker = {
       return;
     }
     await purgeDueRepositories(env);
+    await purgeAgentFeeds(env);
+    await releaseExpiredTaskLeases(env);
     await purgeReadNotifications(env);
     await purgeWebhookDeliveries(env);
   },

@@ -187,6 +187,9 @@ export interface AgentSession {
   status: "active" | "completed" | "revoked";
   createdAt: number;
   expiresAt: number;
+  /** Latest instant renewal can extend the session to. */
+  maxExpiresAt: number;
+  renewalCount: number;
 }
 
 export interface CreatedAgentSession extends AgentSession {
@@ -194,6 +197,13 @@ export interface CreatedAgentSession extends AgentSession {
   gitToken: string;
   instructions: string | null;
 }
+
+/** Renewal keeps the session token and fork and returns the replacement Git credential once. */
+export interface RenewedAgentSession extends AgentSession {
+  gitToken: string;
+}
+
+export const AGENT_SESSION_MAX_LIFETIME_MS = 7 * 86_400_000;
 
 export interface GitRef {
   name: string;
@@ -353,6 +363,9 @@ export const CreateAgentSessionInputSchema = z.object({
   repositoryId: z.string().min(1),
   baseRef: GitBranchSchema.default("main"),
   permission: z.enum(["read", "write"]).default("write"),
+  ttlSeconds: z.number().int().min(300).max(86_400).default(3_600),
+});
+export const RenewAgentSessionInputSchema = z.object({
   ttlSeconds: z.number().int().min(300).max(86_400).default(3_600),
 });
 export const GitMergeInputSchema = z.object({

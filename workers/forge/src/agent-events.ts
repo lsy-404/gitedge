@@ -1,4 +1,5 @@
 import {
+  agentEventData,
   extractMentions,
   type AgentWebhookEvent,
   type RevokeAgentSessionsInput,
@@ -6,19 +7,46 @@ import {
 } from "../../../packages/contracts/src/index";
 import { createLogger } from "../../../src/worker/common/logger";
 import { repositoryRole } from "../../../src/worker/common/repositories";
+import { agentDeliveryMode, appendFeedEvent } from "./agent-feed";
 import type { ForgeEnv, RepositoryRow } from "./common";
 
+/**
+ * Routes one event to the agent's chosen channels: the signed webhook outbox owned by Auth, the
+ * pull feed, or both. Delivery failures are logged and never fail the originating write.
+ */
 export async function agentEvent(
   env: ForgeEnv,
   repository: RepositoryRow,
-  user: TrustedUser,
+  user: Pick<TrustedUser, "id">,
   agentId: string,
   event: AgentWebhookEvent,
   data: Record<string, unknown>
 ): Promise<void> {
-  if (!env.AUTH || repository.agents_enabled === 0) return;
+  if (repository.agents_enabled === 0) return;
+  const mode = await agentDeliveryMode(env, agentId);
+  if (mode === null) return;
+  if (mode !== "pull" && env.AUTH)
+    await queueWebhookEvent(env, repository, user, agentId, event, data);
+  if (mode !== "webhook")
+    await appendFeedEvent(
+      env,
+      repository,
+      agentId,
+      event,
+      agentEventData(data, repository.id, agentId)
+    );
+}
+
+async function queueWebhookEvent(
+  env: ForgeEnv,
+  repository: RepositoryRow,
+  user: Pick<TrustedUser, "id">,
+  agentId: string,
+  event: AgentWebhookEvent,
+  data: Record<string, unknown>
+): Promise<void> {
   try {
-    const result = await env.AUTH.fetch(
+    const result = await env.AUTH?.fetch(
       new Request("https://auth.internal/_internal/agent-events", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -31,7 +59,7 @@ export async function agentEvent(
         }),
       })
     );
-    if (!result.ok) throw new Error("event_rejected");
+    if (!result?.ok) throw new Error("event_rejected");
     await result.body?.cancel();
   } catch {
     createLogger(env.LOG_LEVEL, { service: "forge", repoId: repository.id }).warn(
@@ -76,8 +104,9 @@ export async function mentionAgents(
   user: TrustedUser,
   body: string,
   target: Record<string, unknown>
-): Promise<void> {
-  if (!env.AUTH || repository.agents_enabled === 0) return;
+): Promise<Set<string>> {
+  const notified = new Set<string>();
+  if (repository.agents_enabled === 0) return notified;
   const { agents: mentions } = extractMentions(body);
   if (mentions.length > 10)
     createLogger(env.LOG_LEVEL, { service: "forge" }).warn("agent:mentions-truncated", {
@@ -98,17 +127,13 @@ export async function mentionAgents(
       continue;
     }
     await agentEvent(env, repository, user, agent.id, "agent.mentioned", target);
+    notified.add(agent.id);
   }
+  return notified;
 }
 
-export async function pullRequestEvent(
-  env: ForgeEnv,
-  repository: RepositoryRow,
-  user: TrustedUser,
-  pullRequestId: string,
-  data: Record<string, unknown>
-): Promise<void> {
-  if (!env.AUTH || repository.agents_enabled === 0) return;
+/** Agents working on a pull request: its agent assignees and the agent whose session owns the head. */
+async function pullRequestAgents(env: ForgeEnv, pullRequestId: string): Promise<string[]> {
   const agents = await env.DB.prepare(
     "SELECT assignee_id AS id FROM forge_assignments WHERE target_kind='pull_request' AND target_id=? AND assignee_kind='agent' UNION SELECT s.agent_id AS id FROM forge_pull_requests p JOIN auth_agent_sessions s ON s.id=p.head_session_id WHERE p.id=? LIMIT 21"
   )
@@ -118,9 +143,55 @@ export async function pullRequestEvent(
     createLogger(env.LOG_LEVEL, { service: "forge" }).warn("agent:pull-recipients-truncated", {
       pullRequestId,
     });
-  for (const agent of agents.results.slice(0, 20))
-    await agentEvent(env, repository, user, agent.id, "pull_request.updated", {
-      ...data,
-      pullRequestId,
+  return agents.results.slice(0, 20).map((agent) => agent.id);
+}
+
+/**
+ * Notifies the agents of a pull request. Events caused by an agent's own session skip that agent
+ * unless `includeActor` is set, so state changes are still announced to the agent that made them.
+ */
+export async function pullRequestEvent(
+  env: ForgeEnv,
+  repository: RepositoryRow,
+  user: Pick<TrustedUser, "id"> & Partial<Pick<TrustedUser, "agentSession">>,
+  pullRequestId: string,
+  data: Record<string, unknown>,
+  event: AgentWebhookEvent = "pull_request.updated"
+): Promise<void> {
+  if (repository.agents_enabled === 0) return;
+  const skip = event === "pull_request.updated" ? undefined : user.agentSession?.agentId;
+  for (const agentId of await pullRequestAgents(env, pullRequestId))
+    if (agentId !== skip)
+      await agentEvent(env, repository, user, agentId, event, { ...data, pullRequestId });
+}
+
+/** Announces a new comment to the agents assigned to its issue or pull request. */
+export async function commentEvent(
+  env: ForgeEnv,
+  repository: RepositoryRow,
+  user: TrustedUser,
+  target: { kind: "issue" | "pull_request" | "discussion"; id: string; number: number },
+  commentId: string,
+  alreadyNotified: ReadonlySet<string>
+): Promise<void> {
+  if (repository.agents_enabled === 0 || target.kind === "discussion") return;
+  const agents =
+    target.kind === "pull_request"
+      ? await pullRequestAgents(env, target.id)
+      : (
+          await env.DB.prepare(
+            "SELECT assignee_id AS id FROM forge_assignments WHERE target_kind='issue' AND target_id=? AND assignee_kind='agent' LIMIT 20"
+          )
+            .bind(target.id)
+            .all<{ id: string }>()
+        ).results.map((agent) => agent.id);
+  for (const agentId of agents) {
+    if (agentId === user.agentSession?.agentId || alreadyNotified.has(agentId)) continue;
+    await agentEvent(env, repository, user, agentId, "comment.created", {
+      targetKind: target.kind,
+      targetId: target.id,
+      number: target.number,
+      commentId,
     });
+  }
 }

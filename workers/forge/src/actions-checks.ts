@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { createLogger } from "../../../src/worker/common/logger";
 import { parseJson, type ForgeEnv, type RepositoryRow } from "./common";
+import { pullRequestEvent } from "./agent-events";
 import { outcomeNotificationStatement } from "./notifications";
 import { checkRunWebhook, queueWebhookEvent } from "./webhook-events";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
@@ -20,6 +21,7 @@ type RunRow = {
   path: string;
   source_ref: string;
   created_at: number;
+  created_by: string;
   check_status: "queued" | "in_progress" | "completed" | null;
   check_conclusion: "success" | "failure" | "cancelled" | null;
 };
@@ -141,6 +143,21 @@ export async function actionsCheck(
       })
     );
   }
+  if (repository && parsed.data.status === "completed")
+    for (const pull of pulls.results)
+      await pullRequestEvent(
+        env,
+        repository,
+        { id: run.created_by },
+        pull.id,
+        {
+          number: pull.number,
+          name: run.path,
+          conclusion: parsed.data.conclusion,
+          commitOid: run.commit_oid,
+        },
+        "check.completed"
+      );
   createLogger(env.LOG_LEVEL, { service: "forge", repoId: run.repository_id }).info(
     "actions:check-published",
     { runId: run.id, count: pulls.results.length, oid: run.commit_oid }

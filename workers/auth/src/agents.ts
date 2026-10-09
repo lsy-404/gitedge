@@ -6,8 +6,10 @@ import {
 } from "../../../src/worker/common/repositories";
 import { z } from "zod";
 import {
+  AGENT_SESSION_MAX_LIFETIME_MS,
   CreateAgentInputSchema,
   CreateAgentSessionInputSchema,
+  RenewAgentSessionInputSchema,
   RevokeAgentSessionsInputSchema,
   accessTokenAllows,
   accessTokenAllowsRepository,
@@ -16,6 +18,7 @@ import {
   UpdateAgentInputSchema,
   type AgentSession,
   type CreatedAgentSession,
+  type RenewedAgentSession,
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
 import { createLogger, type Logger } from "../../../src/worker/common/logger";
@@ -41,6 +44,7 @@ interface AgentRow {
   createdAt: number;
   updatedAt: number;
   disabledAt: number | null;
+  deliveryMode: Agent["deliveryMode"];
 }
 interface AgentSessionRow extends AgentSession {
   gitTokenId: string;
@@ -63,8 +67,9 @@ export interface GitAuthentication {
   permission: "read" | "write";
 }
 
-const sessionSelect =
-  "SELECT s.id, s.agent_id AS agentId, a.name AS agentName, s.repository_id AS repositoryId, s.workspace_name AS workspaceName, s.remote, s.base_ref AS baseRef, s.base_oid AS baseOid, s.permission, s.status, s.created_at AS createdAt, s.expires_at AS expiresAt, s.git_token_id AS gitTokenId, s.user_id AS userId, u.identifier, u.group_key AS groupKey FROM auth_agent_sessions s JOIN auth_agents a ON a.id = s.agent_id JOIN users u ON u.id = s.user_id";
+const agentSelect =
+  "SELECT a.id, u.identifier AS owner, a.handle, '/' || u.identifier || '/@' || a.handle AS profilePath, a.name, a.description, a.profile_public AS profilePublic, a.created_at AS createdAt, a.updated_at AS updatedAt, a.disabled_at AS disabledAt, a.delivery_mode AS deliveryMode FROM auth_agents a JOIN users u ON u.id = a.user_id";
+const sessionSelect = `SELECT s.id, s.agent_id AS agentId, a.name AS agentName, s.repository_id AS repositoryId, s.workspace_name AS workspaceName, s.remote, s.base_ref AS baseRef, s.base_oid AS baseOid, s.permission, s.status, s.created_at AS createdAt, s.expires_at AS expiresAt, s.created_at + ${AGENT_SESSION_MAX_LIFETIME_MS} AS maxExpiresAt, s.renewal_count AS renewalCount, s.git_token_id AS gitTokenId, s.user_id AS userId, u.identifier, u.group_key AS groupKey FROM auth_agent_sessions s JOIN auth_agents a ON a.id = s.agent_id JOIN users u ON u.id = s.user_id`;
 
 function newToken(prefix: string): string {
   return prefix + randomHex(32);
@@ -83,6 +88,8 @@ function sessionResponse(row: AgentSessionRow): AgentSession {
     status: row.status,
     createdAt: row.createdAt,
     expiresAt: row.expiresAt,
+    maxExpiresAt: row.maxExpiresAt,
+    renewalCount: row.renewalCount,
   };
 }
 
@@ -273,28 +280,136 @@ async function loadManagedAgent(
   userId: string,
   agentId: string
 ): Promise<Agent | null> {
-  const row = await env.DB.prepare(
-    "SELECT a.id, u.identifier AS owner, a.handle, '/' || u.identifier || '/@' || a.handle AS profilePath, a.name, a.description, a.profile_public AS profilePublic, a.created_at AS createdAt, a.updated_at AS updatedAt, a.disabled_at AS disabledAt FROM auth_agents a JOIN users u ON u.id = a.user_id WHERE a.id = ? AND a.user_id = ?"
-  )
+  const row = await env.DB.prepare(agentSelect + " WHERE a.id = ? AND a.user_id = ?")
     .bind(agentId, userId)
     .first<AgentRow>();
   return row ? { ...row, profilePublic: Boolean(row.profilePublic) } : null;
 }
 
+/** Revokes an Artifacts token; an already revoked token counts as success. */
+async function revokeArtifactsToken(workspace: ArtifactsRepo, tokenId: string): Promise<void> {
+  if (await workspace.revokeToken(tokenId)) return;
+  const { tokens } = await workspace.listTokens();
+  const alreadyRevoked = tokens.some((token) => token.id === tokenId && token.state === "revoked");
+  if (!alreadyRevoked) throw new Error("token_not_revoked");
+}
+
 async function revokeSession(env: AgentAuthEnv, row: AgentSessionRow): Promise<void> {
   {
     using workspace = await env.ARTIFACTS.get(row.workspaceName);
-    if (!(await workspace.revokeToken(row.gitTokenId))) {
-      const { tokens } = await workspace.listTokens();
-      const alreadyRevoked = tokens.some(
-        (token) => token.id === row.gitTokenId && token.state === "revoked"
-      );
-      if (!alreadyRevoked) throw new Error("token_not_revoked");
-    }
+    await revokeArtifactsToken(workspace, row.gitTokenId);
   }
   await env.DB.prepare("UPDATE auth_agent_sessions SET status = 'revoked' WHERE id = ?")
     .bind(row.id)
     .run();
+}
+
+export type RenewalOutcome =
+  | { kind: "renewed"; session: RenewedAgentSession }
+  | { kind: "lifetime_exceeded" }
+  | { kind: "conflict" };
+
+const MIN_RENEWAL_REMAINING_MS = 60_000;
+
+/**
+ * Extends an active session and replaces its Git credential. The new token is created first and
+ * the old one revoked before the row moves, so a failure never leaves two valid credentials.
+ */
+export async function renewAgentSession(
+  env: AgentAuthEnv,
+  row: AgentSessionRow,
+  ttlSeconds: number,
+  now = Date.now()
+): Promise<RenewalOutcome> {
+  const logger = createLogger(env.LOG_LEVEL, { service: "agent-auth" });
+  const ceiling = row.createdAt + AGENT_SESSION_MAX_LIFETIME_MS;
+  const expiresAt = Math.min(Math.max(now + ttlSeconds * 1000, row.expiresAt), ceiling);
+  if (row.status !== "active" || row.expiresAt <= now) return { kind: "conflict" };
+  if (row.expiresAt >= ceiling || expiresAt - now < MIN_RENEWAL_REMAINING_MS) {
+    logger.info("agent:session-renewal-refused", { sessionId: row.id, agentId: row.agentId });
+    return { kind: "lifetime_exceeded" };
+  }
+  using workspace = await env.ARTIFACTS.get(row.workspaceName);
+  const next = await workspace.createToken(row.permission, Math.floor((expiresAt - now) / 1000));
+  try {
+    await revokeArtifactsToken(workspace, row.gitTokenId);
+  } catch (error) {
+    await workspace.revokeToken(next.id);
+    throw error;
+  }
+  const moved = await env.DB.prepare(
+    "UPDATE auth_agent_sessions SET git_token_id = ?, expires_at = ?, renewal_count = renewal_count + 1, renewed_at = ? WHERE id = ? AND status = 'active' AND git_token_id = ?"
+  )
+    .bind(next.id, Date.parse(next.expiresAt), now, row.id, row.gitTokenId)
+    .run();
+  if (moved.meta.changes !== 1) {
+    await workspace.revokeToken(next.id);
+    return { kind: "conflict" };
+  }
+  logger.info("agent:session-renewed", {
+    sessionId: row.id,
+    agentId: row.agentId,
+    renewalCount: row.renewalCount + 1,
+  });
+  return {
+    kind: "renewed",
+    session: {
+      ...sessionResponse(row),
+      expiresAt: Date.parse(next.expiresAt),
+      renewalCount: row.renewalCount + 1,
+      gitToken: next.plaintext,
+    },
+  };
+}
+
+function renewalFailure(outcome: Exclude<RenewalOutcome, { kind: "renewed" }>): Response {
+  return outcome.kind === "lifetime_exceeded"
+    ? errorResponse(
+        409,
+        "session_lifetime_exceeded",
+        "The session reached its maximum lifetime. Create a new session to continue."
+      )
+    : errorResponse(409, "conflict", "Session changed or is no longer active.");
+}
+
+/** Lets an agent renew its own session with the session token; expired sessions explain the next step. */
+export async function handleAgentSessionRenewal(
+  request: Request,
+  env: AgentAuthEnv
+): Promise<Response> {
+  const authorization = request.headers.get("Authorization") ?? "";
+  const token = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
+  if (!/^ge_session_[0-9a-f]{64}$/.test(token))
+    return errorResponse(401, "unauthorized", "An agent session token is required.");
+  const parsed = RenewAgentSessionInputSchema.safeParse(
+    (await readJsonLimited(request, SMALL_JSON_BYTES)) ?? {}
+  );
+  if (!parsed.success) return errorResponse(400, "bad_request", "Invalid renewal payload.");
+  const row = await env.DB.prepare(
+    sessionSelect + " WHERE s.token_hash = ? AND a.disabled_at IS NULL AND u.disabled_at IS NULL"
+  )
+    .bind(await sha256Hex(token))
+    .first<AgentSessionRow>();
+  if (!row || row.status === "revoked")
+    return errorResponse(401, "unauthorized", "Agent session is invalid or revoked.");
+  if (row.expiresAt <= Date.now() || row.status !== "active")
+    return errorResponse(
+      401,
+      "session_expired",
+      "The agent session has expired. Ask its owner to create a new session in Settings, Agents."
+    );
+  if (!(await authenticateAgentSession(env, token)))
+    return errorResponse(401, "unauthorized", "Agent session is invalid or revoked.");
+  try {
+    const outcome = await renewAgentSession(env, row, parsed.data.ttlSeconds);
+    return outcome.kind === "renewed" ? dataResponse(outcome.session) : renewalFailure(outcome);
+  } catch {
+    createLogger(env.LOG_LEVEL, { service: "agent-auth" }).error("agent:session-renewal-failed", {
+      sessionId: row.id,
+      agentId: row.agentId,
+    });
+    return errorResponse(503, "service_unavailable", "Session renewal failed; retry.");
+  }
 }
 
 async function revokeSessions(
@@ -415,7 +530,7 @@ export async function handleAgentManagement(
     }
     if (parts.length === 1 && request.method === "GET") {
       const rows = await env.DB.prepare(
-        "SELECT a.id, u.identifier AS owner, a.handle, '/' || u.identifier || '/@' || a.handle AS profilePath, a.name, a.description, a.profile_public AS profilePublic, a.created_at AS createdAt, a.updated_at AS updatedAt, a.disabled_at AS disabledAt FROM auth_agents a JOIN users u ON u.id = a.user_id WHERE a.user_id = ? ORDER BY a.created_at DESC"
+        agentSelect + " WHERE a.user_id = ? ORDER BY a.created_at DESC"
       )
         .bind(user.id)
         .all<AgentRow>();
@@ -466,9 +581,7 @@ export async function handleAgentManagement(
       return dataResponse(created, 201);
     }
     const agentId = parts[1];
-    const agent = await env.DB.prepare(
-      "SELECT a.id, u.identifier AS owner, a.handle, '/' || u.identifier || '/@' || a.handle AS profilePath, a.name, a.description, a.profile_public AS profilePublic, a.created_at AS createdAt, a.updated_at AS updatedAt, a.disabled_at AS disabledAt FROM auth_agents a JOIN users u ON u.id = a.user_id WHERE a.id = ? AND a.user_id = ?"
-    )
+    const agent = await env.DB.prepare(agentSelect + " WHERE a.id = ? AND a.user_id = ?")
       .bind(agentId ?? "", user.id)
       .first<AgentRow>();
     if (!agent) return errorResponse(404, "not_found", "Agent was not found.");
@@ -493,13 +606,14 @@ export async function handleAgentManagement(
       }
       const now = Date.now();
       await env.DB.prepare(
-        "UPDATE auth_agents SET handle = ?, name = ?, description = ?, profile_public = ?, updated_at = ? WHERE id = ? AND user_id = ?"
+        "UPDATE auth_agents SET handle = ?, name = ?, description = ?, profile_public = ?, delivery_mode = ?, updated_at = ? WHERE id = ? AND user_id = ?"
       )
         .bind(
           handle,
           values.name ?? agent.name,
           values.description ?? agent.description,
           Number(values.profilePublic ?? Boolean(agent.profilePublic)),
+          values.deliveryMode ?? agent.deliveryMode,
           now,
           agent.id,
           user.id
@@ -537,6 +651,19 @@ export async function handleAgentManagement(
         .bind(agent.id)
         .all<AgentSessionRow>();
       return dataResponse(rows.results.map(sessionResponse));
+    }
+    if (parts.length === 5 && parts[4] === "renew" && request.method === "POST") {
+      const parsed = RenewAgentSessionInputSchema.safeParse(
+        (await readJsonLimited(request, SMALL_JSON_BYTES)) ?? {}
+      );
+      if (!parsed.success) return errorResponse(400, "bad_request", "Invalid renewal payload.");
+      if (agent.disabledAt !== null) return errorResponse(409, "conflict", "Agent is disabled.");
+      const row = await env.DB.prepare(sessionSelect + " WHERE s.id = ? AND s.agent_id = ?")
+        .bind(parts[3], agent.id)
+        .first<AgentSessionRow>();
+      if (!row) return errorResponse(404, "not_found", "Session was not found.");
+      const outcome = await renewAgentSession(env, row, parsed.data.ttlSeconds);
+      return outcome.kind === "renewed" ? dataResponse(outcome.session) : renewalFailure(outcome);
     }
     if (parts.length === 4 && request.method === "DELETE") {
       const row = await env.DB.prepare(sessionSelect + " WHERE s.id = ? AND s.agent_id = ?")
@@ -610,6 +737,8 @@ export async function handleAgentManagement(
       status: "active",
       createdAt,
       expiresAt: Date.parse(gitToken.expiresAt),
+      maxExpiresAt: createdAt + AGENT_SESSION_MAX_LIFETIME_MS,
+      renewalCount: 0,
       token,
       gitToken: gitToken.plaintext,
       instructions: null,

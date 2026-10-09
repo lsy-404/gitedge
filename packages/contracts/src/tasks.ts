@@ -64,6 +64,18 @@ export interface TaskProgress {
   percent: number | null;
 }
 
+/** Time-boxed claim of a task by one agent; it expires unless heartbeats extend it. */
+export interface TaskLease {
+  agent: { id: string; name: string };
+  claimedAt: number;
+  expiresAt: number;
+}
+
+export const TASK_LEASE_DEFAULT_SECONDS = 900;
+export const TASK_LEASE_MAX_SECONDS = 3_600;
+/** A claim cannot be extended past this age; the agent must release and claim again. */
+export const TASK_LEASE_MAX_TOTAL_MS = 8 * 3_600_000;
+
 export interface Task {
   id: string;
   number: number;
@@ -73,6 +85,7 @@ export interface Task {
   description: string;
   status: TaskStatus;
   assignee: Assignee | null;
+  lease: TaskLease | null;
   actor: Actor;
   progress: TaskProgress;
   commitCount: number;
@@ -189,6 +202,15 @@ export const UpdateTaskInputSchema = z
     status: TaskStatusSchema.optional(),
   })
   .refine((value) => Object.keys(value).length > 0);
+
+export const TaskLeaseInputSchema = z.object({
+  ttlSeconds: z
+    .number()
+    .int()
+    .min(60)
+    .max(TASK_LEASE_MAX_SECONDS)
+    .default(TASK_LEASE_DEFAULT_SECONDS),
+});
 
 export const AssignTaskInputSchema = z.object({ assignee: AssigneeRefSchema.nullable() });
 
