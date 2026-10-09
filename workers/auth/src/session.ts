@@ -14,16 +14,20 @@ export function readCookie(request: Request): string | null {
   return entry ? entry.slice(SESSION_COOKIE.length + 1) : null;
 }
 
-export async function issueSession(env: { DB: D1Database }, userId: string): Promise<string> {
+/** Returns null when the account is disabled or deleted. */
+export async function issueSession(
+  env: { DB: D1Database },
+  userId: string
+): Promise<string | null> {
   const token = createToken();
   const id = crypto.randomUUID();
   const now = Date.now();
-  await env.DB.prepare(
-    "INSERT INTO auth_sessions (id, token_hash, user_id, expires_at, created_at, recent_auth_at) VALUES (?, ?, ?, ?, ?, ?)"
+  const inserted = await env.DB.prepare(
+    "INSERT INTO auth_sessions (id, token_hash, user_id, expires_at, created_at, recent_auth_at) SELECT ?, ?, id, ?, ?, ? FROM users WHERE id = ? AND disabled_at IS NULL"
   )
-    .bind(id, await hashToken(token), userId, now + SESSION_MAX_AGE_SECONDS * 1000, now, now)
+    .bind(id, await hashToken(token), now + SESSION_MAX_AGE_SECONDS * 1000, now, now, userId)
     .run();
-  return token;
+  return inserted.meta.changes === 1 ? token : null;
 }
 
 export async function hashToken(token: string): Promise<string> {

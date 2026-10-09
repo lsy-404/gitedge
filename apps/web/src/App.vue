@@ -366,6 +366,8 @@ if (!sessionState.checked) void refreshSession();
                     ><AppIcon name="agent" />{{ t("agents") }}</RouterLink
                   ><RouterLink to="/settings/account"
                     ><AppIcon name="gear" />{{ t("account") }}</RouterLink
+                  ><RouterLink v-if="sessionState.user.siteAdmin" to="/admin"
+                    ><AppIcon name="shield" />{{ t("adminTitle") }}</RouterLink
                   >
                   <hr />
                 </template>
@@ -511,6 +513,9 @@ if (!sessionState.checked) void refreshSession();
           <hr />
           <RouterLink v-if="!guestView" to="/settings/account"
             ><AppIcon name="gear" />{{ t("account") }}</RouterLink
+          >
+          <RouterLink v-if="!guestView && sessionState.user?.siteAdmin" to="/admin"
+            ><AppIcon name="shield" />{{ t("adminTitle") }}</RouterLink
           >
         </nav>
         <p class="drawer-footer">{{ t("edge") }}</p>

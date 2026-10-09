@@ -112,9 +112,16 @@ describe("Repository control authorization and rename invariants", () => {
   });
   it("enforces read/write/admin collaborators across Forge and Git", async () => {
     const route = `/repositories/${repositoryId}/collaborators`;
-    expect((await call(route, "PUT", "owner", { identifier: "reader", role: "read" })).status).toBe(
-      200
-    );
+    const invite = async (identifier: "reader" | "writer", role: string) => {
+      const created = await call(`/repositories/${repositoryId}/invitations`, "POST", "owner", {
+        identifier,
+        role,
+      });
+      expect(created.status).toBe(201);
+      const { data } = z.object({ data: z.object({ id: z.string() }) }).parse(await created.json());
+      expect((await call(`/invitations/${data.id}/accept`, "POST", identifier)).status).toBe(200);
+    };
+    await invite("reader", "read");
     expect((await call(`/repositories/${repositoryId}`, "GET", "reader")).status).toBe(200);
     const mine = await call("/repositories", "GET", "reader");
     expect(await mine.json()).toMatchObject({ data: [{ id: repositoryId, canWrite: false }] });
@@ -135,9 +142,7 @@ describe("Repository control authorization and rename invariants", () => {
         })
       ).status
     ).toBe(403);
-    expect(
-      (await call(route, "PUT", "owner", { identifier: "writer", role: "write" })).status
-    ).toBe(200);
+    await invite("writer", "write");
     expect(
       (
         await call(`/repositories/${repositoryId}/branch-rules`, "POST", "writer", {
@@ -145,9 +150,9 @@ describe("Repository control authorization and rename invariants", () => {
         })
       ).status
     ).toBe(403);
-    expect(
-      (await call(route, "PUT", "owner", { identifier: "writer", role: "admin" })).status
-    ).toBe(200);
+    expect((await call(`${route}/writer-id`, "PATCH", "owner", { role: "admin" })).status).toBe(
+      200
+    );
     expect(
       (
         await call(`/repositories/${repositoryId}/settings`, "PATCH", "writer", {

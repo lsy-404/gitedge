@@ -15,6 +15,7 @@ import actionsMessages from "./i18n/actions";
 import browserAccountMessages from "./i18n/browserAccounts";
 import importMessages from "./i18n/imports";
 import { securityMessages } from "./i18n/security";
+import membershipMessages from "./i18n/membership";
 
 const messages = {
   "zh-CN": {
@@ -111,8 +112,6 @@ const messages = {
     organizationName: "组织名称",
     displayName: "显示名称",
     members: "成员",
-    addMember: "添加成员",
-    memberIdentifier: "用户名或邮箱",
     role: "角色",
     ownerRole: "管理员",
     memberRole: "成员",
@@ -511,8 +510,6 @@ const messages = {
     organizationName: "Organization name",
     displayName: "Display name",
     members: "Members",
-    addMember: "Add member",
-    memberIdentifier: "Username or email",
     role: "Role",
     ownerRole: "Owner",
     memberRole: "Member",
@@ -861,6 +858,7 @@ export const i18n = createI18n({
       ...importMessages["zh-CN"],
       ...accessTokenMessages["zh-CN"],
       ...securityMessages["zh-CN"],
+      ...membershipMessages["zh-CN"],
     },
     en: {
       ...messages.en,
@@ -880,6 +878,7 @@ export const i18n = createI18n({
       ...importMessages.en,
       ...accessTokenMessages.en,
       ...securityMessages.en,
+      ...membershipMessages.en,
     },
   },
 });

@@ -41,10 +41,7 @@ export interface RepositoryCollaborator {
   role: RepositoryRole;
   inherited: boolean;
 }
-export const PutRepositoryCollaboratorSchema = z.object({
-  identifier: z.string().trim().toLowerCase().min(3).max(63),
-  role: RepositoryRoleSchema,
-});
+export const UpdateRepositoryCollaboratorSchema = z.object({ role: RepositoryRoleSchema }).strict();
 export const EditRepositoryFileSchema = z.object({
   branch: GitBranchSchema,
   newBranch: GitBranchSchema.optional(),

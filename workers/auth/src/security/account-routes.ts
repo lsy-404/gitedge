@@ -17,6 +17,7 @@ import {
   type TrustedUser,
 } from "../../../../packages/contracts/src/index";
 import { dataResponse, errorResponse, requireRecentAuth } from "../../../../src/worker/common/http";
+import { auditActor, recordAudit, type AuditInput } from "../../../../src/worker/common/audit";
 import { createLogger } from "../../../../src/worker/common/logger";
 import { readJsonLimited, SMALL_JSON_BYTES } from "../../../../src/worker/common/readText";
 import { verifyPassword } from "../password";
@@ -47,6 +48,21 @@ import {
 export interface HumanSession {
   user: TrustedUser;
   tokenHash: string;
+}
+
+function audit(
+  env: SecurityEnv,
+  session: HumanSession,
+  action: AuditInput["action"],
+  metadata: AuditInput["metadata"] = {}
+): Promise<void> {
+  return recordAudit(env, {
+    action,
+    actor: auditActor(session.user),
+    target: { type: "user", id: session.user.id, label: session.user.identifier },
+    subjectUserId: session.user.id,
+    metadata,
+  });
 }
 
 async function readBody<T>(request: Request, schema: z.ZodType<T>): Promise<T | null> {
@@ -165,6 +181,7 @@ async function changePassword(
   createLogger(env.LOG_LEVEL, { service: "auth" }).info("account:password-changed", {
     userId: session.user.id,
   });
+  await audit(env, session, "account.password_changed");
   return dataResponse({ changed: true });
 }
 
@@ -251,6 +268,7 @@ async function confirmTotp(
   createLogger(env.LOG_LEVEL, { service: "auth" }).info("account:totp-enabled", {
     userId: session.user.id,
   });
+  await audit(env, session, "two_factor.totp_enabled");
   return dataResponse({ enabled: true, ...(recoveryCodes ? { recoveryCodes } : {}) });
 }
 
@@ -279,6 +297,7 @@ async function disableTotp(
   createLogger(env.LOG_LEVEL, { service: "auth" }).info("account:totp-disabled", {
     userId: session.user.id,
   });
+  await audit(env, session, "two_factor.totp_disabled");
   return dataResponse({ enabled: false });
 }
 
@@ -291,6 +310,7 @@ async function regenerateCodes(env: SecurityEnv, session: HumanSession): Promise
   createLogger(env.LOG_LEVEL, { service: "auth" }).info("account:recovery-codes-regenerated", {
     userId: session.user.id,
   });
+  await audit(env, session, "two_factor.recovery_codes_regenerated");
   return dataResponse(data);
 }
 
@@ -336,6 +356,7 @@ async function registerPasskey(
   createLogger(env.LOG_LEVEL, { service: "auth" }).info("account:passkey-added", {
     userId: session.user.id,
   });
+  await audit(env, session, "two_factor.passkey_added", { name: body.name });
   return dataResponse({ passkey, ...(recoveryCodes ? { recoveryCodes } : {}) }, 201);
 }
 
@@ -377,9 +398,10 @@ export async function handleAccountSecurity(
   if (passkey && method === "DELETE") {
     const required = reauthRequired(session);
     if (required) return required;
-    return (await removePasskey(env, session.user.id, passkey[1]))
-      ? dataResponse({ removed: true })
-      : errorResponse(404, "not_found", "Passkey was not found.");
+    if (!(await removePasskey(env, session.user.id, passkey[1])))
+      return errorResponse(404, "not_found", "Passkey was not found.");
+    await audit(env, session, "two_factor.passkey_removed");
+    return dataResponse({ removed: true });
   }
   return null;
 }

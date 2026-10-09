@@ -19,6 +19,20 @@ import type {
   User,
 } from "../../../../packages/contracts/src/account";
 import type { QuotaDetail, Usage } from "../../../../packages/contracts/src/ops";
+import type { AuditPage } from "../../../../packages/contracts/src/audit";
+import type {
+  CreatedInvitation,
+  Invitation,
+  OrganizationRole,
+} from "../../../../packages/contracts/src/invitations";
+import type {
+  AdminGroup,
+  AdminPage,
+  AdminRepository,
+  AdminStats,
+  AdminUser,
+  UpdateAdminUserInput,
+} from "../../../../packages/contracts/src/admin";
 import type { DeletedRepository } from "../../../../packages/contracts/src/lifecycle";
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from "@simplewebauthn/browser";
 import type {
@@ -123,6 +137,18 @@ export type {
 } from "../../../../packages/contracts/src/account";
 export type { DeletedRepository } from "../../../../packages/contracts/src/lifecycle";
 export type {
+  AdminGroup,
+  AdminPage,
+  AdminRepository,
+  AdminStats,
+  AdminUser,
+  AuditPage,
+  CreatedInvitation,
+  Invitation,
+  OrganizationRole,
+};
+export type { AuditEvent } from "../../../../packages/contracts/src/audit";
+export type {
   EditRepositoryFileInput,
   RepositoryBranch,
 } from "../../../../packages/contracts/src/repository-controls";
@@ -187,11 +213,14 @@ export interface ApiErrorDetail {
   /** Seconds to wait before retrying, from Retry-After or the rate-limit body. */
   retryAfter?: number | null;
   quota?: QuotaDetail | null;
+  /** Organizations that block an account deletion. */
+  organizations?: string[];
 }
 
 export class ApiError extends Error {
   public readonly retryAfter: number | null;
   public readonly quota: QuotaDetail | null;
+  public readonly organizations: string[];
   constructor(
     public readonly status: number,
     message: string,
@@ -201,6 +230,7 @@ export class ApiError extends Error {
     super(message);
     this.retryAfter = detail.retryAfter ?? null;
     this.quota = detail.quota ?? null;
+    this.organizations = detail.organizations ?? [];
   }
 }
 
@@ -234,6 +264,13 @@ export function errorMessage(
     if (cause.status === 429) return t("rateLimited");
   }
   return t(fallbackKey);
+}
+
+/** Invite an existing user by username, or anyone through a one-time link bound to an email. */
+export type InviteePayload = { identifier: string } | { email: string };
+
+function organizationPath(slug: string): string {
+  return `/api/forge/organizations/${encodeURIComponent(slug)}`;
 }
 
 export interface PublicProfile {
@@ -338,6 +375,7 @@ interface ParsedErrorBody {
   code: string | null;
   retryAfter: number | null;
   quota: QuotaDetail | null;
+  organizations: string[];
 }
 
 /** Reads both the `{ error: { code, message } }` envelope and the Gateway's flat rate-limit body. */
@@ -347,6 +385,7 @@ function parseErrorBody(body: string, statusText: string): ParsedErrorBody {
     code: null,
     retryAfter: null,
     quota: null,
+    organizations: [],
   };
   let parsed: unknown;
   try {
@@ -362,6 +401,10 @@ function parseErrorBody(body: string, statusText: string): ParsedErrorBody {
     if (typeof error.message === "string") failure.message = error.message;
     if (typeof error.code === "string") failure.code = error.code;
     failure.quota = parseQuota(error.quota);
+    if (Array.isArray(error.organizations))
+      failure.organizations = error.organizations.filter(
+        (item): item is string => typeof item === "string"
+      );
   }
   return failure;
 }
@@ -402,6 +445,7 @@ async function requestEnvelope<T>(
     throw new ApiError(response.status, failure.message, failure.code, {
       retryAfter: parseRetryAfter(response.headers.get("Retry-After")) ?? failure.retryAfter,
       quota: failure.quota,
+      organizations: failure.organizations,
     });
   }
   if (response.status === 204) {
@@ -689,14 +733,72 @@ export const api = {
     request<Organization>(`/api/forge/organizations/${encodeURIComponent(slug)}`),
   organizationMembers: (slug: string) =>
     request<OrganizationMember[]>(`/api/forge/organizations/${encodeURIComponent(slug)}/members`),
-  addOrganizationMember: (
-    slug: string,
-    payload: { identifier: string; role: "owner" | "member" }
-  ) =>
-    request<OrganizationMember>(`/api/forge/organizations/${encodeURIComponent(slug)}/members`, {
+  inviteOrganizationMember: (slug: string, payload: InviteePayload & { role: OrganizationRole }) =>
+    request<CreatedInvitation>(`${organizationPath(slug)}/invitations`, {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  organizationInvitations: (slug: string) =>
+    request<Invitation[]>(`${organizationPath(slug)}/invitations`),
+  cancelOrganizationInvitation: (slug: string, id: string) =>
+    request(`${organizationPath(slug)}/invitations/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  updateOrganizationMember: (slug: string, identifier: string, role: OrganizationRole) =>
+    request<OrganizationMember>(
+      `${organizationPath(slug)}/members/${encodeURIComponent(identifier)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ role }),
+      }
+    ),
+  organizationAuditLog: (slug: string, cursor?: string) =>
+    request<AuditPage>(`${organizationPath(slug)}/audit-log${query({ cursor })}`),
+  myInvitations: () => request<Invitation[]>("/api/forge/invitations"),
+  resolveInvitation: (id: string, action: "accept" | "decline") =>
+    request<Invitation>(`/api/forge/invitations/${encodeURIComponent(id)}/${action}`, {
+      method: "POST",
+    }),
+  invitationByToken: (token: string, action: "lookup" | "accept" | "decline") =>
+    request<Invitation>(`/api/forge/invitations/${action}`, {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    }),
+  accountAuditLog: (cursor?: string) =>
+    request<AuditPage>(`/api/auth/audit-log${query({ cursor })}`),
+  deleteAccount: (confirm: string) =>
+    request(
+      "/api/auth/account/delete",
+      { method: "POST", body: JSON.stringify({ confirm }) },
+      true
+    ),
+  exportAccount: async (): Promise<Blob> => {
+    const response = await fetch("/api/auth/account/export", {
+      credentials: "include",
+      headers: expectedIdentityHeaders("/api/auth/account/export"),
+    });
+    if (!response.ok) {
+      const failure = parseErrorBody(await response.text(), response.statusText);
+      throw new ApiError(response.status, failure.message, failure.code);
+    }
+    return response.blob();
+  },
+  adminUsers: (params: { q?: string; cursor?: string }) =>
+    request<AdminPage<AdminUser>>(`/api/auth/admin/users${query(params)}`),
+  adminRepositories: (params: { q?: string; cursor?: string }) =>
+    request<AdminPage<AdminRepository>>(`/api/auth/admin/repositories${query(params)}`),
+  adminGroups: () => request<AdminGroup[]>("/api/auth/admin/groups"),
+  adminStats: () => request<AdminStats>("/api/auth/admin/stats"),
+  setAdminUserDisabled: (id: string, disabled: boolean) =>
+    request<{ id: string; disabled: boolean }>(
+      `/api/auth/admin/users/${encodeURIComponent(id)}/${disabled ? "disable" : "enable"}`,
+      { method: "POST" }
+    ),
+  updateAdminUser: (id: string, payload: UpdateAdminUserInput) =>
+    request<{ id: string; groupKey: string; siteAdmin: boolean }>(
+      `/api/auth/admin/users/${encodeURIComponent(id)}`,
+      { method: "PATCH", body: JSON.stringify(payload) }
+    ),
   removeOrganizationMember: async (slug: string, identifier: string): Promise<boolean> => {
     const envelope = await requestEnvelope<RevocationOutcome>(
       `/api/forge/organizations/${encodeURIComponent(slug)}/members/${encodeURIComponent(identifier)}`,
@@ -1124,14 +1226,27 @@ export const api = {
     ),
   repositoryCollaborators: (repositoryId: string) =>
     request<RepositoryCollaborator[]>(repositoryPath(repositoryId, "collaborators")),
-  putRepositoryCollaborator: (
+  inviteRepositoryCollaborator: (
     repositoryId: string,
-    payload: { identifier: string; role: RepositoryRole }
+    payload: InviteePayload & { role: RepositoryRole }
   ) =>
-    request<RepositoryCollaborator>(repositoryPath(repositoryId, "collaborators"), {
-      method: "PUT",
+    request<CreatedInvitation>(repositoryPath(repositoryId, "invitations"), {
+      method: "POST",
       body: JSON.stringify(payload),
     }),
+  repositoryInvitations: (repositoryId: string) =>
+    request<Invitation[]>(repositoryPath(repositoryId, "invitations")),
+  cancelRepositoryInvitation: (repositoryId: string, id: string) =>
+    request(repositoryPath(repositoryId, `invitations/${encodeURIComponent(id)}`), {
+      method: "DELETE",
+    }),
+  updateRepositoryCollaborator: (repositoryId: string, userId: string, role: RepositoryRole) =>
+    request<RepositoryCollaborator>(
+      repositoryPath(repositoryId, `collaborators/${encodeURIComponent(userId)}`),
+      { method: "PATCH", body: JSON.stringify({ role }) }
+    ),
+  repositoryAuditLog: (repositoryId: string, cursor?: string) =>
+    request<AuditPage>(`${repositoryPath(repositoryId, "audit-log")}${query({ cursor })}`),
   deleteRepositoryCollaborator: (repositoryId: string, userId: string) =>
     request<CollaboratorRemoval>(
       repositoryPath(repositoryId, `collaborators/${encodeURIComponent(userId)}`),

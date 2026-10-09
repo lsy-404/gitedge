@@ -7,6 +7,7 @@ import { resolveWorkspace, type GitRepositoryAccess } from "../../workers/git/sr
 import { createRepositoryBranch } from "../../workers/git/src/write";
 import { trustedHeaders } from "../../packages/contracts/src/trust";
 import { runSqlScript } from "../support/database";
+import { grantCollaborator } from "../support/membership";
 import { FixtureArtifacts } from "../support/artifacts";
 
 const migrations = import.meta.glob<string>("../../migrations/*.sql", {
@@ -91,14 +92,7 @@ beforeAll(async () => {
   expect(created.status).toBe(201);
   repositoryId = z.object({ data: z.object({ id: z.string() }) }).parse(await created.json())
     .data.id;
-  expect(
-    (
-      await forgeCall(`/repositories/${repositoryId}/collaborators`, "PUT", {
-        identifier: "writer",
-        role: "write",
-      })
-    ).status
-  ).toBe(200);
+  await grantCollaborator(env.DB, repositoryId, users.writer.id, "write");
   const row = await env.DB.prepare("SELECT artifact_name AS name FROM repositories WHERE id=?")
     .bind(repositoryId)
     .first<{ name: string }>();

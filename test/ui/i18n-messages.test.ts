@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { i18n } from "../../apps/web/src/i18n";
+import { AuditActions } from "../../packages/contracts/src/audit";
 import { taskDocumentKinds, taskStatuses } from "../../apps/web/src/lib/tasks";
 
 const locales = ["zh-CN", "en"] as const;
@@ -50,6 +51,10 @@ const dynamicKeys: Record<string, readonly string[]> = {
     "timed_out",
     "import_failed",
   ],
+  auditAction_: AuditActions.map((action) => action.replace(".", "_")),
+  auditActor_: ["user", "agent", "token", "system"],
+  inviteRole_: ["owner", "member", "read", "write", "admin"],
+  adminTab_: ["overview", "users", "repositories"],
   patOs_: ["osxkeychain", "manager", "libsecret", "store"],
   patScope_: ["repo_read", "repo_write", "issues_write", "pulls_write", "org_read", "admin"],
 };

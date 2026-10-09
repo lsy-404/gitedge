@@ -4,6 +4,7 @@ import {
   type AgentWebhookSettings,
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
+import { auditActor, recordAudit } from "../../../src/worker/common/audit";
 import { createLogger } from "../../../src/worker/common/logger";
 import { repositoryRole, writableRole } from "../../../src/worker/common/repositories";
 import { bytesToHex, randomHex } from "../../../src/worker/common/encoding";
@@ -485,6 +486,22 @@ export async function drainAgentEventOutbox(
   return processed;
 }
 
+async function auditWebhook(
+  env: AgentWebhookEnv,
+  user: TrustedUser,
+  agentId: string,
+  url: string,
+  rotated: boolean
+): Promise<void> {
+  await recordAudit(env, {
+    action: "webhook.updated",
+    actor: auditActor(user),
+    target: { type: "agent_webhook", id: agentId },
+    subjectUserId: user.id,
+    metadata: { host: new URL(url).host, rotated },
+  });
+}
+
 export async function handleAgentWebhookManagement(
   request: Request,
   env: AgentWebhookEnv,
@@ -525,6 +542,7 @@ export async function handleAgentWebhookManagement(
             agentId
           )
           .run();
+        await auditWebhook(env, user, agentId, parsed.data.url, false);
         return response({ ...parsed.data, configured: true, secret: null });
       }
       const secret = `ge_webhook_${randomHex(32)}`;
@@ -543,6 +561,7 @@ export async function handleAgentWebhookManagement(
           now
         )
         .run();
+      await auditWebhook(env, user, agentId, parsed.data.url, true);
       return response({ ...parsed.data, configured: true, secret }, row ? 200 : 201);
     }
     if (parts.length === 4 && parts[3] === "test" && request.method === "POST") {

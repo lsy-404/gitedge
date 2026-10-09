@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const ReservedAccountIdentifiers: ReadonlySet<string> = new Set([
   "account",
+  "admin",
   "assets",
   "agents",
   "api",
@@ -12,6 +13,8 @@ export const ReservedAccountIdentifiers: ReadonlySet<string> = new Set([
   "explore",
   "git",
   "github",
+  "invitations",
+  "invite",
   "issues",
   "login",
   "logout",
@@ -34,6 +37,8 @@ export interface User {
   id: string;
   identifier: string;
   externalIdentity?: ExternalIdentity;
+  /** Present for site administrators of a browser session. */
+  siteAdmin?: true;
 }
 
 export interface ExternalIdentity {

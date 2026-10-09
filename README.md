@@ -78,7 +78,7 @@ Repository deployment accepts prebuilt JavaScript modules plus declared D1, R2 a
 
 ## Repository controls and Actions
 
-Repository settings independently enable collaboration areas, agents, deployments, commit graphs, Actions and online editing. Renaming preserves historical repository URLs. Branch patterns can require PRs, human approvals, named checks, linear history and verified signatures. Repository collaborators have read, write or admin access.
+Repository settings independently enable collaboration areas, agents, deployments, commit graphs, Actions and online editing. Renaming preserves historical repository URLs. Branch patterns can require PRs, human approvals, named checks, linear history and verified signatures. Repository collaborators have read, write or admin access. Collaborators and organization members join by accepting an invitation (7-day expiry, username or one-time link); repository settings and organizations show an append-only audit log, and the account security log lists your own sensitive events. Site administrators (`SITE_ADMINS`) manage users, groups and see site statistics at `/admin`; users can export their data and delete their account from account settings.
 
 `node test/e2e/repository-controls.mjs` creates a nonempty verification repository and checks online edits, stale SHA rejection, protected native pushes, squash/rebase, signed-commit requirements, redirects and community defaults.
 

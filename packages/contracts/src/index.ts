@@ -17,11 +17,15 @@ export * from "./lifecycle";
 export * from "./imports";
 export * from "./import-url";
 export * from "./security";
+export * from "./audit";
+export * from "./invitations";
+export * from "./admin";
 
 export const ErrorCodeSchema = z.enum([
   "bad_request",
   "unauthorized",
   "forbidden",
+  "account_disabled",
   "not_found",
   "conflict",
   "method_not_allowed",
@@ -176,11 +180,6 @@ export const CreateOrganizationInputSchema = z.object({
   slug: NamespaceSlugSchema,
   displayName: z.string().trim().min(1).max(100),
   description: z.string().trim().max(500).default(""),
-});
-
-export const AddOrganizationMemberInputSchema = z.object({
-  identifier: z.string().trim().min(3).max(64),
-  role: z.enum(["owner", "member"]).default("member"),
 });
 
 export const CreateRepositoryInputSchema = z.object({

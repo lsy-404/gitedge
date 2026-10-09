@@ -18,13 +18,21 @@ import ConfirmButton from "./ConfirmButton.vue";
 import NoticeBar from "./NoticeBar.vue";
 import StatusState from "./StatusState.vue";
 import BranchProtectionSettings from "./BranchProtectionSettings.vue";
+import AuditLogList from "./AuditLogList.vue";
 import RepositoryCollaborators from "./RepositoryCollaborators.vue";
 import RepositoryDangerActions from "./RepositoryDangerActions.vue";
 import "../styles/settings.css";
 
 type RepositoryDraft = Omit<RepositorySettings, "canManage">;
 type SettingsSection =
-  "general" | "features" | "merge" | "branchRules" | "collaborators" | "agents" | "danger";
+  | "general"
+  | "features"
+  | "merge"
+  | "branchRules"
+  | "collaborators"
+  | "agents"
+  | "audit"
+  | "danger";
 
 const sections = [
   ["general", "repoSettingsGeneral"],
@@ -33,6 +41,7 @@ const sections = [
   ["branchRules", "repoSettingsBranchRules"],
   ["collaborators", "repoSettingsCollaborators"],
   ["agents", "repoSettingsAgentsMemory"],
+  ["audit", "auditLogTitle"],
   ["danger", "repoSettingsDangerZone"],
 ] as const satisfies ReadonlyArray<readonly [SettingsSection, string]>;
 const visibilities = ["public", "private"] as const;
@@ -501,6 +510,25 @@ watch(() => props.repository.id, load, { immediate: true });
             :repository-id="props.repository.id"
             :can-manage="canManage"
           />
+
+          <section
+            v-else-if="activeSection === 'audit'"
+            class="box"
+            aria-labelledby="settings-audit-title"
+          >
+            <header class="box-header">
+              <h3 id="settings-audit-title">{{ t("auditLogTitle") }}</h3>
+            </header>
+            <p class="box-row field-hint">{{ t("auditRepositoryHint") }}</p>
+            <AuditLogList
+              v-if="canManage"
+              :load="(cursor) => api.repositoryAuditLog(props.repository.id, cursor)"
+              :reload-key="props.repository.id"
+            />
+            <div v-else class="box-form">
+              <NoticeBar intent="info">{{ t("auditAdminOnly") }}</NoticeBar>
+            </div>
+          </section>
 
           <section
             v-else-if="activeSection === 'agents'"

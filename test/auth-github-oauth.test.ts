@@ -77,8 +77,10 @@ class TestStatement implements D1PreparedStatement {
         browser_hash: String(this.values[5]),
       });
     }
-    if (this.query.startsWith("INSERT INTO auth_sessions"))
+    if (this.query.startsWith("INSERT INTO auth_sessions")) {
       this.database.sessions.set(String(this.values[0]), String(this.values[1]));
+      return { results: [], meta: { changes: 1 } } as unknown as D1Result;
+    }
     return { results: [], meta: { changes: 0 } };
   }
 }

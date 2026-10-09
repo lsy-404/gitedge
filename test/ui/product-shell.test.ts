@@ -123,7 +123,8 @@ describe("GitEdge API client", () => {
     await api.updateBranchRule("repo-7", "rule-1", rule);
     await api.deleteBranchRule("repo-7", "rule-1");
     await api.repositoryCollaborators("repo-7");
-    await api.putRepositoryCollaborator("repo-7", { identifier: "octocat", role: "write" });
+    await api.updateRepositoryCollaborator("repo-7", "user / 1", "write");
+    await api.inviteRepositoryCollaborator("repo-7", { identifier: "octocat", role: "write" });
     await api.deleteRepositoryCollaborator("repo-7", "user / 1");
 
     expect(fetchMock.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
@@ -132,11 +133,13 @@ describe("GitEdge API client", () => {
       ["/api/forge/repositories/repo-7/branch-rules/rule-1", "PATCH"],
       ["/api/forge/repositories/repo-7/branch-rules/rule-1", "DELETE"],
       ["/api/forge/repositories/repo-7/collaborators", undefined],
-      ["/api/forge/repositories/repo-7/collaborators", "PUT"],
+      ["/api/forge/repositories/repo-7/collaborators/user%20%2F%201", "PATCH"],
+      ["/api/forge/repositories/repo-7/invitations", "POST"],
       ["/api/forge/repositories/repo-7/collaborators/user%20%2F%201", "DELETE"],
     ]);
     expect(fetchMock.mock.calls[1]?.[1]?.body).toBe(JSON.stringify(rule));
-    expect(fetchMock.mock.calls[5]?.[1]?.body).toBe(
+    expect(fetchMock.mock.calls[5]?.[1]?.body).toBe(JSON.stringify({ role: "write" }));
+    expect(fetchMock.mock.calls[6]?.[1]?.body).toBe(
       JSON.stringify({ identifier: "octocat", role: "write" })
     );
   });
@@ -174,7 +177,7 @@ describe("GitEdge API client", () => {
       .spyOn(globalThis, "fetch")
       .mockImplementation(async () => new Response(JSON.stringify({ data: {} }), { status: 201 }));
     await api.createOrganization({ slug: "acme", displayName: "Acme", description: "Team" });
-    await api.addOrganizationMember("acme", { identifier: "dev", role: "member" });
+    await api.inviteOrganizationMember("acme", { identifier: "dev", role: "member" });
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       "/api/forge/organizations",
@@ -184,7 +187,7 @@ describe("GitEdge API client", () => {
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      "/api/forge/organizations/acme/members",
+      "/api/forge/organizations/acme/invitations",
       expect.objectContaining({ body: JSON.stringify({ identifier: "dev", role: "member" }) })
     );
   });

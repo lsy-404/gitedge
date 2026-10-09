@@ -16,6 +16,7 @@ import {
   jsonResponse,
   requireRecentAuth,
 } from "../../../src/worker/common/http";
+import { auditActor, recordAudit } from "../../../src/worker/common/audit";
 import { createLogger } from "../../../src/worker/common/logger";
 import { repositoryRole } from "../../../src/worker/common/repositories";
 import { revokeAgentSessions } from "./agent-events";
@@ -119,6 +120,14 @@ export async function repositoryLifecycle(
     // Session forks hold direct Artifacts credentials, so they must not outlive the deletion.
     const revoked = await revokeAgentSessions(env, { repositoryId: repository.id });
     logger.info("lifecycle:repository-deleted", { userId: user.id, purgeAfter, revoked });
+    await recordAudit(env, {
+      action: "repository.deleted",
+      actor: auditActor(user),
+      target: { type: "repository", id: repository.id, label: fullName(repository) },
+      repositoryId: repository.id,
+      namespaceId: repository.namespace_id,
+      metadata: { purgeAfter },
+    });
     return dataResponse({
       deletedAt: now,
       purgeAfter,
@@ -169,6 +178,21 @@ export async function repositoryLifecycle(
     from: repository.namespace_id,
     to: target.id,
     revoked,
+  });
+  await recordAudit(env, {
+    action: "repository.transferred",
+    actor: auditActor(user),
+    target: { type: "repository", id: repository.id, label: fullName(repository) },
+    repositoryId: repository.id,
+    namespaceId: repository.namespace_id,
+    metadata: { fromOwner: repository.owner, toOwner: target.slug },
+  });
+  await recordAudit(env, {
+    action: "repository.transfer_received",
+    actor: auditActor(user),
+    target: { type: "repository", id: repository.id, label: `${target.slug}/${repository.slug}` },
+    namespaceId: target.id,
+    metadata: { fromOwner: repository.owner, toOwner: target.slug },
   });
   const transferred = repoResponse(
     { ...repository, namespace_id: target.id, owner: target.slug, updated_at: now },
@@ -245,6 +269,13 @@ export async function deletedRepositories(
       return errorResponse(409, "conflict", "Another repository now uses this name.");
     }
     logger.info("lifecycle:repository-restored", { repositoryId: id, userId: user.id });
+    await recordAudit(env, {
+      action: "repository.restored",
+      actor: auditActor(user),
+      target: { type: "repository", id, label: `${row.owner}/${row.name}` },
+      repositoryId: id,
+      namespaceId: row.namespaceId,
+    });
     const restored = await env.DB.prepare(
       "SELECT repositories.*, namespaces.slug AS owner FROM repositories JOIN namespaces ON namespaces.id = repositories.namespace_id WHERE repositories.id = ?"
     )
@@ -267,6 +298,13 @@ export async function deletedRepositories(
     if (expedited.meta.changes !== 1)
       return errorResponse(404, "not_found", "Deleted repository was not found.");
     logger.info("lifecycle:repository-purge-requested", { repositoryId: id, userId: user.id });
+    await recordAudit(env, {
+      action: "repository.purge_requested",
+      actor: auditActor(user),
+      target: { type: "repository", id, label: `${row.owner}/${row.name}` },
+      repositoryId: id,
+      namespaceId: row.namespaceId,
+    });
     const purged = await attemptPurge(env, id, now);
     return dataResponse({ purged }, purged ? 200 : 202);
   }

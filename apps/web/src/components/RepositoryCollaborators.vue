@@ -1,15 +1,11 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import type { RepositoryCollaborator, RepositoryRole } from "../lib/api";
+import type { RepositoryCollaborator } from "../lib/api";
 import { api } from "../lib/api";
-import {
-  FluentButton,
-  FluentField,
-  FluentSelect,
-  type FluentSelectOption,
-} from "@platform-kit/fluent/vue";
+import { FluentSelect, type FluentSelectOption } from "@platform-kit/fluent/vue";
 import ConfirmButton from "./ConfirmButton.vue";
+import MemberInvitations from "./MemberInvitations.vue";
 import NoticeBar from "./NoticeBar.vue";
 import StatusState from "./StatusState.vue";
 import { oneOf } from "../ui/formEvents";
@@ -24,8 +20,6 @@ const notice = ref("");
 const saving = ref(false);
 const removingId = ref("");
 const revocationIncomplete = ref(false);
-const identifier = ref("");
-const role = ref<RepositoryRole>("read");
 const roleValues = ["read", "write", "admin"] as const;
 const roleOptions = computed<readonly FluentSelectOption[]>(() => [
   { value: "read", label: t("collaboratorRead") },
@@ -48,30 +42,6 @@ async function load(): Promise<void> {
   }
 }
 
-async function save(): Promise<void> {
-  const normalizedIdentifier = identifier.value.trim();
-  if (!props.canManage || saving.value || !normalizedIdentifier) return;
-  saving.value = true;
-  saveError.value = "";
-  notice.value = "";
-  try {
-    const saved = await api.putRepositoryCollaborator(props.repositoryId, {
-      identifier: normalizedIdentifier,
-      role: role.value,
-    });
-    collaborators.value = [
-      ...collaborators.value.filter((item) => item.id !== saved.id),
-      saved,
-    ].sort((a, b) => a.identifier.localeCompare(b.identifier));
-    identifier.value = "";
-    notice.value = t("collaboratorSaved");
-  } catch {
-    saveError.value = t("collaboratorSaveError");
-  } finally {
-    saving.value = false;
-  }
-}
-
 async function updateRole(item: RepositoryCollaborator, value: string): Promise<void> {
   const nextRole = oneOf(roleValues, value, item.role);
   if (!props.canManage || item.inherited || saving.value || nextRole === item.role) return;
@@ -79,10 +49,7 @@ async function updateRole(item: RepositoryCollaborator, value: string): Promise<
   saveError.value = "";
   notice.value = "";
   try {
-    const saved = await api.putRepositoryCollaborator(props.repositoryId, {
-      identifier: item.identifier,
-      role: nextRole,
-    });
+    const saved = await api.updateRepositoryCollaborator(props.repositoryId, item.id, nextRole);
     collaborators.value = collaborators.value.map((entry) =>
       entry.id === saved.id ? saved : entry
     );
@@ -147,29 +114,6 @@ watch(() => props.repositoryId, load, { immediate: true });
           />
         </li>
       </ul>
-
-      <div class="box-form collaborator-form" @keydown.enter.stop.prevent>
-        <FluentField
-          v-model="identifier"
-          :label="t('collaboratorIdentifier')"
-          :disabled="!canManage || saving"
-        />
-        <FluentSelect
-          v-model="role"
-          :label="t('collaboratorRole')"
-          :options="roleOptions"
-          :disabled="!canManage || saving"
-        />
-        <FluentButton
-          type="button"
-          tone="primary"
-          :disabled="!canManage || saving || !identifier.trim()"
-          :busy="saving"
-          @click="save"
-        >
-          {{ saving ? t("loading") : t("collaboratorAdd") }}
-        </FluentButton>
-      </div>
     </template>
     <div v-if="saveError || notice || revocationIncomplete" class="box-form form-stack">
       <NoticeBar v-if="saveError" intent="error">{{ saveError }}</NoticeBar>
@@ -179,6 +123,12 @@ watch(() => props.repositoryId, load, { immediate: true });
       }}</NoticeBar>
     </div>
   </section>
+  <MemberInvitations
+    :scope="{ kind: 'repository', repositoryId }"
+    :roles="roleOptions"
+    default-role="read"
+    :can-manage="canManage"
+  />
 </template>
 
 <style scoped>
@@ -188,16 +138,8 @@ watch(() => props.repositoryId, load, { immediate: true });
   gap: var(--space-3);
   align-items: center;
 }
-.collaborator-form {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(150px, 220px) auto;
-  gap: var(--space-3);
-  align-items: end;
-  border-top: 1px solid var(--border-muted);
-}
 @media (max-width: 760px) {
-  .collaborator-row,
-  .collaborator-form {
+  .collaborator-row {
     grid-template-columns: minmax(0, 1fr);
   }
 }
