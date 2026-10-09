@@ -47,6 +47,7 @@ const releasesMessages = {
     releaseErrorAssetExists: "已存在同名附件。",
     releaseErrorAssetTooLarge: "文件超过大小上限。",
     releaseErrorInvalid: "请检查标签名称、分支和提交 ID。",
+    releaseErrorChanged: "这个发布刚刚被其他人发布或撤回，请刷新后重试。",
     tagManage: "管理标签",
     tagListTitle: "标签",
     tagNone: "还没有标签。",
@@ -122,6 +123,8 @@ const releasesMessages = {
     releaseErrorAssetExists: "An asset with this name already exists.",
     releaseErrorAssetTooLarge: "The file exceeds the size limit.",
     releaseErrorInvalid: "Check the tag name, branch and commit ID.",
+    releaseErrorChanged:
+      "Someone else just published or unpublished this release. Reload and try again.",
     tagManage: "Manage tags",
     tagListTitle: "Tags",
     tagNone: "No tags yet.",

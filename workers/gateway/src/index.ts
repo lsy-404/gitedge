@@ -383,6 +383,22 @@ async function handleHealth(env: GatewayEnv): Promise<Response> {
 }
 
 const IMPORT_RPM_LIMIT = 5;
+const ARCHIVE_RPM_LIMIT = 10;
+const ARCHIVE_PATH = /^(?:\/api\/git\/repositories\/[^/]+\/archive|\/[^/]+\/[^/]+\/archive\/.+)$/;
+
+/** Archives read every blob of a tree from Artifacts, so they get a much tighter budget. */
+async function enforceArchiveLimit(
+  request: Request,
+  pathname: string,
+  session: SessionResult,
+  env: GatewayEnv
+): Promise<Response | null> {
+  if (request.method !== "GET" || !ARCHIVE_PATH.test(pathname)) return null;
+  const key = session.authenticated
+    ? `archive:user:${session.id}`
+    : `archive:ip:${rateLimitIpKey(request.headers.get("CF-Connecting-IP") || "unknown")}`;
+  return rateLimitedResponse(await consumeRateLimit(env.RATE_LIMITER, key, ARCHIVE_RPM_LIMIT));
+}
 
 async function enforceImportLimit(
   request: Request,
@@ -495,6 +511,8 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
           { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="GitEdge"' } }
         );
       if ((request.method === "GET" || request.method === "HEAD") && prefix !== "/api/deploy") {
+        const archiveLimit = await enforceArchiveLimit(request, url.pathname, session, env);
+        if (archiveLimit) return archiveLimit;
         return presentRepositoryResponse(
           await service.fetch(forwardAuthenticated(request, prefix)),
           env
@@ -524,6 +542,8 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
     if (userLimitResponse) return userLimitResponse;
     const importLimitResponse = await enforceImportLimit(request, url.pathname, session, env);
     if (importLimitResponse) return importLimitResponse;
+    const archiveLimitResponse = await enforceArchiveLimit(request, url.pathname, session, env);
+    if (archiveLimitResponse) return archiveLimitResponse;
     return presentRepositoryResponse(
       await service.fetch(forwardAuthenticated(request, prefix, session)),
       env
@@ -654,6 +674,8 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
             const userLimit = await enforceUserLimit(session, env);
             if (userLimit) return userLimit;
           }
+          const archiveLimit = await enforceArchiveLimit(request, url.pathname, session, env);
+          if (archiveLimit) return archiveLimit;
           return presentRepositoryResponse(
             await env.GIT.fetch(
               forwardAuthenticated(

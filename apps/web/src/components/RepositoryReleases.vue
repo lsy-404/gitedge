@@ -81,6 +81,7 @@ const errorKeys: Readonly<Record<string, string>> = {
   asset_exists: "releaseErrorAssetExists",
   asset_too_large: "releaseErrorAssetTooLarge",
   bad_request: "releaseErrorInvalid",
+  release_changed: "releaseErrorChanged",
 };
 function failure(cause: unknown): string {
   if (cause instanceof ApiError && cause.code && errorKeys[cause.code])

@@ -22,6 +22,7 @@ const { t } = useI18n();
 const tags = ref<RepositoryTag[]>([]);
 const truncated = ref(false);
 const expanded = ref(false);
+const loaded = ref(false);
 const loading = ref(false);
 const saving = ref(false);
 const error = ref("");
@@ -50,18 +51,29 @@ function failure(cause: unknown): void {
       : errorMessage(cause, t);
 }
 
+let loadVersion = 0;
 async function load(): Promise<void> {
+  const version = ++loadVersion;
+  const repositoryId = props.repository.id;
   loading.value = true;
   error.value = "";
   try {
-    const page = await api.repositoryTags(props.repository.id);
+    const page = await api.repositoryTags(repositoryId);
+    if (version !== loadVersion) return;
     tags.value = page.items;
     truncated.value = page.truncated;
+    loaded.value = true;
   } catch (cause) {
-    failure(cause);
+    if (version === loadVersion) failure(cause);
   } finally {
-    loading.value = false;
+    if (version === loadVersion) loading.value = false;
   }
+}
+
+// Listing tags reads one commit per tag, so it waits until the panel is opened.
+function toggle(): void {
+  expanded.value = !expanded.value;
+  if (expanded.value && !loaded.value && !loading.value) void load();
 }
 
 async function create(): Promise<void> {
@@ -99,18 +111,27 @@ async function remove(tag: RepositoryTag): Promise<void> {
   }
 }
 
-watch(() => props.repository.id, load, { immediate: true });
+watch(
+  () => props.repository.id,
+  () => {
+    loadVersion += 1;
+    tags.value = [];
+    truncated.value = false;
+    loaded.value = false;
+    loading.value = false;
+    error.value = "";
+    if (expanded.value) void load();
+  }
+);
 </script>
 
 <template>
   <div class="tag-management">
-    <FluentButton
-      type="button"
-      tone="secondary"
-      :aria-expanded="expanded"
-      @click="expanded = !expanded"
-      ><AppIcon name="tag" />{{ t("tagManage") }} ({{ tags.length
-      }}{{ truncated ? "+" : "" }})</FluentButton
+    <FluentButton type="button" tone="secondary" :aria-expanded="expanded" @click="toggle"
+      ><AppIcon name="tag" />{{ t("tagManage")
+      }}<template v-if="loaded">
+        ({{ tags.length }}{{ truncated ? "+" : "" }})</template
+      ></FluentButton
     >
     <section v-if="expanded" class="tag-panel box" :aria-label="t('tagListTitle')">
       <div class="box-header">
@@ -118,7 +139,7 @@ watch(() => props.repository.id, load, { immediate: true });
         <h2>{{ t("tagListTitle") }}</h2>
       </div>
       <p v-if="loading" class="muted">{{ t("loading") }}</p>
-      <p v-else-if="!tags.length" class="muted">{{ t("tagNone") }}</p>
+      <p v-else-if="loaded && !tags.length" class="muted">{{ t("tagNone") }}</p>
       <div v-for="tag in tags" :key="tag.name" class="tag-row">
         <FluentButton
           type="button"

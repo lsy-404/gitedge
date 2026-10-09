@@ -154,7 +154,7 @@ async function readReleases(
       truncated: rows.results.length > RELEASE_LIST_LIMIT,
     });
   }
-  if (releaseId === "latest") {
+  if (releaseId === "latest" && rest.length === 2) {
     const row = await env.DB.prepare(
       `SELECT ${RELEASE_COLUMNS} ${RELEASE_FROM} WHERE r.repository_id = ? AND r.draft = 0 AND r.prerelease = 0 ORDER BY r.published_at DESC LIMIT 1`
     )
@@ -253,7 +253,13 @@ async function gitFailure(response: Response, logger: Logger): Promise<Response>
   );
 }
 
-/** Makes sure the release's tag exists, creating it from the chosen target when one is given. */
+type TagOutcome =
+  { kind: "created" } | { kind: "existing" } | { kind: "failed"; response: Response };
+
+/**
+ * Makes sure the release's tag exists, creating it from the chosen target when one is given.
+ * An existing tag is reused as is, so the caller must not record the target as its origin.
+ */
 async function ensureTag(
   env: ForgeEnv,
   user: TrustedUser,
@@ -262,7 +268,7 @@ async function ensureTag(
   target: string | null,
   source: string | null,
   logger: Logger
-): Promise<Response | null> {
+): Promise<TagOutcome> {
   if (target) {
     const created = await gitCall(env, user, repositoryId, "tags", {
       method: "POST",
@@ -271,7 +277,7 @@ async function ensureTag(
     if (created.ok) {
       await created.body?.cancel();
       logger.info("release:tag-created", { tagName });
-      return null;
+      return { kind: "created" };
     }
     const failure = GitErrorSchema.safeParse(
       await created
@@ -281,21 +287,28 @@ async function ensureTag(
     );
     if (created.status === 409 && failure.success && failure.data.error.code === "tag_exists") {
       await created.body?.cancel();
-      return null;
+      return { kind: "existing" };
     }
-    return gitFailure(created, logger);
+    return { kind: "failed", response: await gitFailure(created, logger) };
   }
   const lookup = await gitCall(env, user, repositoryId, `tags?name=${encodeURIComponent(tagName)}`);
-  if (!lookup.ok) return gitFailure(lookup, logger);
+  if (!lookup.ok) return { kind: "failed", response: await gitFailure(lookup, logger) };
   const tags = GitTagListSchema.safeParse(await lookup.json().catch(() => null));
-  if (!tags.success) return errorResponse(502, "git_unavailable", "The tag could not be verified.");
+  if (!tags.success)
+    return {
+      kind: "failed",
+      response: errorResponse(502, "git_unavailable", "The tag could not be verified."),
+    };
   return tags.data.data.some((tag) => tag.name === tagName)
-    ? null
-    : errorResponse(
-        400,
-        "tag_missing",
-        "The tag does not exist. Choose a branch or commit to create it from."
-      );
+    ? { kind: "existing" }
+    : {
+        kind: "failed",
+        response: errorResponse(
+          400,
+          "tag_missing",
+          "The tag does not exist. Choose a branch or commit to create it from."
+        ),
+      };
 }
 
 async function emit(
@@ -427,9 +440,22 @@ async function uploadAsset(
         RELEASE_REPOSITORY_ASSET_BYTES
       )
       .run();
-  } catch {
+  } catch (cause) {
     await discard("insert-conflict");
-    return errorResponse(409, "asset_exists", "An asset with this name already exists.");
+    const duplicate = await env.DB.prepare(
+      "SELECT 1 AS found FROM forge_release_assets WHERE release_id = ? AND name = ?"
+    )
+      .bind(release.id, name.data)
+      .first<{ found: number }>();
+    if (duplicate)
+      return errorResponse(409, "asset_exists", "An asset with this name already exists.");
+    if (!(await findRelease(env, repository.id, release.id)))
+      return errorResponse(404, "not_found", "Release was not found.");
+    logger.error("release:asset-insert-failed", {
+      assetId,
+      error: cause instanceof Error ? cause.message : "unknown",
+    });
+    throw cause;
   }
   if (inserted.meta.changes !== 1) {
     await discard("limit");
@@ -481,10 +507,10 @@ export async function repositoryReleases(
       return errorResponse(409, "release_exists", "A release for this tag already exists.");
     if ((counts?.releases ?? 0) >= RELEASE_MAX_PER_REPOSITORY)
       return errorResponse(409, "release_limit", "The release limit was reached.");
-    const target = input.data.target ?? null;
-    const source = input.data.source ?? null;
+    let target = input.data.target ?? null;
+    let source = input.data.source ?? null;
     if (!input.data.draft) {
-      const tagFailure = await ensureTag(
+      const tag = await ensureTag(
         env,
         user,
         repository.id,
@@ -493,7 +519,11 @@ export async function repositoryReleases(
         source,
         logger
       );
-      if (tagFailure) return tagFailure;
+      if (tag.kind === "failed") return tag.response;
+      if (tag.kind === "existing") {
+        target = null;
+        source = null;
+      }
     }
     const now = Date.now();
     const id = crypto.randomUUID();
@@ -535,22 +565,29 @@ export async function repositoryReleases(
     const input = UpdateReleaseInputSchema.safeParse(await parseJson(request));
     if (!input.success) return errorResponse(400, "bad_request", "Invalid release update.");
     const publishing = release.draft === 1 && input.data.draft === false;
+    let target = release.target;
+    let source = release.target_source;
     if (publishing) {
-      const tagFailure = await ensureTag(
+      const tag = await ensureTag(
         env,
         user,
         repository.id,
         release.tag_name,
-        release.target,
-        release.target_source,
+        target,
+        source,
         logger
       );
-      if (tagFailure) return tagFailure;
+      if (tag.kind === "failed") return tag.response;
+      if (tag.kind === "existing") {
+        target = null;
+        source = null;
+      }
     }
     const draft = input.data.draft ?? release.draft === 1;
     const now = Date.now();
-    await env.DB.prepare(
-      "UPDATE forge_releases SET title = ?, body = ?, draft = ?, prerelease = ?, published_at = ?, updated_at = ? WHERE id = ? AND repository_id = ?"
+    // The draft state read above guards the write, so concurrent publishes emit one event.
+    const written = await env.DB.prepare(
+      "UPDATE forge_releases SET title = ?, body = ?, draft = ?, prerelease = ?, published_at = ?, target = ?, target_source = ?, updated_at = ? WHERE id = ? AND repository_id = ? AND draft = ?"
     )
       .bind(
         input.data.title === undefined ? release.title : input.data.title || release.tag_name,
@@ -558,11 +595,20 @@ export async function repositoryReleases(
         Number(draft),
         Number(input.data.prerelease ?? release.prerelease === 1),
         draft ? null : (release.published_at ?? now),
+        target,
+        source,
         now,
         release.id,
-        repository.id
+        repository.id,
+        release.draft
       )
       .run();
+    if (written.meta.changes !== 1)
+      return errorResponse(
+        409,
+        "release_changed",
+        "The release was published or unpublished meanwhile. Reload before retrying."
+      );
     const updated = await findRelease(env, repository.id, release.id);
     if (!updated) return errorResponse(404, "not_found", "Release was not found.");
     logger.info("release:updated", { releaseId: release.id, publishing });

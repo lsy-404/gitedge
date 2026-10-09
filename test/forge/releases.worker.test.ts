@@ -29,11 +29,13 @@ type Actor = keyof typeof users | "anonymous" | "agent" | "token";
 const existingTags = new Set<string>();
 const gitCalls: { method: string; path: string; body: unknown }[] = [];
 const events: ReleaseEvent[] = [];
+let beforeTagResponse: (() => Promise<void>) | null = null;
 const GIT = {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const body: unknown = request.method === "POST" ? await request.json() : null;
     gitCalls.push({ method: request.method, path: url.pathname + url.search, body });
+    await beforeTagResponse?.();
     if (request.method === "GET") {
       const name = url.searchParams.get("name") ?? "";
       return Response.json({ data: existingTags.has(name) ? [{ name }] : [], truncated: false });
@@ -186,7 +188,9 @@ beforeAll(async () => {
 beforeEach(() => {
   gitCalls.length = 0;
   events.length = 0;
+  beforeTagResponse = null;
 });
+const targetSchema = z.object({ data: z.object({ target: z.string().nullable() }) });
 
 describe("release authorization", () => {
   it("lets only writers create, edit, upload and delete", async () => {
@@ -293,6 +297,37 @@ describe("release records and tags", () => {
     const release = await created({ tagName: "v3.0.0" });
     expect(release.title).toBe("v3.0.0");
     expect(gitCalls.some((entry) => entry.method === "POST")).toBe(false);
+  });
+
+  it("does not record a target for a tag that already existed", async () => {
+    existingTags.add("v3.1.0");
+    const response = await createRelease({ tagName: "v3.1.0", target: "release-branch" });
+    expect(response.status).toBe(201);
+    expect(targetSchema.parse(await response.json()).data.target).toBeNull();
+    const fresh = await createRelease({ tagName: "v3.2.0", target: "release-branch" });
+    expect(targetSchema.parse(await fresh.json()).data.target).toBe("release-branch");
+  });
+
+  it("publishes a draft once when two publishes race", async () => {
+    const draft = await created({ tagName: "v3.3.0", target: "main", draft: true });
+    beforeTagResponse = async () => {
+      await env.DB.prepare("UPDATE forge_releases SET draft = 0, published_at = ? WHERE id = ?")
+        .bind(Date.now(), draft.id)
+        .run();
+    };
+    const raced = await call(`/repositories/${repositoryId}/releases/${draft.id}`, "PATCH", {
+      body: { draft: false },
+    });
+    expect(raced.status).toBe(409);
+    expect(await raced.json()).toMatchObject({ error: { code: "release_changed" } });
+    expect(events).toEqual([]);
+  });
+
+  it("does not treat extra segments after latest as the latest release", async () => {
+    const response = await call(`/repositories/${repositoryId}/releases/latest/assets`, "GET", {
+      actor: "anonymous",
+    });
+    expect(response.status).toBe(404);
   });
 
   it("requires a target when the tag does not exist", async () => {

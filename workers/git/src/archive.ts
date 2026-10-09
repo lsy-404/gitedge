@@ -45,6 +45,8 @@ export interface ArchiveOptions {
   root: string;
   mtime: Date;
   limits?: ArchiveLimits;
+  /** Called once when streaming fails after the response has started. */
+  onError?: (cause: unknown) => void;
 }
 
 const CHUNK_BYTES = 64 * 1024;
@@ -192,8 +194,13 @@ function zipArchive(store: ArchiveStore, plan: ArchivePlan, options: ArchiveOpti
   }
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
-      await addNext();
-      if (failure) throw failure;
+      try {
+        await addNext();
+        if (failure) throw failure;
+      } catch (cause) {
+        options.onError?.(cause);
+        throw cause;
+      }
       for (const chunk of output.splice(0)) if (chunk.length) controller.enqueue(chunk);
       if (finished) controller.close();
     },
@@ -239,7 +246,10 @@ function tarGzArchive(store: ArchiveStore, plan: ArchivePlan, options: ArchiveOp
     }
     controller.finalize();
   }
-  produce().catch((cause: unknown) => controller.error(cause));
+  produce().catch((cause: unknown) => {
+    options.onError?.(cause);
+    controller.error(cause);
+  });
   return readable.pipeThrough(new CompressionStream("gzip"));
 }
 

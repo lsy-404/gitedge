@@ -231,8 +231,15 @@ export class FixtureArtifacts implements Artifacts {
 
   private handle(repository: FixtureRepository): ArtifactsRepo {
     const fixture = this;
+    let disposed = false;
+    // Mirrors RPC stubs, which refuse calls once their handle is disposed.
+    const live = () => {
+      if (disposed) throw new Error("Attempted to use an Artifacts handle after disposal.");
+    };
     return {
-      [Symbol.dispose]() {},
+      [Symbol.dispose]() {
+        disposed = true;
+      },
       async createToken(scope = "write", ttlSeconds = 86_400) {
         if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds < 60 || ttlSeconds > 31_536_000)
           throw new Error("Invalid fixture token TTL.");
@@ -254,19 +261,23 @@ export class FixtureArtifacts implements Artifacts {
         return { ...repository.info };
       },
       async readBlob(hash) {
+        live();
         const bytes = repository.blobs.get(hash);
         return bytes ? new Blob([bytes as BlobPart]) : null;
       },
       async readTree(hash) {
+        live();
         return repository.trees.get(hash) ?? (hash === baseCommit.treeHash ? [] : null);
       },
       async readCommit(oid) {
+        live();
         return repository.commits.find((commit) => commit.hash === oid) ?? null;
       },
       async readFile() {
         return null;
       },
       async log(options) {
+        live();
         return [...(repository.branchCommits.get(options?.ref ?? "") ?? repository.commits)];
       },
       async fork(name, options = {}) {

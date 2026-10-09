@@ -411,6 +411,44 @@ describe("Gateway routing", () => {
       expect(unsupported.status).toBe(404);
     });
 
+    it("gives source archives a tighter rate limit than other reads", async () => {
+      const limits: number[] = [];
+      const archiveLimited = {
+        getByName: () => ({
+          consume: async (_key: string, limit: number) => {
+            limits.push(limit);
+            return { allowed: limit !== 10, retryAfter: 60 };
+          },
+        }),
+      };
+      let gitCalls = 0;
+      const env: GatewayEnv = {
+        ...environment({
+          forge: resolvedForge,
+          git: service(() => {
+            gitCalls += 1;
+            return new Response("ok");
+          }),
+        }),
+        RATE_LIMITER: archiveLimited,
+      };
+      for (const path of ["/owner/repo/archive/main.zip", "/api/git/repositories/repo-1/archive"])
+        expect(
+          (await handleGatewayRequest(new Request(`https://gitedge.example.com${path}`), env))
+            .status
+        ).toBe(429);
+      expect(
+        (
+          await handleGatewayRequest(
+            new Request("https://gitedge.example.com/owner/repo/raw/main/README.md"),
+            env
+          )
+        ).status
+      ).toBe(200);
+      expect(gitCalls).toBe(1);
+      expect(limits).toContain(10);
+    });
+
     it("answers 404 JSON instead of the app shell for private repositories", async () => {
       const response = await handleGatewayRequest(
         new Request("https://gitedge.example.com/owner/repo/raw/main/README.md"),

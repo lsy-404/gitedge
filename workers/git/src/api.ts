@@ -66,6 +66,40 @@ function pageNumber(value: string | null, fallback: number, maximum: number): nu
     ? Math.min(parsed, maximum)
     : fallback;
 }
+/** Streams from a handle and disposes it once the consumer finishes, fails or cancels. */
+function releaseWhenSettled(
+  handle: ArtifactsRepo,
+  open: (handle: ArtifactsRepo) => ReadableStream<Uint8Array>
+): ReadableStream<Uint8Array> {
+  const reader = open(handle).getReader();
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    handle[Symbol.dispose]();
+  };
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const next = await reader.read();
+        if (next.done) {
+          release();
+          controller.close();
+        } else controller.enqueue(next.value);
+      } catch (cause) {
+        release();
+        throw cause;
+      }
+    },
+    async cancel(reason) {
+      try {
+        await reader.cancel(reason);
+      } finally {
+        release();
+      }
+    },
+  });
+}
 function validPath(path: string): boolean {
   return (
     path.length <= 2000 &&
@@ -514,12 +548,24 @@ export async function handleGitApi(
         files: plan.files.length,
         directories: plan.directories.length,
       });
-      const body = archiveStream(repo, plan, format, {
-        root: name,
-        mtime: new Date(commit.committedAt * 1000),
-      });
-      if (request.method === "HEAD") await body.cancel();
-      return new Response(request.method === "HEAD" ? null : body, {
+      // HEAD must not start the producer, and the stream outlives this function's `repo`
+      // handle, so it reads through its own handle that is released when the stream settles.
+      const body =
+        request.method === "HEAD"
+          ? null
+          : releaseWhenSettled(await env.ARTIFACTS.get(access.repository.artifactName), (handle) =>
+              archiveStream(handle, plan, format, {
+                root: name,
+                mtime: new Date(commit.committedAt * 1000),
+                onError: (cause) =>
+                  logger.warn("git:archive-aborted", {
+                    format,
+                    code: cause instanceof ArchiveError ? cause.code : "stream_failed",
+                    error: cause instanceof Error ? cause.message : "unknown",
+                  }),
+              })
+            );
+      return new Response(body, {
         headers: {
           ...headers,
           "Content-Type": archiveContentType(format),

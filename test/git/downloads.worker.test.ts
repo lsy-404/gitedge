@@ -170,6 +170,19 @@ describe("source archives", () => {
     expect((await response.arrayBuffer()).byteLength).toBeGreaterThan(20);
   });
 
+  it("answers HEAD without starting the archive stream", async () => {
+    const opened = vi.spyOn(artifacts, "get");
+    const response = await gitCall("public", "archive?ref=main&format=tar.gz", {
+      user: null,
+      method: "HEAD",
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Disposition")).toContain("open-main.tar.gz");
+    expect(response.body).toBeNull();
+    expect(opened).toHaveBeenCalledTimes(1);
+    opened.mockRestore();
+  });
+
   it("rejects unknown formats and refs", async () => {
     expect((await gitCall("public", "archive?ref=main&format=rar", { user: null })).status).toBe(
       400
@@ -237,6 +250,7 @@ describe("tag permissions", () => {
       {},
       { name: "bad name", target: "main" },
       { name: "v1", target: "main", extra: 1 },
+      { name: "a".repeat(40), target: "main" },
     ]) {
       const response = await gitCall("public", "tags", { method: "POST", body: invalid });
       expect(response.status).toBe(400);

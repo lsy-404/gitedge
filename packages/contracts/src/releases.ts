@@ -8,7 +8,10 @@ export const RELEASE_REPOSITORY_ASSET_BYTES = 10 * 1024 * 1024 * 1024;
 export const RELEASE_LIST_LIMIT = 100;
 export const TAG_LIST_LIMIT = 100;
 
-export const GitTagNameSchema = GitBranchSchema.refine((value) => value.length <= 200);
+/** A tag spelled like a full commit id would be indistinguishable from one in raw and archive URLs. */
+export const GitTagNameSchema = GitBranchSchema.refine(
+  (value) => value.length <= 200 && !GitOidSchema.safeParse(value).success
+);
 /** Branch name or full commit id a new tag points at. */
 export const TagTargetSchema = z.union([GitOidSchema, GitBranchSchema]);
 

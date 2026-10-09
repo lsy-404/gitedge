@@ -150,9 +150,17 @@ describe("source archives", () => {
       };
       const store = fakeStore(big);
       const plan = await planArchive(store, "root", limits);
-      await expect(collect(archiveStream(store, plan, format, options))).rejects.toMatchObject({
-        code: "archive_too_large",
-      });
+      const failures: unknown[] = [];
+      await expect(
+        collect(
+          archiveStream(store, plan, format, {
+            ...options,
+            onError: (cause) => failures.push(cause),
+          })
+        )
+      ).rejects.toMatchObject({ code: "archive_too_large" });
+      expect(failures).toHaveLength(1);
+      expect(failures[0]).toBeInstanceOf(ArchiveError);
     });
 
     it(`fails the ${format} stream when one file exceeds the per-file cap`, async () => {
