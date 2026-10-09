@@ -41,13 +41,24 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-async function mountHooks() {
+async function mountHooks(canManage = true) {
   return mountAt("/_verify/webhooks", "/_verify/webhooks", () =>
-    h(RepositoryWebhooks, { repositoryId: "repo-1", canManage: true })
+    h(RepositoryWebhooks, { repositoryId: "repo-1", canManage })
   );
 }
 
 describe("repository webhooks", () => {
+  it("does not request administrator-only webhook settings for other members", async () => {
+    const list = vi.spyOn(api, "repositoryWebhooks").mockResolvedValue([]);
+    const mounted = await mountHooks(false);
+    await settle();
+    expect(list).not.toHaveBeenCalled();
+    expect(mounted.root.textContent).toContain("signed JSON");
+    expect(mounted.root.querySelector("form")).toBeNull();
+    expect(mounted.root.querySelector('[role="alert"]')).toBeNull();
+    mounted.unmount();
+  });
+
   it("lists hooks, creates one and shows the generated secret once", async () => {
     vi.spyOn(api, "repositoryWebhooks").mockResolvedValue([structuredClone(hook)]);
     const create = vi.spyOn(api, "createRepositoryWebhook").mockResolvedValue({

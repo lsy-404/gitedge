@@ -220,12 +220,19 @@ function statusTone(delivery: RepositoryWebhookDelivery): "success" | "danger" |
 }
 
 watch(
-  () => props.repositoryId,
-  () => {
+  () => [props.repositoryId, props.canManage] as const,
+  ([, canManage]) => {
     resetForm();
     openDeliveries.value = null;
     revealedSecret.value = "";
-    void load();
+    hooks.value = [];
+    // Webhook settings are administrator-only; other members would only receive 403.
+    if (canManage) void load();
+    else {
+      loadVersion += 1;
+      loading.value = false;
+      error.value = "";
+    }
   },
   { immediate: true }
 );
@@ -237,8 +244,13 @@ watch(
       <h3 id="webhooks-title">{{ t("repoSettingsWebhooks") }}</h3>
     </header>
     <p class="box-row field-hint">{{ t("webhooksIntro") }}</p>
-    <StatusState v-if="loading || error" :loading="loading" :error="error" @retry="load" />
-    <template v-else>
+    <StatusState
+      v-if="canManage && (loading || error)"
+      :loading="loading"
+      :error="error"
+      @retry="load"
+    />
+    <template v-else-if="canManage">
       <p v-if="!hooks.length" class="settings-empty">{{ t("webhooksEmpty") }}</p>
       <ul v-else class="settings-list">
         <li v-for="hook in hooks" :key="hook.id" class="box-row webhook-item">

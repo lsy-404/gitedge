@@ -636,6 +636,28 @@ describe("webhook delivery", () => {
     expect(left?.total).toBe(0);
   });
 
+  it("records a retry instead of failing when the secret cannot be decrypted", async () => {
+    const hook = await createHook();
+    const rotated = { WEBHOOK_ENCRYPTION_KEY: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=" };
+    const ping = await call(
+      `/repositories/rp/webhooks/${hook.id}/ping`,
+      "POST",
+      "owner",
+      undefined,
+      {
+        env: rotated,
+      }
+    );
+    expect(ping.status).toBe(502);
+    expect(await json<RepositoryWebhookDelivery>(ping)).toMatchObject({
+      event: "ping",
+      status: "pending",
+      errorCode: "delivery_error",
+      attemptCount: 1,
+    });
+    expect(sent).toEqual([]);
+  });
+
   it("does not follow redirects", async () => {
     respondWith = () => 302;
     const hook = await createHook();

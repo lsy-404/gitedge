@@ -1260,19 +1260,28 @@ async function featureRequest(
               "Answer comment must belong to this discussion."
             );
         }
-        const changed = await env.DB.prepare(
-          "UPDATE forge_discussions SET title = COALESCE(?, title), body = COALESCE(?, body), state = COALESCE(?, state), answer_comment_id = CASE WHEN ? THEN ? ELSE answer_comment_id END, updated_at = ? WHERE id = ?"
-        )
-          .bind(
+        const [changed] = await env.DB.batch([
+          env.DB.prepare(
+            "UPDATE forge_discussions SET title = COALESCE(?, title), body = COALESCE(?, body), state = COALESCE(?, state), answer_comment_id = CASE WHEN ? THEN ? ELSE answer_comment_id END, updated_at = ? WHERE id = ?"
+          ).bind(
             p.title ?? null,
             p.body ?? null,
             p.state ?? null,
             p.answerCommentId === null ? 1 : p.answerCommentId ? 1 : 0,
-            p.answerCommentId,
+            p.answerCommentId ?? null,
             Date.now(),
             current.id
-          )
-          .run();
+          ),
+          ...(p.body !== undefined
+            ? await threadNotificationStatements(
+                env,
+                repository,
+                user,
+                { kind: "discussion", id: String(current.id), number },
+                { body: p.body, previousBody: String(current.body), participants: false }
+              )
+            : []),
+        ]);
         if (changed.meta.changes !== 1)
           return errorResponse(409, "conflict", "Discussion changed while it was being updated.");
       }

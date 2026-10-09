@@ -75,10 +75,10 @@ export async function actionsCheck(
     .first<{ id: string }>();
   if (latest?.id !== run.id) return dataResponse({ superseded: true });
   const pulls = await env.DB.prepare(
-    "SELECT id, merge_started_at FROM forge_pull_requests WHERE repository_id=? AND head_ref=? AND head_session_id IS NULL AND state='open' LIMIT 101"
+    "SELECT id, number, merge_started_at FROM forge_pull_requests WHERE repository_id=? AND head_ref=? AND head_session_id IS NULL AND state='open' LIMIT 101"
   )
     .bind(run.repository_id, run.source_ref)
-    .all<{ id: string; merge_started_at: number | null }>();
+    .all<{ id: string; number: number; merge_started_at: number | null }>();
   if (pulls.results.length > 100)
     return errorResponse(413, "pull_limit", "Too many pull requests for this head.");
   if (
@@ -90,19 +90,13 @@ export async function actionsCheck(
   const repository = pulls.results.length > 0 ? await loadRepository(run.repository_id) : null;
   if (pulls.results.length > 0) {
     const now = Date.now();
-    const numbers = await env.DB.prepare(
-      `SELECT id, number FROM forge_pull_requests WHERE id IN (${pulls.results.map(() => "?").join(", ")})`
-    )
-      .bind(...pulls.results.map((pull) => pull.id))
-      .all<{ id: string; number: number }>();
-    const numberById = new Map(numbers.results.map((row) => [row.id, row.number]));
     await env.DB.batch(
       pulls.results.flatMap((pull) => {
         const applied = {
           sql: "EXISTS (SELECT 1 FROM forge_check_runs WHERE pull_request_id = ? AND commit_oid = ? AND name = ? AND actor_key = 'ci:gitedge-actions' AND updated_at = ?)",
           binds: [pull.id, run.commit_oid, run.path, now],
         };
-        const number = numberById.get(pull.id) ?? 0;
+        const number = pull.number;
         return [
           checkStatement(
             env.DB,

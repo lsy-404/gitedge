@@ -180,6 +180,40 @@ describe("notification generation", () => {
     expect(reader.items.find((item) => item.subjectNumber === created.number)).toBeUndefined();
   });
 
+  it("notifies mentions added by a discussion edit", async () => {
+    const created = await json<{ number: number }>(
+      await call("/repositories/rp/discussions", "POST", "owner", {
+        title: "Plans",
+        body: "draft",
+        category: "general",
+      }),
+      201
+    );
+    expect((await reasons("writer"))[`discussion:${created.number}`]).toBeUndefined();
+    await json(
+      await call(`/repositories/rp/discussions/${created.number}`, "PATCH", "owner", {
+        body: "draft for @writer",
+      }),
+      200
+    );
+    expect((await reasons("writer"))[`discussion:${created.number}`]).toBe("mentioned");
+  });
+
+  it("does not repeat the invitation when a collaborator's role changes", async () => {
+    await json(await call("/notifications/read", "POST", "writer", { all: true }), 200);
+    for (const role of ["read", "write"] as const)
+      expect(
+        (
+          await call("/repositories/rp/collaborators", "PUT", "owner", {
+            identifier: "writer",
+            role,
+          })
+        ).status
+      ).toBe(200);
+    const unread = await inbox("writer", "?unread=true&reason=invited");
+    expect(unread.items).toEqual([]);
+  });
+
   it("notifies assignees and requested reviewers", async () => {
     const created = await issue("owner", "Assign me");
     await json(
@@ -355,6 +389,24 @@ describe("notification listing", () => {
     expect(
       (await call("/notification-preferences", "PUT", "reader", { mutedReasons: ["nope"] })).status
     ).toBe(400);
+  });
+
+  it("requires the admin token scope to change preferences", async () => {
+    const readOnly = { token: { id: "t-read", scopes: ["repo:read" as const] } };
+    expect(
+      (await call("/notification-preferences", "GET", "reader", undefined, readOnly)).status
+    ).toBe(200);
+    expect(
+      (await call("/notification-preferences", "PUT", "reader", { mutedReasons: [] }, readOnly))
+        .status
+    ).toBe(403);
+    expect(
+      (await call("/notifications/read", "POST", "reader", { all: true }, readOnly)).status
+    ).toBe(200);
+    const admin = { token: { id: "t-admin", scopes: ["admin" as const] } };
+    expect(
+      (await call("/notification-preferences", "PUT", "reader", { mutedReasons: [] }, admin)).status
+    ).toBe(200);
   });
 
   it("limits tokens to their repositories and refuses agent sessions", async () => {

@@ -258,6 +258,25 @@ async function attempt(env: ForgeEnv, row: DeliveryRow, now: number): Promise<vo
   });
 }
 
+/** Runs one attempt; unexpected failures (such as an undecryptable secret) schedule a retry instead of escaping. */
+async function attemptSafely(env: ForgeEnv, row: DeliveryRow, now: number): Promise<void> {
+  try {
+    await attempt(env, row, now);
+  } catch {
+    createLogger(env.LOG_LEVEL, { service: "forge-webhooks", repoId: row.repositoryId }).error(
+      "webhook:delivery-error",
+      { deliveryId: row.id }
+    );
+    await finish(env, row, {
+      status: row.attemptCount >= WEBHOOK_MAX_ATTEMPTS ? "failed" : "pending",
+      responseStatus: null,
+      errorCode: "delivery_error",
+      nextAttemptAt: now + webhookRetryDelay(row.attemptCount),
+      deliveredAt: null,
+    });
+  }
+}
+
 async function claim(env: ForgeEnv, id: string, now: number, due: boolean): Promise<boolean> {
   const result = await env.DB.prepare(
     `UPDATE forge_webhook_deliveries SET status = 'processing', lease_until = ?, attempt_count = attempt_count + 1 WHERE id = ? AND attempt_count < ? AND ((status = 'pending'${due ? " AND next_attempt_at <= ?" : ""}) OR (status = 'processing' AND lease_until <= ?))`
@@ -294,19 +313,9 @@ export async function drainWebhookDeliveries(
     const row = await claimedRow(env, id);
     if (!row) continue;
     processed += 1;
-    try {
-      await attempt(env, row, now);
-    } catch {
-      logger.error("webhook:delivery-error", { deliveryId: id });
-      await finish(env, row, {
-        status: row.attemptCount >= WEBHOOK_MAX_ATTEMPTS ? "failed" : "pending",
-        responseStatus: null,
-        errorCode: "delivery_error",
-        nextAttemptAt: now + webhookRetryDelay(row.attemptCount),
-        deliveredAt: null,
-      });
-    }
+    await attemptSafely(env, row, now);
   }
+  if (due.results.length === limit) logger.info("webhook:drain-limited", { limit, processed });
   return processed;
 }
 
@@ -342,7 +351,7 @@ async function deliverNow(env: ForgeEnv, id: string): Promise<DeliveryRow | null
   const now = Date.now();
   if (await claim(env, id, now, false)) {
     const row = await claimedRow(env, id);
-    if (row) await attempt(env, row, now);
+    if (row) await attemptSafely(env, row, now);
   }
   return claimedRow(env, id);
 }

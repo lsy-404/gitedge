@@ -123,11 +123,12 @@ export async function repositoryControls(
         .first<{ count: number }>();
       if ((count?.count ?? 0) >= 80)
         return errorResponse(409, "member_limit", "Collaborator limit reached.");
+      const addedAt = Date.now();
       await env.DB.batch([
         env.DB.prepare(
           "INSERT INTO repository_collaborators(repository_id,user_id,role,created_at) VALUES (?,?,?,?) ON CONFLICT(repository_id,user_id) DO UPDATE SET role=excluded.role"
-        ).bind(repo.id, person.id, parsed.data.role, Date.now()),
-        invitationNotificationStatement(env.DB, repo.id, user.id, person.id),
+        ).bind(repo.id, person.id, parsed.data.role, addedAt),
+        invitationNotificationStatement(env.DB, repo.id, user.id, person.id, addedAt),
       ]);
       logger.info("collaborator:saved", { userId: person.id, role: parsed.data.role });
       return dataResponse({

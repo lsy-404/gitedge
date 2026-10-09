@@ -51,8 +51,9 @@ interface Subject {
   readonly number: number | null;
 }
 
+// Id lists travel as one JSON bind because D1 caps a statement at 100 bound parameters.
 function userIds(ids: readonly string[]): RecipientSet {
-  return { sql: ids.map(() => "?").join(", "), binds: ids };
+  return { sql: "SELECT value FROM json_each(?)", binds: [JSON.stringify(ids)] };
 }
 
 function ownerIds(target: NotificationTarget): RecipientSet {
@@ -125,11 +126,10 @@ export async function mentionedUserIds(
     createLogger(env.LOG_LEVEL, { service: "forge" }).warn("notifications:mentions-truncated", {
       count: logins.length,
     });
-  const capped = logins.slice(0, MAX_MENTIONS);
   const rows = await env.DB.prepare(
-    `SELECT id FROM users WHERE identifier IN (${capped.map(() => "?").join(", ")})`
+    "SELECT id FROM users WHERE identifier IN (SELECT value FROM json_each(?))"
   )
-    .bind(...capped)
+    .bind(JSON.stringify(logins.slice(0, MAX_MENTIONS)))
     .all<{ id: string }>();
   return rows.results.map((row) => row.id);
 }
@@ -228,11 +228,13 @@ export function outcomeNotificationStatement(
   );
 }
 
+/** Notifies a collaborator added at `addedAt`; role changes of an existing collaborator stay silent. */
 export function invitationNotificationStatement(
   db: D1Database,
   repositoryId: string,
   actorId: string,
-  inviteeId: string
+  inviteeId: string,
+  addedAt: number
 ): D1PreparedStatement {
   return insertNotifications(
     db,
@@ -241,7 +243,11 @@ export function invitationNotificationStatement(
     "invited",
     actorId,
     userIds([inviteeId]),
-    Date.now()
+    addedAt,
+    {
+      sql: "EXISTS (SELECT 1 FROM repository_collaborators WHERE repository_id = ? AND user_id = ? AND created_at = ?)",
+      binds: [repositoryId, inviteeId, addedAt],
+    }
   );
 }
 
@@ -262,7 +268,10 @@ interface NotificationRow {
 function allowlist(user: TrustedUser): { sql: string; binds: string[] } {
   const ids = user.token?.repositoryIds;
   return ids
-    ? { sql: ` AND n.repository_id IN (${ids.map(() => "?").join(", ")})`, binds: ids }
+    ? {
+        sql: " AND n.repository_id IN (SELECT value FROM json_each(?))",
+        binds: [JSON.stringify(ids)],
+      }
     : { sql: "", binds: [] };
 }
 
@@ -337,7 +346,7 @@ async function markRead(env: ForgeEnv, request: Request, user: TrustedUser): Pro
   const input = parsed.data;
   const filter =
     "ids" in input
-      ? { sql: ` AND n.id IN (${input.ids.map(() => "?").join(", ")})`, binds: input.ids }
+      ? { sql: " AND n.id IN (SELECT value FROM json_each(?))", binds: [JSON.stringify(input.ids)] }
       : input.repositoryId
         ? { sql: " AND n.repository_id = ?", binds: [input.repositoryId] }
         : { sql: "", binds: [] };
