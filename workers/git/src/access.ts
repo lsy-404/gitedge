@@ -29,6 +29,7 @@ export interface GitRepositoryRow {
   agentsEnabled: number;
   graphEnabled: number;
   onlineEditingEnabled: number;
+  cacheGeneration: number;
 }
 export interface GitRepositoryAccess {
   repository: GitRepositoryRow;
@@ -49,7 +50,7 @@ export async function resolveGitAccess(
   )
     return null;
   const repository = await env.DB.prepare(
-    "SELECT r.id, r.namespace_id AS namespaceId, r.artifact_name AS artifactName, r.remote, r.default_branch AS defaultBranch, r.visibility, n.slug AS owner, r.slug, r.archived, r.agents_enabled AS agentsEnabled, r.graph_enabled AS graphEnabled,r.online_editing_enabled AS onlineEditingEnabled,0 AS canWrite FROM repositories r JOIN namespaces n ON n.id = r.namespace_id WHERE r.id = ? AND r.deleted_at IS NULL"
+    "SELECT r.id, r.namespace_id AS namespaceId, r.artifact_name AS artifactName, r.remote, r.default_branch AS defaultBranch, r.visibility, n.slug AS owner, r.slug, r.archived, r.agents_enabled AS agentsEnabled, r.graph_enabled AS graphEnabled,r.online_editing_enabled AS onlineEditingEnabled,r.cache_generation AS cacheGeneration,0 AS canWrite FROM repositories r JOIN namespaces n ON n.id = r.namespace_id WHERE r.id = ? AND r.deleted_at IS NULL"
   )
     .bind(repositoryId)
     .first<GitRepositoryRow>();

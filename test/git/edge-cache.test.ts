@@ -18,7 +18,7 @@ const oid = "a".repeat(40);
 const other = "b".repeat(40);
 const scope: RepositoryCacheScope = {
   repositoryId: "repo-1",
-  namespaceId: "ns-1",
+  generation: 3,
   artifactName: "artifact-1",
 };
 const publicAnonymous: EdgeAudience = { shared: true, anonymous: true };
@@ -52,7 +52,7 @@ describe("edge cache keys", () => {
 
   it("is built from repository generation, resource, id and parameters", () => {
     const key = new URL(edgeCacheKey(scope, "tree", address, { path: "src", ref: "main" }).url);
-    expect(key.pathname).toBe(`/v1/public/repo-1/ns-1/artifact-1/tree/${oid}`);
+    expect(key.pathname).toBe(`/v1/public/repo-1/g3/artifact-1/tree/${oid}`);
     expect(key.search).toBe("?path=src&ref=main");
   });
 
@@ -69,7 +69,7 @@ describe("edge cache keys", () => {
       edgeCacheKey(scope, "tree", { kind: "ref", oid: other }, { path: "" }),
       edgeCacheKey(scope, "file", address, { path: "" }),
       edgeCacheKey(scope, "tree", address, { path: "docs" }),
-      edgeCacheKey({ ...scope, namespaceId: "ns-2" }, "tree", address, { path: "" }),
+      edgeCacheKey({ ...scope, generation: 4 }, "tree", address, { path: "" }),
       edgeCacheKey({ ...scope, artifactName: "artifact-2" }, "tree", address, { path: "" }),
       edgeCacheKey({ ...scope, repositoryId: "repo-2" }, "tree", address, { path: "" }),
       edgeCacheKey(scope, "tree", { kind: "listing" }, { path: "" }),
@@ -78,10 +78,10 @@ describe("edge cache keys", () => {
   });
 
   it("is absent for repositories without Artifacts storage", () => {
-    expect(repositoryCacheScope({ id: "r", namespaceId: "n", artifactName: null })).toBeNull();
-    expect(repositoryCacheScope({ id: "r", namespaceId: "n", artifactName: "a" })).toEqual({
+    expect(repositoryCacheScope({ id: "r", cacheGeneration: 2, artifactName: null })).toBeNull();
+    expect(repositoryCacheScope({ id: "r", cacheGeneration: 2, artifactName: "a" })).toEqual({
       repositoryId: "r",
-      namespaceId: "n",
+      generation: 2,
       artifactName: "a",
     });
   });
@@ -271,6 +271,15 @@ describe("edge reads", () => {
     const cache = new MemoryCache();
     const response = await read(cache, {
       compute: async () => Response.json({ data: "x".repeat(EDGE_CACHE_MAX_BYTES + 1) }),
+    });
+    expect(response.status).toBe(200);
+    expect(cache.writes).toBe(0);
+  });
+
+  it("measures the stored size in bytes rather than characters", async () => {
+    const cache = new MemoryCache();
+    const response = await read(cache, {
+      compute: async () => Response.json({ data: "é".repeat(EDGE_CACHE_MAX_BYTES / 2 + 1) }),
     });
     expect(response.status).toBe(200);
     expect(cache.writes).toBe(0);

@@ -503,7 +503,7 @@ export async function handleGitApi(
   if (request.method !== "GET" && request.method !== "HEAD")
     return errorResponse(405, "method_not_allowed", "Method is not allowed.");
   const artifactName = access.repository.artifactName;
-  const dispatch = async (): Promise<Response> => {
+  const dispatch = async (target = ref): Promise<Response> => {
     if (resource === "community")
       return dataResponse(await repositoryCommunity(env, access.repository, repo, ref));
     if (resource === "refs") return dataResponse(await listArtifactRefs(repo, env.LOG_LEVEL));
@@ -570,7 +570,7 @@ export async function handleGitApi(
         : errorResponse(404, "not_found", "Commit was not found.");
     }
     if (resource === "files") {
-      const list = await listFiles(repo, ref);
+      const list = await listFiles(repo, target);
       if (!list) return errorResponse(404, "not_found", "Ref was not found.");
       if (list.truncated)
         logger.warn("artifacts:file-list-truncated", { paths: list.paths.length });
@@ -581,7 +581,7 @@ export async function handleGitApi(
       if (cursor !== null && !GitOidSchema.safeParse(cursor).success)
         return errorResponse(400, "bad_request", "Invalid history cursor.");
       if (!path) return errorResponse(400, "bad_request", "A file or directory path is required.");
-      const history = await pathHistory(repo, cursor ?? ref, path);
+      const history = await pathHistory(repo, cursor ?? target, path);
       logger.debug("artifacts:path-history", {
         inspected: history.inspected,
         matches: history.commits.length,
@@ -590,7 +590,7 @@ export async function handleGitApi(
       return dataResponse(history);
     }
     if (resource === "blame") {
-      const result = path ? await blameFile(repo, ref, path) : { status: "not_found" as const };
+      const result = path ? await blameFile(repo, target, path) : { status: "not_found" as const };
       if (result.status === "not_found")
         return errorResponse(404, "not_found", "File was not found.");
       if (result.status === "unsupported")
@@ -609,20 +609,20 @@ export async function handleGitApi(
       return dataResponse(
         (
           await repo.log({
-            ref,
+            ref: target,
             limit: Math.max(1, pageNumber(url.searchParams.get("limit"), 30, 100)),
             offset: pageNumber(url.searchParams.get("offset"), 0, 10000),
           })
         ).map(commitResponse)
       );
     if (resource === "tree") {
-      const tree = await readArtifactTree(repo, ref, path);
+      const tree = await readArtifactTree(repo, target, path);
       return tree
-        ? dataResponse(tree)
+        ? dataResponse({ ...tree, ref })
         : errorResponse(404, "not_found", "Directory was not found.");
     }
     if (resource === "file") {
-      const file = path ? await readArtifactFile(repo, ref, path) : null;
+      const file = path ? await readArtifactFile(repo, target, path) : null;
       return file ? dataResponse(file) : errorResponse(404, "not_found", "File was not found.");
     }
     if (resource === "tags") {
@@ -797,6 +797,7 @@ export async function handleGitApi(
     shared: access.repository.visibility === "public" && !session,
     anonymous: !access.user,
   };
+  const address = await edgeAddress(repo, reference, audience.shared);
   return await serveEdgeRead({
     request,
     cache: caches.default,
@@ -804,9 +805,11 @@ export async function handleGitApi(
     logger,
     scope,
     resource,
-    address: await edgeAddress(repo, reference, audience.shared),
+    address,
     audience,
     params: reference.params,
-    compute: dispatch,
+    // A branch is read at the commit it resolved to, so a concurrent push cannot store newer
+    // content under the older commit's key.
+    compute: () => dispatch(address?.kind === "ref" ? address.oid : ref),
   });
 }

@@ -131,7 +131,7 @@ Unset or invalid values use `not_found`. The policy covers browser repository ro
 
 ## Edge caching
 
-Public repository reads are cached close to readers and never shared for private data. Commit-addressed responses are immutable; branch and tag reads are resolved to their commit on each request, so a push is visible immediately and conditional requests answer 304. Visibility changes and deletion take effect at once because access is checked before any cache lookup. Inspect the `X-GitEdge-Cache` response header (`hit`, `miss`, `revalidated`, `bypass`) to verify behavior; the classes and limits are described in [docs/architecture.md](docs/architecture.md#edge-caching).
+Public repository reads are cached close to readers and never shared for private data. Commit-addressed responses are immutable; branch and tag reads are resolved to their commit on each request, so a push is visible immediately and conditional requests answer 304. Visibility changes, transfers, renames and deletion take effect at once: access is checked before any cache lookup, and each of those changes moves the repository to a new cache generation. Inspect the `X-GitEdge-Cache` response header (`hit`, `miss`, `revalidated`, `bypass`) to verify behavior; the classes and limits are described in [docs/architecture.md](docs/architecture.md#edge-caching).
 
 ## License
 

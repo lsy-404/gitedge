@@ -35,24 +35,25 @@ export interface EdgeAudience {
 
 export interface RepositoryCacheScope {
   readonly repositoryId: string;
-  readonly namespaceId: string;
+  readonly generation: number;
   readonly artifactName: string;
 }
 
 /**
- * Cache keys embed the repository, its owning namespace and its storage name, so a transfer or a
- * re-import starts a fresh generation. Visibility and deletion are re-read from D1 before every
- * lookup, which keeps entries unreachable while a repository is private or deleted.
+ * Cache keys embed the repository, its cache generation and its storage name. A database trigger
+ * bumps the generation whenever visibility, owner, name, deletion state or storage changes, so
+ * entries written before such a change are never read again; visibility and deletion are also
+ * re-read from D1 before every lookup.
  */
 export function repositoryCacheScope(repository: {
   readonly id: string;
-  readonly namespaceId: string;
+  readonly cacheGeneration: number;
   readonly artifactName: string | null;
 }): RepositoryCacheScope | null {
   return repository.artifactName
     ? {
         repositoryId: repository.id,
-        namespaceId: repository.namespaceId,
+        generation: repository.cacheGeneration,
         artifactName: repository.artifactName,
       }
     : null;
@@ -68,7 +69,7 @@ export function edgeCacheKey(
     KEY_VERSION,
     "public",
     scope.repositoryId,
-    scope.namespaceId,
+    `g${scope.generation}`,
     scope.artifactName,
     resource,
     address.kind === "listing" ? "listing" : address.oid,
@@ -230,7 +231,8 @@ export async function serveEdgeRead(input: EdgeReadInput): Promise<Response> {
   const text = await response.text();
   const etag = known ?? `"${await sha256Hex(text)}"`;
   const contentType = response.headers.get("Content-Type") ?? "application/json";
-  if (text.length <= EDGE_CACHE_MAX_BYTES) {
+  const bytes = new TextEncoder().encode(text).byteLength;
+  if (bytes <= EDGE_CACHE_MAX_BYTES) {
     const ttl = address.kind === "listing" ? STORE_TTL_LISTING : STORE_TTL_CONTENT;
     const write = input.cache
       .put(
@@ -252,7 +254,7 @@ export async function serveEdgeRead(input: EdgeReadInput): Promise<Response> {
     if (input.waitUntil) input.waitUntil(write);
     else await write;
   } else {
-    logger.warn("git:edge-cache-skipped", { resource: input.resource, bytes: text.length });
+    logger.warn("git:edge-cache-skipped", { resource: input.resource, bytes });
   }
   if (matchesEtag(conditional, etag)) return notModified(etag, "miss");
   return jsonResponse(

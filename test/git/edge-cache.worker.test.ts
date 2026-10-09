@@ -10,7 +10,31 @@ const migrations = import.meta.glob<string>("../../migrations/*.sql", {
   import: "default",
   eager: true,
 });
-const artifacts = new FixtureArtifacts();
+/** Runs a hook after the next ref resolution, the moment a concurrent push could land. */
+class RacingArtifacts extends FixtureArtifacts {
+  private race: (() => Promise<void>) | null = null;
+
+  afterNextLog(hook: () => Promise<void>): void {
+    this.race = hook;
+  }
+
+  override async get(name: string): Promise<ArtifactsRepo> {
+    const handle = await super.get(name);
+    const log = handle.log.bind(handle);
+    return {
+      ...handle,
+      log: async (options) => {
+        const commits = await log(options);
+        const race = this.race;
+        this.race = null;
+        if (race) await race();
+        return commits;
+      },
+    };
+  }
+}
+
+const artifacts = new RacingArtifacts();
 const gitEnv = { DB: env.DB, ARTIFACTS: artifacts };
 const owner = { id: "owner-id", identifier: "owner", groupKey: "free" };
 const files = { "README.md": "# demo\n" };
@@ -65,7 +89,17 @@ beforeAll(async () => {
   await createRepository("gone", "public");
   await createRepository("moved", "public");
   await createRepository("pushed", "public");
+  await createRepository("raced", "public");
+  await createRepository("toggled", "public");
+  await createRepository("renamed", "public");
 });
+
+async function artifactName(repositoryId: string): Promise<string> {
+  const row = await env.DB.prepare("SELECT artifact_name AS name FROM repositories WHERE id=?")
+    .bind(repositoryId)
+    .first<{ name: string }>();
+  return row?.name ?? "";
+}
 
 describe("edge cache for public repositories", () => {
   it("serves repeated anonymous branch reads from the cache with the resolved commit as validator", async () => {
@@ -104,14 +138,78 @@ describe("edge cache for public repositories", () => {
     expect(
       (await call("pushed", "file?ref=main&path=README.md")).headers.get("X-GitEdge-Cache")
     ).toBe("hit");
-    const row = await env.DB.prepare("SELECT artifact_name AS name FROM repositories WHERE id=?")
-      .bind("pushed")
-      .first<{ name: string }>();
-    const moved = await artifacts.seedFiles(row?.name ?? "", { "README.md": "# changed\n" });
+    const moved = await artifacts.seedFiles(await artifactName("pushed"), {
+      "README.md": "# changed\n",
+    });
     const after = await call("pushed", "file?ref=main&path=README.md");
     expect(after.headers.get("X-GitEdge-Cache")).toBe("miss");
     expect(after.headers.get("ETag")).toBe(`"${moved}"`);
     expect(await after.json()).toMatchObject({ data: { content: "# changed\n" } });
+  });
+
+  it("stores a branch read under the commit it was computed from when a push races the fill", async () => {
+    const name = await artifactName("raced");
+    const repository = artifacts.repositories.get(name);
+    const before = [...(repository?.commits ?? [])];
+    const original = before[0]?.hash ?? "";
+    let pushed = "";
+    artifacts.afterNextLog(async () => {
+      pushed = await artifacts.seedFiles(name, { "README.md": "# raced\n" });
+      repository?.branchCommits.set(original, before);
+    });
+    const raced = await call("raced", "file?ref=main&path=README.md");
+    expect(raced.headers.get("ETag")).toBe(`"${original}"`);
+    expect(await raced.json()).toMatchObject({ data: { content: "# demo\n" } });
+    const next = await call("raced", "file?ref=main&path=README.md");
+    expect(next.headers.get("X-GitEdge-Cache")).toBe("miss");
+    expect(next.headers.get("ETag")).toBe(`"${pushed}"`);
+    expect(await next.json()).toMatchObject({ data: { content: "# raced\n" } });
+  });
+
+  it("keeps the requested ref name in cached tree responses", async () => {
+    const response = await call("open", "tree?ref=main");
+    expect(await response.json()).toMatchObject({ data: { ref: "main" } });
+  });
+});
+
+describe("repository cache generation", () => {
+  async function generation(id: string): Promise<number> {
+    const row = await env.DB.prepare(
+      "SELECT cache_generation AS value FROM repositories WHERE id=?"
+    )
+      .bind(id)
+      .first<{ value: number }>();
+    return row?.value ?? -1;
+  }
+
+  it("moves to a new keyspace when visibility changes, even after it changes back", async () => {
+    expect((await call("toggled", `files?ref=${head}`)).headers.get("X-GitEdge-Cache")).toBe(
+      "miss"
+    );
+    expect((await call("toggled", `files?ref=${head}`)).headers.get("X-GitEdge-Cache")).toBe("hit");
+    const start = await generation("toggled");
+    await env.DB.prepare("UPDATE repositories SET visibility='private' WHERE id='toggled'").run();
+    await env.DB.prepare("UPDATE repositories SET visibility='public' WHERE id='toggled'").run();
+    expect(await generation("toggled")).toBe(start + 2);
+    expect((await call("toggled", `files?ref=${head}`)).headers.get("X-GitEdge-Cache")).toBe(
+      "miss"
+    );
+  });
+
+  it("is bumped by rename and deletion but not by unrelated settings", async () => {
+    expect((await call("renamed", "tree?ref=main")).headers.get("X-GitEdge-Cache")).toBe("miss");
+    const start = await generation("renamed");
+    await env.DB.prepare(
+      "UPDATE repositories SET description='changed', visibility='public', updated_at=5 WHERE id='renamed'"
+    ).run();
+    expect(await generation("renamed")).toBe(start);
+    expect((await call("renamed", "tree?ref=main")).headers.get("X-GitEdge-Cache")).toBe("hit");
+    await env.DB.prepare("UPDATE repositories SET slug='renamed-again' WHERE id='renamed'").run();
+    expect(await generation("renamed")).toBe(start + 1);
+    expect((await call("renamed", "tree?ref=main")).headers.get("X-GitEdge-Cache")).toBe("miss");
+    await env.DB.prepare("UPDATE repositories SET deleted_at=9 WHERE id='renamed'").run();
+    await env.DB.prepare("UPDATE repositories SET deleted_at=NULL WHERE id='renamed'").run();
+    expect(await generation("renamed")).toBe(start + 3);
   });
 });
 
