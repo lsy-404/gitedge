@@ -10,6 +10,6 @@ Forge: `GET /api/forge/usage` returns the caller's repository count, storage use
 
 Git: `/api/git/repositories/:id/refs`, `tree`, `file`, `raw`, `commits`, `graph` and `compare`. Reads accept appropriate `ref`, `path`, `offset` or `limit` queries. Comparisons accept `base`, `head` and a validated `headSessionId`. Agent sessions operate on their own workspace by default.
 
-Actions: `/api/actions/repositories/:id[/...]`, `/api/actions/runs/:id` and `/api/actions/runs/:id/cancel`.
+Actions: `/api/actions/repositories/:id[/...]`, `/api/actions/runs/:id` and `/api/actions/runs/:id/cancel`. Starting a run beyond six per repository per hour returns 429 `run_limit` with a `Retry-After` header.
 
 Deploy: `/api/deploy/plan`, `session`, `account`, `resources`, `provision`, `migrate` and `deploy`. See [the deployment manifest](deploy.md) for source and permission requirements.

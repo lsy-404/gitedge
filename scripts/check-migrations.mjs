@@ -1,7 +1,7 @@
 import { readdirSync } from "node:fs";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-const migrationsDirectory = "migrations";
+const migrationsDirectory = fileURLToPath(new URL("../migrations/", import.meta.url));
 const filenamePattern = /^(\d{4})_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$/;
 
 // Numbers that were skipped historically and must never be reused or reported again.

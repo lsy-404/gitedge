@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { trustedHeaders } from "../../packages/contracts/src/trust";
 import actions from "../../workers/actions/src/index";
 
@@ -308,5 +308,72 @@ jobs:
     await expect(internal.json()).resolves.toMatchObject({
       data: { runs: [{ workflowName: "Push checks", commitOid: "c".repeat(40) }], failures: [] },
     });
+  });
+
+  it("tells the caller when the hourly run limit frees a slot", async () => {
+    const now = 1_800_000_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    const files = [
+      { path: ".github/workflows/checks.yml", contentBase64: btoa(workflow), mode: "100644" },
+    ];
+    const env = {
+      DB: {
+        prepare(sql: string) {
+          return {
+            bind() {
+              return {
+                first: async () =>
+                  sql.includes("CASE WHEN m.role")
+                    ? { role: "admin" }
+                    : sql.includes("OFFSET")
+                      ? { created_at: now - 59 * 60 * 1000 - 500 }
+                      : {
+                          id: "repository-1",
+                          created_by: "user-1",
+                          visibility: "public",
+                          archived: 0,
+                          actions_enabled: 1,
+                          actions_network_enabled: 0,
+                          default_branch: "main",
+                        },
+                run: async () => ({ meta: { changes: 0 } }),
+              };
+            },
+          };
+        },
+      },
+      ACTION_RUNS: { getByName: () => ({ isContainerConfigured: async () => true }) },
+      GIT: {
+        fetch: async () =>
+          Response.json({
+            data: {
+              oid: "d".repeat(40),
+              totalBytes: new TextEncoder().encode(workflow).byteLength,
+              files,
+            },
+          }),
+      },
+      FORGE: { fetch: async () => new Response(null, { status: 204 }) },
+    } as unknown as Parameters<typeof actions.fetch>[1];
+    const headers = trustedHeaders({ id: "user-1", identifier: "user", groupKey: "free" });
+    try {
+      const response = await actions.fetch(
+        new Request("https://actions.test/repositories/repository-1/runs", {
+          method: "POST",
+          headers: new Headers([...headers, ["Content-Type", "application/json"]]),
+          body: JSON.stringify({
+            workflowPath: ".github/workflows/checks.yml",
+            ref: "refs/heads/main",
+            expectedOid: "d".repeat(40),
+          }),
+        }),
+        env
+      );
+      expect(response.status).toBe(429);
+      expect(response.headers.get("Retry-After")).toBe("60");
+      await expect(response.json()).resolves.toMatchObject({ error: { code: "run_limit" } });
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });

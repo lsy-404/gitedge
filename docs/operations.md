@@ -88,7 +88,7 @@ The Gateway goes last because it is the only public entrypoint and binds every o
 
 ## Health check
 
-`GET /api/health` on the Gateway probes `auth`, `forge`, `git`, `deploy`, `actions`, the rate limiter (`limits`) and D1 one after another, each with a two-second timeout. It returns 200 with `status: "ok"` when every probe passes and 503 with `status: "degraded"` otherwise, along with `ok` and `latencyMs` per probe. The endpoint is anonymous and counts against the normal per-IP rate limit, so poll it no more than once a minute from a monitor.
+`GET /api/health` on the Gateway probes `auth`, `forge`, `git`, `deploy`, `actions`, the rate limiter (`limits`) and D1 one after another, each with a two-second timeout. It returns 200 with `status: "ok"` when every probe passes and 503 with `status: "degraded"` otherwise, along with `ok` and `latencyMs` per probe. The Gateway has no D1 binding, so the `d1` probe runs `SELECT 1` through Forge and also fails when Forge is down. The `deploy` probe fails while `DEPLOY_SESSION_KEY` is missing or shorter than 32 bytes. Probes check reachability and configuration, not deep service state. The endpoint is anonymous and counts against the normal per-IP rate limit, so poll it no more than once a minute from a monitor.
 
 ## Incident checklist
 

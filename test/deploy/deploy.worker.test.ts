@@ -4,6 +4,7 @@ import { env as workerEnv } from "cloudflare:workers";
 import { DeployManifestSchema } from "../../packages/contracts/src/deploy";
 import type { DeployEnv } from "../../workers/deploy/src/deploy";
 import { handleDeploy } from "../../workers/deploy/src/deploy";
+import deployWorker from "../../workers/deploy/src/index";
 
 const migrations = import.meta.glob<string>("../../migrations/*.sql", {
   query: "?raw",
@@ -136,6 +137,19 @@ const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+describe("deploy health probe", () => {
+  it("reports unhealthy while the session encryption key is missing", async () => {
+    const probe = () => new Request("https://gateway.internal/internal/health");
+    const missing = await deployWorker.fetch(probe(), { ...workerEnv, DEPLOY_SESSION_KEY: "" });
+    expect(missing.status).toBe(503);
+    const configured = await deployWorker.fetch(probe(), {
+      ...workerEnv,
+      DEPLOY_SESSION_KEY: testEnv().DEPLOY_SESSION_KEY,
+    });
+    expect(configured.status).toBe(200);
+  });
 });
 
 describe("repository deployment", () => {

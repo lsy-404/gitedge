@@ -18,7 +18,7 @@ import {
   type RateLimitNamespace,
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
-import { createLogger } from "../../../src/worker/common/logger";
+import { createLogger, type Logger } from "../../../src/worker/common/logger";
 
 export interface GatewayService {
   fetch(request: Request): Promise<Response>;
@@ -281,10 +281,11 @@ async function probeService(service: GatewayService, path: string): Promise<bool
 
 async function runProbe(
   name: string,
-  probe: () => Promise<boolean>
-): Promise<[string, ServiceHealth]> {
+  probe: () => Promise<boolean>,
+  logger: Logger
+): Promise<ServiceHealth> {
   const started = Date.now();
-  let timer: ReturnType<typeof setTimeout> | null = null;
+  let timer: number | null = null;
   let ok = false;
   try {
     ok = await Promise.race([
@@ -294,22 +295,21 @@ async function runProbe(
       }),
     ]);
   } catch (cause) {
-    createLogger(undefined, { service: "gateway" }).warn("gateway:health-probe-failed", {
+    logger.warn("gateway:health-probe-failed", {
       probe: name,
       reason: cause instanceof Error ? cause.message : "unknown",
     });
   } finally {
-    if (timer !== null) clearTimeout(timer);
+    clearTimeout(timer);
   }
-  if (!ok)
-    createLogger(undefined, { service: "gateway" }).warn("gateway:health-probe-unhealthy", {
-      probe: name,
-    });
-  return [name, { ok, latencyMs: Date.now() - started }];
+  const latencyMs = Date.now() - started;
+  if (!ok) logger.warn("gateway:health-probe-unhealthy", { probe: name, latencyMs });
+  return { ok, latencyMs };
 }
 
 // Probes run one after another so a health check never fans out subrequests.
 async function handleHealth(env: GatewayEnv): Promise<Response> {
+  const logger = createLogger(undefined, { service: "gateway" });
   const bound: [string, GatewayService | undefined][] = [
     ["auth", env.AUTH],
     ["forge", env.FORGE],
@@ -329,10 +329,7 @@ async function handleHealth(env: GatewayEnv): Promise<Response> {
   ]);
   probes.push(["d1", () => probeService(env.FORGE, "/internal/health/d1")]);
   const services: Record<string, ServiceHealth> = {};
-  for (const [name, probe] of probes) {
-    const [key, result] = await runProbe(name, probe);
-    services[key] = result;
-  }
+  for (const [name, probe] of probes) services[name] = await runProbe(name, probe, logger);
   const healthy = Object.values(services).every((entry) => entry.ok);
   const body: HealthResponse = { status: healthy ? "ok" : "degraded", services };
   return Response.json(body, { status: healthy ? 200 : 503 });
