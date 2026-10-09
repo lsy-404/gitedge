@@ -5,6 +5,10 @@ export const REPOSITORY_IMPORT_STATUSES = ["queued", "running", "succeeded", "fa
 export const RepositoryImportStatusSchema = z.enum(REPOSITORY_IMPORT_STATUSES);
 export type RepositoryImportStatus = z.infer<typeof RepositoryImportStatusSchema>;
 
+/** `starting` covers the request that hands the source to Artifacts; `importing` waits for it. */
+export const REPOSITORY_IMPORT_PROGRESS = ["", "queued", "starting", "importing"] as const;
+export type RepositoryImportProgress = (typeof REPOSITORY_IMPORT_PROGRESS)[number];
+
 export const REPOSITORY_IMPORT_ERROR_CODES = [
   "invalid_url",
   "remote_auth_required",
@@ -12,6 +16,7 @@ export const REPOSITORY_IMPORT_ERROR_CODES = [
   "upstream_unavailable",
   "size_limit",
   "name_taken",
+  "access_revoked",
   "timed_out",
   "import_failed",
 ] as const;
@@ -38,7 +43,7 @@ export interface RepositoryImport {
   readonly description: string;
   readonly sourceUrl: string;
   readonly status: RepositoryImportStatus;
-  readonly progress: string;
+  readonly progress: RepositoryImportProgress;
   readonly errorCode: RepositoryImportErrorCode | null;
   readonly error: string | null;
   readonly attempt: number;
@@ -48,18 +53,29 @@ export interface RepositoryImport {
   readonly finishedAt: number | null;
 }
 
+const ArtifactNameSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
+
 export const GitImportInputSchema = z.object({
-  name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/),
+  name: ArtifactNameSchema,
   sourceUrl: z.string().min(1).max(2048),
   description: z.string().max(500),
 });
 
-export const GitImportResultSchema = z.object({
-  name: z.string().min(1),
-  remote: z.string().min(1),
-  defaultBranch: z.string().min(1),
-});
-export type GitImportResult = z.infer<typeof GitImportResultSchema>;
+export const GitImportTargetSchema = z.object({ name: ArtifactNameSchema });
 
-/** Running jobs idle longer than this are treated as lost and become retryable. */
+/** Artifacts may still be copying the remote after `import()` resolves; Forge polls until ready. */
+export const GitImportStateSchema = z.discriminatedUnion("state", [
+  z.object({ state: z.literal("importing") }),
+  z.object({
+    state: z.literal("ready"),
+    name: z.string().min(1),
+    remote: z.string().min(1),
+    defaultBranch: z.string().min(1),
+  }),
+]);
+export type GitImportState = z.infer<typeof GitImportStateSchema>;
+
+/** A job stuck in `starting` this long lost its runner and becomes retryable. */
 export const REPOSITORY_IMPORT_STALE_MS = 10 * 60 * 1000;
+/** Upper bound on a whole attempt, including the time Artifacts spends copying the remote. */
+export const REPOSITORY_IMPORT_MAX_MS = 60 * 60 * 1000;

@@ -29,6 +29,7 @@ const visibility = ref<"private" | "public">("private");
 const saving = ref(false);
 const formError = ref("");
 const job = ref<RepositoryImport | null>(null);
+const unfinished = ref<RepositoryImport[]>([]);
 let timer: ReturnType<typeof setTimeout> | undefined;
 let generation = 0;
 
@@ -54,6 +55,24 @@ function reset() {
   saving.value = false;
   formError.value = "";
   job.value = null;
+  unfinished.value = [];
+}
+
+async function loadUnfinished() {
+  const current = generation;
+  try {
+    const jobs = await api.repositoryImports();
+    if (current === generation && !job.value) unfinished.value = jobs ?? [];
+  } catch {
+    unfinished.value = [];
+  }
+}
+
+function resume(next: RepositoryImport) {
+  stopPolling();
+  formError.value = "";
+  job.value = next;
+  if (next.status === "queued" || next.status === "running") poll(next.id);
 }
 
 function poll(id: string) {
@@ -89,9 +108,7 @@ async function start() {
       visibility: visibility.value,
       description: description.value,
     });
-    if (!created) return;
-    job.value = created;
-    poll(created.id);
+    if (created) resume(created);
   } catch (cause) {
     formError.value = errorMessage(cause, t, { 409: "nameTaken", 422: "importInvalidUrl" });
   } finally {
@@ -104,9 +121,7 @@ async function retry() {
   formError.value = "";
   try {
     const next = await api.retryRepositoryImport(job.value.id);
-    if (!next) return;
-    job.value = next;
-    poll(next.id);
+    if (next) resume(next);
   } catch (cause) {
     formError.value = errorMessage(cause, t);
   }
@@ -123,7 +138,9 @@ watch(
   () => props.open,
   (open) => {
     if (!open && !running.value) reset();
-  }
+    else if (open && !job.value) void loadUnfinished();
+  },
+  { immediate: true }
 );
 watch(
   () => props.defaultOwner,
@@ -142,7 +159,11 @@ onBeforeUnmount(stopPolling);
     <div v-if="job" class="form-stack" aria-live="polite">
       <p class="mono">{{ job.owner }}/{{ job.slug }}</p>
       <NoticeBar v-if="running" intent="info">{{
-        job.status === "queued" ? t("importQueued") : t("importRunning")
+        job.status === "queued"
+          ? t("importQueued")
+          : job.progress === "starting"
+            ? t("importStarting")
+            : t("importRunning")
       }}</NoticeBar>
       <NoticeBar v-else-if="job.status === 'succeeded'" intent="success">{{
         t("importSucceeded")
@@ -167,6 +188,13 @@ onBeforeUnmount(stopPolling);
     </div>
     <form v-else class="form-stack" @submit.prevent="start">
       <p class="muted">{{ t("importRepositoryHint") }}</p>
+      <section v-if="unfinished.length" class="form-stack" :aria-label="t('importUnfinished')">
+        <h3>{{ t("importUnfinished") }}</h3>
+        <div v-for="item in unfinished" :key="item.id" class="form-actions">
+          <span class="mono">{{ item.owner }}/{{ item.slug }}</span>
+          <FluentButton type="button" @click="resume(item)">{{ t("importView") }}</FluentButton>
+        </div>
+      </section>
       <TextField v-model="sourceUrl" type="url" required>{{ t("importSourceUrl") }}</TextField>
       <SelectField v-model="owner" :label="t('repositoryOwner')" required>
         <option v-for="option in owners" :key="option.value" :value="option.value">

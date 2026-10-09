@@ -1,7 +1,11 @@
 import { env } from "cloudflare:workers";
+import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 import forge from "../../workers/forge/src/index";
+import { runImport } from "../../workers/forge/src/imports";
 import gitWorker from "../../workers/git/src/index";
+import { handleInternalImports } from "../../workers/git/src/imports";
+import type { HostResolver } from "../../workers/git/src/public-host";
 import { trustedHeaders } from "../../packages/contracts/src/trust";
 import type { RepositoryImport } from "../../packages/contracts/src/index";
 import { runSqlScript } from "../support/database";
@@ -12,39 +16,52 @@ const migrations = import.meta.glob<string>("../../migrations/*.sql", {
   import: "default",
   eager: true,
 });
-const artifacts = new FixtureArtifacts();
+
+function artifactsError(code: ArtifactsErrorCode): Error {
+  return Object.assign(new Error(code), { name: "ArtifactsError", code, numericCode: 1 });
+}
+
+/** Mirrors the platform: import() can resolve while the copy is still running. */
+class ImportingArtifacts extends FixtureArtifacts {
+  failNext: ArtifactsErrorCode | null = null;
+  hold = false;
+  readonly pending = new Set<string>();
+
+  override async import(params: Parameters<Artifacts["import"]>[0]) {
+    if (this.failNext) {
+      const code = this.failNext;
+      this.failNext = null;
+      throw artifactsError(code);
+    }
+    const created = await super.import(params);
+    if (this.hold) this.pending.add(created.name);
+    return created;
+  }
+
+  override async get(name: string) {
+    if (this.pending.has(name)) throw artifactsError("IMPORT_IN_PROGRESS");
+    return super.get(name);
+  }
+}
+
+const artifacts = new ImportingArtifacts();
 const users = {
   owner: { id: "owner-id", identifier: "owner", groupKey: "free" },
   other: { id: "other-id", identifier: "other", groupKey: "free" },
 };
-let failNextImport: ArtifactsErrorCode | null = null;
-const importing: Artifacts = Object.assign(Object.create(artifacts), {
-  import: async (params: Parameters<Artifacts["import"]>[0]) => {
-    if (failNextImport) {
-      const code = failNextImport;
-      failNextImport = null;
-      throw Object.assign(new Error(code), { name: "ArtifactsError", code, numericCode: 1 });
-    }
-    return artifacts.import(params);
-  },
-});
+const resolveHost: HostResolver = async (hostname) =>
+  hostname === "private.example.com" ? { ok: false, reason: "private_address" } : { ok: true };
+const gitEnv = { DB: env.DB, ARTIFACTS: artifacts };
 const forgeEnv = {
   DB: env.DB,
-  ARTIFACTS: importing,
+  ARTIFACTS: artifacts,
   GIT: {
     fetch: (request: Request) =>
-      gitWorker.fetch(request, { DB: env.DB, ARTIFACTS: importing }, executionContext),
+      new URL(request.url).pathname.startsWith("/internal/imports")
+        ? handleInternalImports(request, gitEnv, resolveHost)
+        : gitWorker.fetch(request, gitEnv, createExecutionContext()),
   },
 };
-const executionContext = {
-  waitUntil() {},
-  passThroughOnException() {},
-} as unknown as ExecutionContext;
-const pending: Promise<unknown>[] = [];
-const collectingContext = {
-  waitUntil: (task: Promise<unknown>) => void pending.push(task),
-  passThroughOnException() {},
-} as unknown as ExecutionContext;
 
 async function call(
   path: string,
@@ -54,6 +71,7 @@ async function call(
 ) {
   const headers = trustedHeaders(users[user]);
   headers.set("Content-Type", "application/json");
+  const ctx = createExecutionContext();
   const response = await forge.fetch(
     new Request(`https://forge.test${path}`, {
       method,
@@ -61,13 +79,24 @@ async function call(
       body: body === undefined ? undefined : JSON.stringify(body),
     }),
     forgeEnv,
-    collectingContext
+    ctx
   );
-  await Promise.all(pending.splice(0));
+  await waitOnExecutionContext(ctx);
   return response;
 }
 async function job(response: Response): Promise<RepositoryImport> {
   return ((await response.json()) as { data: RepositoryImport }).data;
+}
+async function artifactName(id: string): Promise<string> {
+  const row = await env.DB.prepare("SELECT artifact_name FROM repository_imports WHERE id = ?")
+    .bind(id)
+    .first<{ artifact_name: string }>();
+  return row?.artifact_name ?? "";
+}
+async function allowNextCheck(id: string): Promise<void> {
+  await env.DB.prepare("UPDATE repository_imports SET updated_at = updated_at - 5000 WHERE id = ?")
+    .bind(id)
+    .run();
 }
 const input = {
   sourceUrl: "https://example.com/acme/widgets.git",
@@ -86,10 +115,10 @@ beforeAll(async () => {
       .bind(user.id, user.identifier)
       .run();
   await env.DB.prepare(
-    "INSERT INTO namespaces(id,slug,created_by,created_at,kind) VALUES('ns','owner','owner-id',1,'personal')"
+    "INSERT INTO namespaces(id,slug,created_by,created_at,kind) VALUES('ns','owner','owner-id',1,'personal'),('ns-shared','shared','owner-id',1,'personal')"
   ).run();
   await env.DB.prepare(
-    "INSERT INTO namespace_memberships(namespace_id,user_id,role,created_at) VALUES('ns','owner-id','owner',1)"
+    "INSERT INTO namespace_memberships(namespace_id,user_id,role,created_at) VALUES('ns','owner-id','owner',1),('ns-shared','owner-id','owner',1)"
   ).run();
 });
 
@@ -98,38 +127,77 @@ describe("Repository import jobs", () => {
     const created = await call("/repository-imports", "POST", "owner", input);
     expect(created.status).toBe(202);
     const queued = await job(created);
-    expect(queued.id).toBeTruthy();
     const status = await job(await call(`/repository-imports/${queued.id}`));
     expect(status.status).toBe("succeeded");
     expect(status.repositoryId).toBeTruthy();
     const row = await env.DB.prepare(
-      "SELECT artifact_name, remote, visibility FROM repositories WHERE id = ?"
+      "SELECT artifact_name, visibility FROM repositories WHERE id = ?"
     )
       .bind(status.repositoryId)
-      .first<{ artifact_name: string; remote: string; visibility: string }>();
+      .first<{ artifact_name: string; visibility: string }>();
     expect(row?.visibility).toBe("private");
+    const tokens = artifacts.snapshot(row?.artifact_name ?? "").tokens;
+    expect(tokens.length).toBeGreaterThan(0);
+    expect(tokens.every((token) => token.state === "revoked")).toBe(true);
+  });
+
+  it("waits while Artifacts is still importing and hides the repository until ready", async () => {
+    artifacts.hold = true;
+    const started = await job(
+      await call("/repository-imports", "POST", "owner", { ...input, slug: "slow" })
+    );
+    artifacts.hold = false;
+    const name = await artifactName(started.id);
+    expect(artifacts.pending.has(name)).toBe(true);
+    await allowNextCheck(started.id);
+    const waiting = await job(await call(`/repository-imports/${started.id}`));
+    expect(waiting).toMatchObject({ status: "running", progress: "importing" });
     expect(
-      artifacts.snapshot(row?.artifact_name ?? "").tokens.every((t) => t.state === "revoked")
-    ).toBe(true);
+      await env.DB.prepare("SELECT id FROM repositories WHERE slug = 'slow'").first()
+    ).toBeNull();
+    const create = await call("/repositories", "POST", "owner", {
+      owner: "owner",
+      slug: "slow",
+      description: "",
+      visibility: "private",
+    });
+    expect(create.status).toBe(409);
+
+    artifacts.pending.delete(name);
+    await allowNextCheck(started.id);
+    const [first, second] = await Promise.all([
+      call(`/repository-imports/${started.id}`),
+      call(`/repository-imports/${started.id}`),
+    ]);
+    expect([first.status, second.status]).toEqual([200, 200]);
+    const done = await job(await call(`/repository-imports/${started.id}`));
+    expect(done.status).toBe("succeeded");
+    const repositories = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM repositories WHERE slug = 'slow'"
+    ).first<{ count: number }>();
+    expect(repositories?.count).toBe(1);
+    expect(artifacts.snapshot(name).tokens.every((token) => token.state === "revoked")).toBe(true);
   });
 
   it("leaves no repository behind after a failure and allows retry", async () => {
-    failNextImport = "UPSTREAM_UNAVAILABLE";
+    artifacts.failNext = "UPSTREAM_UNAVAILABLE";
     const failed = await job(
       await call("/repository-imports", "POST", "owner", { ...input, slug: "retry-me" })
     );
+    const firstName = await artifactName(failed.id);
     const status = await job(await call(`/repository-imports/${failed.id}`));
     expect(status.status).toBe("failed");
     expect(status.errorCode).toBe("upstream_unavailable");
-    const none = await env.DB.prepare(
-      "SELECT id FROM repositories WHERE slug = 'retry-me'"
-    ).first();
-    expect(none).toBeNull();
+    expect(artifacts.repositories.has(firstName)).toBe(false);
+    expect(
+      await env.DB.prepare("SELECT id FROM repositories WHERE slug = 'retry-me'").first()
+    ).toBeNull();
     const retried = await call(`/repository-imports/${failed.id}/retry`, "POST");
     expect(retried.status).toBe(202);
     const done = await job(await call(`/repository-imports/${failed.id}`));
     expect(done.status).toBe("succeeded");
     expect(done.attempt).toBe(2);
+    expect(await artifactName(failed.id)).not.toBe(firstName);
     expect((await call(`/repository-imports/${failed.id}/retry`, "POST")).status).toBe(409);
   });
 
@@ -157,40 +225,94 @@ describe("Repository import jobs", () => {
     ).toBe(404);
   });
 
-  it("hides jobs from other users and marks stale running jobs as failed", async () => {
+  it("fails hosts that resolve to private addresses without creating storage", async () => {
+    const before = artifacts.repositories.size;
+    const created = await job(
+      await call("/repository-imports", "POST", "owner", {
+        ...input,
+        sourceUrl: "https://private.example.com/a.git",
+        slug: "rebound",
+      })
+    );
+    const status = await job(await call(`/repository-imports/${created.id}`));
+    expect(status).toMatchObject({ status: "failed", errorCode: "invalid_url" });
+    expect(artifacts.repositories.size).toBe(before);
+  });
+
+  it("fails and discards the attempt when owner access is removed mid-import", async () => {
+    artifacts.hold = true;
+    const started = await job(
+      await call("/repository-imports", "POST", "owner", {
+        ...input,
+        owner: "shared",
+        slug: "revoked",
+      })
+    );
+    artifacts.hold = false;
+    const name = await artifactName(started.id);
+    await env.DB.prepare(
+      "UPDATE namespaces SET created_by = 'other-id' WHERE id = 'ns-shared'"
+    ).run();
+    artifacts.pending.delete(name);
+    await allowNextCheck(started.id);
+    const status = await job(await call(`/repository-imports/${started.id}`));
+    expect(status).toMatchObject({ status: "failed", errorCode: "access_revoked" });
+    expect(artifacts.repositories.has(name)).toBe(false);
+    expect(
+      await env.DB.prepare("SELECT id FROM repositories WHERE slug = 'revoked'").first()
+    ).toBeNull();
+  });
+
+  it("hides jobs from other users and times out lost attempts with cleanup", async () => {
+    artifacts.hold = true;
     const created = await job(
       await call("/repository-imports", "POST", "owner", { ...input, slug: "stale" })
     );
+    artifacts.hold = false;
+    const name = await artifactName(created.id);
     expect((await call(`/repository-imports/${created.id}`, "GET", "other")).status).toBe(404);
     expect((await call(`/repository-imports/${created.id}/retry`, "POST", "other")).status).toBe(
       404
     );
+    const listed = (await (await call("/repository-imports")).json()) as {
+      data: RepositoryImport[];
+    };
+    expect(listed.data.some((item) => item.id === created.id)).toBe(true);
     await env.DB.prepare(
-      "UPDATE repository_imports SET status='running', repository_id=NULL, updated_at=1 WHERE id=?"
+      "UPDATE repository_imports SET progress='starting', updated_at=1, started_at=1 WHERE id=?"
     )
       .bind(created.id)
       .run();
     const stale = await job(await call(`/repository-imports/${created.id}`));
-    expect(stale.status).toBe("failed");
-    expect(stale.errorCode).toBe("timed_out");
+    expect(stale).toMatchObject({ status: "failed", errorCode: "timed_out" });
+    expect(artifacts.repositories.has(name)).toBe(false);
   });
 
   it("serializes concurrent claims of one job", async () => {
-    const { runImport } = await import("../../workers/forge/src/imports");
-    failNextImport = null;
     const row = await env.DB.prepare(
-      "SELECT id FROM repository_imports WHERE slug = 'stale'"
-    ).first<{ id: string }>();
-    await env.DB.prepare("UPDATE repository_imports SET status='queued' WHERE id=?")
-      .bind(row?.id ?? "")
-      .run();
-    const before = await env.DB.prepare("SELECT attempt FROM repository_imports WHERE id=?")
-      .bind(row?.id ?? "")
-      .first<{ attempt: number }>();
-    await Promise.all([runImport(forgeEnv, row?.id ?? ""), runImport(forgeEnv, row?.id ?? "")]);
-    const after = await env.DB.prepare("SELECT attempt FROM repository_imports WHERE id=?")
-      .bind(row?.id ?? "")
-      .first<{ attempt: number }>();
-    expect((after?.attempt ?? 0) - (before?.attempt ?? 0)).toBe(1);
+      "SELECT id, attempt FROM repository_imports WHERE slug = 'stale'"
+    ).first<{ id: string; attempt: number }>();
+    const id = row?.id ?? "";
+    await env.DB.prepare("UPDATE repository_imports SET status='queued' WHERE id=?").bind(id).run();
+    await Promise.all([runImport(forgeEnv, id), runImport(forgeEnv, id)]);
+    const after = await env.DB.prepare("SELECT attempt, status FROM repository_imports WHERE id=?")
+      .bind(id)
+      .first<{ attempt: number; status: string }>();
+    expect((after?.attempt ?? 0) - (row?.attempt ?? 0)).toBe(1);
+    expect(after?.status).toBe("succeeded");
+  });
+
+  it("keeps the internal Git import endpoints off public hosts", async () => {
+    for (const path of ["/internal/imports", "/internal/imports/discard"]) {
+      const response = await gitWorker.fetch(
+        new Request(`https://gitedge.example.com${path}`, {
+          method: "POST",
+          body: JSON.stringify({ name: "repo-x" }),
+        }),
+        gitEnv,
+        createExecutionContext()
+      );
+      expect(response.status).toBe(404);
+    }
   });
 });

@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { repositoryNameFromUrl, validateImportUrl } from "../../packages/contracts/src/import-url";
 import { canTransition, IMPORT_TRANSITIONS } from "../../workers/forge/src/imports";
+import { isNonPublicAddress, resolvePublicHost } from "../../workers/git/src/public-host";
 
 describe("import URL validation", () => {
   it("accepts public https remotes and strips query and fragment", () => {
@@ -52,5 +53,83 @@ describe("import state machine", () => {
     expect(canTransition("succeeded", "queued")).toBe(false);
     expect(canTransition("queued", "succeeded")).toBe(false);
     expect(IMPORT_TRANSITIONS.succeeded).toEqual([]);
+  });
+});
+
+describe("resolved address screening", () => {
+  it.each([
+    ["10.1.2.3", true],
+    ["100.64.0.1", true],
+    ["127.0.0.1", true],
+    ["169.254.169.254", true],
+    ["172.31.255.255", true],
+    ["192.168.1.1", true],
+    ["198.18.0.1", true],
+    ["224.0.0.1", true],
+    ["255.255.255.255", true],
+    ["::1", true],
+    ["::", true],
+    ["::ffff:10.0.0.1", true],
+    ["::ffff:127.0.0.1", true],
+    ["64:ff9b::a00:1", true],
+    ["fd12:3456::1", true],
+    ["fe80::1", true],
+    ["ff02::1", true],
+    ["2001:db8::1", true],
+    ["not-an-ip", true],
+    ["140.82.112.3", false],
+    ["172.32.0.1", false],
+    ["2606:4700:4700::1111", false],
+    ["::ffff:140.82.112.3", false],
+  ])("classifies %s", (address, blocked) => {
+    expect(isNonPublicAddress(address)).toBe(blocked);
+  });
+});
+
+describe("DNS-over-HTTPS host check", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function stubDns(records: Record<string, Array<{ type: number; data: string }>>) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: URL) => {
+        const type = input.searchParams.get("type") ?? "";
+        return Response.json({ Status: 0, Answer: records[type] ?? [] });
+      })
+    );
+  }
+
+  it("accepts hosts with only public addresses", async () => {
+    stubDns({ A: [{ type: 1, data: "140.82.112.3" }], AAAA: [] });
+    expect(await resolvePublicHost("github.com")).toEqual({ ok: true });
+  });
+
+  it("rejects hosts with any private address, including through CNAME chains", async () => {
+    stubDns({
+      A: [
+        { type: 5, data: "alias.example.com." },
+        { type: 1, data: "10.0.0.8" },
+      ],
+    });
+    expect(await resolvePublicHost("rebind.example.com")).toEqual({
+      ok: false,
+      reason: "private_address",
+    });
+  });
+
+  it("fails closed when nothing resolves or the resolver errors", async () => {
+    stubDns({});
+    expect(await resolvePublicHost("missing.example.com")).toEqual({
+      ok: false,
+      reason: "unresolved",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("nope", { status: 500 }))
+    );
+    expect(await resolvePublicHost("down.example.com")).toEqual({
+      ok: false,
+      reason: "resolver_error",
+    });
   });
 });

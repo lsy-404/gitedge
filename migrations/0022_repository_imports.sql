@@ -7,15 +7,17 @@ CREATE TABLE repository_imports (
   description TEXT NOT NULL,
   source_url TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed')),
-  progress TEXT NOT NULL DEFAULT '',
+  progress TEXT NOT NULL DEFAULT '' CHECK (progress IN ('', 'queued', 'starting', 'importing')),
   error_code TEXT,
   error TEXT,
   attempt INTEGER NOT NULL DEFAULT 0,
+  artifact_name TEXT,
   repository_id TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   started_at INTEGER,
-  finished_at INTEGER
+  finished_at INTEGER,
+  CHECK (status <> 'running' OR artifact_name IS NOT NULL)
 );
 CREATE UNIQUE INDEX idx_repository_imports_active_path
   ON repository_imports(namespace_id, slug)

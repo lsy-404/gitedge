@@ -61,6 +61,7 @@ afterEach(() => {
 describe("Repository import dialog", () => {
   it("fills the name from the URL, polls to failure and retries", async () => {
     vi.useFakeTimers();
+    vi.spyOn(api, "repositoryImports").mockResolvedValue([]);
     const start = vi.spyOn(api, "importRepository").mockResolvedValue(base);
     const status = vi
       .spyOn(api, "repositoryImport")
@@ -86,6 +87,27 @@ describe("Repository import dialog", () => {
     retryButton?.click();
     await vi.advanceTimersByTimeAsync(0);
     expect(retry).toHaveBeenCalledWith("job-1");
+    expect(root.textContent).toContain(i18n.global.t("importRunning"));
+  });
+  it("lists unfinished imports and resumes polling one", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(api, "repositoryImports").mockResolvedValue([
+      { ...base, status: "running", progress: "starting", attempt: 1 },
+    ]);
+    const status = vi
+      .spyOn(api, "repositoryImport")
+      .mockResolvedValue({ ...base, status: "running", progress: "importing", attempt: 1 });
+    const root = await mount();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(root.textContent).toContain(i18n.global.t("importUnfinished"));
+    const view = [...root.querySelectorAll("button")].find(
+      (button) => button.textContent?.trim() === i18n.global.t("importView")
+    );
+    view?.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(root.textContent).toContain(i18n.global.t("importStarting"));
+    await vi.advanceTimersByTimeAsync(2100);
+    expect(status).toHaveBeenCalledWith("job-1");
     expect(root.textContent).toContain(i18n.global.t("importRunning"));
   });
 });

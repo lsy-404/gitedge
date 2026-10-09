@@ -45,6 +45,7 @@ const dynamicKeys: Record<string, readonly string[]> = {
     "upstream_unavailable",
     "size_limit",
     "name_taken",
+    "access_revoked",
     "timed_out",
     "import_failed",
   ],

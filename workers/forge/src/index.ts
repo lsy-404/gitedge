@@ -37,7 +37,7 @@ import {
   type WikiPageSummary,
 } from "../../../packages/contracts/src/index";
 import { createLogger } from "../../../src/worker/common/logger";
-import { handleRepositoryImports } from "./imports";
+import { activeImportPath, handleRepositoryImports } from "./imports";
 import { assignmentsColumn, parseAssignments, replaceAssignments } from "./assignments";
 import {
   canWriteSession,
@@ -1770,6 +1770,12 @@ export default {
           403,
           "forbidden",
           "Repository creation requires namespace owner access."
+        );
+      if (await activeImportPath(env, namespace.id, parsed.data.slug))
+        return errorResponse(
+          409,
+          "conflict",
+          "Repository name is reserved by an import in progress."
         );
       const now = Date.now(),
         id = crypto.randomUUID(),

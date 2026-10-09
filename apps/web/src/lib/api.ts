@@ -470,6 +470,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  repositoryImports: () => request<RepositoryImport[]>("/api/forge/repository-imports"),
   repositoryImport: (id: string) =>
     request<RepositoryImport>(`/api/forge/repository-imports/${encodeURIComponent(id)}`),
   retryRepositoryImport: (id: string) =>

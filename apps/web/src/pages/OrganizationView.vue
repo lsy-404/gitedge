@@ -131,6 +131,7 @@ watch(
       :owners="[{ value: slug, label: organization?.displayName || slug }]"
       :default-owner="slug"
       @close="showImport = false"
+      @imported="load"
     />
     <StatusState :loading="loading" :error="error" @retry="load" />
     <div v-if="!loading && !error" class="organization-layout">

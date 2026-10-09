@@ -32,10 +32,12 @@ const ownerOptions = computed(() => [
     value: sessionState.user?.identifier ?? "",
     label: `${sessionState.user?.identifier ?? ""} (${t("personal")})`,
   },
-  ...organizations.value.map((organization) => ({
-    value: organization.slug,
-    label: organization.displayName,
-  })),
+  ...organizations.value
+    .filter((organization) => organization.role === "owner")
+    .map((organization) => ({
+      value: organization.slug,
+      label: organization.displayName,
+    })),
 ]);
 const saving = ref(false);
 const formError = ref("");

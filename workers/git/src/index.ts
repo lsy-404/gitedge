@@ -2,7 +2,7 @@ import { GitWriteConflict } from "./write";
 import { createLogger } from "../../../src/worker/common/logger";
 import { handleGitApi } from "./api";
 import { errorResponse } from "../../../src/worker/common/http";
-import { importRepository } from "./imports";
+import { handleInternalImports } from "./imports";
 import { proxyGitTransport } from "./transport";
 import { GitResourceLimitError } from "./http";
 import type { GitEnv } from "./access";
@@ -11,10 +11,8 @@ export default {
   async fetch(request: Request, env: GitEnv, ctx: ExecutionContext): Promise<Response> {
     try {
       const url = new URL(request.url);
-      if (url.pathname === "/internal/imports")
-        return request.method === "POST" && url.hostname === "git.internal"
-          ? await importRepository(request, env)
-          : errorResponse(404, "not_found", "Endpoint was not found.");
+      if (url.pathname.startsWith("/internal/imports"))
+        return await handleInternalImports(request, env);
       return url.pathname.includes(".git/")
         ? await proxyGitTransport(request, env, ctx)
         : await handleGitApi(request, env, ctx);
