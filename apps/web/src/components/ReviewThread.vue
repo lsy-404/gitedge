@@ -159,6 +159,7 @@ function actorLabel(comment: ReviewComment): string {
             <MarkdownContent
               v-if="segment.kind === 'markdown'"
               class="body-content"
+              mentions
               :source="segment.text"
             />
             <figure v-else class="thread-suggestion">
