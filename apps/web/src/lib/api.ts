@@ -46,6 +46,10 @@ import type {
   CreatedAgentSession,
 } from "../../../../packages/contracts/src/forge";
 import type {
+  CreateRepositoryImportInput,
+  RepositoryImport,
+} from "../../../../packages/contracts/src/imports";
+import type {
   EditRepositoryFileInput,
   RepositoryBranch,
 } from "../../../../packages/contracts/src/repository-controls";
@@ -536,6 +540,18 @@ export const api = {
         visibility: payload.visibility,
         initializeReadme: payload.initializeReadme,
       }),
+    }),
+  importRepository: (payload: CreateRepositoryImportInput) =>
+    request<RepositoryImport>("/api/forge/repository-imports", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  repositoryImports: () => request<RepositoryImport[]>("/api/forge/repository-imports"),
+  repositoryImport: (id: string) =>
+    request<RepositoryImport>(`/api/forge/repository-imports/${encodeURIComponent(id)}`),
+  retryRepositoryImport: (id: string) =>
+    request<RepositoryImport>(`/api/forge/repository-imports/${encodeURIComponent(id)}/retry`, {
+      method: "POST",
     }),
   organizations: () => request<Organization[]>("/api/forge/organizations"),
   createOrganization: (payload: { slug: string; displayName: string; description: string }) =>

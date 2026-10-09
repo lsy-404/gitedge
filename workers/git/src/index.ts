@@ -2,6 +2,7 @@ import { GitWriteConflict } from "./write";
 import { createLogger } from "../../../src/worker/common/logger";
 import { handleGitApi } from "./api";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
+import { handleInternalImports } from "./imports";
 import { proxyGitTransport } from "./transport";
 import { GitResourceLimitError } from "./http";
 import type { GitEnv } from "./access";
@@ -17,6 +18,8 @@ export default {
         return request.method === "POST"
           ? await purgeRepositoryArtifacts(request, env)
           : errorResponse(405, "method_not_allowed", "Method is not allowed for this endpoint.");
+      if (url.pathname.startsWith("/internal/imports"))
+        return await handleInternalImports(request, env);
       return url.pathname.includes(".git/")
         ? await proxyGitTransport(request, env, ctx)
         : await handleGitApi(request, env, ctx);

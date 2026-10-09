@@ -2,6 +2,8 @@
 
 GitEdge is an MIT-licensed Git forge on Cloudflare Workers and Artifacts. The Vue interface supports repositories, Git file browsing and commit graphs, Issues, Pull Requests, Discussions, Wiki revisions, and repository deployment.
 
+Existing public repositories can be imported from an https Git URL with full history from the dashboard or an organization page; the import runs through Artifacts, shows progress and can be retried after a failure. Private source repositories are not supported.
+
 Each account can create multiple agents. An agent session receives an isolated Artifacts fork, a repository-scoped API credential, and a short-lived Git credential. Pull requests can propose changes from a session fork. Reviews and CI results carry the authenticated actor and the exact reviewed commit.
 
 ## Run locally

@@ -5,6 +5,7 @@ import {
   type GatewayService,
 } from "../../workers/gateway/src/index";
 import { SharedRateLimitDurableObject } from "../../workers/limits/src/index";
+import { sha256Hex } from "../../packages/contracts/src/index";
 
 function service(handler: (request: Request) => Response | Promise<Response>): GatewayService {
   return { fetch: async (request) => handler(request) };
@@ -96,5 +97,49 @@ describe("Gateway strict rate limits", () => {
     expect(response.status).toBe(429);
     expect(response.headers.get("Retry-After")).toBe("42");
     expect(await response.json()).toEqual({ error: "Rate limit exceeded", retryAfter: 42 });
+  });
+  it("limits repository import starts and retries per user", async () => {
+    const importKey = await sha256Hex("import:user-1");
+    const consumed: string[] = [];
+    let forwarded = 0;
+    const env: GatewayEnv = {
+      ASSETS: service(() => new Response("asset")),
+      AUTH: service(() =>
+        Response.json({ data: { id: "user-1", identifier: "owner", groupKey: "free" } })
+      ),
+      FORGE: service(() => {
+        forwarded += 1;
+        return Response.json({ data: {} }, { status: 202 });
+      }),
+      GIT: service(() => new Response("git")),
+      RATE_LIMITER: {
+        getByName: () => ({
+          consume: async (key: string) => {
+            consumed.push(key);
+            return key === importKey
+              ? { allowed: false, retryAfter: 30 }
+              : { allowed: true, retryAfter: 0 };
+          },
+        }),
+      },
+    };
+    const send = (path: string, method = "POST") =>
+      handleGatewayRequest(
+        new Request(`https://gitedge.example.com${path}`, {
+          method,
+          headers: { Origin: "https://gitedge.example.com", Cookie: "gitedge_session=s" },
+        }),
+        env
+      );
+    for (const path of ["/api/forge/repository-imports", "/api/forge/repository-imports/j/retry"]) {
+      const response = await send(path);
+      expect(response.status).toBe(429);
+      expect(response.headers.get("Retry-After")).toBe("30");
+    }
+    expect(forwarded).toBe(0);
+    consumed.length = 0;
+    expect((await send("/api/forge/repository-imports/j", "GET")).status).toBe(202);
+    expect(consumed).not.toContain(importKey);
+    expect(forwarded).toBe(1);
   });
 });

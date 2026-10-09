@@ -1,0 +1,56 @@
+const importMessages = {
+  "zh-CN": {
+    importRepository: "导入仓库",
+    importRepositoryHint: "从公开的 https Git 地址导入完整历史。私有来源仓库暂不支持。",
+    importSourceUrl: "源仓库地址",
+    importStart: "开始导入",
+    importQueued: "导入已排队，即将开始。",
+    importStarting: "正在连接源主机。",
+    importRunning: "正在导入，大型仓库可能需要几分钟。",
+    importUnfinished: "未完成的导入",
+    importView: "查看",
+    importSucceeded: "导入完成。",
+    importRetry: "重试",
+    importOpenRepository: "打开仓库",
+    importInvalidUrl:
+      "地址无效。仅支持公开的 https 地址，不支持 IP、本地主机、自定义端口或内嵌凭据。",
+    importError_invalid_url: "该地址不是公开的 https Git 仓库。",
+    importError_remote_auth_required: "源仓库不是公开的，需要认证。",
+    importError_remote_not_found: "未找到源仓库。",
+    importError_upstream_unavailable: "无法连接源主机，请稍后重试。",
+    importError_size_limit: "源仓库过大，无法导入。",
+    importError_name_taken: "仓库名称已被占用，请使用其他名称重新导入。",
+    importError_access_revoked: "导入期间你已失去该命名空间的所有者权限。",
+    importError_timed_out: "导入未能在限定时间内完成，可重试。",
+    importError_import_failed: "导入失败，请重试。",
+  },
+  en: {
+    importRepository: "Import repository",
+    importRepositoryHint:
+      "Import the full history from a public https Git URL. Private source repositories are not supported yet.",
+    importSourceUrl: "Source repository URL",
+    importStart: "Start import",
+    importQueued: "Import queued and starting shortly.",
+    importStarting: "Connecting to the source host.",
+    importRunning: "Importing. Large repositories can take a few minutes.",
+    importUnfinished: "Unfinished imports",
+    importView: "View",
+    importSucceeded: "Import complete.",
+    importRetry: "Retry",
+    importOpenRepository: "Open repository",
+    importInvalidUrl:
+      "Invalid URL. Only public https URLs are supported, without IP addresses, local hosts, custom ports or embedded credentials.",
+    importError_invalid_url: "That URL is not a public https Git repository.",
+    importError_remote_auth_required:
+      "The source repository is not public and requires authentication.",
+    importError_remote_not_found: "The source repository was not found.",
+    importError_upstream_unavailable: "The source host could not be reached. Try again later.",
+    importError_size_limit: "The source repository is too large to import.",
+    importError_name_taken: "The repository name is already taken. Import again with another name.",
+    importError_access_revoked: "You lost owner access to this namespace during the import.",
+    importError_timed_out: "The import did not finish in time. You can retry.",
+    importError_import_failed: "The import failed. Try again.",
+  },
+};
+
+export default importMessages;

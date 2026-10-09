@@ -335,6 +335,24 @@ async function handleHealth(env: GatewayEnv): Promise<Response> {
   return Response.json(body, { status: healthy ? 200 : 503 });
 }
 
+const IMPORT_RPM_LIMIT = 5;
+
+async function enforceImportLimit(
+  request: Request,
+  pathname: string,
+  session: AuthenticatedSession,
+  env: GatewayEnv
+): Promise<Response | null> {
+  if (
+    request.method !== "POST" ||
+    !/^\/api\/forge\/repository-imports(?:\/[^/]+\/retry)?$/.test(pathname)
+  )
+    return null;
+  return rateLimitedResponse(
+    await consumeRateLimit(env.RATE_LIMITER, `import:${session.id}`, IMPORT_RPM_LIMIT)
+  );
+}
+
 async function serveSpa(request: Request, assets: GatewayService): Promise<Response> {
   const assetResponse = await assets.fetch(request);
   if (assetResponse.status !== 404 || (request.method !== "GET" && request.method !== "HEAD")) {
@@ -449,6 +467,8 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
     }
     const userLimitResponse = await enforceUserLimit(session, env);
     if (userLimitResponse) return userLimitResponse;
+    const importLimitResponse = await enforceImportLimit(request, url.pathname, session, env);
+    if (importLimitResponse) return importLimitResponse;
     return presentRepositoryResponse(
       await service.fetch(forwardAuthenticated(request, prefix, session)),
       env
