@@ -29,6 +29,7 @@ export const ReservedAccountIdentifiers: ReadonlySet<string> = new Set([
   "sessions",
   "settings",
   "sso",
+  "stars",
   "tokens",
   "web-sessions",
   "wiki",

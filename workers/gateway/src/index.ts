@@ -461,7 +461,7 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
       prefix === "/api/git" &&
       request.method !== "GET" &&
       request.method !== "HEAD" &&
-      !/^\/api\/git\/repositories\/[^/]+\/(edit|commit|branches|tags)$/.test(url.pathname)
+      !/^\/api\/git\/repositories\/[^/]+\/(edit|commit|branches|tags|fork-sync)$/.test(url.pathname)
     )
       return Response.json(
         {

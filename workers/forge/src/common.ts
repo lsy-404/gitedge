@@ -47,6 +47,8 @@ export type RepositoryRow = {
   delete_branch_on_merge?: number;
   required_approvals?: number;
   require_passing_checks?: number;
+  fork_of?: string | null;
+  star_count?: number;
   created_at: number;
   updated_at: number;
 };
@@ -106,10 +108,18 @@ export function parseActor(value: unknown, authorId: unknown): Actor {
   return { kind: "user", id, name: id };
 }
 
+export interface RepositorySocialFields {
+  topics: string[];
+  forkCount: number;
+  forkOf: Repository["forkOf"];
+}
+const NO_SOCIAL: RepositorySocialFields = { topics: [], forkCount: 0, forkOf: null };
+
 export function repoResponse(
   row: RepositoryRow,
   viewerRole: RepositoryRole | null = null,
-  canWrite = false
+  canWrite = false,
+  social: RepositorySocialFields = NO_SOCIAL
 ) {
   return {
     id: row.id,
@@ -138,6 +148,10 @@ export function repoResponse(
     deleteBranchOnMerge: row.delete_branch_on_merge === 1,
     requiredApprovals: row.required_approvals ?? 0,
     requirePassingChecks: row.require_passing_checks === 1,
+    topics: social.topics,
+    starCount: row.star_count ?? 0,
+    forkCount: social.forkCount,
+    forkOf: social.forkOf,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     viewerRole,

@@ -227,7 +227,7 @@ const compareHead = computed({
 });
 const compareRefsAreBranches = computed(() => {
   const names = new Set(shortRefs(branchRefs.value).map((item) => item.shortName));
-  const headIsFreeText = Boolean(route.query.headSessionId);
+  const headIsFreeText = Boolean(route.query.headSessionId || route.query.headRepositoryId);
   return names.has(compareBase.value) && (headIsFreeText || names.has(compareHead.value));
 });
 const canOpenPull = computed(
@@ -241,6 +241,7 @@ const canOpenPull = computed(
 );
 const openPullLocation = computed(() => {
   const headSessionId = route.query.headSessionId?.toString();
+  const headRepositoryId = route.query.headRepositoryId?.toString();
   return {
     path: `/${props.repository.owner}/${props.repository.name}/pulls`,
     query: {
@@ -248,6 +249,7 @@ const openPullLocation = computed(() => {
       base: compareBase.value,
       head: compareHead.value,
       ...(headSessionId ? { headSessionId } : {}),
+      ...(headRepositoryId ? { headRepositoryId } : {}),
     },
   };
 });
@@ -297,7 +299,8 @@ async function load() {
         props.repository.id,
         base,
         head,
-        route.query.headSessionId?.toString()
+        route.query.headSessionId?.toString(),
+        route.query.headRepositoryId?.toString()
       );
       if (version !== requestVersion) return;
       comparison.value = result;

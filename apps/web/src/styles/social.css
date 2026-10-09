@@ -1,0 +1,110 @@
+.topic-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.topic-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--space-5);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-full);
+  background: var(--accent-subtle);
+  color: var(--accent-fg);
+  font-size: var(--font-size-meta);
+}
+.topic-chip:hover {
+  color: var(--accent-fg-hover);
+  text-decoration: none;
+}
+.social-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.social-bar select {
+  min-height: var(--control-height-sm);
+}
+.social-count {
+  color: var(--fg-muted);
+  font-size: var(--font-size-meta);
+}
+.social-error {
+  color: var(--danger-fg);
+  font-size: var(--font-size-meta);
+}
+.repository-fork-origin {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
+  color: var(--fg-muted);
+  font-size: var(--font-size-meta);
+}
+.repository-topics {
+  margin-top: var(--space-2);
+}
+.explore-page {
+  display: grid;
+  gap: var(--space-4);
+  width: min(960px, calc(100% - var(--page-gutter, var(--space-6)) * 2));
+  margin: var(--space-6) auto 0;
+}
+.explore-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-4);
+}
+.explore-controls .text-field {
+  flex: 1 1 240px;
+}
+.explore-sort {
+  display: flex;
+  gap: var(--space-1);
+}
+.explore-topics {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.explore-repository {
+  display: grid;
+  gap: var(--space-1);
+}
+.explore-repository-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-lg);
+}
+.explore-repository p {
+  margin: 0;
+}
+.explore-repository-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--fg-muted);
+  font-size: var(--font-size-meta);
+}
+.fork-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-4);
+}
+.topics-editor {
+  display: grid;
+  gap: var(--space-3);
+  max-width: 560px;
+}

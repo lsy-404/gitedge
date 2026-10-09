@@ -15,6 +15,8 @@ const InviteAcceptView = () => import("./pages/InviteAcceptView.vue");
 const AdminView = () => import("./pages/AdminView.vue");
 const NotificationsView = () => import("./pages/NotificationsView.vue");
 const UserProfileView = () => import("./pages/UserProfileView.vue");
+const ExploreView = () => import("./pages/ExploreView.vue");
+const StarredView = () => import("./pages/StarredView.vue");
 import { refreshSession, sessionState } from "./lib/session";
 
 export const router = createRouter({
@@ -34,6 +36,8 @@ export const router = createRouter({
     { path: "/admin", component: AdminView },
     { path: "/dashboard", component: DashboardView },
     { path: "/notifications", component: NotificationsView },
+    { path: "/explore", component: ExploreView, meta: { allowAnonymous: true } },
+    { path: "/stars", component: StarredView },
     { path: "/organizations", component: OrganizationsView },
     { path: "/organizations/:slug", component: OrganizationView },
     { path: "/settings/account", component: AccountSettingsView },
@@ -74,7 +78,7 @@ export const router = createRouter({
       meta: { allowAnonymous: true },
     },
     {
-      path: "/:owner/:repo/:section(code|issues|pulls|discussions|wiki|tasks|commits|compare|releases|settings|agents|deploy|actions)?",
+      path: "/:owner/:repo/:section(code|issues|pulls|discussions|wiki|tasks|commits|compare|releases|forks|settings|agents|deploy|actions)?",
       component: RepositoryView,
       meta: { allowAnonymous: true },
     },

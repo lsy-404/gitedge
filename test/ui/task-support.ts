@@ -15,6 +15,10 @@ export const human: Actor = { kind: "user", id: "user-1", name: "example-user" }
 export const agentActor: Actor = { kind: "agent", id: "agent-1", name: "builder" };
 
 export const repository: Repository = {
+  topics: [],
+  starCount: 0,
+  forkCount: 0,
+  forkOf: null,
   id: "repo-1",
   namespaceId: "namespace-1",
   owner: "acme",

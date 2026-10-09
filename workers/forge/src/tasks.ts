@@ -1,3 +1,4 @@
+import { detachForks } from "./forks";
 import { agentEvent, revokeAgentSessions } from "./agent-events";
 import { z } from "zod";
 import {
@@ -1109,6 +1110,19 @@ async function settingsRequest(
       );
   }
   const visibility = input.visibility ?? null;
+  if (visibility === "public" && repository.fork_of) {
+    const parent = await env.DB.prepare(
+      "SELECT visibility FROM repositories WHERE id = ? AND deleted_at IS NULL"
+    )
+      .bind(repository.fork_of)
+      .first<{ visibility: string }>();
+    if (parent?.visibility === "private")
+      return errorResponse(
+        409,
+        "conflict",
+        "A fork of a private repository cannot be made public."
+      );
+  }
   const memoryVisibility = visibility === "private" ? "members" : (input.memoryVisibility ?? null);
   try {
     const mutation = env.DB.prepare(
@@ -1170,6 +1184,8 @@ async function settingsRequest(
     visibility,
     archived: input.archived,
   });
+  if (visibility === "private" && repository.visibility !== "private")
+    await detachForks(env, { parentId: repository.id, level: env.LOG_LEVEL });
   const changes: [AuditAction, Record<string, unknown>][] = [];
   if (visibility && visibility !== repository.visibility)
     changes.push([

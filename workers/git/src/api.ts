@@ -40,14 +40,24 @@ import {
 } from "./archive";
 import { contentDisposition } from "../../../src/worker/common/content-disposition";
 import { createLogger } from "../../../src/worker/common/logger";
+import { repositoryRole } from "../../../src/worker/common/repositories";
+import { syncForkBranch } from "./fork-sync";
+import { GitResourceLimitError } from "./http";
 import {
+  ForkSyncInputSchema,
   GitMergeInputSchema,
   GitOidSchema,
   accessTokenAllows,
   requiredAccessTokenScope,
   sha256Hex,
 } from "../../../packages/contracts/src/index";
-import { listRepositorySessions, resolveGitAccess, resolveWorkspace, type GitEnv } from "./access";
+import {
+  listRepositorySessions,
+  resolveGitAccess,
+  resolveProposalHead,
+  resolveWorkspace,
+  type GitEnv,
+} from "./access";
 import {
   artifactGraph,
   commitResponse,
@@ -162,7 +172,8 @@ export async function handleGitApi(
     return errorResponse(404, "not_found", "Session workspace was not found.");
   const resource = parts[2];
   const proposalComparison =
-    (resource === "compare" || resource === "pull-head") && url.searchParams.has("headSessionId");
+    (resource === "compare" || resource === "pull-head") &&
+    (url.searchParams.has("headSessionId") || url.searchParams.has("headRepositoryId"));
   const committing = (resource === "edit" || resource === "commit") && request.method === "POST";
   // Commit lookups answer whether the repository itself holds a commit, never a private fork;
   // commit writes stay in the session workspace like every other mutation.
@@ -173,6 +184,7 @@ export async function handleGitApi(
     resource === "commit-diff" ||
     resource === "signature" ||
     resource === "snapshot" ||
+    resource === "fork-sync" ||
     resource === "tags" ||
     resource === "archive";
   using repo = await env.ARTIFACTS.get(
@@ -386,6 +398,65 @@ export async function handleGitApi(
       throw cause;
     }
   }
+  if (resource === "fork-sync") {
+    if (request.method !== "POST")
+      return errorResponse(405, "method_not_allowed", "Method is not allowed.");
+    if (!access.user || !access.repository.canWrite || userSession)
+      return errorResponse(403, "forbidden", "Repository write access is required.");
+    if (access.repository.archived)
+      return errorResponse(409, "repository_archived", "Archived repositories are read-only.");
+    const input = ForkSyncInputSchema.safeParse(await readJsonLimited(request, 20_000));
+    if (!input.success) return errorResponse(400, "bad_request", "Invalid fork sync.");
+    const parent = await env.DB.prepare(
+      "SELECT p.id, p.artifact_name AS artifactName, p.visibility FROM repositories f JOIN repositories p ON p.id = f.fork_of WHERE f.id = ? AND p.deleted_at IS NULL AND p.artifact_name IS NOT NULL"
+    )
+      .bind(repositoryId)
+      .first<{ id: string; artifactName: string; visibility: "public" | "private" }>();
+    const mayDrawFromParent =
+      parent &&
+      (parent.visibility === "public" ||
+        (access.repository.visibility === "private" &&
+          (await repositoryRole(env.DB, parent.id, access.user.id)) !== null));
+    if (!parent || !mayDrawFromParent)
+      return errorResponse(404, "upstream_unavailable", "The upstream repository is unavailable.");
+    if (await protectedBranch(env.DB, repositoryId, input.data.branch))
+      return errorResponse(403, "protected_branch", "Protected branches reject direct updates.");
+    using upstream = await env.ARTIFACTS.get(parent.artifactName);
+    try {
+      const outcome = await syncForkBranch(
+        repo,
+        upstream,
+        input.data.branch,
+        async () => {
+          const latest = await resolveGitAccess(request, env, repositoryId);
+          if (
+            latest instanceof Response ||
+            !latest?.repository.canWrite ||
+            latest.repository.archived
+          )
+            throw new GitWriteConflict("Repository permissions changed. Reload before retrying.");
+        },
+        env.LOG_LEVEL
+      );
+      if (outcome.kind === "missing_upstream")
+        return errorResponse(404, "branch_not_found", "The upstream has no branch of that name.");
+      if (outcome.kind === "not_fast_forward")
+        return errorResponse(
+          409,
+          "not_fast_forward",
+          "The fork has diverged from upstream or is too far behind to fast-forward."
+        );
+      return dataResponse(outcome.result);
+    } catch (cause) {
+      if (cause instanceof GitWriteConflict)
+        return errorResponse(409, "refs_changed", cause.message);
+      if (cause instanceof GitWriteInputError)
+        return errorResponse(404, "branch_not_found", cause.message);
+      if (cause instanceof GitResourceLimitError)
+        return errorResponse(413, "repository_too_large", cause.message);
+      throw cause;
+    }
+  }
   if (resource === "merge" && request.method === "POST") {
     if (access.repository.archived)
       return errorResponse(409, "repository_archived", "Archived repositories are read-only.");
@@ -394,14 +465,13 @@ export async function handleGitApi(
     const input = GitMergeInputSchema.safeParse(await readJsonLimited(request));
     if (!input.success || !input.data.pullRequestId || !input.data.leaseAt)
       return errorResponse(400, "bad_request", "Invalid merge request.");
-    const headSession = input.data.headSessionId
-      ? await resolveWorkspace(env, access, input.data.headSessionId)
-      : null;
-    if (input.data.headSessionId && !headSession)
-      return errorResponse(404, "not_found", "Head session was not found.");
-    using headRepo = await env.ARTIFACTS.get(
-      headSession?.workspaceName ?? access.repository.artifactName
-    );
+    const headArtifact = await resolveProposalHead(env, access, {
+      sessionId: input.data.headSessionId,
+      repositoryId: input.data.headRepositoryId,
+      ref: input.data.headRef,
+    });
+    if (!headArtifact) return errorResponse(404, "not_found", "Head repository was not found.");
+    using headRepo = await env.ARTIFACTS.get(headArtifact);
     const rules = matchingBranchRules(await branchRules(env.DB, repositoryId), input.data.baseRef);
     if (rules.some((rule) => rule.locked))
       return errorResponse(403, "protected_branch", "This branch is locked.");
@@ -758,32 +828,28 @@ export async function handleGitApi(
     return dataResponse(graph);
   }
   if (resource === "pull-head") {
-    const headSessionId = url.searchParams.get("headSessionId");
     const head = url.searchParams.get("head") ?? "HEAD";
-    const headSession = headSessionId
-      ? await resolveWorkspace(env, access, headSessionId, head)
-      : null;
-    if (headSessionId && !headSession)
-      return errorResponse(404, "not_found", "Head session was not found.");
-    using headRepo = await env.ARTIFACTS.get(
-      headSession?.workspaceName ?? access.repository.artifactName
-    );
+    const headArtifact = await resolveProposalHead(env, access, {
+      sessionId: url.searchParams.get("headSessionId"),
+      repositoryId: url.searchParams.get("headRepositoryId"),
+      ref: head,
+    });
+    if (!headArtifact) return errorResponse(404, "not_found", "Head repository was not found.");
+    using headRepo = await env.ARTIFACTS.get(headArtifact);
     const commit = await resolveCommit(headRepo, head);
     return commit
       ? dataResponse({ oid: commit.hash })
       : errorResponse(404, "not_found", "Head ref was not found.");
   }
   if (resource === "compare") {
-    const headSessionId = url.searchParams.get("headSessionId");
     const head = url.searchParams.get("head") ?? "HEAD";
-    const headSession = headSessionId
-      ? await resolveWorkspace(env, access, headSessionId, head)
-      : null;
-    if (headSessionId && !headSession)
-      return errorResponse(404, "not_found", "Head session was not found.");
-    using headRepo = await env.ARTIFACTS.get(
-      headSession?.workspaceName ?? access.repository.artifactName
-    );
+    const headArtifact = await resolveProposalHead(env, access, {
+      sessionId: url.searchParams.get("headSessionId"),
+      repositoryId: url.searchParams.get("headRepositoryId"),
+      ref: head,
+    });
+    if (!headArtifact) return errorResponse(404, "not_found", "Head repository was not found.");
+    using headRepo = await env.ARTIFACTS.get(headArtifact);
     const comparison = await compareArtifacts(
       repo,
       headRepo,

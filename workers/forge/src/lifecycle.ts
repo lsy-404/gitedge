@@ -20,6 +20,7 @@ import { auditActor, recordAudit } from "../../../src/worker/common/audit";
 import { createLogger } from "../../../src/worker/common/logger";
 import { repositoryRole } from "../../../src/worker/common/repositories";
 import { revokeAgentSessions } from "./agent-events";
+import { detachForks } from "./forks";
 import { purgeReleaseAssets } from "./releases";
 import { parseJson, repoResponse, type ForgeEnv, type RepositoryRow } from "./common";
 
@@ -118,6 +119,7 @@ export async function repositoryLifecycle(
     ]);
     if (marked.results.length !== 1)
       return errorResponse(404, "not_found", "Repository was not found.");
+    await detachForks(env, { parentId: repository.id, level: env.LOG_LEVEL });
     // Session forks hold direct Artifacts credentials, so they must not outlive the deletion.
     const revoked = await revokeAgentSessions(env, { repositoryId: repository.id });
     logger.info("lifecycle:repository-deleted", { userId: user.id, purgeAfter, revoked });

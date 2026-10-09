@@ -15,6 +15,10 @@ import RepositoryCommit from "../components/RepositoryCommit.vue";
 import RepositoryHistory from "../components/RepositoryHistory.vue";
 import RepositoryReleases from "../components/RepositoryReleases.vue";
 import RepositoryCollaboration from "../components/RepositoryCollaboration.vue";
+import RepositoryForkOrigin from "../components/RepositoryForkOrigin.vue";
+import RepositoryForks from "../components/RepositoryForks.vue";
+import RepositorySocialBar from "../components/RepositorySocialBar.vue";
+import TopicChips from "../components/TopicChips.vue";
 import RepositorySettingsPanel from "../components/RepositorySettings.vue";
 import RepositoryTasks from "../components/RepositoryTasks.vue";
 const RepositoryActions = defineAsyncComponent(() => import("../components/RepositoryActions.vue"));
@@ -37,6 +41,7 @@ const tabs: { key: string; label: string; icon: IconName; write?: boolean }[] = 
   { key: "commits", label: "commitGraph", icon: "clock" },
   { key: "compare", label: "compare", icon: "diff" },
   { key: "releases", label: "releases", icon: "tag" },
+  { key: "forks", label: "forksTitle", icon: "fork" },
   { key: "issues", label: "issues", icon: "issue" },
   { key: "pulls", label: "pulls", icon: "pr" },
   { key: "tasks", label: "tasks", icon: "task" },
@@ -97,6 +102,9 @@ function settingsUpdated(settings: RepositorySettings): void {
     requirePassingChecks: settings.requirePassingChecks,
   };
   void loadCounts(repository.value, loadVersion);
+}
+function topicsSaved(topics: string[]): void {
+  if (repository.value) repository.value = { ...repository.value, topics };
 }
 const loading = ref(true);
 const error = ref("");
@@ -249,7 +257,7 @@ watch(
             }}</StatusBadge
           >
           <div class="repository-heading-actions">
-            <RouterLink
+            <RepositorySocialBar :repository="repository" /><RouterLink
               v-if="repository.graphEnabled"
               class="btn btn-sm secondary-repo-action"
               :to="`${base}/commits`"
@@ -262,6 +270,8 @@ watch(
             >
           </div>
         </div>
+        <RepositoryForkOrigin :repository="repository" />
+        <TopicChips class="repository-topics" :topics="repository.topics" />
         <nav class="repository-nav" :aria-label="t('repositoryNav')">
           <RouterLink
             v-for="tab in tabs.filter(
@@ -299,6 +309,7 @@ watch(
           @changed="refreshCounts"
         />
         <RepositoryReleases v-else-if="section === 'releases'" :repository="repository" />
+        <RepositoryForks v-else-if="section === 'forks'" :repository="repository" />
         <template v-else-if="section === 'deploy' && repository.canWrite && !repository.archived"
           ><div class="repository-panel-head">
             <h2>{{ t("ghDeployTab") }}</h2>
@@ -411,6 +422,7 @@ watch(
           v-else-if="section === 'settings' && repository.canWrite"
           :repository="repository"
           @updated="settingsUpdated"
+          @topics-saved="topicsSaved"
         />
         <RepositoryCollaboration
           v-else-if="

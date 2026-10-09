@@ -38,6 +38,8 @@ const PENDING_INVITATION = `EXISTS (SELECT 1 FROM invitations iv WHERE iv.reposi
 /** Listing access: readable repositories, plus invitations the user has not answered yet. */
 const USER_CAN_SEE = `(${USER_CAN_READ} OR (n.reason = 'invited' AND ${PENDING_INVITATION}))`;
 const REASON_NOT_MUTED = `NOT EXISTS (SELECT 1 FROM forge_notification_preferences p, json_each(p.muted_reasons_json) j WHERE p.user_id = u.id AND j.value = ?)`;
+/** Users who silenced the repository receive nothing but invitations. */
+const NOT_IGNORING = `NOT EXISTS (SELECT 1 FROM repository_watches w WHERE w.repository_id = r.id AND w.user_id = u.id AND w.level = 'ignore')`;
 const UPSERT = `ON CONFLICT(recipient_id, subject_kind, subject_id) DO UPDATE SET reason = excluded.reason, subject_number = excluded.subject_number, actor_id = excluded.actor_id, created_at = excluded.created_at, read_at = NULL`;
 
 /** Extra predicate that must hold when the batch runs, so a statement only fires if its sibling write applied. */
@@ -101,7 +103,7 @@ function insertNotifications(
 ): D1PreparedStatement {
   return db
     .prepare(
-      `INSERT INTO forge_notifications (id, recipient_id, repository_id, subject_kind, subject_id, subject_number, reason, actor_id, created_at, read_at) SELECT lower(hex(randomblob(16))), u.id, r.id, ?, ?, ?, ?, ?, ?, NULL FROM users u JOIN repositories r ON r.id = ? WHERE u.id IN (${recipients.sql}) AND u.id IS NOT ? AND r.deleted_at IS NULL AND ${access} AND ${REASON_NOT_MUTED}${when ? ` AND (${when.sql})` : ""} ${UPSERT}`
+      `INSERT INTO forge_notifications (id, recipient_id, repository_id, subject_kind, subject_id, subject_number, reason, actor_id, created_at, read_at) SELECT lower(hex(randomblob(16))), u.id, r.id, ?, ?, ?, ?, ?, ?, NULL FROM users u JOIN repositories r ON r.id = ? WHERE u.id IN (${recipients.sql}) AND u.id IS NOT ? AND r.deleted_at IS NULL AND ${access} AND ${reason === "invited" ? "1" : NOT_IGNORING} AND ${REASON_NOT_MUTED}${when ? ` AND (${when.sql})` : ""} ${UPSERT}`
     )
     .bind(
       subject.kind,
@@ -116,6 +118,27 @@ function insertNotifications(
       reason,
       ...(when?.binds ?? [])
     );
+}
+
+/** Watchers of everything (`all`) learn about each new issue, pull request or discussion. */
+export function watcherNotificationStatement(
+  db: D1Database,
+  repository: Pick<RepositoryRow, "id">,
+  user: TrustedUser,
+  target: NotificationTarget
+): D1PreparedStatement {
+  return insertNotifications(
+    db,
+    repository.id,
+    target,
+    "watching",
+    user.id,
+    {
+      sql: `SELECT user_id FROM repository_watches WHERE repository_id = ? AND level = 'all' LIMIT ${PARTICIPANT_LIMIT}`,
+      binds: [repository.id],
+    },
+    Date.now()
+  );
 }
 
 /** Resolves mentioned logins to user ids; mentions already present in `previousBody` are skipped. */

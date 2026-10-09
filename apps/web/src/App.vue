@@ -51,6 +51,8 @@ const pageName = computed(() => {
   if (route.path.startsWith("/settings/agents")) return t("agents");
   if (route.path.startsWith("/settings")) return t("account");
   if (route.path.startsWith("/organizations")) return t("organizations");
+  if (route.path === "/explore") return t("exploreNav");
+  if (route.path === "/stars") return t("starredNav");
   return t("dashboard");
 });
 const mainRegion = ref<HTMLElement | null>(null);
@@ -498,6 +500,9 @@ if (!sessionState.checked) void refreshSession();
           <RouterLink to="/dashboard"><AppIcon name="repo" />{{ t("repositories") }}</RouterLink
           ><RouterLink to="/organizations"
             ><AppIcon name="organization" />{{ t("organizations") }}</RouterLink
+          ><RouterLink to="/explore"><AppIcon name="compass" />{{ t("exploreNav") }}</RouterLink
+          ><RouterLink v-if="sessionState.user" to="/stars"
+            ><AppIcon name="star" />{{ t("starredNav") }}</RouterLink
           ><RouterLink v-if="!guestView" to="/settings/agents"
             ><AppIcon name="agent" />{{ t("agents") }}</RouterLink
           >
@@ -538,6 +543,9 @@ if (!sessionState.checked) void refreshSession();
             ><AppIcon name="repo" />{{ t("repositories") }}</RouterLink
           ><RouterLink v-if="!guestView" to="/organizations"
             ><AppIcon name="organization" />{{ t("organizations") }}</RouterLink
+          ><RouterLink to="/explore"><AppIcon name="compass" />{{ t("exploreNav") }}</RouterLink
+          ><RouterLink v-if="sessionState.user && !guestView" to="/stars"
+            ><AppIcon name="star" />{{ t("starredNav") }}</RouterLink
           ><RouterLink v-if="!guestView" to="/settings/agents"
             ><AppIcon name="agent" />{{ t("agents") }}</RouterLink
           >

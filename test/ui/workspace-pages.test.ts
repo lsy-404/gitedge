@@ -33,6 +33,10 @@ const profile: AccountProfile = {
   },
 };
 const repository: Repository = {
+  topics: [],
+  starCount: 0,
+  forkCount: 0,
+  forkOf: null,
   id: "repo-1",
   namespaceId: "namespace-1",
   owner: "octocat",
