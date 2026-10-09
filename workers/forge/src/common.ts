@@ -188,4 +188,3 @@ export function repoResponse(
     canWrite,
   } satisfies Omit<Repository, "createdAt"> & { createdAt: number };
 }
-

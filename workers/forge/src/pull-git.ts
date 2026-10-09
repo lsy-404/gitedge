@@ -88,14 +88,7 @@ export function pullRequestHeadOid(
   pull: Record<string, unknown>,
   user: TrustedUser
 ): Promise<string | Response> {
-  return branchTipOid(
-    env,
-    requestUrl,
-    repository,
-    String(pull.head_ref),
-    pullHead(pull),
-    user
-  );
+  return branchTipOid(env, requestUrl, repository, String(pull.head_ref), pullHead(pull), user);
 }
 
 export function mergeResultOid(value: unknown): string | null {

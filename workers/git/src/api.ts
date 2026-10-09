@@ -647,9 +647,7 @@ export async function handleGitApi(
             signer: null,
             verifiedAt: Date.now(),
           } satisfies GitSignature);
-        return dataResponse(
-          await readObjectSignature(repo, env.DB, "tag", tag.oid, env.LOG_LEVEL)
-        );
+        return dataResponse(await readObjectSignature(repo, env.DB, "tag", tag.oid, env.LOG_LEVEL));
       }
       const oid = url.searchParams.get("oid") ?? "";
       const commitRef = url.searchParams.get("ref");
