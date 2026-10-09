@@ -27,6 +27,7 @@ import {
   webhookRetryDelay,
 } from "../../../src/worker/common/webhooks";
 import { z } from "zod";
+import { enqueueAiSummariesForPush } from "./ai-summary";
 import { parseJson, type ForgeEnv, type RepositoryRow } from "./common";
 import {
   pushWebhook,
@@ -595,6 +596,12 @@ export async function handlePushEvent(
     logger.warn("webhook:push-refs-truncated", { count: parsed.data.updates.length });
   const events: WebhookEvent[] = updates.map((update) => pushWebhook(repository, pusher, update));
   await env.DB.batch(events.map((event) => queueWebhookEvent(env.DB, repository.id, event)));
+  await enqueueAiSummariesForPush(
+    env,
+    repository,
+    pusher.id,
+    updates.map((update) => update.ref)
+  );
   return dataResponse({
     queued: events.length,
     truncated: parsed.data.updates.length > updates.length,

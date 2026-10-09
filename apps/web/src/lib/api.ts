@@ -64,6 +64,7 @@ import type {
   SavedRepositoryWebhook,
   UpdateRepositoryWebhookInput,
 } from "../../../../packages/contracts/src/webhooks";
+import type { AiSummaryState } from "../../../../packages/contracts/src/ai-summary";
 import type {
   AgentProfile,
   AgentWebhookDelivery,
@@ -1074,6 +1075,12 @@ export const api = {
     request<PullRequest>(repositoryPath(repositoryId, `pull-requests/${number}`), {
       method: "PATCH",
       body: JSON.stringify(payload),
+    }),
+  aiSummary: (repositoryId: string, number: number) =>
+    request<AiSummaryState>(repositoryPath(repositoryId, `pull-requests/${number}/ai-summary`)),
+  regenerateAiSummary: (repositoryId: string, number: number) =>
+    request<AiSummaryState>(repositoryPath(repositoryId, `pull-requests/${number}/ai-summary`), {
+      method: "POST",
     }),
   pullDiff: (repositoryId: string, number: number) =>
     request<GitComparison>(repositoryPath(repositoryId, `pull-requests/${number}/diff`)),

@@ -101,6 +101,8 @@ const editableFields = [
   "actionsEnabled",
   "actionsNetworkEnabled",
   "onlineEditingEnabled",
+  "aiSummariesEnabled",
+  "aiSummariesPrivateConsent",
   "allowMergeCommit",
   "allowSquashMerge",
   "allowRebaseMerge",
@@ -146,6 +148,15 @@ const mergeMethodEnabled = computed(
   () =>
     draft.value !== null &&
     (draft.value.allowMergeCommit || draft.value.allowSquashMerge || draft.value.allowRebaseMerge)
+);
+const aiConsentMissing = computed(
+  () =>
+    draft.value !== null &&
+    settings.value !== null &&
+    draft.value.aiSummariesEnabled &&
+    !settings.value.aiSummariesEnabled &&
+    draft.value.visibility === "private" &&
+    !draft.value.aiSummariesPrivateConsent
 );
 const publicMemoryAllowed = computed(() => draft.value?.visibility === "public");
 const visibilityChoices = computed(() =>
@@ -241,7 +252,14 @@ function setName(value: string) {
 }
 
 async function save() {
-  if (!draft.value || !settings.value || !canManage.value || !mergeMethodEnabled.value) return;
+  if (
+    !draft.value ||
+    !settings.value ||
+    !canManage.value ||
+    !mergeMethodEnabled.value ||
+    aiConsentMissing.value
+  )
+    return;
   saving.value = true;
   saveError.value = "";
   saved.value = false;
@@ -450,6 +468,33 @@ watch(() => props.repository.id, load, { immediate: true });
               </div>
               <FluentSwitch v-model="draft[key]" :label="t(label)" :disabled="!canManage" />
             </div>
+            <template v-if="draft.aiSummariesAvailable">
+              <div class="box-row settings-row">
+                <div class="row-copy">
+                  <span>{{ t("repoSettingsAiSummaries") }}</span>
+                  <p>{{ t("repoSettingsAiSummariesHint") }}</p>
+                </div>
+                <FluentSwitch
+                  v-model="draft.aiSummariesEnabled"
+                  :label="t('repoSettingsAiSummaries')"
+                  :disabled="!canManage"
+                />
+              </div>
+              <div v-if="draft.visibility === 'private'" class="box-row settings-row">
+                <div class="row-copy">
+                  <span>{{ t("repoSettingsAiPrivate") }}</span>
+                  <p>{{ t("repoSettingsAiPrivateHint") }}</p>
+                </div>
+                <FluentSwitch
+                  v-model="draft.aiSummariesPrivateConsent"
+                  :label="t('repoSettingsAiPrivate')"
+                  :disabled="!canManage"
+                />
+              </div>
+              <div v-if="aiConsentMissing" class="box-form">
+                <NoticeBar intent="warning">{{ t("repoSettingsAiPrivateRequired") }}</NoticeBar>
+              </div>
+            </template>
           </section>
 
           <section
@@ -621,7 +666,7 @@ watch(() => props.repository.id, load, { immediate: true });
               tone="primary"
               :label="t('save')"
               :prompt="t('confirmArchiveRepository')"
-              :disabled="!canManage || saving || !dirty || !mergeMethodEnabled"
+              :disabled="!canManage || saving || !dirty || !mergeMethodEnabled || aiConsentMissing"
               :busy="saving"
               @confirm="save"
             />
@@ -629,7 +674,7 @@ watch(() => props.repository.id, load, { immediate: true });
               v-else
               type="submit"
               tone="primary"
-              :disabled="!canManage || saving || !dirty || !mergeMethodEnabled"
+              :disabled="!canManage || saving || !dirty || !mergeMethodEnabled || aiConsentMissing"
               :busy="saving"
             >
               {{ saving ? t("loading") : t("save") }}

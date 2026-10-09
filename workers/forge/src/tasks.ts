@@ -42,6 +42,7 @@ import { actorForUser, trustedHeaders } from "../../../packages/contracts/src/tr
 import { auditActor, recordAudit } from "../../../src/worker/common/audit";
 import type { AuditAction } from "../../../packages/contracts/src/audit";
 import { createLogger } from "../../../src/worker/common/logger";
+import { aiSummarySiteEnabled } from "./ai-summary";
 import { assigneeCandidates, resolveAssignable } from "./assignments";
 import { nextNumber, parseActor, parseJson, type ForgeEnv, type RepositoryRow } from "./common";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
@@ -213,7 +214,7 @@ async function repositorySettings(
   repositoryId: string
 ): Promise<Omit<RepositorySettings, "canManage">> {
   const row = await env.DB.prepare(
-    "SELECT slug, description, visibility, default_branch, archived, issues_enabled, pulls_enabled, discussions_enabled, wiki_enabled, required_approvals, require_passing_checks, tasks_enabled, agents_enabled, deployments_enabled, graph_enabled, actions_enabled, actions_network_enabled, online_editing_enabled, allow_merge_commit, allow_squash_merge, allow_rebase_merge, delete_branch_on_merge, memory_visibility, agent_assignment_policy FROM repositories WHERE id = ?"
+    "SELECT slug, description, visibility, default_branch, archived, issues_enabled, pulls_enabled, discussions_enabled, wiki_enabled, required_approvals, require_passing_checks, tasks_enabled, agents_enabled, deployments_enabled, graph_enabled, actions_enabled, actions_network_enabled, online_editing_enabled, ai_summaries_enabled, ai_summaries_private_consent, allow_merge_commit, allow_squash_merge, allow_rebase_merge, delete_branch_on_merge, memory_visibility, agent_assignment_policy FROM repositories WHERE id = ?"
   )
     .bind(repositoryId)
     .first<{
@@ -233,6 +234,8 @@ async function repositorySettings(
       actions_enabled: number;
       actions_network_enabled: number;
       online_editing_enabled: number;
+      ai_summaries_enabled: number;
+      ai_summaries_private_consent: number;
       allow_merge_commit: number;
       allow_squash_merge: number;
       allow_rebase_merge: number;
@@ -260,6 +263,9 @@ async function repositorySettings(
     actionsEnabled: row?.actions_enabled === 1,
     actionsNetworkEnabled: row?.actions_network_enabled === 1,
     onlineEditingEnabled: row?.online_editing_enabled !== 0,
+    aiSummariesAvailable: aiSummarySiteEnabled(env),
+    aiSummariesEnabled: row?.ai_summaries_enabled === 1,
+    aiSummariesPrivateConsent: row?.ai_summaries_private_consent === 1,
     allowMergeCommit: row?.allow_merge_commit !== 0,
     allowSquashMerge: row?.allow_squash_merge !== 0,
     allowRebaseMerge: row?.allow_rebase_merge !== 0,
@@ -1081,6 +1087,17 @@ async function settingsRequest(
     !(input.allowRebaseMerge ?? repository.allow_rebase_merge !== 0)
   )
     return errorResponse(400, "bad_request", "At least one merge method must be enabled.");
+  if (
+    input.aiSummariesEnabled === true &&
+    repository.ai_summaries_enabled !== 1 &&
+    (input.visibility ?? repository.visibility) === "private" &&
+    !(input.aiSummariesPrivateConsent ?? repository.ai_summaries_private_consent === 1)
+  )
+    return errorResponse(
+      400,
+      "private_consent_required",
+      "AI summaries on a private repository require explicit consent to send code to Workers AI."
+    );
   if (slug && slug !== repository.slug) {
     const collision = await env.DB.prepare(
       "SELECT 1 AS found FROM repository_paths WHERE namespace_id = ? AND slug = ? AND repository_id != ?"
@@ -1112,7 +1129,7 @@ async function settingsRequest(
   const memoryVisibility = visibility === "private" ? "members" : (input.memoryVisibility ?? null);
   try {
     const mutation = env.DB.prepare(
-      "UPDATE repositories SET slug = COALESCE(?, slug), description = COALESCE(?, description), visibility = COALESCE(?, visibility), default_branch = COALESCE(?, default_branch), archived = COALESCE(?, archived), issues_enabled = COALESCE(?, issues_enabled), pulls_enabled = COALESCE(?, pulls_enabled), discussions_enabled = COALESCE(?, discussions_enabled), wiki_enabled = COALESCE(?, wiki_enabled), required_approvals = COALESCE(?, required_approvals), require_passing_checks = COALESCE(?, require_passing_checks), tasks_enabled = COALESCE(?, tasks_enabled), agents_enabled = COALESCE(?, agents_enabled), deployments_enabled = COALESCE(?, deployments_enabled), graph_enabled = COALESCE(?, graph_enabled), actions_enabled = COALESCE(?, actions_enabled), actions_network_enabled = COALESCE(?, actions_network_enabled), online_editing_enabled = COALESCE(?, online_editing_enabled), allow_merge_commit = COALESCE(?, allow_merge_commit), allow_squash_merge = COALESCE(?, allow_squash_merge), allow_rebase_merge = COALESCE(?, allow_rebase_merge), delete_branch_on_merge = COALESCE(?, delete_branch_on_merge), memory_visibility = COALESCE(?, memory_visibility), agent_assignment_policy = COALESCE(?, agent_assignment_policy), updated_at = ? WHERE id = ? AND deleted_at IS NULL AND (? IS NULL OR ? = 'members' OR COALESCE(?, visibility) = 'public')"
+      "UPDATE repositories SET slug = COALESCE(?, slug), description = COALESCE(?, description), visibility = COALESCE(?, visibility), default_branch = COALESCE(?, default_branch), archived = COALESCE(?, archived), issues_enabled = COALESCE(?, issues_enabled), pulls_enabled = COALESCE(?, pulls_enabled), discussions_enabled = COALESCE(?, discussions_enabled), wiki_enabled = COALESCE(?, wiki_enabled), required_approvals = COALESCE(?, required_approvals), require_passing_checks = COALESCE(?, require_passing_checks), tasks_enabled = COALESCE(?, tasks_enabled), agents_enabled = COALESCE(?, agents_enabled), deployments_enabled = COALESCE(?, deployments_enabled), graph_enabled = COALESCE(?, graph_enabled), actions_enabled = COALESCE(?, actions_enabled), actions_network_enabled = COALESCE(?, actions_network_enabled), online_editing_enabled = COALESCE(?, online_editing_enabled), ai_summaries_enabled = COALESCE(?, ai_summaries_enabled), ai_summaries_private_consent = COALESCE(?, ai_summaries_private_consent), allow_merge_commit = COALESCE(?, allow_merge_commit), allow_squash_merge = COALESCE(?, allow_squash_merge), allow_rebase_merge = COALESCE(?, allow_rebase_merge), delete_branch_on_merge = COALESCE(?, delete_branch_on_merge), memory_visibility = COALESCE(?, memory_visibility), agent_assignment_policy = COALESCE(?, agent_assignment_policy), updated_at = ? WHERE id = ? AND deleted_at IS NULL AND (? IS NULL OR ? = 'members' OR COALESCE(?, visibility) = 'public')"
     ).bind(
       slug ?? null,
       input.description ?? null,
@@ -1132,6 +1149,10 @@ async function settingsRequest(
       input.actionsEnabled === undefined ? null : Number(input.actionsEnabled),
       input.actionsNetworkEnabled === undefined ? null : Number(input.actionsNetworkEnabled),
       input.onlineEditingEnabled === undefined ? null : Number(input.onlineEditingEnabled),
+      input.aiSummariesEnabled === undefined ? null : Number(input.aiSummariesEnabled),
+      input.aiSummariesPrivateConsent === undefined
+        ? null
+        : Number(input.aiSummariesPrivateConsent),
       input.allowMergeCommit === undefined ? null : Number(input.allowMergeCommit),
       input.allowSquashMerge === undefined ? null : Number(input.allowSquashMerge),
       input.allowRebaseMerge === undefined ? null : Number(input.allowRebaseMerge),
@@ -1180,6 +1201,19 @@ async function settingsRequest(
     changes.push(["repository.renamed", { from: repository.slug, to: slug }]);
   if (input.archived !== undefined && input.archived !== (repository.archived === 1))
     changes.push([input.archived ? "repository.archived" : "repository.unarchived", {}]);
+  const aiBefore = [
+    repository.ai_summaries_enabled === 1,
+    repository.ai_summaries_private_consent === 1,
+  ];
+  const aiAfter = [
+    input.aiSummariesEnabled ?? aiBefore[0],
+    input.aiSummariesPrivateConsent ?? aiBefore[1],
+  ];
+  if (aiBefore.some((value, index) => value !== aiAfter[index]))
+    changes.push([
+      "repository.ai_summaries_changed",
+      { enabled: aiAfter[0], privateConsent: aiAfter[1] },
+    ]);
   for (const [action, metadata] of changes)
     await recordAudit(env, {
       action,

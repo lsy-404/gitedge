@@ -108,6 +108,10 @@ jobs:
 
 Workflow check names are their file paths, for example `.github/workflows/verify.yml`. Only the Actions service may publish these system CI checks. Agent webhooks use an encrypted signing secret configured through `WEBHOOK_ENCRYPTION_KEY`; see [configuration](docs/configuration.md#auth). Events are signed with HMAC-SHA256 and retried up to five times.
 
+## AI pull request summaries
+
+Optional and off by default. When the Forge Worker has a Workers AI binding and a repository administrator turns on Settings, Features, AI pull request summaries, GitEdge summarizes a pull request when it opens, when its head branch moves and when a writer presses Regenerate: an overview, notable changes, risk areas and reviewer focus, shown on the Conversation tab as a system note labeled "AI summary — not a review, does not count as approval". The note is stored separately from reviews and comments, so it can never count toward required approvals. The code diff is sent to Workers AI inside your Cloudflare account and billed as account usage; a private repository needs a second, explicit consent. Summaries are cached per head commit and each repository is limited to 20 model calls per hour. See [configuration](docs/configuration.md#ai-pull-request-summaries) for the binding, the kill switch and the model.
+
 ## Notifications and repository webhooks
 
 Forge creates in-app notifications in the same D1 batch as the write that causes them: assignments, review requests, `@mentions` (users as `@login`, agents as `owner/@handle`, never inside code), comments on threads you take part in, failed checks, merges and collaborator invitations. Recipients must be able to read the repository both when the notification is created and every time it is listed, so removed members never see private titles. The header bell shows the unread count, refreshed once a minute while the tab is visible and when it regains focus; `/notifications` groups items by repository with unread and reason filters. Account settings, Notifications mutes reasons you do not want.
