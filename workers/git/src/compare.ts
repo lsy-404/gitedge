@@ -3,7 +3,7 @@ import type { GitComparison, GitDiffFile } from "../../../packages/contracts/src
 import { commitResponse, resolveCommit } from "./read";
 import { GitResourceLimitError } from "./http";
 
-interface FlatTreeEntry {
+export interface FlatTreeEntry {
   oid: string;
   mode: string;
 }
@@ -42,7 +42,7 @@ async function history(
   }
   return result;
 }
-async function blobText(repo: ArtifactsRepo, oid: string | null): Promise<string | null> {
+export async function blobText(repo: ArtifactsRepo, oid: string | null): Promise<string | null> {
   if (!oid) return "";
   const blob = await repo.readBlob(oid);
   if (!blob || blob.size > 256_000) return null;
@@ -54,6 +54,30 @@ async function blobText(repo: ArtifactsRepo, oid: string | null): Promise<string
   } catch {
     return null;
   }
+}
+/** Unified diff of one path; patch is null for binary or oversized content. */
+export async function fileDiff(
+  oldRepo: ArtifactsRepo,
+  newRepo: ArtifactsRepo,
+  path: string,
+  oldEntry: FlatTreeEntry | undefined,
+  newEntry: FlatTreeEntry | undefined
+): Promise<{ patch: string | null; binary: boolean }> {
+  const oldText = await blobText(oldRepo, oldEntry?.oid ?? null);
+  const newText = await blobText(newRepo, newEntry?.oid ?? null);
+  const patch =
+    oldText === null || newText === null
+      ? null
+      : createTwoFilesPatch(
+          oldEntry ? `a/${path}` : "/dev/null",
+          newEntry ? `b/${path}` : "/dev/null",
+          oldText,
+          newText,
+          "",
+          "",
+          { context: 3 }
+        );
+  return { patch, binary: oldText === null || newText === null };
 }
 export async function compareArtifacts(
   baseRepo: ArtifactsRepo,
@@ -97,20 +121,8 @@ export async function compareArtifacts(
       truncated = true;
       break;
     }
-    const oldText = await blobText(baseRepo, oldEntry?.oid ?? null);
-    const newText = await blobText(headRepo, newEntry?.oid ?? null);
-    let patch =
-      oldText === null || newText === null
-        ? null
-        : createTwoFilesPatch(
-            oldEntry ? `a/${path}` : "/dev/null",
-            newEntry ? `b/${path}` : "/dev/null",
-            oldText,
-            newText,
-            "",
-            "",
-            { context: 3 }
-          );
+    const diff = await fileDiff(baseRepo, headRepo, path, oldEntry, newEntry);
+    let patch = diff.patch;
     patchBytes += patch?.length ?? 0;
     if (patchBytes > 2_000_000) {
       patch = null;
@@ -122,7 +134,7 @@ export async function compareArtifacts(
       oldOid: oldEntry?.oid ?? null,
       newOid: newEntry?.oid ?? null,
       patch,
-      binary: oldText === null || newText === null,
+      binary: diff.binary,
     });
   }
   const commits = [...headHistory.values()]

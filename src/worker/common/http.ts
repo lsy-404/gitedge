@@ -3,7 +3,7 @@ import { hasRecentAuth } from "../../../packages/contracts/src/security";
 
 export function jsonResponse(body: object, status = 200, headers?: HeadersInit): Response {
   const result = new Headers(headers);
-  result.set("Cache-Control", "no-store");
+  if (!result.has("Cache-Control")) result.set("Cache-Control", "no-store");
   return Response.json(body, { status, headers: result });
 }
 
