@@ -12,11 +12,13 @@ import {
   trustedHeaders,
   consumeRateLimit,
   parseUserGroupLimits,
+  type HealthResponse,
+  type ServiceHealth,
   type RateLimitDecision,
   type RateLimitNamespace,
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
-import { createLogger } from "../../../src/worker/common/logger";
+import { createLogger, type Logger } from "../../../src/worker/common/logger";
 
 export interface GatewayService {
   fetch(request: Request): Promise<Response>;
@@ -269,6 +271,70 @@ async function enforceUserLimit(
   return rateLimitedResponse(decision);
 }
 
+const HEALTH_PROBE_TIMEOUT_MS = 2000;
+
+async function probeService(service: GatewayService, path: string): Promise<boolean> {
+  const response = await service.fetch(new Request(`https://gateway.internal${path}`));
+  await response.body?.cancel();
+  return response.ok;
+}
+
+async function runProbe(
+  name: string,
+  probe: () => Promise<boolean>,
+  logger: Logger
+): Promise<ServiceHealth> {
+  const started = Date.now();
+  let timer: number | null = null;
+  let ok = false;
+  try {
+    ok = await Promise.race([
+      probe(),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), HEALTH_PROBE_TIMEOUT_MS);
+      }),
+    ]);
+  } catch (cause) {
+    logger.warn("gateway:health-probe-failed", {
+      probe: name,
+      reason: cause instanceof Error ? cause.message : "unknown",
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+  const latencyMs = Date.now() - started;
+  if (!ok) logger.warn("gateway:health-probe-unhealthy", { probe: name, latencyMs });
+  return { ok, latencyMs };
+}
+
+// Probes run one after another so a health check never fans out subrequests.
+async function handleHealth(env: GatewayEnv): Promise<Response> {
+  const logger = createLogger(undefined, { service: "gateway" });
+  const bound: [string, GatewayService | undefined][] = [
+    ["auth", env.AUTH],
+    ["forge", env.FORGE],
+    ["git", env.GIT],
+    ["deploy", env.DEPLOY],
+    ["actions", env.ACTIONS],
+  ];
+  const probes: [string, () => Promise<boolean>][] = [];
+  for (const [name, service] of bound)
+    if (service) probes.push([name, () => probeService(service, "/internal/health")]);
+  probes.push([
+    "limits",
+    async () => {
+      await consumeRateLimit(env.RATE_LIMITER, "health-probe", 1);
+      return true;
+    },
+  ]);
+  probes.push(["d1", () => probeService(env.FORGE, "/internal/health/d1")]);
+  const services: Record<string, ServiceHealth> = {};
+  for (const [name, probe] of probes) services[name] = await runProbe(name, probe, logger);
+  const healthy = Object.values(services).every((entry) => entry.ok);
+  const body: HealthResponse = { status: healthy ? "ok" : "degraded", services };
+  return Response.json(body, { status: healthy ? 200 : 503 });
+}
+
 async function serveSpa(request: Request, assets: GatewayService): Promise<Response> {
   const assetResponse = await assets.fetch(request);
   if (assetResponse.status !== 404 || (request.method !== "GET" && request.method !== "HEAD")) {
@@ -288,6 +354,8 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
     const ipLimitResponse = await enforceIpLimit(request, env);
     if (ipLimitResponse) return ipLimitResponse;
   }
+
+  if (request.method === "GET" && url.pathname === "/api/health") return handleHealth(env);
 
   if (isApiPath(url.pathname, "/api/auth")) {
     return env.AUTH.fetch(forwardServicePath(request, "/api/auth"));

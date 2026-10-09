@@ -457,7 +457,26 @@ type QueueActionResult =
       readonly status: number;
       readonly code: "conflict" | "run_limit" | "internal_error";
       readonly message: string;
+      readonly retryAfter?: number;
     };
+
+const RUN_LIMIT_PER_HOUR = 6;
+const RUN_LIMIT_WINDOW_MS = 60 * 60 * 1000;
+
+// A slot frees once the oldest run counted in the window leaves it.
+async function runLimitRetryAfter(
+  env: ActionsEnv,
+  repositoryId: string,
+  now: number
+): Promise<number> {
+  const oldest = await env.DB.prepare(
+    "SELECT created_at FROM actions_runs WHERE repository_id = ? AND created_at > ? ORDER BY created_at DESC LIMIT 1 OFFSET ?"
+  )
+    .bind(repositoryId, now - RUN_LIMIT_WINDOW_MS, RUN_LIMIT_PER_HOUR - 1)
+    .first<{ created_at: number }>();
+  if (!oldest) return 1;
+  return Math.max(1, Math.ceil((oldest.created_at + RUN_LIMIT_WINDOW_MS - now) / 1000));
+}
 
 async function queueActionRun(
   env: ActionsEnv,
@@ -491,7 +510,7 @@ async function queueActionRun(
   }
   const now = Date.now();
   const created = await env.DB.prepare(
-    "INSERT INTO actions_runs (id, repository_id, commit_oid, workflow, path, source_ref, created_by, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM actions_runs WHERE repository_id = ? AND created_at > ?) < 6"
+    "INSERT INTO actions_runs (id, repository_id, commit_oid, workflow, path, source_ref, created_by, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM actions_runs WHERE repository_id = ? AND created_at > ?) < ?"
   )
     .bind(
       id,
@@ -503,7 +522,8 @@ async function queueActionRun(
       user.id,
       now,
       repositoryId,
-      now - 60 * 60 * 1000
+      now - RUN_LIMIT_WINDOW_MS,
+      RUN_LIMIT_PER_HOUR
     )
     .run();
   if (created.meta.changes !== 1) {
@@ -512,6 +532,7 @@ async function queueActionRun(
       status: 429,
       code: "run_limit",
       message: "This repository has reached its limit of six runs per hour.",
+      retryAfter: await runLimitRetryAfter(env, repositoryId, now),
     };
   }
 
@@ -758,7 +779,13 @@ async function startRun(
   }
 
   const result = await queueActionRun(env, repo, user, repositoryId, body.ref, snapshot, workflow);
-  if (!result.ok) return errorResponse(result.status, result.code, result.message);
+  if (!result.ok)
+    return errorResponse(
+      result.status,
+      result.code,
+      result.message,
+      result.retryAfter === undefined ? undefined : { "Retry-After": String(result.retryAfter) }
+    );
   return dataResponse(result.summary, 202);
 }
 
@@ -859,6 +886,8 @@ export default {
     const logger = createLogger(env.LOG_LEVEL, { service: "actions" });
     try {
       const url = new URL(request.url);
+      if (request.method === "GET" && url.pathname === "/internal/health")
+        return dataResponse({ ok: true });
       if (url.pathname === "/internal/push") return await handleInternalPush(request, env);
       const user = readTrustedUser(request);
       const parts = url.pathname.split("/").filter(Boolean);

@@ -1,13 +1,15 @@
 import { GitWriteConflict } from "./write";
 import { createLogger } from "../../../src/worker/common/logger";
 import { handleGitApi } from "./api";
-import { errorResponse } from "../../../src/worker/common/http";
+import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 import { proxyGitTransport } from "./transport";
 import { GitResourceLimitError } from "./http";
 import type { GitEnv } from "./access";
 
 export default {
   async fetch(request: Request, env: GitEnv, ctx: ExecutionContext): Promise<Response> {
+    if (request.method === "GET" && new URL(request.url).pathname === "/internal/health")
+      return dataResponse({ ok: true });
     try {
       return new URL(request.url).pathname.includes(".git/")
         ? await proxyGitTransport(request, env, ctx)

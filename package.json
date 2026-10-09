@@ -14,6 +14,7 @@
     "test:workers": "vitest run --config vitest.config.ts",
     "test:auth": "vitest run --config vitest.config.ts test/agents test/account test/sso test/signatures",
     "test:web": "pnpm --dir apps/web run test",
+    "check:migrations": "node scripts/check-migrations.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit -p workers/auth/tsconfig.json && tsc --noEmit -p workers/forge/tsconfig.json && tsc --noEmit -p workers/git/tsconfig.json && tsc --noEmit -p workers/gateway/tsconfig.json && tsc --noEmit -p workers/limits/tsconfig.json && pnpm --dir workers/deploy run typecheck && pnpm run typecheck:actions && pnpm --dir apps/web exec vue-tsc --noEmit",

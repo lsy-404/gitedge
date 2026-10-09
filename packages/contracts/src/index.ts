@@ -9,6 +9,7 @@ export * from "./trust";
 export * from "./account";
 export * from "./actions";
 export * from "./browser-accounts";
+export * from "./ops";
 
 export const ErrorCodeSchema = z.enum([
   "bad_request",

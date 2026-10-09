@@ -22,6 +22,7 @@ jobs:
             apps/web/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm --dir apps/web install --frozen-lockfile
+      - run: pnpm run check:migrations
       - run: pnpm run typecheck
       - run: pnpm run test
       - run: pnpm run test:workers

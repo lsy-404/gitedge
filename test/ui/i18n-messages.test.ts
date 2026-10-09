@@ -18,6 +18,7 @@ const nonMessageSources = Object.entries(sources).filter(
 
 /** Message keys built at runtime: prefix to the values appended to it. */
 const dynamicKeys: Record<string, readonly string[]> = {
+  quotaResource_: ["repositories", "storage"],
   actionsStatus_: ["queued", "running", "completed"],
   "deployWizard.state.": ["pending", "running", "done", "failed"],
   actionsConclusion_: ["success", "failure", "cancelled"],
