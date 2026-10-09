@@ -103,6 +103,8 @@ describe("code navigation endpoints", () => {
     expect(publicOid.headers.get("Cache-Control")).toBe("public, max-age=3600, immutable");
     const privateOid = await call("private-id", `files?ref=${baseOid}`, owner);
     expect(privateOid.headers.get("Cache-Control")).toBe("private, max-age=3600");
+    expect(privateOid.headers.get("Vary")).toBe("Cookie, Authorization");
+    expect(publicOid.headers.get("Vary")).toBeNull();
     const branch = await call("public-id", "files?ref=main");
     expect(branch.headers.get("Cache-Control")).toBe("no-store");
     const detail = await call("public-id", `commit-diff?oid=${baseOid}`);

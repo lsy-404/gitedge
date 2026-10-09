@@ -59,7 +59,7 @@ const gutter = computed(() => {
             summary: commit.summary,
             author: commit.author.name,
             age: relativeAge(commit.author.timestamp, now, locale.value),
-            href: `/${props.repository.owner}/${props.repository.name}/commit/${commit.oid}`,
+            href: `/${props.repository.owner}/${props.repository.name}/commit/${commit.oid}?ref=${blame.value.oid}`,
             title: `${commit.author.name} · ${d(commit.author.timestamp * 1000, "long")} · ${commit.summary}`,
           }
         : { summary: t("blameOlder"), author: "", age: "", href: null, title: t("blameOlder") }

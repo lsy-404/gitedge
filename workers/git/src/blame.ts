@@ -8,7 +8,11 @@ export const BLAME_LIMITS = {
   commits: 500,
   treeReads: 500,
   blobReads: 150,
+  /** Bytes of earlier file versions decoded per request. */
+  blobBytes: 8 * 1024 * 1024,
   editLength: 4000,
+  /** Line-comparison budget across all diffs; Myers costs about (old + new lines) * edits. */
+  diffWork: 20_000_000,
 };
 
 export type BlameResult =
@@ -16,7 +20,8 @@ export type BlameResult =
   | { status: "not_found" }
   | { status: "unsupported"; reason: "binary" | "too_large" };
 
-type BlobLines = { lines: string[] } | { unsupported: "binary" | "too_large" } | null;
+type BlobLines =
+  { lines: string[]; byteLength: number } | { unsupported: "binary" | "too_large" } | null;
 
 async function readLines(repo: ArtifactsRepo, oid: string, maxBytes: number): Promise<BlobLines> {
   const blob = await repo.readBlob(oid);
@@ -27,6 +32,7 @@ async function readLines(repo: ArtifactsRepo, oid: string, maxBytes: number): Pr
   try {
     return {
       lines: splitLines(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes)),
+      byteLength: bytes.byteLength,
     };
   } catch {
     return { unsupported: "binary" };
@@ -37,24 +43,36 @@ function isRegularFile(entry: PathEntry | null): entry is PathEntry {
   return entry !== null && (entry.type === "blob" || entry.type === "exec");
 }
 
-/** Maps each line of `next` to the matching line index of `previous`, or -1 when it is new. */
-function lineMapping(previous: string[], next: string[], maxEditLength: number): Int32Array | null {
+/**
+ * Maps each line of `next` to the matching line index of `previous`, or -1 when it is new, and
+ * reports the number of edited lines.
+ */
+function lineMapping(
+  previous: string[],
+  next: string[],
+  maxEditLength: number
+): { mapping: Int32Array; edits: number } | null {
   const parts = diffArrays(previous, next, { maxEditLength });
   if (!parts) return null;
   const mapping = new Int32Array(next.length).fill(-1);
   let oldIndex = 0;
   let newIndex = 0;
+  let edits = 0;
   for (const part of parts) {
     const count = part.value.length;
-    if (part.added) newIndex += count;
-    else if (part.removed) oldIndex += count;
-    else {
+    if (part.added) {
+      newIndex += count;
+      edits += count;
+    } else if (part.removed) {
+      oldIndex += count;
+      edits += count;
+    } else {
       for (let offset = 0; offset < count; offset++) mapping[newIndex + offset] = oldIndex + offset;
       oldIndex += count;
       newIndex += count;
     }
   }
-  return mapping;
+  return { mapping, edits };
 }
 
 /**
@@ -92,6 +110,8 @@ export async function blameFile(
   let currentLines = headLines.lines;
   let inspected = 0;
   let blobReads = 0;
+  let blobBytes = 0;
+  let diffWork = limits.diffWork;
   try {
     while (current && pending.length > 0) {
       const parent = await walk.take();
@@ -105,10 +125,21 @@ export async function blameFile(
       if (parentEntry.oid !== currentEntry.oid) {
         if (blobReads >= limits.blobReads) break;
         blobReads += 1;
-        const parentLines = await readLines(repo, parentEntry.oid, limits.fileBytes);
+        const remainingBytes = limits.blobBytes - blobBytes;
+        const parentLines = await readLines(
+          repo,
+          parentEntry.oid,
+          Math.min(limits.fileBytes, remainingBytes)
+        );
         if (!parentLines || "unsupported" in parentLines) break;
-        const mapping = lineMapping(parentLines.lines, currentLines, limits.editLength);
-        if (!mapping) break;
+        blobBytes += parentLines.byteLength;
+        const span = Math.max(1, parentLines.lines.length + currentLines.length);
+        const maxEditLength = Math.min(limits.editLength, Math.floor(diffWork / span));
+        if (maxEditLength < 1) break;
+        const diff = lineMapping(parentLines.lines, currentLines, maxEditLength);
+        if (!diff) break;
+        diffWork -= span * Math.max(1, diff.edits);
+        const { mapping } = diff;
         const introduced: typeof pending = [];
         const carried: typeof pending = [];
         for (const item of pending) {

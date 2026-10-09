@@ -121,6 +121,8 @@ describe("fuzzy finder scoring", () => {
 
   it("reports matched positions", () => {
     expect(fuzzyMatch("api", "src/lib/api.ts")?.indices).toEqual([8, 9, 10]);
+    // "İ" lowercases to two units; indices must still point into the original path.
+    expect(fuzzyMatch("ab", "İ/ab.ts")?.indices).toEqual([2, 3]);
   });
 
   it("prefers basename, word-start and consecutive matches", () => {

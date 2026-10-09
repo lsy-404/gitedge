@@ -63,19 +63,19 @@ function validPath(path: string): boolean {
     path.split("/").every((part) => part !== ".." && part !== ".")
   );
 }
-/** Responses addressed by a full commit id never change; others must be revalidated. */
+/**
+ * Responses addressed by a full commit id never change; others must be revalidated. Private
+ * entries vary by credentials so a browser never replays them after sign-out or to another user.
+ */
 function oidCacheHeaders(
   ref: string,
   access: { repository: { visibility: string } },
   scopedToSession: boolean
 ): HeadersInit | undefined {
   if (!GitOidSchema.safeParse(ref).success) return undefined;
-  return {
-    "Cache-Control":
-      scopedToSession || access.repository.visibility !== "public"
-        ? "private, max-age=3600"
-        : "public, max-age=3600, immutable",
-  };
+  return scopedToSession || access.repository.visibility !== "public"
+    ? { "Cache-Control": "private, max-age=3600", Vary: "Cookie, Authorization" }
+    : { "Cache-Control": "public, max-age=3600, immutable" };
 }
 export async function handleGitApi(
   request: Request,

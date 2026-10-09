@@ -326,7 +326,7 @@ describe("path history view", () => {
     const rows = mounted.root.querySelectorAll(".history-row");
     expect(rows).toHaveLength(2);
     expect(rows[0]?.querySelector("a")?.getAttribute("href")).toBe(
-      `/example/sample/commit/${headOid}`
+      `/example/sample/commit/${headOid}?ref=${headOid}`
     );
     expect(mounted.root.textContent).toContain("Inspected 200 commits");
 
@@ -389,8 +389,8 @@ describe("blame view", () => {
     expect(mounted.root.querySelectorAll(".code-line")).toHaveLength(4);
     const links = [...mounted.root.querySelectorAll<HTMLAnchorElement>("a.blame-summary")];
     expect(links.map((link) => link.getAttribute("href"))).toEqual([
-      `/example/sample/commit/${olderOid}`,
-      `/example/sample/commit/${headOid}`,
+      `/example/sample/commit/${olderOid}?ref=${headOid}`,
+      `/example/sample/commit/${headOid}?ref=${headOid}`,
     ]);
     expect(mounted.root.textContent).toContain("Older history");
     expect(mounted.root.textContent).toContain("after inspecting 25 commits, 1 lines");
@@ -468,6 +468,17 @@ describe("commit page", () => {
     expect(mounted.root.textContent).toContain("some files or patches are omitted");
     const browse = mounted.root.querySelector<HTMLAnchorElement>("a.btn");
     expect(browse?.getAttribute("href")).toBe(`/example/sample?ref=${headOid}`);
+    mounted.unmount();
+  });
+
+  it("keeps the ref used for signature checks on parent links", async () => {
+    mockApi({ "commit-diff": () => detail });
+    const mounted = await mountAt(RepositoryCommit, `/example/sample/commit/${headOid}?ref=dev`, {
+      oid: headOid,
+    });
+    expect(
+      mounted.root.querySelector(`a[href="/example/sample/commit/${olderOid}?ref=dev"]`)
+    ).not.toBeNull();
     mounted.unmount();
   });
 

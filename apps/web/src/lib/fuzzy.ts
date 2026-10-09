@@ -19,19 +19,26 @@ function wordBonus(path: string, index: number, basenameStart: number): number {
   return bonus + (index >= basenameStart ? 0.3 : 0);
 }
 
+/** Lowercases per UTF-16 unit when needed so match indices stay aligned with the input. */
+function lowerUnits(text: string): string | string[] {
+  const lower = text.toLowerCase();
+  if (lower.length === text.length) return lower;
+  return Array.from({ length: text.length }, (_, index) => (text[index] ?? "").toLowerCase());
+}
+
 /**
  * Case-insensitive subsequence match scored for word starts, consecutive runs and basename hits.
  * Returns null when the query is not a subsequence of the path.
  */
 export function fuzzyMatch(query: string, path: string): FuzzyMatch | null {
-  const needle = query.toLowerCase().replaceAll(/\s+/g, "");
-  const haystack = path.toLowerCase();
+  const needle = lowerUnits(query.replaceAll(/\s+/g, ""));
+  const haystack = lowerUnits(path);
   const rows = needle.length;
   const columns = haystack.length;
   if (rows === 0) return { path, score: 0, indices: [] };
   if (rows > columns) return null;
   let probe = 0;
-  for (const char of haystack) if (char === needle[probe] && ++probe === rows) break;
+  for (let i = 0; i < columns && probe < rows; i++) if (haystack[i] === needle[probe]) probe++;
   if (probe < rows) return null;
 
   const basenameStart = path.lastIndexOf("/") + 1;

@@ -79,7 +79,11 @@ export async function commitDetail(
   let patchBytes = 0;
   let truncated = !complete;
   for (const change of changes) {
-    const diff = await fileDiff(repo, repo, change.path, change.before, change.after);
+    // Once the patch budget is spent, list the remaining files without reading their blobs.
+    const diff =
+      patchBytes > limits.patchBytes
+        ? { patch: null, binary: false }
+        : await fileDiff(repo, repo, change.path, change.before, change.after);
     let patch = diff.patch;
     patchBytes += patch?.length ?? 0;
     if (patchBytes > limits.patchBytes) {

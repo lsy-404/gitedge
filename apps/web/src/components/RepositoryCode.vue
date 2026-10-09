@@ -1137,7 +1137,10 @@ onUnmounted(() => {
           <RouterLink
             v-if="selectedCommit"
             class="btn btn-sm"
-            :to="`/${repository.owner}/${repository.name}/commit/${selectedCommit.oid}`"
+            :to="{
+              path: `/${repository.owner}/${repository.name}/commit/${selectedCommit.oid}`,
+              query: { ref: refName },
+            }"
             >{{ t("viewCommit") }}</RouterLink
           >
           <div class="commit-parents">

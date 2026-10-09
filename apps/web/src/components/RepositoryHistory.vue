@@ -39,8 +39,11 @@ const backLocation = computed(() =>
   )
 );
 
-function commitPath(oid: string): string {
-  return `/${props.repository.owner}/${props.repository.name}/commit/${oid}`;
+function commitPath(oid: string) {
+  return {
+    path: `/${props.repository.owner}/${props.repository.name}/commit/${oid}`,
+    query: { ref: pinnedRef.value },
+  };
 }
 async function load() {
   const current = ++version;

@@ -67,7 +67,10 @@ watch([() => props.repository.id, () => props.oid], load, { immediate: true });
           <RouterLink
             v-for="parent in detail.commit.parents"
             :key="parent"
-            :to="`${base}/commit/${parent}`"
+            :to="{
+              path: `${base}/commit/${parent}`,
+              query: route.query.ref ? { ref: signatureRef } : {},
+            }"
             >{{ parent.slice(0, 8) }}</RouterLink
           >
         </span>

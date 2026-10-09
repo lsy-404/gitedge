@@ -42,7 +42,7 @@ async function history(
   }
   return result;
 }
-export async function blobText(repo: ArtifactsRepo, oid: string | null): Promise<string | null> {
+async function blobText(repo: ArtifactsRepo, oid: string | null): Promise<string | null> {
   if (!oid) return "";
   const blob = await repo.readBlob(oid);
   if (!blob || blob.size > 256_000) return null;
@@ -121,7 +121,11 @@ export async function compareArtifacts(
       truncated = true;
       break;
     }
-    const diff = await fileDiff(baseRepo, headRepo, path, oldEntry, newEntry);
+    // Once the patch budget is spent, list the remaining files without reading their blobs.
+    const diff =
+      patchBytes > 2_000_000
+        ? { patch: null, binary: false }
+        : await fileDiff(baseRepo, headRepo, path, oldEntry, newEntry);
     let patch = diff.patch;
     patchBytes += patch?.length ?? 0;
     if (patchBytes > 2_000_000) {

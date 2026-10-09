@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blameFile } from "../../workers/git/src/blame";
+import { BLAME_LIMITS, blameFile } from "../../workers/git/src/blame";
 import { commitDetail } from "../../workers/git/src/commit-diff";
 import { listFiles, pathHistory } from "../../workers/git/src/navigation";
 import { memoryHistory, type HistoryStep } from "../support/memory-history";
@@ -191,7 +191,7 @@ describe("blame", () => {
         { message: "edit", files: { "f.txt": lines("a", "b", "c") } },
         { message: "edit again", files: { "f.txt": lines("a", "b", "c", "d") } },
       ],
-      { fileBytes: 1000, commits: 1, treeReads: 100, blobReads: 100, editLength: 100 }
+      { ...BLAME_LIMITS, commits: 1 }
     );
     expect(blame.partial).toBe(true);
     expect(blame.hunks).toEqual([
@@ -206,10 +206,43 @@ describe("blame", () => {
         { message: "create", files: { "f.txt": lines("a") } },
         { message: "edit", files: { "f.txt": lines("a", "b") } },
       ],
-      { fileBytes: 1000, commits: 100, treeReads: 100, blobReads: 0, editLength: 100 }
+      { ...BLAME_LIMITS, blobReads: 0 }
     );
     expect(blame.partial).toBe(true);
     expect(blame.hunks).toEqual([{ startLine: 1, lineCount: 2, commitOid: null }]);
+  });
+
+  it("reports partial results when the diff work budget is exhausted", async () => {
+    const steps: HistoryStep[] = [
+      { message: "create", files: { "f.txt": lines("a", "b", "c", "d") } },
+      { message: "rewrite", files: { "f.txt": lines("w", "x", "y", "z") } },
+      { message: "append", files: { "f.txt": lines("w", "x", "y", "z", "e") } },
+    ];
+    const generous = await blamed(steps);
+    expect(generous.blame.partial).toBe(false);
+    // The first diff (9 lines, 1 edit) fits; the full rewrite below it would exceed the budget.
+    const { blame, oids } = await blamed(steps, { ...BLAME_LIMITS, diffWork: 20 });
+    expect(blame.partial).toBe(true);
+    expect(blame.hunks).toEqual([
+      { startLine: 1, lineCount: 4, commitOid: null },
+      { startLine: 5, lineCount: 1, commitOid: oids[2] },
+    ]);
+  });
+
+  it("reports partial results when earlier versions exceed the byte budget", async () => {
+    const { blame, oids } = await blamed(
+      [
+        { message: "create", files: { "f.txt": lines("a") } },
+        { message: "edit", files: { "f.txt": lines("a", "b") } },
+        { message: "edit again", files: { "f.txt": lines("a", "b", "c") } },
+      ],
+      { ...BLAME_LIMITS, blobBytes: 4 }
+    );
+    expect(blame.partial).toBe(true);
+    expect(blame.hunks).toEqual([
+      { startLine: 1, lineCount: 2, commitOid: null },
+      { startLine: 3, lineCount: 1, commitOid: oids[2] },
+    ]);
   });
 
   it("handles files without a trailing newline and empty files", async () => {
@@ -241,15 +274,10 @@ describe("blame", () => {
       status: "unsupported",
       reason: "binary",
     });
-    expect(
-      await blameFile(repo, "main", "big.txt", {
-        fileBytes: 10,
-        commits: 10,
-        treeReads: 10,
-        blobReads: 10,
-        editLength: 10,
-      })
-    ).toEqual({ status: "unsupported", reason: "too_large" });
+    expect(await blameFile(repo, "main", "big.txt", { ...BLAME_LIMITS, fileBytes: 10 })).toEqual({
+      status: "unsupported",
+      reason: "too_large",
+    });
   });
 });
 
@@ -300,6 +328,27 @@ describe("commit detail", () => {
     expect(detail?.files).toHaveLength(2);
     expect(detail?.files[0]).toMatchObject({ path: "a.bin", binary: true, patch: null });
     expect(detail?.truncated).toBe(true);
+  });
+
+  it("stops reading blobs once the patch budget is spent", async () => {
+    const { repo, oids, reads } = await memoryHistory([
+      { message: "root", files: { "a.txt": "a".repeat(40), "b.txt": "b", "c.txt": "c" } },
+    ]);
+    reads.blobs = 0;
+    const detail = await commitDetail(repo, oids[0] ?? "", {
+      files: 10,
+      treeReads: 10,
+      patchBytes: 20,
+    });
+    expect(detail?.truncated).toBe(true);
+    expect(detail?.files.map((file) => [file.path, file.patch])).toEqual([
+      ["a.txt", null],
+      ["b.txt", null],
+      ["c.txt", null],
+    ]);
+    expect(detail?.files.every((file) => !file.binary)).toBe(true);
+    // Only the first file's blob is read; one side of an added file is empty.
+    expect(reads.blobs).toBe(1);
   });
 
   it("returns null for an unknown commit", async () => {

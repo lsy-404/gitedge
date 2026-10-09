@@ -27,7 +27,8 @@ const rows = computed(() =>
   results.value.map((match) => {
     const matched = new Set(match.indices);
     const parts: { text: string; match: boolean }[] = [];
-    for (const [index, char] of [...match.path].entries()) {
+    for (let index = 0; index < match.path.length; index++) {
+      const char = match.path[index] ?? "";
       const isMatch = matched.has(index);
       const last = parts.at(-1);
       if (last && last.match === isMatch) last.text += char;

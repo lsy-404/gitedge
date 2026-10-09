@@ -379,6 +379,18 @@
 .with-blame .line-number {
   left: 360px;
 }
+@media (max-width: 720px) {
+  .blame-cell {
+    flex-basis: 140px;
+  }
+  .blame-author,
+  .blame-age {
+    display: none;
+  }
+  .with-blame .line-number {
+    left: 140px;
+  }
+}
 
 .tree-toolbar {
   display: flex;
