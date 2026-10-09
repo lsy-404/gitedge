@@ -368,7 +368,8 @@ describe("repository Code view", () => {
     buttons[0]?.click();
     buttons[1]?.click();
 
-    expect(mounted.root.querySelector(".code-source .highlighted-file")?.textContent).toBe("");
+    expect(mounted.root.querySelector(".code-lines")).not.toBeNull();
+    expect(mounted.root.querySelectorAll(".code-line")).toHaveLength(0);
     expect(open).toHaveBeenCalledWith("blob:test", "_blank", "noopener");
     expect(click).toHaveBeenCalledOnce();
     expect(createObjectURL).toHaveBeenCalledTimes(2);
@@ -903,7 +904,7 @@ describe("repository Code view interactions", () => {
     mounted.unmount();
   });
 
-  it("returns focus to the clone toggle and the file search trigger on Escape", async () => {
+  it("returns focus to the clone toggle on Escape", async () => {
     i18n.global.locale.value = "en";
     mockCodeApi();
     const mounted = await mountCode("/example/sample", "code");
@@ -915,16 +916,6 @@ describe("repository Code view interactions", () => {
     await settle();
     expect(mounted.root.querySelector("#clone-menu")).toBeNull();
     expect(document.activeElement).toBe(toggle);
-
-    button(mounted.root, "Go to file")?.click();
-    await settle();
-    const input = mounted.root.querySelector<HTMLInputElement>(".file-search input");
-    expect(input?.getAttribute("aria-label")).toBe("Go to file");
-    expect(document.activeElement).toBe(input);
-    if (input) press(input, "Escape");
-    await settle();
-    expect(mounted.root.querySelector(".file-search")).toBeNull();
-    expect(document.activeElement).toBe(mounted.root.querySelector(".search-trigger"));
     mounted.unmount();
   });
 

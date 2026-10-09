@@ -64,7 +64,12 @@ export const router = createRouter({
     },
     { path: "/:owner/:repo/wiki/:slug", component: RepositoryView, meta: { allowAnonymous: true } },
     {
-      path: "/:owner/:repo/:view(tree|blob)/:path(.*)*",
+      path: "/:owner/:repo/commit/:oid([0-9a-f]{40})",
+      component: RepositoryView,
+      meta: { allowAnonymous: true },
+    },
+    {
+      path: "/:owner/:repo/:view(tree|blob|history|blame)/:path(.*)*",
       component: RepositoryView,
       meta: { allowAnonymous: true },
     },

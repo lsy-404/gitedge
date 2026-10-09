@@ -43,6 +43,9 @@ import {
 } from "./read";
 import { readCommitSignature, verifyCommitSignature } from "./signatures";
 import { compareArtifacts } from "./compare";
+import { blameFile } from "./blame";
+import { commitDetail } from "./commit-diff";
+import { listFiles, pathHistory } from "./navigation";
 import { mergeArtifacts } from "./merge";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 
@@ -60,6 +63,20 @@ function validPath(path: string): boolean {
     !path.includes("\0") &&
     path.split("/").every((part) => part !== ".." && part !== ".")
   );
+}
+/**
+ * Responses addressed by a full commit id never change; others must be revalidated. Private
+ * entries vary by credentials so a browser never replays them after sign-out or to another user.
+ */
+function oidCacheHeaders(
+  ref: string,
+  access: { repository: { visibility: string } },
+  scopedToSession: boolean
+): HeadersInit | undefined {
+  if (!GitOidSchema.safeParse(ref).success) return undefined;
+  return scopedToSession || access.repository.visibility !== "public"
+    ? { "Cache-Control": "private, max-age=3600", Vary: "Cookie, Authorization" }
+    : { "Cache-Control": "public, max-age=3600, immutable" };
 }
 export async function handleGitApi(
   request: Request,
@@ -100,6 +117,7 @@ export async function handleGitApi(
     proposalComparison ||
     resource === "pull-head" ||
     resource === "commit" ||
+    resource === "commit-diff" ||
     resource === "signature" ||
     resource === "snapshot";
   using repo = await env.ARTIFACTS.get(
@@ -418,6 +436,56 @@ export async function handleGitApi(
     return commit
       ? dataResponse(commitResponse(commit))
       : errorResponse(404, "not_found", "Commit was not found.");
+  }
+  if (resource === "commit-diff") {
+    const oid = url.searchParams.get("oid") ?? "";
+    if (!GitOidSchema.safeParse(oid).success)
+      return errorResponse(400, "bad_request", "Invalid commit oid.");
+    const detail = await commitDetail(repo, oid);
+    logger.debug("artifacts:commit-diff", {
+      oid,
+      found: detail !== null,
+      files: detail?.files.length,
+      truncated: detail?.truncated,
+    });
+    return detail
+      ? dataResponse(detail, 200, oidCacheHeaders(oid, access, false))
+      : errorResponse(404, "not_found", "Commit was not found.");
+  }
+  if (resource === "files") {
+    const list = await listFiles(repo, ref);
+    if (!list) return errorResponse(404, "not_found", "Ref was not found.");
+    if (list.truncated) logger.warn("artifacts:file-list-truncated", { paths: list.paths.length });
+    return dataResponse(list, 200, oidCacheHeaders(ref, access, session !== null));
+  }
+  if (resource === "history") {
+    const cursor = url.searchParams.get("cursor");
+    if (cursor !== null && !GitOidSchema.safeParse(cursor).success)
+      return errorResponse(400, "bad_request", "Invalid history cursor.");
+    if (!path) return errorResponse(400, "bad_request", "A file or directory path is required.");
+    const history = await pathHistory(repo, cursor ?? ref, path);
+    logger.debug("artifacts:path-history", {
+      inspected: history.inspected,
+      matches: history.commits.length,
+      truncated: history.truncated,
+    });
+    return dataResponse(history, 200, oidCacheHeaders(cursor ?? ref, access, session !== null));
+  }
+  if (resource === "blame") {
+    const result = path ? await blameFile(repo, ref, path) : { status: "not_found" as const };
+    if (result.status === "not_found")
+      return errorResponse(404, "not_found", "File was not found.");
+    if (result.status === "unsupported")
+      return errorResponse(
+        422,
+        result.reason === "binary" ? "binary_file" : "file_too_large",
+        result.reason === "binary"
+          ? "Blame is unavailable for binary files."
+          : "File is too large to blame."
+      );
+    if (result.blame.partial)
+      logger.warn("artifacts:blame-partial", { inspected: result.blame.inspected });
+    return dataResponse(result.blame, 200, oidCacheHeaders(ref, access, session !== null));
   }
   if (resource === "commits")
     return dataResponse(

@@ -72,6 +72,8 @@ The public Gateway serves Vue assets and authenticates requests before forwardin
 
 Artifacts owns repository contents, refs and Git protocol behavior. Older repositories without an Artifacts mapping must be imported before use. Preserve the prior deployment and its storage until their data has been transferred and verified; deploying the new application does not transfer existing Git data.
 
+Code view shortcuts: `t` opens a fuzzy file finder (20,000 paths per commit, truncation is reported) and `y` rewrites the address to a permalink pinned to the full commit id. Blob URLs accept `#L10` and `#L10-L20` anchors; click or shift-click a line number to set them, and use "Copy permalink" to share a stable link. Files and directories have a History view (first-parent commits that changed the path, loaded in bounded pages) and files have a Blame view that reports partial results when the walk budget ends. Every commit has a page at `/:owner/:repo/commit/:oid` with its message, parents and diff.
+
 Browser previews support text files up to 2 MiB. Diffs show up to 200 changed files and report truncation. In-Worker comparisons inspect up to 250 commits per side; in-Worker merge transfer is limited to 24 MiB per remote. Larger histories and merges can be handled with a regular Git client, while transport streams remain unbuffered.
 
 Repository deployment accepts prebuilt JavaScript modules plus declared D1, R2 and KV resources. The wizard shows permissions, license, terms, source digest, resource names and progress, and reuses completed provisioning work on retry. See the [manifest format](docs/deploy.md).

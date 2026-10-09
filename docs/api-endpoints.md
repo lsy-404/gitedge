@@ -20,6 +20,15 @@ Repository import: `POST /api/forge/repository-imports` with `sourceUrl`, `owner
 
 Git: `/api/git/repositories/:id/refs`, `tree`, `file`, `raw`, `commits`, `graph` and `compare`. Reads accept appropriate `ref`, `path`, `offset` or `limit` queries. Comparisons accept `base`, `head` and a validated `headSessionId`. Agent sessions operate on their own workspace by default.
 
+Code navigation (Git, all `repo:read` and 404 for unauthorized private readers):
+
+- `GET /files?ref=` returns `{ oid, paths, truncated }`, every blob path of the commit sorted, bounded to 20,000 paths and 500 directories; `truncated` reports a partial list.
+- `GET /history?ref=&path=[&cursor=]` returns `{ commits, inspected, truncated, nextCursor }`: first-parent commits that changed the file or directory, newest first. A request inspects at most 200 commits, returns at most 30 matches and stops at a tree-read budget; pass `nextCursor` as `cursor` to continue. Side-branch commits appear as their merge commit.
+- `GET /blame?ref=&path=` returns `{ oid, path, blobOid, lineCount, hunks, commits, inspected, partial }`. Hunks are consecutive lines from one commit (`commitOid` is `null` for lines older than the inspected history, with `partial: true`). Walks the first-parent chain up to 500 commits, 150 file versions (8 MiB of earlier versions) and a fixed line-diff work budget. Binary files answer 422 `binary_file` and files over 512 KiB answer 422 `file_too_large`.
+- `GET /commit-diff?oid=` returns `{ commit, files, truncated }`: the commit against its first parent (or the empty tree), at most 200 files and 2 MB of patches.
+
+Responses addressed by a 40-character commit id (`files`, `blame`, the `history` cursor and `commit-diff`) carry `Cache-Control: public, max-age=3600, immutable` for public repositories and `private, max-age=3600` with `Vary: Cookie, Authorization` for private repositories and agent workspaces; branch and tag refs are `no-store`.
+
 Actions: `/api/actions/repositories/:id[/...]`, `/api/actions/runs/:id` and `/api/actions/runs/:id/cancel`. Starting a run beyond six per repository per hour returns 429 `run_limit` with a `Retry-After` header.
 
 Deploy: `/api/deploy/plan`, `session`, `account`, `resources`, `provision`, `migrate` and `deploy`. See [the deployment manifest](deploy.md) for source and permission requirements.

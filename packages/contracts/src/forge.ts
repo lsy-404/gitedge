@@ -249,6 +249,45 @@ export interface GitComparison {
   files: GitDiffFile[];
   truncated: boolean;
 }
+/** Every blob path of a commit tree; `truncated` when the entry or directory budget was reached. */
+export interface GitFileList {
+  oid: string;
+  paths: string[];
+  truncated: boolean;
+}
+/** First-parent commits that changed a path; `nextCursor` resumes an interrupted walk. */
+export interface GitPathHistory {
+  commits: GitCommit[];
+  inspected: number;
+  truncated: boolean;
+  nextCursor: string | null;
+}
+export interface GitBlameCommit {
+  oid: string;
+  summary: string;
+  author: { name: string; timestamp: number };
+}
+/** `commitOid` is null for lines older than the inspected history. */
+export interface GitBlameHunk {
+  startLine: number;
+  lineCount: number;
+  commitOid: string | null;
+}
+export interface GitBlame {
+  oid: string;
+  path: string;
+  blobOid: string;
+  lineCount: number;
+  hunks: GitBlameHunk[];
+  commits: GitBlameCommit[];
+  inspected: number;
+  partial: boolean;
+}
+export interface GitCommitDetail {
+  commit: GitCommit;
+  files: GitDiffFile[];
+  truncated: boolean;
+}
 
 const title = z.string().trim().min(1).max(200);
 const body = z.string().max(50_000);

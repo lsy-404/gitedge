@@ -46,7 +46,7 @@ const languages = new Map<string, string>(
     yaml: "yaml",
   })
 );
-function escapeHtml(value: string): string {
+export function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")

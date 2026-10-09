@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import type {
@@ -36,6 +36,15 @@ import {
   type GraphSessionMarker,
 } from "../lib/gitGraphView";
 import { highlightedCode } from "../lib/markdown";
+import {
+  permalinkLocation,
+  resolveCommitOid,
+  splitHighlightedLines,
+  parseLineAnchor,
+} from "../lib/codeAnchor";
+import { useLineSelection } from "../lib/lineSelection";
+import CodeLines from "./CodeLines.vue";
+import FileFinderDialog from "./FileFinderDialog.vue";
 import MarkdownContent from "./MarkdownContent.vue";
 import DiffViewer from "./DiffViewer.vue";
 import CommitSignatureStatus from "./CommitSignatureStatus.vue";
@@ -148,33 +157,34 @@ const markdownBase = computed(
   () =>
     `/${props.repository.owner}/${props.repository.name}/blob/${filePath.value.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(refName.value)}`
 );
-const queryText = ref("");
-const showFileSearch = ref(false);
+const showFinder = ref(false);
 const showCloneMenu = ref(false);
 const cloneToggle = ref<HTMLElement | null>(null);
-const codeRoot = ref<HTMLElement | null>(null);
-const fileSearchInput = ref<HTMLInputElement | null>(null);
+const codeLines = ref<InstanceType<typeof CodeLines> | null>(null);
+const { selection: lineSelection, select: selectLine } = useLineSelection(codeLines);
 const copied = ref(false);
 const copyFailed = ref(false);
 let copiedTimer: number | undefined;
 const hasMoreGraph = computed(
   () => Boolean(graph.value?.truncated) && graphLimit.value < graphMaxLimit
 );
-const filteredEntries = computed(() =>
-  (tree.value?.entries ?? []).filter((entry) =>
-    entry.name.toLocaleLowerCase().includes(queryText.value.trim().toLocaleLowerCase())
-  )
+const treeEntries = computed(() => tree.value?.entries ?? []);
+const commitOid = computed(() => resolveCommitOid(refs.value, refName.value));
+const permalink = computed(() =>
+  commitOid.value && isBlob.value
+    ? permalinkLocation({
+        owner: props.repository.owner,
+        repository: props.repository.name,
+        path: filePath.value,
+        commitOid: commitOid.value,
+        range: lineSelection.value,
+      })
+    : null
 );
 const latestCommit = computed(() => graph.value?.commits[0] ?? commits.value[0] ?? null);
 const breadcrumbs = computed(() => filePath.value.split("/").filter(Boolean));
-const highlightedContent = computed(() =>
-  highlightedCode(file.value?.content ?? "", file.value?.path)
-);
-const fileLineNumbers = computed(() =>
-  Array.from(
-    { length: (file.value?.content?.match(/\n/g)?.length ?? 0) + 1 },
-    (_, index) => index + 1
-  )
+const highlightedLines = computed(() =>
+  splitHighlightedLines(highlightedCode(file.value?.content ?? "", file.value?.path))
 );
 const compareBase = computed({
   get: () => String(route.query.base || props.repository.defaultBranch),
@@ -284,6 +294,7 @@ async function load() {
       if (version !== requestVersion) return;
       file.value = fileData;
       tree.value = directory;
+      if (markdownFile.value && parseLineAnchor(route.hash)) fileMode.value = "code";
       return;
     }
     const treeData = await api.tree(props.repository.id, pinnedRef, filePath.value);
@@ -422,13 +433,46 @@ function copyCloneUrl() {
 function copyToken() {
   return token.value ? copyText(token.value.token) : Promise.resolve();
 }
-function openFileSearch() {
-  showFileSearch.value = true;
-  void nextTick(() => fileSearchInput.value?.focus());
+function openFile(path: string) {
+  void router.push(
+    repositoryCodeLocation(
+      props.repository.owner,
+      props.repository.name,
+      "blob",
+      path,
+      refName.value
+    )
+  );
 }
-function closeFileSearch() {
-  showFileSearch.value = false;
-  void nextTick(() => codeRoot.value?.querySelector<HTMLElement>(".search-trigger")?.focus());
+function copyPermalink() {
+  if (!permalink.value) return;
+  const target = router.resolve(permalink.value);
+  return copyText(window.location.origin + target.fullPath);
+}
+function typingTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))
+  );
+}
+function codeShortcuts(event: KeyboardEvent) {
+  if (
+    props.section !== "code" ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.altKey ||
+    event.defaultPrevented ||
+    typingTarget(event.target) ||
+    document.querySelector("dialog[open]")
+  )
+    return;
+  if (event.key === "t" && refs.value.length) {
+    event.preventDefault();
+    showFinder.value = true;
+  } else if (event.key === "y" && permalink.value) {
+    event.preventDefault();
+    void router.replace(permalink.value);
+  }
 }
 async function issueToken() {
   tokenBusy.value = true;
@@ -497,17 +541,16 @@ function dismissCodeMenu(event: Event) {
     showCloneMenu.value = false;
 }
 watch(
-  () => route.fullPath,
+  () => route.fullPath.replace(/#.*$/, ""),
   () => {
     showCloneMenu.value = false;
-    showFileSearch.value = false;
-    queryText.value = "";
+    showFinder.value = false;
     fileMode.value = "preview";
     showFileEditor.value = false;
     savedFile.value = null;
   }
 );
-function fileHref(path: string, view: "tree" | "blob" = "blob") {
+function fileHref(path: string, view: "tree" | "blob" | "history" | "blame" = "blob") {
   return repositoryCodeLocation(
     props.repository.owner,
     props.repository.name,
@@ -520,14 +563,14 @@ let previousRepositoryId = props.repository.id;
 let previousSection = props.section;
 let previousRef = refName.value;
 watch(
-  () => [
-    props.repository.id,
-    props.section,
-    refName.value,
-    filePath.value,
-    isBlob.value,
-    route.query.base,
-    route.query.head,
+  [
+    () => props.repository.id,
+    () => props.section,
+    refName,
+    filePath,
+    isBlob,
+    () => route.query.base,
+    () => route.query.head,
   ],
   () => {
     const resetCommits =
@@ -549,6 +592,7 @@ watch(
 );
 onMounted(() => {
   document.addEventListener("keydown", dismissCodeMenu);
+  document.addEventListener("keydown", codeShortcuts);
   document.addEventListener("pointerdown", dismissCodeMenu);
   clockTimer = window.setInterval(() => {
     now.value = Date.now();
@@ -556,6 +600,7 @@ onMounted(() => {
 });
 onUnmounted(() => {
   document.removeEventListener("keydown", dismissCodeMenu);
+  document.removeEventListener("keydown", codeShortcuts);
   document.removeEventListener("pointerdown", dismissCodeMenu);
   clearInterval(clockTimer);
   clearTimeout(copiedTimer);
@@ -564,7 +609,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section ref="codeRoot" class="code-section">
+  <section class="code-section">
     <div v-if="section === 'code'" class="code-toolbar">
       <div class="code-controls">
         <SelectField
@@ -600,17 +645,12 @@ onUnmounted(() => {
         <span class="repo-count"
           >{{ branchRefs.length }} {{ t("branches") }} · {{ tagRefs.length }} {{ t("tags") }}</span
         >
-        <label v-if="showFileSearch" class="file-search">
-          <AppIcon name="search" />
-          <input
-            ref="fileSearchInput"
-            v-model="queryText"
-            :aria-label="t('goToFile')"
-            :placeholder="t('codeSearchPlaceholder')"
-            @keydown.esc.stop="closeFileSearch"
-          />
-        </label>
-        <FluentButton v-else class="search-trigger" tone="secondary" @click="openFileSearch"
+        <FluentButton
+          class="search-trigger"
+          tone="secondary"
+          :disabled="!refs.length"
+          :title="t('goToFileShortcut')"
+          @click="showFinder = true"
           ><AppIcon name="search" />{{ t("goToFile") }}</FluentButton
         >
         <FluentButton
@@ -751,6 +791,11 @@ onUnmounted(() => {
             d(latestCommit.author.timestamp * 1000, "short")
           }}</time>
         </div>
+        <div v-if="filePath" class="tree-toolbar">
+          <RouterLink class="btn btn-sm" :to="fileHref(filePath, 'history')"
+            ><AppIcon name="clock" />{{ t("fileHistory") }}</RouterLink
+          >
+        </div>
         <RouterLink
           v-if="filePath"
           class="file-entry file-entry-root"
@@ -758,7 +803,7 @@ onUnmounted(() => {
           >↑ {{ t("repositoryRoot") }}</RouterLink
         >
         <RouterLink
-          v-for="entry in filteredEntries"
+          v-for="entry in treeEntries"
           :key="entry.path"
           class="file-entry"
           :to="
@@ -792,7 +837,7 @@ onUnmounted(() => {
           {{ filePath.split("/").slice(0, -1).join("/") || "/" }}
         </div>
         <RouterLink
-          v-for="entry in filteredEntries"
+          v-for="entry in treeEntries"
           :key="entry.path"
           class="file-tree-item"
           :class="{ selected: entry.path === filePath }"
@@ -856,6 +901,15 @@ onUnmounted(() => {
               @click="downloadText"
               ><AppIcon name="download" />{{ t("download") }}</FluentButton
             >
+            <RouterLink class="btn" :to="fileHref(filePath, 'blame')">{{ t("blame") }}</RouterLink>
+            <RouterLink class="btn" :to="fileHref(filePath, 'history')"
+              ><AppIcon name="clock" />{{ t("fileHistory") }}</RouterLink
+            >
+            <FluentButton tone="secondary" :disabled="!permalink" @click="copyPermalink"
+              ><AppIcon :name="copied ? 'check' : 'link'" />{{
+                copied ? t("copied") : t("copyPermalink")
+              }}</FluentButton
+            >
           </div>
         </div>
         <p v-if="file.binary || file.content === null" class="muted box-form">
@@ -868,17 +922,16 @@ onUnmounted(() => {
           :source="file.content"
           :base-url="markdownBase"
         />
-        <pre
+        <CodeLines
           v-else
-          class="code-source"
-          tabindex="0"
-          role="region"
-          :aria-label="title"
-          :class="{ 'code-wrapped': preferencesState.lineWrap }"
-          :style="{ tabSize: preferencesState.tabSize }"
-        ><code class="line-gutter" aria-hidden="true">{{
-          fileLineNumbers.join("\n")
-        }}</code><code class="highlighted-file" v-html="highlightedContent"></code></pre>
+          ref="codeLines"
+          :lines="highlightedLines"
+          :label="title"
+          :selection="lineSelection"
+          :wrap="preferencesState.lineWrap"
+          :tab-size="preferencesState.tabSize"
+          @select="selectLine"
+        />
       </div>
       <RepositoryFileEditor
         v-if="showFileEditor && canManageCode && canEditCurrentRef && !emptyRepository"
@@ -1081,6 +1134,15 @@ onUnmounted(() => {
           />
           <p v-if="selectedCommit" class="commit-full-message">{{ selectedCommit.message }}</p>
           <p v-else class="muted">{{ t("commitNotInGraph") }}</p>
+          <RouterLink
+            v-if="selectedCommit"
+            class="btn btn-sm"
+            :to="{
+              path: `/${repository.owner}/${repository.name}/commit/${selectedCommit.oid}`,
+              query: { ref: refName },
+            }"
+            >{{ t("viewCommit") }}</RouterLink
+          >
           <div class="commit-parents">
             <strong>{{ t("parents") }}</strong>
             <AppLink
@@ -1165,6 +1227,13 @@ onUnmounted(() => {
         </template>
       </div>
     </section>
+    <FileFinderDialog
+      v-if="section === 'code' && refs.length"
+      v-model:open="showFinder"
+      :repository-id="repository.id"
+      :ref-name="commitOid ?? refName"
+      @select="openFile"
+    />
   </section>
 </template>
 
@@ -1342,26 +1411,6 @@ onUnmounted(() => {
   flex-wrap: wrap;
   gap: var(--space-3);
   color: var(--fg-secondary);
-}
-.compare-file {
-  display: grid;
-  gap: var(--space-2);
-  min-width: 0;
-}
-.compare-file-header {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-}
-.compare-file-header > .icon {
-  color: var(--fg-muted);
-}
-.compare-file-header strong {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  font-family: var(--font-mono);
-  font-size: var(--font-size-meta);
 }
 @media (max-width: 720px) {
   .commit-title small {

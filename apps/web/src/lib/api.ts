@@ -77,10 +77,14 @@ import type {
   CheckRun,
   Comment,
   Discussion,
+  GitBlame,
   GitCommit,
+  GitCommitDetail,
   GitComparison,
   GitFile,
+  GitFileList,
   GitGraph,
+  GitPathHistory,
   GitRef,
   GitTree,
   GitTreeEntry,
@@ -180,10 +184,14 @@ export type {
   CheckRun,
   Comment,
   Discussion,
+  GitBlame,
   GitCommit,
+  GitCommitDetail,
   GitComparison,
   GitFile,
+  GitFileList,
   GitGraph,
+  GitPathHistory,
   GitRef,
   GitTree,
   GitTreeEntry,
@@ -885,6 +893,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  fileList: (repositoryId: string, ref: string) =>
+    request<GitFileList>(gitPath(repositoryId, `files${query({ ref })}`)),
+  pathHistory: (repositoryId: string, ref: string, path: string, cursor?: string | null) =>
+    request<GitPathHistory>(
+      gitPath(repositoryId, `history${query({ ref, path, cursor: cursor ?? undefined })}`)
+    ),
+  blame: (repositoryId: string, ref: string, path: string) =>
+    request<GitBlame>(gitPath(repositoryId, `blame${query({ ref, path })}`)),
+  commitDetail: (repositoryId: string, oid: string) =>
+    request<GitCommitDetail>(gitPath(repositoryId, `commit-diff${query({ oid })}`)),
   commits: (repositoryId: string, ref: string, offset: number, limit: number) =>
     request<GitCommit[]>(gitPath(repositoryId, `commits${query({ ref, offset, limit })}`)),
   graph: (repositoryId: string, ref: string, limit: number) =>
