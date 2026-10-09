@@ -216,7 +216,20 @@ describe("AI summary repository settings", () => {
     );
     enable?.click();
     await settle();
-    expect(mounted.root.textContent).toContain("Tick the consent option");
+    expect(mounted.root.textContent).toContain("needs the consent to send code diffs");
+    expect(mounted.root.querySelector<HTMLButtonElement>("button[type='submit']")?.disabled).toBe(
+      true
+    );
+  });
+
+  it("blocks saving a private repository whose stored summaries lack consent", async () => {
+    const mounted = await mountSettings({
+      ...settings,
+      visibility: "private",
+      aiSummariesEnabled: true,
+      aiSummariesPrivateConsent: false,
+    });
+    expect(mounted.root.textContent).toContain("needs the consent to send code diffs");
     expect(mounted.root.querySelector<HTMLButtonElement>("button[type='submit']")?.disabled).toBe(
       true
     );

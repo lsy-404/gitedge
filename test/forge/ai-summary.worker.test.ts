@@ -20,7 +20,11 @@ let head = HEAD_A;
 let patch = "@@ -1 +1 @@\n-old\n+new";
 let comparisonTruncated = false;
 let modelOutput: Record<string, unknown> = {};
-const aiCalls: { model: string; messages: { role: string; content: string }[] }[] = [];
+const aiCalls: {
+  model: string;
+  messages: { role: string; content: string }[];
+  signal: AbortSignal | undefined;
+}[] = [];
 const goodOutput = {
   response: JSON.stringify({
     overview: "Renames a helper.",
@@ -31,11 +35,11 @@ const goodOutput = {
 };
 
 const AI = {
-  async run(model: string, inputs: Record<string, unknown>) {
+  async run(model: string, inputs: Record<string, unknown>, options?: AiOptions) {
     const parsed = z
       .object({ messages: z.array(z.object({ role: z.string(), content: z.string() })) })
       .parse(inputs);
-    aiCalls.push({ model, messages: parsed.messages });
+    aiCalls.push({ model, messages: parsed.messages, signal: options?.signal });
     return modelOutput;
   },
 };
@@ -262,9 +266,27 @@ describe("AI pull request summaries", () => {
     const flipped = await request("/repositories/r3/settings", "PATCH", "owner", {
       visibility: "private",
     });
-    expect(flipped.status).toBe(200);
+    expect(flipped.status).toBe(400);
+    expect(await flipped.json()).toMatchObject({ error: { code: "private_consent_required" } });
     await env.DB.prepare("UPDATE repositories SET visibility = 'private' WHERE id = 'r3'").run();
     expect(await state("r3", number)).toMatchObject({ unavailable: "private_consent_required" });
+    const consented = await request("/repositories/r3/settings", "PATCH", "owner", {
+      aiSummariesPrivateConsent: true,
+    });
+    expect(consented.status).toBe(200);
+    const withdrawn = await request("/repositories/r3/settings", "PATCH", "owner", {
+      aiSummariesPrivateConsent: false,
+    });
+    expect(withdrawn.status).toBe(400);
+    const switchedOff = await request("/repositories/r3/settings", "PATCH", "owner", {
+      aiSummariesEnabled: false,
+      aiSummariesPrivateConsent: false,
+    });
+    expect(switchedOff.status).toBe(200);
+    expect(await state("r3", number)).toMatchObject({ unavailable: "repository_disabled" });
+    await env.DB.prepare(
+      "UPDATE repositories SET ai_summaries_enabled = 1, ai_summaries_private_consent = 0 WHERE id = 'r3'"
+    ).run();
   });
 
   it("limits who can change the setting", async () => {
@@ -299,6 +321,7 @@ describe("AI pull request summaries", () => {
       content: { overview: "Renames a helper.", riskAreas: ["Callers outside the repository"] },
     });
     expect(current.job).toBeNull();
+    expect(aiCalls[0].signal).toBeInstanceOf(AbortSignal);
     const prompt = aiCalls[0].messages.map((message) => message.content).join("\n");
     expect(prompt).toContain("src/app.ts");
     expect(prompt).toContain("+new");
@@ -402,5 +425,63 @@ describe("AI pull request summaries", () => {
     );
     expect(merged.status).toBe(409);
     expect(await merged.json()).toMatchObject({ error: { code: "approvals_required" } });
+  });
+
+  it("runs summaries from the scheduled drain, not from request waitUntil", async () => {
+    const pending: Promise<unknown>[] = [];
+    const ctx: ExecutionContext = {
+      waitUntil: (promise) => void pending.push(promise),
+      passThroughOnException: () => undefined,
+      props: {},
+    };
+    const response = await forge.fetch(
+      new Request("https://forge.test/repositories/r1/pull-requests", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-GitEdge-User-Id": "u2",
+          "X-GitEdge-User-Name": "writer",
+          "X-GitEdge-User-Group": "free",
+        },
+        body: JSON.stringify({ title: "Inline", body: "", baseRef: "main", headRef: "topic" }),
+      }),
+      siteEnv,
+      ctx
+    );
+    expect(response.status).toBe(201);
+    await Promise.all(pending);
+    expect(aiCalls).toHaveLength(0);
+    await drainAiSummaries(siteEnv);
+    expect(aiCalls).toHaveLength(1);
+  });
+
+  it("never runs two jobs of one pull request at the same time", async () => {
+    const number = await openPull("r1");
+    await env.DB.prepare(
+      "UPDATE forge_ai_summaries SET status = 'running', started_at = ? WHERE status = 'queued'"
+    )
+      .bind(Date.now())
+      .run();
+    const accepted = await request(
+      `/repositories/r1/pull-requests/${number}/ai-summary`,
+      "POST",
+      "writer"
+    );
+    expect(accepted.status).toBe(202);
+    await drainAiSummaries(siteEnv);
+    expect(aiCalls).toHaveLength(0);
+    expect(await state("r1", number)).toMatchObject({ job: { status: "queued" } });
+  });
+
+  it("holds the hourly limit across pull requests drained together", async () => {
+    siteEnv = { ...siteEnv, AI_SUMMARY_HOURLY_LIMIT: "1" };
+    const first = await openPull("r1");
+    const second = await openPull("r1");
+    await drainAiSummaries(siteEnv);
+    expect(aiCalls).toHaveLength(1);
+    expect(await count("forge_ai_usage")).toBe(1);
+    const states = [await state("r1", first), await state("r1", second)];
+    expect(states.filter((entry) => entry.summary !== null)).toHaveLength(1);
+    expect(states.filter((entry) => entry.job?.errorCode === "rate_limited")).toHaveLength(1);
   });
 });

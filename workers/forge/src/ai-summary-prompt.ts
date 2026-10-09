@@ -4,8 +4,15 @@ const TITLE_CHARS = 200;
 const BODY_CHARS = 2000;
 const COMMIT_LIMIT = 30;
 const COMMIT_CHARS = 200;
+const REF_CHARS = 200;
+const PATH_CHARS = 300;
 const FILE_LIST_LIMIT = 400;
+/** Fraction of the budget the changed file list may use; the rest is left for patches. */
+const FILE_LIST_SHARE = 1 / 3;
 const MIN_PATCH_SHARE = 200;
+/** Room for the truncation notice and section labels around the header and patches. */
+const NOTICE_CHARS = 250;
+const PATCH_MARKER = "\n[patch truncated]";
 
 export interface SummaryPromptInput {
   title: string;
@@ -57,12 +64,21 @@ function clipPatch(patch: string, limit: number): string {
   return patch.slice(0, cut > 0 ? cut : limit);
 }
 
-/** Builds a prompt of at most `budget` characters of untrusted content and reports what was left out. */
+/** Builds a user message of at most `budget` characters and reports what was left out. */
 export function buildSummaryPrompt(input: SummaryPromptInput, budget: number): SummaryPrompt {
-  const listed = input.files.slice(0, FILE_LIST_LIMIT);
+  const fileLines: string[] = [];
+  let fileListChars = 0;
+  for (const file of input.files.slice(0, FILE_LIST_LIMIT)) {
+    const { added, removed } = lineCounts(file.patch);
+    const line = `${file.type} ${clip(file.path, PATH_CHARS)} (+${added} -${removed}${file.binary ? ", binary" : ""})`;
+    if (fileListChars + line.length + 1 > budget * FILE_LIST_SHARE) break;
+    fileLines.push(line);
+    fileListChars += line.length + 1;
+  }
+  const listed = input.files.slice(0, fileLines.length);
   const header = [
     `Pull request: ${clip(input.title, TITLE_CHARS)}`,
-    `Branches: ${input.headRef} into ${input.baseRef}`,
+    `Branches: ${clip(input.headRef, REF_CHARS)} into ${clip(input.baseRef, REF_CHARS)}`,
     `Description:\n${clip(input.body, BODY_CHARS) || "(none)"}`,
     `Commits (${input.commitMessages.length}):\n${
       input.commitMessages
@@ -70,31 +86,33 @@ export function buildSummaryPrompt(input: SummaryPromptInput, budget: number): S
         .map((message) => `- ${clip(message.split("\n")[0] ?? "", COMMIT_CHARS)}`)
         .join("\n") || "(none)"
     }`,
-    `Changed files (${input.files.length}):\n${listed
-      .map((file) => {
-        const { added, removed } = lineCounts(file.patch);
-        return `${file.type} ${file.path} (+${added} -${removed}${file.binary ? ", binary" : ""})`;
-      })
-      .join("\n")}`,
+    `Changed files (${input.files.length}):\n${fileLines.join("\n")}`,
   ].join("\n\n");
 
   const candidates = listed
-    .map((file, index) => ({ index, patch: file.binary ? null : file.patch }))
-    .filter((entry): entry is { index: number; patch: string } => Boolean(entry.patch));
-  let remaining = Math.max(0, budget - header.length);
+    .map((file, index) => ({
+      index,
+      patch: file.binary ? null : file.patch,
+      // Each hunk is framed by its path, an optional truncation marker and a blank line.
+      framing: `--- ${clip(file.path, PATH_CHARS)}\n`.length + PATCH_MARKER.length + 2,
+    }))
+    .filter((entry): entry is { index: number; patch: string; framing: number } =>
+      Boolean(entry.patch)
+    );
+  let remaining = Math.max(0, budget - NOTICE_CHARS - header.length);
   const included = new Map<number, string>();
   let omittedFiles = 0;
   let partialFiles = 0;
   const bySize = [...candidates].sort((a, b) => a.patch.length - b.patch.length);
   bySize.forEach((entry, position) => {
-    const share = Math.floor(remaining / (bySize.length - position));
+    const share = Math.floor(remaining / (bySize.length - position)) - entry.framing;
     if (entry.patch.length <= share) {
       included.set(entry.index, entry.patch);
-      remaining -= entry.patch.length;
+      remaining -= entry.patch.length + entry.framing;
     } else if (share >= MIN_PATCH_SHARE) {
       const part = clipPatch(entry.patch, share);
       included.set(entry.index, part);
-      remaining -= part.length;
+      remaining -= part.length + entry.framing;
       partialFiles++;
     } else omittedFiles++;
   });
@@ -104,7 +122,7 @@ export function buildSummaryPrompt(input: SummaryPromptInput, budget: number): S
     .map((entry) => {
       const file = listed[entry.index];
       const part = included.get(entry.index) ?? "";
-      return `--- ${file.path}\n${part}${part.length < entry.patch.length ? "\n[patch truncated]" : ""}`;
+      return `--- ${clip(file.path, PATH_CHARS)}\n${part}${part.length < entry.patch.length ? PATCH_MARKER : ""}`;
     })
     .join("\n\n");
 

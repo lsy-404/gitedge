@@ -1088,8 +1088,11 @@ async function settingsRequest(
   )
     return errorResponse(400, "bad_request", "At least one merge method must be enabled.");
   if (
-    input.aiSummariesEnabled === true &&
-    repository.ai_summaries_enabled !== 1 &&
+    aiSummarySiteEnabled(env) &&
+    (input.aiSummariesEnabled !== undefined ||
+      input.aiSummariesPrivateConsent !== undefined ||
+      input.visibility !== undefined) &&
+    (input.aiSummariesEnabled ?? repository.ai_summaries_enabled === 1) &&
     (input.visibility ?? repository.visibility) === "private" &&
     !(input.aiSummariesPrivateConsent ?? repository.ai_summaries_private_consent === 1)
   )

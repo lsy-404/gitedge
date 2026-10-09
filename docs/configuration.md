@@ -95,10 +95,10 @@ Without the binding the feature is hidden: the repository setting is not offered
 
 Cost and privacy:
 
-- Each summary is one Workers AI request billed to this Cloudflare account. The prompt holds the pull request title and description, commit subjects, the changed file list and at most 48,000 characters of patches; larger diffs are shortened evenly and the summary is marked as truncated for readers.
+- Each summary is one Workers AI request billed to this Cloudflare account. The prompt holds the pull request title and description, commit subjects, the changed file list and patches, at most 48,000 characters in total; larger diffs are shortened evenly and the summary is marked as truncated for readers.
 - The diff leaves the Git service only to reach Workers AI in this account; GitEdge sends it nowhere else and logs only identifiers, never diff or summary text.
-- A repository administrator must switch the feature on per repository (off by default). A private repository additionally needs an explicit consent to send its code to Workers AI; without it nothing is generated even if the switch is on. Changing either setting is recorded in the audit log.
-- A summary is cached per pull request and head commit, so a commit is never summarized twice unless a writer presses Regenerate. Summaries run on the Forge Worker from a D1 queue, drained after each write and by the per-minute cron.
+- A repository administrator must switch the feature on per repository (off by default). A private repository additionally needs an explicit consent to send its code to Workers AI; without it nothing is generated even if the switch is on, and a settings change that would leave summaries on for a private repository without consent is rejected. Changing either setting is recorded in the audit log.
+- A summary is cached per pull request and head commit, so a commit is never summarized twice unless a writer presses Regenerate. Summaries run on the Forge Worker from a D1 queue drained by the per-minute cron, because a model call can outlast the 30 seconds `waitUntil` allows after a response; expect a summary one to two minutes after a pull request opens or its head branch moves. A pull request whose head is an agent session is summarized when it opens; later session pushes are flagged as outdated on the panel until a writer presses Regenerate.
 
 ## Git
 

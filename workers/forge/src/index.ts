@@ -98,6 +98,7 @@ import { activeImportPath, handleRepositoryImports } from "./imports";
 import { assignmentsColumn, parseAssignments, replaceAssignments } from "./assignments";
 import {
   canWriteSession,
+  compareRequest,
   repoResponse,
   isMember,
   nextNumber,
@@ -275,27 +276,6 @@ function boundedList<T>(
     data: (chronological ? kept.reverse() : kept).map(present),
     truncated: rows.length > MAX_LIST_ROWS,
   });
-}
-
-function compareRequest(
-  requestUrl: string,
-  repository: RepositoryRow,
-  pull: Record<string, unknown>,
-  user: TrustedUser,
-  range?: { base: string; head: string }
-): Request {
-  const merged = pull.state === "merged";
-  const gitUrl = new URL(`/repositories/${repository.id}/compare`, requestUrl);
-  gitUrl.searchParams.set(
-    "base",
-    range?.base ?? String(merged ? pull.merge_base_oid : pull.base_ref)
-  );
-  gitUrl.searchParams.set(
-    "head",
-    range?.head ?? String(merged ? pull.merge_head_oid : pull.head_ref)
-  );
-  if (pull.head_session_id) gitUrl.searchParams.set("headSessionId", String(pull.head_session_id));
-  return new Request(gitUrl, { headers: trustedHeaders(user) });
 }
 
 async function pullRequestHeadOid(
@@ -2598,7 +2578,7 @@ export default {
     const response = await worker.fetch(request, env, ctx);
     // Deliver freshly queued webhooks right after a successful write instead of waiting for the next cron tick.
     if (ctx && response.ok && request.method !== "GET" && request.method !== "HEAD")
-      ctx.waitUntil(Promise.all([drainWebhookDeliveries(env), drainAiSummaries(env)]));
+      ctx.waitUntil(drainWebhookDeliveries(env));
     return response;
   },
   scheduled: worker.scheduled,

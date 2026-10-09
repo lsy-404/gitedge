@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { GitDiffFile } from "../../packages/contracts/src/index";
+import { AI_SUMMARY_PROMPT_CHARS, type GitDiffFile } from "../../packages/contracts/src/index";
 import {
   buildSummaryPrompt,
   type SummaryPromptInput,
@@ -52,7 +52,7 @@ describe("summary prompt", () => {
     expect(user).toContain("Input truncated");
     expect(user).toContain("[patch truncated]");
     expect(user).toContain("--- small.ts");
-    expect(user.length).toBeLessThan(5000 + 1500);
+    expect(user.length).toBeLessThanOrEqual(5000);
   });
 
   it("omits patches that cannot get a useful share and lists every file", () => {
@@ -80,5 +80,23 @@ describe("summary prompt", () => {
     expect(text(prompt)).toContain("binary");
     expect(prompt.messages[0].content).toContain("untrusted");
     expect(prompt.truncated).toBe(false);
+  });
+
+  it("stays inside the production budget when every field is at its limit", () => {
+    const longPath = (index: number) => `${"deep/".repeat(80)}file-${index}.ts`;
+    const files = Array.from({ length: 2000 }, (_, index) => file(longPath(index), 500));
+    const prompt = buildSummaryPrompt(
+      input(files, {
+        title: "t".repeat(5000),
+        body: "b".repeat(50_000),
+        baseRef: "r".repeat(1000),
+        headRef: "h".repeat(1000),
+        commitMessages: Array.from({ length: 500 }, () => "m".repeat(1000)),
+      }),
+      AI_SUMMARY_PROMPT_CHARS
+    );
+    expect(prompt.messages[1].content.length).toBeLessThanOrEqual(AI_SUMMARY_PROMPT_CHARS);
+    expect(prompt.truncated).toBe(true);
+    expect(prompt.messages[1].content).toMatch(/Input truncated: \d+ files were not listed/);
   });
 });

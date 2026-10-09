@@ -7,10 +7,15 @@ import {
   type RepositoryRole,
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
+import { trustedHeaders } from "../../../packages/contracts/src/trust";
 
-/** The part of the Workers AI binding used for text generation. */
+/** The part of the Workers AI binding used for text generation with a configurable model id. */
 export type TextGenerationBinding = {
-  run(model: string, inputs: Record<string, unknown>): Promise<Record<string, unknown>>;
+  run(
+    model: string,
+    inputs: Record<string, unknown>,
+    options?: AiOptions
+  ): Promise<Record<string, unknown>>;
 };
 export type ForgeEnv = {
   readonly DB: D1Database;
@@ -153,4 +158,26 @@ export function repoResponse(
     viewerRole,
     canWrite,
   } satisfies Omit<Repository, "createdAt"> & { createdAt: number };
+}
+
+/** Git comparison of a pull request as `user`; merged pull requests compare their recorded OIDs. */
+export function compareRequest(
+  requestUrl: string,
+  repository: Pick<RepositoryRow, "id">,
+  pull: Record<string, unknown>,
+  user: TrustedUser,
+  range?: { base: string; head: string }
+): Request {
+  const merged = pull.state === "merged";
+  const gitUrl = new URL(`/repositories/${repository.id}/compare`, requestUrl);
+  gitUrl.searchParams.set(
+    "base",
+    range?.base ?? String(merged ? pull.merge_base_oid : pull.base_ref)
+  );
+  gitUrl.searchParams.set(
+    "head",
+    range?.head ?? String(merged ? pull.merge_head_oid : pull.head_ref)
+  );
+  if (pull.head_session_id) gitUrl.searchParams.set("headSessionId", String(pull.head_session_id));
+  return new Request(gitUrl, { headers: trustedHeaders(user) });
 }

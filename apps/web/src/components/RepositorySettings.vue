@@ -152,9 +152,8 @@ const mergeMethodEnabled = computed(
 const aiConsentMissing = computed(
   () =>
     draft.value !== null &&
-    settings.value !== null &&
+    draft.value.aiSummariesAvailable &&
     draft.value.aiSummariesEnabled &&
-    !settings.value.aiSummariesEnabled &&
     draft.value.visibility === "private" &&
     !draft.value.aiSummariesPrivateConsent
 );
@@ -491,9 +490,6 @@ watch(() => props.repository.id, load, { immediate: true });
                   :disabled="!canManage"
                 />
               </div>
-              <div v-if="aiConsentMissing" class="box-form">
-                <NoticeBar intent="warning">{{ t("repoSettingsAiPrivateRequired") }}</NoticeBar>
-              </div>
             </template>
           </section>
 
@@ -651,6 +647,9 @@ watch(() => props.repository.id, load, { immediate: true });
 
           <NoticeBar v-if="branchesError && activeSection !== 'general'" intent="warning">{{
             t("repoSettingsBranchUnavailable")
+          }}</NoticeBar>
+          <NoticeBar v-if="aiConsentMissing" intent="warning">{{
+            t("repoSettingsAiPrivateRequired")
           }}</NoticeBar>
           <NoticeBar v-if="saveError" intent="error">{{ saveError }}</NoticeBar>
           <NoticeBar v-else-if="saved && !dirty" intent="success">{{

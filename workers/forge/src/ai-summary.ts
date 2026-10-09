@@ -12,17 +12,19 @@ import {
   type AiSummaryUnavailableReason,
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
-import { trustedHeaders } from "../../../packages/contracts/src/trust";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 import { createLogger, type Logger } from "../../../src/worker/common/logger";
 import { repositoryRole } from "../../../src/worker/common/repositories";
-import { isMember, type ForgeEnv, type RepositoryRow } from "./common";
+import { compareRequest, isMember, type ForgeEnv, type RepositoryRow } from "./common";
 import { buildSummaryPrompt } from "./ai-summary-prompt";
 
 const HOUR_MS = 3_600_000;
 const STALE_RUNNING_MS = 120_000;
 const KEPT_SUMMARIES = 10;
-const JOBS_PER_DRAIN = 2;
+const JOBS_PER_DRAIN = 4;
+// Later jobs wait for the next tick so overlapping cron invocations stay short.
+const CLAIM_WINDOW_MS = 30_000;
+const COMPARE_TIMEOUT_MS = 20_000;
 const MAX_TOKENS = 900;
 
 /** The kill switch is a site-wide off state; the Workers AI binding is optional. */
@@ -60,6 +62,17 @@ async function retryAfterSeconds(env: ForgeEnv, repositoryId: string): Promise<n
   if (rows.results.length < limit) return 0;
   const oldest = rows.results[rows.results.length - 1].created_at;
   return Math.max(1, Math.ceil((oldest + HOUR_MS - Date.now()) / 1000));
+}
+
+/** Records one model call unless the repository already used its hourly allowance; atomic in D1. */
+async function reserveModelCall(env: ForgeEnv, repositoryId: string): Promise<boolean> {
+  const now = Date.now();
+  const result = await env.DB.prepare(
+    "INSERT INTO forge_ai_usage (id, repository_id, created_at) SELECT ?, ?, ? WHERE (SELECT COUNT(*) FROM forge_ai_usage WHERE repository_id = ? AND created_at > ?) < ?"
+  )
+    .bind(crypto.randomUUID(), repositoryId, now, repositoryId, now - HOUR_MS, hourlyLimit(env))
+    .run();
+  return result.meta.changes === 1;
 }
 
 /** Queues a summary of the pull request's current head; one queued job per pull request. */
@@ -238,7 +251,10 @@ type JobContext = {
   force: number;
 };
 
-/** Runs queued jobs. Safe to call concurrently: each job is claimed atomically. */
+/**
+ * Runs queued jobs from the scheduled handler, which allows a model call longer than the 30 seconds
+ * `waitUntil` grants after a response. Safe to call concurrently: each job is claimed atomically.
+ */
 export async function drainAiSummaries(env: ForgeEnv): Promise<void> {
   if (!aiSummarySiteEnabled(env)) return;
   const now = Date.now();
@@ -247,9 +263,10 @@ export async function drainAiSummaries(env: ForgeEnv): Promise<void> {
   )
     .bind(now, now - STALE_RUNNING_MS)
     .run();
-  for (let handled = 0; handled < JOBS_PER_DRAIN; handled++) {
+  for (let handled = 0; handled < JOBS_PER_DRAIN && Date.now() - now < CLAIM_WINDOW_MS; handled++) {
+    // A pull request never has two running jobs, so a head is not summarized twice concurrently.
     const job = await env.DB.prepare(
-      "UPDATE forge_ai_summaries SET status = 'running', started_at = ?, updated_at = ? WHERE status = 'queued' AND id = (SELECT id FROM forge_ai_summaries WHERE status = 'queued' ORDER BY created_at LIMIT 1) RETURNING id, repository_id, pull_request_id, requested_by, force"
+      "UPDATE forge_ai_summaries SET status = 'running', started_at = ?, updated_at = ? WHERE status = 'queued' AND id = (SELECT id FROM forge_ai_summaries AS queued WHERE status = 'queued' AND NOT EXISTS (SELECT 1 FROM forge_ai_summaries AS running WHERE running.pull_request_id = queued.pull_request_id AND running.status = 'running') ORDER BY created_at LIMIT 1) RETURNING id, repository_id, pull_request_id, requested_by, force"
     )
       .bind(Date.now(), Date.now())
       .first<JobContext>();
@@ -272,7 +289,7 @@ export async function drainAiSummaries(env: ForgeEnv): Promise<void> {
 
 async function failJob(env: ForgeEnv, id: string, code: AiSummaryErrorCode): Promise<void> {
   await env.DB.prepare(
-    "UPDATE forge_ai_summaries SET status = 'failed', error_code = ?, updated_at = ? WHERE id = ?"
+    "UPDATE forge_ai_summaries SET status = 'failed', error_code = ?, updated_at = ? WHERE id = ? AND status = 'running'"
   )
     .bind(code, Date.now(), id)
     .run();
@@ -397,17 +414,17 @@ async function runJob(env: ForgeEnv, job: JobContext, logger: Logger): Promise<v
     identifier: requester.identifier,
     groupKey: requester.group_key,
   };
-  const url = new URL(`https://git.internal/repositories/${repository.id}/compare`);
-  url.searchParams.set("base", pull.base_ref);
-  url.searchParams.set("head", pull.head_ref);
-  if (pull.head_session_id) url.searchParams.set("headSessionId", pull.head_session_id);
-  const response = await env.GIT.fetch(new Request(url, { headers: trustedHeaders(user) }));
-  const comparison = response.ok
+  const response = await env.GIT.fetch(
+    new Request(compareRequest("https://git.internal", repository, pull, user), {
+      signal: AbortSignal.timeout(COMPARE_TIMEOUT_MS),
+    })
+  ).catch(() => null);
+  const comparison = response?.ok
     ? ComparisonSchema.safeParse(await response.json().catch(() => null))
     : null;
   if (!comparison?.success) {
-    if (!response.ok) await response.body?.cancel();
-    logger.warn("ai-summary:diff-unavailable", { jobId: job.id, status: response.status });
+    if (response && !response.ok) await response.body?.cancel();
+    logger.warn("ai-summary:diff-unavailable", { jobId: job.id, status: response?.status ?? 0 });
     return failJob(env, job.id, "diff_unavailable");
   }
   const diff = comparison.data.data;
@@ -423,7 +440,7 @@ async function runJob(env: ForgeEnv, job: JobContext, logger: Logger): Promise<v
       return dropJob(env, job.id);
     }
   }
-  if ((await retryAfterSeconds(env, repository.id)) > 0) {
+  if (!(await reserveModelCall(env, repository.id))) {
     logger.warn("ai-summary:rate-limited", { jobId: job.id });
     return failJob(env, job.id, "rate_limited");
   }
@@ -441,24 +458,26 @@ async function runJob(env: ForgeEnv, job: JobContext, logger: Logger): Promise<v
     AI_SUMMARY_PROMPT_CHARS
   );
   const model = env.AI_SUMMARY_MODEL || AI_SUMMARY_DEFAULT_MODEL;
-  await env.DB.prepare(
-    "INSERT INTO forge_ai_usage (id, repository_id, created_at) VALUES (?, ?, ?)"
-  )
-    .bind(crypto.randomUUID(), repository.id, Date.now())
-    .run();
   const started = Date.now();
-  let timer: number | null = null;
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(), AI_SUMMARY_TIMEOUT_MS);
   let output: Record<string, unknown>;
   try {
+    if (!env.AI) throw new Error("AI binding missing");
     output = await Promise.race([
-      env.AI?.run(model, { messages: prompt.messages, max_tokens: MAX_TOKENS, temperature: 0.2 }) ??
-        Promise.reject(new Error("AI binding missing")),
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("timeout")), AI_SUMMARY_TIMEOUT_MS);
-      }),
+      env.AI.run(
+        model,
+        { messages: prompt.messages, max_tokens: MAX_TOKENS, temperature: 0.2 },
+        { signal: deadline.signal }
+      ),
+      new Promise<never>((_, reject) =>
+        deadline.signal.addEventListener("abort", () => reject(new Error("timeout")), {
+          once: true,
+        })
+      ),
     ]);
   } catch (cause) {
-    const timedOut = cause instanceof Error && cause.message === "timeout";
+    const timedOut = deadline.signal.aborted;
     logger.error("ai-summary:model-failed", {
       jobId: job.id,
       model,
@@ -480,7 +499,7 @@ async function runJob(env: ForgeEnv, job: JobContext, logger: Logger): Promise<v
       "DELETE FROM forge_ai_summaries WHERE pull_request_id = ? AND head_oid = ? AND status = 'succeeded'"
     ).bind(pull.id, diff.headOid),
     env.DB.prepare(
-      "UPDATE forge_ai_summaries SET status = 'succeeded', head_oid = ?, model = ?, summary_json = ?, truncated = ?, error_code = NULL, updated_at = ? WHERE id = ?"
+      "UPDATE forge_ai_summaries SET status = 'succeeded', head_oid = ?, model = ?, summary_json = ?, truncated = ?, error_code = NULL, updated_at = ? WHERE id = ? AND status = 'running'"
     ).bind(
       diff.headOid,
       model,
