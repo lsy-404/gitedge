@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { onBeforeRouteLeave } from "vue-router";
+import { onBeforeRouteLeave, useRoute } from "vue-router";
 import {
   FluentButton,
   FluentCheckbox,
@@ -15,6 +15,7 @@ import {
   type AccessToken,
   type AccessTokenScope,
 } from "../../../../packages/contracts/src/access-tokens";
+import { MCP_PATH } from "../../../../packages/contracts/src/openapi";
 import type { Repository } from "../lib/api";
 import { api, errorMessage } from "../lib/api";
 import { useReauthRetry } from "../lib/reauth";
@@ -25,6 +26,13 @@ import StatusBadge from "./StatusBadge.vue";
 import StatusState from "./StatusState.vue";
 
 const { t, d } = useI18n();
+const route = useRoute();
+const MCP_SCOPES: readonly AccessTokenScope[] = ["repo:read", "issues:write", "pulls:write"];
+const mcpUrl = `${window.location.origin}${MCP_PATH}`;
+const mcpCopied = ref(false);
+const mcpPreset = ref(false);
+const createdForMcp = ref(false);
+const createForm = ref<HTMLFormElement | null>(null);
 const tokens = ref<AccessToken[]>([]);
 const repositories = ref<Repository[]>([]);
 const name = ref("");
@@ -42,6 +50,7 @@ const oneTime = ref<{ token: string; expiresAt: number } | null>(null);
 const copied = ref(false);
 const now = ref(Date.now());
 let copiedTimer: number | undefined;
+let mcpCopiedTimer: number | undefined;
 let clockTimer: number | undefined;
 
 const expiryOptions = computed<readonly FluentSelectOption[]>(() =>
@@ -96,6 +105,29 @@ function isActive(token: AccessToken): boolean {
 function clearOneTime(): void {
   oneTime.value = null;
   copied.value = false;
+  createdForMcp.value = false;
+}
+
+/** Prefills the form with the scopes the MCP tools need; the user still reviews and submits it. */
+function prefillMcp(): void {
+  name.value = "MCP";
+  selectedScopes.value = [...MCP_SCOPES];
+  expiryDays.value = "30";
+  repositoryMode.value = "all";
+  mcpPreset.value = true;
+  createForm.value?.scrollIntoView({ block: "start" });
+  createForm.value?.querySelector<HTMLInputElement>("input")?.focus();
+}
+
+async function copyMcpUrl(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(mcpUrl);
+    mcpCopied.value = true;
+    if (mcpCopiedTimer !== undefined) window.clearTimeout(mcpCopiedTimer);
+    mcpCopiedTimer = window.setTimeout(() => (mcpCopied.value = false), 2000);
+  } catch (cause) {
+    actionError.value = errorMessage(cause, t);
+  }
 }
 
 async function load(): Promise<void> {
@@ -125,6 +157,8 @@ async function createToken(): Promise<void> {
       ...(repositoryMode.value === "selected" ? { repositoryIds: selectedRepositories.value } : {}),
     });
     oneTime.value = { token: created.token, expiresAt: created.expiresAt };
+    createdForMcp.value = mcpPreset.value;
+    mcpPreset.value = false;
     name.value = "";
     await load();
   } catch (cause) {
@@ -163,11 +197,13 @@ async function revokeToken(token: AccessToken): Promise<void> {
 
 onMounted(() => {
   void load();
+  if (route.query.mcp === "1") prefillMcp();
   clockTimer = window.setInterval(() => (now.value = Date.now()), 30_000);
 });
 function dispose(): void {
   clearOneTime();
   if (copiedTimer !== undefined) window.clearTimeout(copiedTimer);
+  if (mcpCopiedTimer !== undefined) window.clearTimeout(mcpCopiedTimer);
   if (clockTimer !== undefined) window.clearInterval(clockTimer);
 }
 onBeforeRouteLeave(dispose);
@@ -192,7 +228,7 @@ onUnmounted(dispose);
     <div v-if="oneTime" class="box box-form form-stack" aria-live="polite">
       <NoticeBar intent="success">{{ t("patOnce") }}</NoticeBar>
       <FluentField :model-value="oneTime.token" :label="t('patTokenValue')" readonly type="text" />
-      <p class="field-hint">{{ t("patPasteHint") }}</p>
+      <p class="field-hint">{{ createdForMcp ? t("mcpTokenHint") : t("patPasteHint") }}</p>
       <div class="settings-actions">
         <FluentButton type="button" tone="secondary" @click="copyToken">
           {{ copied ? t("settingsCopied") : t("patCopyToken") }}
@@ -203,7 +239,34 @@ onUnmounted(dispose);
       </div>
     </div>
 
-    <form class="box" aria-labelledby="pat-create-title" @submit.prevent="createToken">
+    <section class="box" aria-labelledby="pat-mcp-title">
+      <header class="box-header">
+        <h3 id="pat-mcp-title">{{ t("mcpTitle") }}</h3>
+      </header>
+      <div class="box-form form-stack">
+        <p class="field-hint">{{ t("mcpDescription") }}</p>
+        <p class="pat-mcp-url">
+          <span class="muted">{{ t("mcpUrl") }}</span>
+          <code>{{ mcpUrl }}</code>
+        </p>
+        <div class="settings-actions">
+          <FluentButton type="button" tone="secondary" @click="copyMcpUrl">
+            {{ mcpCopied ? t("settingsCopied") : t("mcpCopyUrl") }}
+          </FluentButton>
+          <FluentButton type="button" tone="secondary" @click="prefillMcp">
+            {{ t("mcpCreateToken") }}
+          </FluentButton>
+          <RouterLink to="/docs/api">{{ t("mcpDocs") }}</RouterLink>
+        </div>
+      </div>
+    </section>
+
+    <form
+      ref="createForm"
+      class="box"
+      aria-labelledby="pat-create-title"
+      @submit.prevent="createToken"
+    >
       <header class="box-header">
         <h3 id="pat-create-title">{{ t("patCreate") }}</h3>
       </header>
@@ -298,3 +361,15 @@ onUnmounted(dispose);
     </section>
   </section>
 </template>
+
+<style scoped>
+.pat-mcp-url {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+}
+.pat-mcp-url code {
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+}
+</style>

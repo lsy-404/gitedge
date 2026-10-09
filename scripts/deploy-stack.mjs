@@ -9,12 +9,13 @@ export const workerConfigs = [
   "workers/git/wrangler.jsonc",
   "workers/deploy/wrangler.jsonc",
   "workers/actions/wrangler.jsonc",
+  "workers/mcp/wrangler.jsonc",
   "workers/gateway/wrangler.jsonc",
 ];
 
 const unresolvedIdPattern = /REPLACE_WITH_[A-Z0-9_]+/;
 
-const bootstrapServices = ["git", "forge", "actions"];
+const bootstrapServices = ["git", "forge", "actions", "gateway"];
 
 export function accountId(configPaths = workerConfigs) {
   const accounts = configPaths.map((configPath) => ({
@@ -97,7 +98,8 @@ function workerExists(service) {
   throw new Error(`Cannot determine whether ${service} is deployed:\n${output}`);
 }
 
-// Git, Forge and Actions bind each other, so a fresh account needs placeholders before the real deploys.
+// Git, Forge and Actions bind each other and MCP binds the Gateway that binds it, so a fresh account
+// needs placeholders before the real deploys.
 function bootstrapCyclicWorkers() {
   for (const service of bootstrapServices) {
     if (workerExists(service)) continue;
@@ -172,7 +174,7 @@ export function deployStack({ dryRun = false } = {}) {
   if (!dryRun && !ensureReleaseAssetBucket()) return false;
   if (!dryRun && !bootstrapCyclicWorkers()) return false;
 
-  for (const service of ["limits", "auth", "forge", "git", "actions", "deploy", "gateway"]) {
+  for (const service of ["limits", "auth", "forge", "git", "actions", "deploy", "mcp", "gateway"]) {
     const args = ["exec", "wrangler", "deploy", "--config", `workers/${service}/wrangler.jsonc`];
     if (dryRun) args.push("--dry-run");
     if (!run("pnpm", args, { cloudflare: true })) return false;

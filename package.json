@@ -17,7 +17,7 @@
     "check:migrations": "node scripts/check-migrations.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "typecheck": "tsc --noEmit -p workers/auth/tsconfig.json && tsc --noEmit -p workers/forge/tsconfig.json && tsc --noEmit -p workers/git/tsconfig.json && tsc --noEmit -p workers/gateway/tsconfig.json && tsc --noEmit -p workers/limits/tsconfig.json && pnpm --dir workers/deploy run typecheck && pnpm run typecheck:actions && pnpm --dir apps/web exec vue-tsc --noEmit",
+    "typecheck": "tsc --noEmit -p workers/auth/tsconfig.json && tsc --noEmit -p workers/forge/tsconfig.json && tsc --noEmit -p workers/git/tsconfig.json && tsc --noEmit -p workers/gateway/tsconfig.json && tsc --noEmit -p workers/limits/tsconfig.json && tsc --noEmit -p workers/mcp/tsconfig.json && pnpm --dir workers/deploy run typecheck && pnpm run typecheck:actions && pnpm --dir apps/web exec vue-tsc --noEmit",
     "db:migrate": "wrangler d1 migrations apply gitedge --remote --config workers/auth/wrangler.jsonc",
     "db:migrate:local": "wrangler d1 migrations apply gitedge --local --persist-to .wrangler/state --config workers/auth/wrangler.jsonc",
     "typecheck:actions": "wrangler types --config workers/actions/wrangler.jsonc --include-runtime=false workers/actions/worker-configuration.d.ts && tsc --noEmit -p workers/actions/tsconfig.json"
@@ -37,6 +37,7 @@
     "xml-encryption": "^3.1.0"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@node-saml/node-saml": "^5.1.0",
     "@simplewebauthn/server": "^14.0.3",
     "@xmldom/xmldom": "^0.8.15",

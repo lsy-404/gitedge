@@ -7,7 +7,7 @@ import {
   resolveCommitOid,
   splitHighlightedLines,
 } from "../../apps/web/src/lib/codeAnchor";
-import { fuzzyFilter, fuzzyMatch } from "../../apps/web/src/lib/fuzzy";
+import { fuzzyFilter, fuzzyMatch } from "../../packages/contracts/src/fuzzy";
 import { highlightedCode } from "../../apps/web/src/lib/markdown";
 import { relativeAge } from "../../apps/web/src/lib/relativeTime";
 import { splitLines } from "../../packages/contracts/src/text-lines";

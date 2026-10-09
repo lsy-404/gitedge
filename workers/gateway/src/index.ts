@@ -6,9 +6,8 @@ import {
 } from "../../../packages/contracts/src/index";
 import { readTextLimited } from "../../../src/worker/common/readText";
 import {
-  AccessTokenIdentitySchema,
-  AgentSessionIdentitySchema,
   TRUSTED_USER_HEADERS,
+  TrustedUserSchema,
   REPOSITORY_ACCESS_DENIED_HEADER,
   trustedHeaders,
   consumeRateLimit,
@@ -19,6 +18,11 @@ import {
   type RateLimitNamespace,
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
+import {
+  MCP_PATH,
+  OPENAPI_PATH,
+  buildOpenApiDocument,
+} from "../../../packages/contracts/src/openapi";
 import { createLogger, type Logger } from "../../../src/worker/common/logger";
 
 export interface GatewayService {
@@ -32,6 +36,7 @@ export interface GatewayEnv {
   GIT: GatewayService;
   DEPLOY?: GatewayService;
   ACTIONS?: GatewayService;
+  MCP?: GatewayService;
   RATE_LIMITER: RateLimitNamespace;
   IP_RPM_LIMIT?: string;
   USER_GROUP_LIMITS_JSON?: string;
@@ -49,34 +54,18 @@ interface AnonymousSession {
 
 type SessionResult = AuthenticatedSession | AnonymousSession;
 
-interface AuthSessionPayload {
-  data: TrustedUser | null;
-  view?: "guest";
-}
+const AuthSessionPayloadSchema = z.object({
+  data: TrustedUserSchema.nullable(),
+  view: z.string().optional(),
+});
 
-function isSessionPayload(value: unknown): value is AuthSessionPayload {
-  if (typeof value !== "object" || value === null || !("data" in value)) {
-    return false;
-  }
-
-  return (
-    value.data === null ||
-    (typeof value.data === "object" &&
-      value.data !== null &&
-      "id" in value.data &&
-      "identifier" in value.data &&
-      typeof value.data.id === "string" &&
-      value.data.id.length > 0 &&
-      typeof value.data.identifier === "string" &&
-      value.data.identifier.length > 0 &&
-      "groupKey" in value.data &&
-      typeof value.data.groupKey === "string" &&
-      value.data.groupKey.length > 0 &&
-      (!("agentSession" in value.data) ||
-        AgentSessionIdentitySchema.safeParse(value.data.agentSession).success) &&
-      (!("token" in value.data) || AccessTokenIdentitySchema.safeParse(value.data.token).success))
-  );
-}
+const GitSessionPayloadSchema = z.object({
+  data: z.object({
+    user: TrustedUserSchema,
+    repositoryId: z.string().min(1),
+    permission: z.enum(["read", "write"]),
+  }),
+});
 
 const securityHeaders: Readonly<Record<string, string>> = {
   "Content-Security-Policy":
@@ -200,26 +189,17 @@ async function readSession(response: Response): Promise<SessionResult | Response
     });
   }
 
-  const payload: unknown = await response.json();
-  if (!isSessionPayload(payload)) {
+  const parsed = AuthSessionPayloadSchema.safeParse(await response.json());
+  if (!parsed.success) {
     return new Response(JSON.stringify({ error: "Invalid authentication response" }), {
       status: 502,
       headers: { "Content-Type": "application/json; charset=utf-8" },
     });
   }
+  const payload = parsed.data;
   if (payload.data === null)
     return { authenticated: false, ...(payload.view === "guest" ? { view: "guest" } : {}) };
-  return {
-    authenticated: true,
-    id: payload.data.id,
-    identifier: payload.data.identifier,
-    groupKey: payload.data.groupKey,
-    agentSession: payload.data.agentSession,
-    token: payload.data.token,
-    ...(typeof payload.data.recentAuthAt === "number"
-      ? { recentAuthAt: payload.data.recentAuthAt }
-      : {}),
-  };
+  return { authenticated: true, ...payload.data };
 }
 
 async function authenticate(
@@ -416,6 +396,41 @@ async function enforceImportLimit(
   );
 }
 
+const bearerChallenge = { "WWW-Authenticate": 'Bearer realm="GitEdge"' };
+
+/**
+ * MCP clients authenticate with a Bearer personal access token or agent session token only;
+ * cookies are dropped so a browser can never drive tools with its ambient session.
+ */
+async function handleMcp(request: Request, env: GatewayEnv): Promise<Response> {
+  if (!env.MCP) {
+    createLogger(undefined, { service: "gateway" }).warn("gateway:mcp-unbound");
+    return Response.json(
+      { error: { code: "service_unavailable", message: "MCP service is unavailable." } },
+      { status: 503 }
+    );
+  }
+  const headers = new Headers(request.headers);
+  withoutTrustedHeaders(headers);
+  headers.delete("Cookie");
+  if (!/^Bearer \S+$/.test(headers.get("Authorization") ?? ""))
+    return Response.json(
+      { error: { code: "unauthorized", message: "A Bearer access token is required." } },
+      { status: 401, headers: bearerChallenge }
+    );
+  const forwarded = new Request(request, { headers });
+  const session = await authenticate(forwarded, env.AUTH);
+  if (session instanceof Response) return session;
+  if (!session.authenticated)
+    return Response.json(
+      { error: { code: "unauthorized", message: "Invalid or expired access token." } },
+      { status: 401, headers: bearerChallenge }
+    );
+  const userLimitResponse = await enforceUserLimit(session, env);
+  if (userLimitResponse) return userLimitResponse;
+  return env.MCP.fetch(forwarded);
+}
+
 async function serveSpa(request: Request, assets: GatewayService): Promise<Response> {
   const assetResponse = await assets.fetch(request);
   if (assetResponse.status !== 404 || (request.method !== "GET" && request.method !== "HEAD")) {
@@ -432,6 +447,7 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
 
   const rateLimitPath =
     isApiPath(url.pathname, "/api") ||
+    url.pathname === MCP_PATH ||
     isGitRequest(url.pathname) ||
     (isDownloadPath(url.pathname) && (request.method === "GET" || request.method === "HEAD"));
   if (rateLimitPath) {
@@ -440,6 +456,11 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
   }
 
   if (request.method === "GET" && url.pathname === "/api/health") return handleHealth(env);
+  if (request.method === "GET" && url.pathname === OPENAPI_PATH)
+    return Response.json(buildOpenApiDocument(url.origin), {
+      headers: { "Cache-Control": "public, max-age=300" },
+    });
+  if (url.pathname === MCP_PATH) return handleMcp(request, env);
 
   if (isApiPath(url.pathname, "/api/auth")) {
     return env.AUTH.fetch(forwardServicePath(request, "/api/auth"));
@@ -573,33 +594,16 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
         await response.body?.cancel();
         return Response.json({ error: "Authentication service unavailable" }, { status: 502 });
       }
-      const payload: unknown = await response.json();
-      if (
-        !payload ||
-        typeof payload !== "object" ||
-        !("data" in payload) ||
-        !payload.data ||
-        typeof payload.data !== "object" ||
-        !("user" in payload.data) ||
-        !isSessionPayload({ data: payload.data.user }) ||
-        !("repositoryId" in payload.data) ||
-        typeof payload.data.repositoryId !== "string" ||
-        !("permission" in payload.data) ||
-        (payload.data.permission !== "read" && payload.data.permission !== "write")
-      )
+      const parsed = GitSessionPayloadSchema.safeParse(await response.json());
+      if (!parsed.success)
         return Response.json({ error: "Invalid Git authentication response" }, { status: 502 });
-      const userPayload = { data: payload.data.user };
-      if (!isSessionPayload(userPayload) || !userPayload.data)
-        return Response.json({ error: "Invalid Git authentication response" }, { status: 502 });
-      trustedHeaders(userPayload.data).forEach((value, name) => headers.set(name, value));
+      const grant = parsed.data.data;
+      trustedHeaders(grant.user).forEach((value, name) => headers.set(name, value));
       headers.set(
         "X-GitEdge-Git-Grant",
-        JSON.stringify({
-          repositoryId: payload.data.repositoryId,
-          permission: payload.data.permission,
-        })
+        JSON.stringify({ repositoryId: grant.repositoryId, permission: grant.permission })
       );
-      const userLimit = await enforceUserLimit({ authenticated: true, ...userPayload.data }, env);
+      const userLimit = await enforceUserLimit({ authenticated: true, ...grant.user }, env);
       if (userLimit) return userLimit;
     }
     const anonymous = !request.headers.has("Authorization");

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { RepositoryRoleSchema } from "./repository-controls";
+import { RepositoryRoleSchema } from "./forge";
 
 export const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const MAX_PENDING_INVITATIONS = 50;

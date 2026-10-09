@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { GitBranchSchema, GitOidSchema } from "./forge";
+import { GitBranchSchema, GitOidSchema, RepositoryRoleSchema, type RepositoryRole } from "./forge";
 
 export const RepositorySlugSchema = z
   .string()
@@ -34,8 +34,6 @@ export interface BranchProtectionRule extends BranchProtectionInput {
   createdAt: number;
   updatedAt: number;
 }
-export const RepositoryRoleSchema = z.enum(["read", "write", "admin"]);
-export type RepositoryRole = z.infer<typeof RepositoryRoleSchema>;
 export interface RepositoryCollaborator {
   id: string;
   identifier: string;

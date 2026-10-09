@@ -1,4 +1,4 @@
-import type { RepositoryRole } from "../../../packages/contracts/src/repository-controls";
+import type { RepositoryRole } from "../../../packages/contracts/src/forge";
 
 export interface RepositoryPath {
   id: string;

@@ -7,11 +7,8 @@ import { router } from "../../apps/web/src/router";
 import { clearSession, setSession } from "../../apps/web/src/lib/session";
 import { fluentUi } from "../../apps/web/src/ui/fluent";
 import { confirmClick } from "./task-support";
-import type { Repository } from "../../packages/contracts/src/forge";
-import type {
-  RepositoryBranch,
-  RepositoryRole,
-} from "../../packages/contracts/src/repository-controls";
+import type { Repository, RepositoryRole } from "../../packages/contracts/src/forge";
+import type { RepositoryBranch } from "../../packages/contracts/src/repository-controls";
 
 const repository: Repository = {
   id: "repo-1",

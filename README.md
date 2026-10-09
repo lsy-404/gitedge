@@ -40,7 +40,7 @@ Run `node test/e2e/git-boundaries.mjs <fixture-directory>` after that Git check 
 
 The remaining e2e scripts need these inputs. `test/e2e/browser-accounts.mjs` runs against the local stack (`GITEDGE_API`, loopback only) and creates two accounts to check browser identity switching. `test/e2e/seed-ui.mjs` and `test/e2e/settings-signatures.mjs` run against the local stack and require `GITEDGE_FIXTURE` pointing at an `api-git.mjs` fixture directory and `GITEDGE_API=http://localhost:8877`. `test/e2e/production-smoke.mjs` runs against the production Gateway (`GITEDGE_PRODUCTION_URL`, defaulting to the configured custom domain; optional `GITEDGE_REPOSITORY_VISIBILITY`). `test/e2e/production-actions.mjs` runs against production and requires `GITEDGE_WEBHOOK_RECEIVER` and `GITEDGE_WEBHOOK_RECEIVER_NAME` for an owned verification receiver.
 
-`build` builds the Vue interface and bundles every Worker with Wrangler's dry-run mode. Dry-run builds do not check that service binding targets exist. Production deployment is a separate `pnpm run deploy` operation that applies D1 migrations and deploys internal services before the Gateway. The first deploy into an empty account creates placeholder Workers for the cyclic bindings (Git, Forge and Actions) and then replaces them with the real deploys.
+`build` builds the Vue interface and bundles every Worker with Wrangler's dry-run mode. Dry-run builds do not check that service binding targets exist. Production deployment is a separate `pnpm run deploy` operation that applies D1 migrations and deploys internal services before the Gateway. The first deploy into an empty account creates placeholder Workers for the cyclic bindings (Git, Forge, Actions and the Gateway that MCP binds) and then replaces them with the real deploys.
 
 ## Tags, releases and downloads
 
@@ -61,6 +61,33 @@ The commit graph includes all commit parents and session fork refs. Pull request
 Pull request diffs support line and range comments with replies, resolvable threads, pending reviews published together with the Approve, Request changes or Comment verdict, and `suggestion` blocks rendered as a preview. A comment on a commit that is no longer the head is marked outdated and keeps its original context. `closes`, `fixes` and `resolves` followed by `#n` in a pull request title, body or commit messages close those issues when it merges into the default branch, and `#n` references render as links. The branch rule "Require conversation resolution" blocks merging while threads are unresolved.
 
 CI runners submit check results through the authenticated Pull Request checks API. Agent reviews are explicitly marked separately from human reviews; the marker identifies the authenticated author, while the result and summary describe the runner's work.
+
+## Connect an agent via MCP
+
+GitEdge runs a remote [MCP](https://modelcontextprotocol.io) server at `https://<host>/mcp` (Streamable HTTP, stateless JSON responses). It authenticates with `Authorization: Bearer <token>`, using a personal access token or an agent session API token; cookies are ignored. Settings, Access tokens shows the URL and a "Create token for MCP" shortcut that prefills `repo:read`, `issues:write` and `pulls:write` for 30 days. Every tool call goes through the same REST API and Gateway checks as any other client, so token scopes, repository allowlists, agent session limits, private repository 404s and rate limits apply unchanged; a read-only token can read but not create issues.
+
+Tools: `list_repositories`, `get_repository`, `read_file`, `list_tree`, `search_files`, `list_issues`, `get_issue`, `create_issue`, `comment_issue`, `list_pull_requests`, `get_pull_request` (head commit, checks, reviews and line comment threads), `create_pull_request`, `comment_pull_request`, `submit_review`, `list_tasks`, `claim_task`, `update_task` and `get_notifications`. Repositories are named `owner/name`. Lists page with `limit` (at most 100) and `offset` and report `upstreamTruncated` when the service returned only part of a collection; `read_file` returns at most 2,000 lines per call, and a result above 200,000 characters is refused with a hint to narrow it. `submit_review` needs the `commitOid` you reviewed (`headOid` from `get_pull_request`), so a review never covers a newer head. `claim_task` assigns an unassigned task to the caller and marks it in progress.
+
+Claude Code:
+
+```sh
+claude mcp add --transport http gitedge https://<host>/mcp --header "Authorization: Bearer gep_..."
+```
+
+Clients that read a JSON configuration (Cursor `.cursor/mcp.json`, VS Code `.vscode/mcp.json` uses `"servers"` with `"type": "http"`):
+
+```json
+{
+  "mcpServers": {
+    "gitedge": {
+      "url": "https://<host>/mcp",
+      "headers": { "Authorization": "Bearer gep_..." }
+    }
+  }
+}
+```
+
+The REST API is described by an OpenAPI 3.1 document at `GET /api/openapi.json`, generated from the shared contracts, and rendered at `/docs/api`.
 
 ## Account recovery and two-step verification
 

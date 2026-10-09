@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { GitOidSchema, type Actor } from "./forge";
+import { ActorSchema, GitOidSchema, type Actor } from "./forge";
 
 export const REVIEW_COMMENT_BODY_MAX = 20_000;
 export const REVIEW_COMMENT_HUNK_MAX = 4_000;
@@ -47,25 +47,23 @@ export function reviewActorKey(actor: Pick<Actor, "kind" | "id">): string {
   return `${actor.kind}:${actor.id}`;
 }
 
-export interface ReviewComment {
-  id: string;
-  /** Root comment of the thread; null on the root itself. */
-  inReplyTo: string | null;
-  reviewId: string | null;
-  commitOid: string;
-  path: string;
-  side: ReviewCommentSide;
-  line: number;
-  startLine: number | null;
-  diffHunk: string;
-  body: string;
-  actor: Actor;
-  /** Visible only to its author until the review is submitted. */
-  pending: boolean;
-  /** The commit differs from the current pull request head. */
-  outdated: boolean;
-  resolvedAt: number | null;
-  resolvedBy: Actor | null;
-  createdAt: number;
-  updatedAt: number;
-}
+export const ReviewCommentSchema = z.object({
+  id: z.string(),
+  inReplyTo: z.string().nullable().describe("Root comment of the thread; null on the root itself."),
+  reviewId: z.string().nullable(),
+  commitOid: z.string(),
+  path: z.string(),
+  side: ReviewCommentSideSchema,
+  line: z.number(),
+  startLine: z.number().nullable(),
+  diffHunk: z.string(),
+  body: z.string(),
+  actor: ActorSchema,
+  pending: z.boolean().describe("Visible only to its author until the review is submitted."),
+  outdated: z.boolean().describe("The commit differs from the current pull request head."),
+  resolvedAt: z.number().nullable(),
+  resolvedBy: ActorSchema.nullable(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+export type ReviewComment = z.infer<typeof ReviewCommentSchema>;

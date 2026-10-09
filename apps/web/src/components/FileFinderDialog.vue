@@ -3,7 +3,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { GitFileList } from "../lib/api";
 import { api, errorMessage } from "../lib/api";
-import { fuzzyFilter } from "../lib/fuzzy";
+import { fuzzyFilter } from "../../../../packages/contracts/src/fuzzy";
 import AppIcon from "./AppIcon.vue";
 import StatusState from "./StatusState.vue";
 

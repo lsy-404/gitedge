@@ -83,9 +83,10 @@ CI runs `check:migrations` on every push.
 4. `git`
 5. `actions`
 6. `deploy`
-7. `gateway`
+7. `mcp`
+8. `gateway`
 
-The Gateway goes last because it is the only public entrypoint and binds every other Worker. On an empty account the script first creates placeholder Workers for `git`, `forge` and `actions`, which bind each other. Run `pnpm run build` (dry run) before deploying. To roll back a single Worker, redeploy the previous commit for that Worker in the same order; schema changes are rolled back only through Time Travel.
+The Gateway goes last because it is the only public entrypoint and binds every other Worker. On an empty account the script first creates placeholder Workers for `git`, `forge` and `actions`, which bind each other, and for `gateway`, which `mcp` binds back. Run `pnpm run build` (dry run) before deploying. To roll back a single Worker, redeploy the previous commit for that Worker in the same order; schema changes are rolled back only through Time Travel.
 
 ## Health check
 

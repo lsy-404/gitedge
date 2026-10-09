@@ -1,6 +1,6 @@
 import { z } from "zod";
-import type { AccessTokenIdentity } from "./access-tokens";
-import { GitBranchSchema, type AgentSessionIdentity } from "./forge";
+import { AccessTokenIdentitySchema } from "./access-tokens";
+import { AgentSessionIdentitySchema, GitBranchSchema } from "./forge";
 import { RepositorySlugSchema } from "./repository-controls";
 import { ConfirmationInputSchema } from "./lifecycle";
 export * from "./repository-controls";
@@ -49,15 +49,23 @@ export type ServiceResult<T> =
   | { readonly ok: true; readonly data: T }
   | { readonly ok: false; readonly status: number; readonly error: ServiceError["error"] };
 
-export type TrustedUser = {
-  readonly id: string;
-  readonly identifier: string;
-  readonly groupKey: string;
-  readonly agentSession?: AgentSessionIdentity;
-  readonly token?: AccessTokenIdentity;
-  /** Epoch milliseconds of the session's latest password or second-factor confirmation. */
-  readonly recentAuthAt?: number;
-};
+/** Identity Auth resolves for a browser session, personal access token or agent session. */
+export const TrustedUserSchema = z
+  .object({
+    id: z.string().min(1),
+    identifier: z.string().min(1),
+    groupKey: z.string().min(1),
+    agentSession: AgentSessionIdentitySchema.optional(),
+    token: AccessTokenIdentitySchema.optional(),
+    recentAuthAt: z
+      .number()
+      .optional()
+      .describe(
+        "Epoch milliseconds of the session's latest password or second-factor confirmation."
+      ),
+  })
+  .readonly();
+export type TrustedUser = z.infer<typeof TrustedUserSchema>;
 
 export type UserGroupLimits = {
   readonly rpm: number;

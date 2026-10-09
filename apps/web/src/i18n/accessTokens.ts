@@ -41,6 +41,14 @@ export const accessTokenMessages = {
     patRevoked: "已撤销",
     patExpired: "已到期",
     patActive: "有效",
+    mcpTitle: "通过 MCP 连接智能体",
+    mcpDescription:
+      "MCP 客户端（如 Claude Code、Cursor）通过此地址使用 GitEdge。请求头携带 Authorization: Bearer <令牌>，令牌的权限范围与仓库限制同样适用。",
+    mcpUrl: "MCP 地址",
+    mcpCopyUrl: "复制地址",
+    mcpCreateToken: "创建 MCP 令牌",
+    mcpDocs: "API 文档",
+    mcpTokenHint: "在 MCP 客户端配置中使用 Authorization: Bearer <此令牌> 连接上方的 MCP 地址。",
   },
   en: {
     patTitle: "Personal access tokens",
@@ -87,5 +95,14 @@ export const accessTokenMessages = {
     patRevoked: "Revoked",
     patExpired: "Expired",
     patActive: "Active",
+    mcpTitle: "Connect an agent via MCP",
+    mcpDescription:
+      "MCP clients such as Claude Code or Cursor use GitEdge at this address. Send Authorization: Bearer <token>; the token's scopes and repository limits apply.",
+    mcpUrl: "MCP URL",
+    mcpCopyUrl: "Copy URL",
+    mcpCreateToken: "Create token for MCP",
+    mcpDocs: "API reference",
+    mcpTokenHint:
+      "Configure your MCP client with Authorization: Bearer <this token> and the MCP URL above.",
   },
 } as const;

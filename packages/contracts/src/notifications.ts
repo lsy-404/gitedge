@@ -67,21 +67,23 @@ export const NotificationPreferencesSchema = z
   .strict();
 export type NotificationPreferences = z.infer<typeof NotificationPreferencesSchema>;
 
-export interface Notification {
-  id: string;
-  reason: NotificationReason;
-  subjectKind: NotificationSubjectKind;
-  subjectNumber: number | null;
-  title: string | null;
-  repository: { id: string; owner: string; name: string };
-  actor: string | null;
-  createdAt: number;
-  readAt: number | null;
-}
-export interface NotificationPage {
-  items: Notification[];
-  nextCursor: string | null;
-}
+export const NotificationSchema = z.object({
+  id: z.string(),
+  reason: NotificationReasonSchema,
+  subjectKind: NotificationSubjectKindSchema,
+  subjectNumber: z.number().nullable(),
+  title: z.string().nullable(),
+  repository: z.object({ id: z.string(), owner: z.string(), name: z.string() }),
+  actor: z.string().nullable(),
+  createdAt: z.number(),
+  readAt: z.number().nullable(),
+});
+export type Notification = z.infer<typeof NotificationSchema>;
+export const NotificationPageSchema = z.object({
+  items: z.array(NotificationSchema),
+  nextCursor: z.string().nullable(),
+});
+export type NotificationPage = z.infer<typeof NotificationPageSchema>;
 export interface NotificationUnreadCount {
   unread: number;
   capped: boolean;

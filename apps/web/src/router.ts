@@ -15,6 +15,7 @@ const InviteAcceptView = () => import("./pages/InviteAcceptView.vue");
 const AdminView = () => import("./pages/AdminView.vue");
 const NotificationsView = () => import("./pages/NotificationsView.vue");
 const UserProfileView = () => import("./pages/UserProfileView.vue");
+const ApiDocsView = () => import("./pages/ApiDocsView.vue");
 import { refreshSession, sessionState } from "./lib/session";
 
 export const router = createRouter({
@@ -34,6 +35,7 @@ export const router = createRouter({
     { path: "/admin", component: AdminView },
     { path: "/dashboard", component: DashboardView },
     { path: "/notifications", component: NotificationsView },
+    { path: "/docs/api", component: ApiDocsView, meta: { allowAnonymous: true } },
     { path: "/organizations", component: OrganizationsView },
     { path: "/organizations/:slug", component: OrganizationView },
     { path: "/settings/account", component: AccountSettingsView },
