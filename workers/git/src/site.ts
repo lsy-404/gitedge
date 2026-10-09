@@ -8,6 +8,7 @@ import {
 } from "../../../packages/contracts/src/index";
 import { createLogger } from "../../../src/worker/common/logger";
 import type { GitEnv } from "./access";
+import { memoryLimit } from "./archive";
 import { resolveCommit } from "./read";
 
 export type SiteMode = "path" | "host";
@@ -197,12 +198,20 @@ function notFound(): Response {
   });
 }
 
+function tooLarge(): Response {
+  return new Response("File is too large to serve from Pages.\n", {
+    status: 413,
+    headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+  });
+}
+
 function siteHeaders(mode: SiteMode, cacheControl: string, preview: boolean): Headers {
   const headers = new Headers({
     "Cache-Control": cacheControl,
     "X-Content-Type-Options": "nosniff",
   });
-  if (mode === "path") headers.set("Content-Security-Policy", SITE_SANDBOX_CSP);
+  // Previews run pull request content, so they stay sandboxed even on an owner's sites origin.
+  if (mode === "path" || preview) headers.set("Content-Security-Policy", SITE_SANDBOX_CSP);
   if (preview) headers.set("X-Robots-Tag", "noindex");
   return headers;
 }
@@ -223,13 +232,13 @@ async function previewSource(
   oid: string
 ): Promise<SiteSource | null> {
   const published = await env.DB.prepare(
-    "SELECT p.head_session_id AS sessionId, p.state, s.workspace_name AS workspace FROM forge_check_runs c JOIN forge_pull_requests p ON p.id = c.pull_request_id LEFT JOIN auth_agent_sessions s ON s.id = p.head_session_id WHERE c.repository_id = ? AND c.commit_oid = ? AND c.name = ? AND c.actor_key = ? ORDER BY (p.head_session_id IS NULL) DESC LIMIT 1"
+    "SELECT p.head_session_id AS sessionId, s.workspace_name AS workspace FROM forge_check_runs c JOIN forge_pull_requests p ON p.id = c.pull_request_id LEFT JOIN auth_agent_sessions s ON s.id = p.head_session_id WHERE c.repository_id = ? AND c.commit_oid = ? AND c.name = ? AND c.actor_key = ? AND (p.head_session_id IS NULL OR (p.state != 'closed' AND s.workspace_name IS NOT NULL)) ORDER BY (p.head_session_id IS NULL) DESC LIMIT 1"
   )
     .bind(repository.id, oid, PAGES_CHECK_NAME, PAGES_CHECK_ACTOR_KEY)
-    .first<{ sessionId: string | null; state: string; workspace: string | null }>();
+    .first<{ sessionId: string | null; workspace: string | null }>();
   if (!published) return null;
   const workspace = published.sessionId ? published.workspace : repository.artifact_name;
-  if (!workspace || (published.sessionId && published.state === "closed")) return null;
+  if (!workspace) return null;
   using repo = await env.ARTIFACTS.get(workspace);
   const commit = await repo.readCommit(oid);
   return commit?.hash === oid ? { workspace, commitOid: oid, treeHash: commit.treeHash } : null;
@@ -299,7 +308,9 @@ export async function serveSite(
       await cached.body?.cancel();
       return new Response(null, { status: 304, headers: cached.headers });
     }
-    return head ? new Response(null, { status: cached.status, headers: cached.headers }) : cached;
+    if (!head) return cached;
+    await cached.body?.cancel();
+    return new Response(null, { status: cached.status, headers: cached.headers });
   }
 
   using repo = await env.ARTIFACTS.get(source.workspace);
@@ -324,14 +335,18 @@ export async function serveSite(
   headers.set("Content-Type", siteContentType(resolution.name));
   if (resolution.status === 200 && notModified(ifNoneMatch, etag))
     return new Response(null, { status: 304, headers });
-  const blob = await repo.readBlob(resolution.hash);
+  let blob: Blob | null;
+  try {
+    blob = await repo.readBlob(resolution.hash);
+  } catch (cause) {
+    if (!memoryLimit(cause)) throw cause;
+    logger.warn("site:file-too-large", { repoId: repository.id, size: null });
+    return tooLarge();
+  }
   if (!blob) return notFound();
   if (blob.size > PAGES_SITE_MAX_BYTES) {
     logger.warn("site:file-too-large", { repoId: repository.id, size: blob.size });
-    return new Response("File is too large to serve from Pages.\n", {
-      status: 413,
-      headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
-    });
+    return tooLarge();
   }
   headers.set("Content-Length", String(blob.size));
   const response = new Response(head ? null : blob.stream(), {

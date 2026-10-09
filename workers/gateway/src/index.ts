@@ -20,7 +20,15 @@ import {
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
 import { createLogger, type Logger } from "../../../src/worker/common/logger";
-import { matchHostSite, matchPathSite, siteRequest, sitesHostOwner, type SiteMatch } from "./sites";
+import {
+  SITE_FETCH_VARY,
+  loadedByApplicationOrigin,
+  matchHostSite,
+  matchPathSite,
+  siteRequest,
+  sitesHostOwner,
+  type SiteMatch,
+} from "./sites";
 
 export interface GatewayService {
   fetch(request: Request): Promise<Response>;
@@ -463,7 +471,26 @@ async function handleSite(request: Request, env: GatewayEnv, match: SiteMatch): 
     )
   );
   if (limited) return limited;
-  return env.GIT.fetch(siteRequest(request, match.target));
+  if (match.target.mode === "path" && loadedByApplicationOrigin(request)) {
+    createLogger(undefined, { service: "gateway" }).warn("gateway:site-subresource-refused", {
+      owner: match.target.owner,
+      repo: match.target.repo,
+      destination: request.headers.get("Sec-Fetch-Dest"),
+    });
+    return new Response("Site files cannot be loaded by GitEdge pages.\n", {
+      status: 403,
+      headers: {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-store",
+        Vary: SITE_FETCH_VARY,
+      },
+    });
+  }
+  const response = await env.GIT.fetch(siteRequest(request, match.target));
+  if (match.target.mode !== "path") return response;
+  const varied = new Response(response.body, response);
+  varied.headers.append("Vary", SITE_FETCH_VARY);
+  return varied;
 }
 
 export async function handleGatewayRequest(request: Request, env: GatewayEnv): Promise<Response> {

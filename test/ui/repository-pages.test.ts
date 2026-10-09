@@ -55,7 +55,7 @@ describe("repository pages settings", () => {
     expect(text).toContain("/owner/site/-/site/");
     expect(text).toContain(oid.slice(0, 12));
     const links = [...mounted.root.querySelectorAll("a")].map((link) => link.getAttribute("href"));
-    expect(links).toContain(`${window.location.origin}/owner/site/-/preview/${oid}/`);
+    expect(links).toContain(`/owner/site/commit/${oid}`);
     mounted.unmount();
   });
 

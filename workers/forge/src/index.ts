@@ -74,6 +74,7 @@ import {
   CreateDiscussionInputSchema,
   CreateReviewInputSchema,
   PutCheckRunInputSchema,
+  PAGES_CHECK_NAME,
   UpdateDiscussionInputSchema,
   MergeAuthorizationInputSchema,
   MergePullRequestInputSchema,
@@ -1592,6 +1593,8 @@ async function featureRequest(
           "reserved_check",
           "Workflow check names are reserved for Container Actions."
         );
+      if (parsed.data.name === PAGES_CHECK_NAME)
+        return errorResponse(403, "reserved_check", "This check name is reserved for Pages.");
       const checkHead = await pullRequestHeadOid(env, request.url, repository, current, user);
       if (checkHead instanceof Response) return checkHead;
       if (parsed.data.commitOid !== checkHead)

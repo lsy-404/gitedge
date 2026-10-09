@@ -12,7 +12,7 @@ export const pagesMessages = {
     pagesOff: "未启用",
     pagesLastPublished: "最近发布的提交",
     pagesLastPublishedHint: "来源分支最近一次推送的提交；站点始终提供分支当前的最新内容。",
-    pagesOpenCommit: "打开该提交的快照",
+    pagesOpenCommit: "查看该提交",
     pagesNeverPublished: "尚未记录推送。",
     pagesBranch: "来源分支",
     pagesBranchHint: "站点内容取自此分支的最新提交。",
@@ -47,7 +47,7 @@ export const pagesMessages = {
     pagesLastPublished: "Last published commit",
     pagesLastPublishedHint:
       "The latest push to the source branch. The site always serves the branch's current head.",
-    pagesOpenCommit: "Open this commit's snapshot",
+    pagesOpenCommit: "View commit",
     pagesNeverPublished: "No push recorded yet.",
     pagesBranch: "Source branch",
     pagesBranchHint: "Site content comes from the latest commit on this branch.",

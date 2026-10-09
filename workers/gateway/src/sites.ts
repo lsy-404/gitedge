@@ -92,6 +92,20 @@ export function matchHostSite(url: URL, owner: string): SiteMatch {
   };
 }
 
+export const SITE_FETCH_VARY = "Sec-Fetch-Site, Sec-Fetch-Mode";
+
+/**
+ * Path-scheme files share the application origin, so a non-navigation request from that origin
+ * would let them satisfy the application's `script-src 'self'`. Sandboxed site documents have an
+ * opaque origin and send `cross-site`, so only application pages are refused here.
+ */
+export function loadedByApplicationOrigin(request: Request): boolean {
+  return (
+    request.headers.get("Sec-Fetch-Site") === "same-origin" &&
+    request.headers.get("Sec-Fetch-Mode") !== "navigate"
+  );
+}
+
 export function siteRequest(request: Request, target: SiteTarget): Request {
   const url = new URL("https://git.internal/internal/site");
   url.searchParams.set("owner", target.owner);

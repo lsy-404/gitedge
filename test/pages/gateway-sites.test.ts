@@ -102,6 +102,49 @@ describe("Gateway site routing", () => {
     expect(post.status).toBe(405);
   });
 
+  it("refuses path-scheme subresources loaded by application pages", async () => {
+    const env = environment();
+    calls.length = 0;
+    const embedded = await handleGatewayRequest(
+      new Request("https://git.example.com/alice/blog/-/site/evil.js", {
+        headers: { "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "no-cors" },
+      }),
+      env
+    );
+    expect(embedded.status).toBe(403);
+    expect(calls).toHaveLength(0);
+    const fetched = await handleGatewayRequest(
+      new Request("https://git.example.com/alice/blog/-/site/data.json", {
+        headers: { "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "cors" },
+      }),
+      env
+    );
+    expect(fetched.status).toBe(403);
+    const navigation = await handleGatewayRequest(
+      new Request("https://git.example.com/alice/blog/-/site/", {
+        headers: { "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "navigate" },
+      }),
+      env
+    );
+    expect(navigation.status).toBe(200);
+    const sandboxed = await handleGatewayRequest(
+      new Request("https://git.example.com/alice/blog/-/site/app.js", {
+        headers: { "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors" },
+      }),
+      env
+    );
+    expect(sandboxed.status).toBe(200);
+    expect(sandboxed.headers.get("Vary")).toContain("Sec-Fetch-Site");
+    expect(sandboxed.headers.get("Content-Security-Policy")).toBe("sandbox allow-scripts");
+    const hosted = await handleGatewayRequest(
+      new Request("https://alice.sites.example.com/blog/app.js", {
+        headers: { "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "no-cors" },
+      }),
+      environment("sites.example.com")
+    );
+    expect(hosted.status).toBe(200);
+  });
+
   it("serves the host scheme only for the configured sites host", async () => {
     const env = environment("sites.example.com");
     calls.length = 0;

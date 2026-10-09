@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { GitBranchSchema } from "./forge";
+import { GitBranchSchema, type CheckRun } from "./forge";
 import { editablePath } from "./repository-controls";
 
 export const PAGES_CHECK_NAME = "GitEdge Pages preview";
@@ -9,6 +9,14 @@ export const PAGES_CHECK_ACTOR = {
   id: "gitedge-pages",
   name: "GitEdge Pages",
 } as const;
+/** True only for the system preview check; members cannot post checks under the Pages actor. */
+export function isPagesPreviewCheck(check: Pick<CheckRun, "name" | "actor">): boolean {
+  return (
+    check.name === PAGES_CHECK_NAME &&
+    check.actor.kind === PAGES_CHECK_ACTOR.kind &&
+    check.actor.id === PAGES_CHECK_ACTOR.id
+  );
+}
 export const PAGES_SITE_MAX_BYTES = 25 * 1024 * 1024;
 export const PAGES_MAX_PATH_SEGMENTS = 32;
 

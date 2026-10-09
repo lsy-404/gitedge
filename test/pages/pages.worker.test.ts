@@ -366,8 +366,30 @@ describe("Pull request previews", () => {
     expect(preview.status).toBe(200);
     expect(preview.headers.get("X-Robots-Tag")).toBe("noindex");
     expect(await preview.text()).toBe("<h1>home</h1>");
+    const hostPreview = await site("site", "/", { preview: headOid, mode: "host" });
+    expect(hostPreview.headers.get("Content-Security-Policy")).toContain("sandbox allow-scripts");
+    expect(hostPreview.headers.get("Content-Security-Policy")).not.toContain("allow-same-origin");
     expect((await site("site", "/", { preview: "f".repeat(40) })).status).toBe(404);
     expect((await site("site", "/", { preview: "nothex" })).status).toBe(404);
+  });
+
+  it("reserves the preview check name for the Pages system actor", async () => {
+    const number = z
+      .object({ data: z.array(z.object({ number: z.number() })) })
+      .parse(await (await forgeCall(`/repositories/${ids.site}/pull-requests`)).json())
+      .data[0].number;
+    const spoofed = await forgeCall(
+      `/repositories/${ids.site}/pull-requests/${number}/checks`,
+      "POST",
+      {
+        name: PAGES_CHECK_NAME,
+        commitOid: headOid,
+        status: "completed",
+        conclusion: "neutral",
+        detailsUrl: "https://phish.example/",
+      }
+    );
+    expect(spoofed.status).toBe(403);
   });
 
   it("records a check for each pushed head of an open pull request", async () => {

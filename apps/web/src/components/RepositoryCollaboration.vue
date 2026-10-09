@@ -19,7 +19,7 @@ import type {
   WikiPage,
   WikiPageSummary,
 } from "../lib/api";
-import { PAGES_CHECK_NAME } from "../../../../packages/contracts/src/pages";
+import { isPagesPreviewCheck } from "../../../../packages/contracts/src/pages";
 import { ApiError, api, errorMessage } from "../lib/api";
 import { sessionState } from "../lib/session";
 import { oneOf } from "../ui/formEvents";
@@ -333,9 +333,7 @@ const previewCheck = computed(() =>
   props.section === "pulls" && diff.value
     ? (checks.value.find(
         (check) =>
-          check.name === PAGES_CHECK_NAME &&
-          check.commitOid === diff.value?.headOid &&
-          check.detailsUrl
+          isPagesPreviewCheck(check) && check.commitOid === diff.value?.headOid && check.detailsUrl
       ) ?? null)
     : null
 );
@@ -366,7 +364,7 @@ const mergeStatusRows = computed<MergeStatusRow[]>(() => {
     });
   else rows.push({ key: "reviews", icon: "circle", tone: "muted", text: t("mergeReviewsNone") });
   const current = checks.value.filter(
-    (check) => check.commitOid === head && check.name !== PAGES_CHECK_NAME
+    (check) => check.commitOid === head && !isPagesPreviewCheck(check)
   );
   const pending = current.filter((check) => check.status !== "completed").length;
   const failing = current.filter(

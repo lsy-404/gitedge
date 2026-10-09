@@ -10,7 +10,6 @@ import {
 } from "@platform-kit/fluent/vue";
 import {
   UpdatePagesInputSchema,
-  pagesPreviewPath,
   type PagesSettings,
 } from "../../../../packages/contracts/src/pages";
 import { api, errorMessage } from "../lib/api";
@@ -62,13 +61,8 @@ const pathUrl = computed(() =>
   settings.value ? new URL(settings.value.pathUrl, window.location.origin).href : ""
 );
 const lastPublished = computed(() => settings.value?.lastPublishedOid ?? "");
-const previewUrl = computed(() =>
-  lastPublished.value
-    ? new URL(
-        pagesPreviewPath(props.owner, props.name, lastPublished.value),
-        window.location.origin
-      ).href
-    : ""
+const commitPath = computed(() =>
+  lastPublished.value ? `/${props.owner}/${props.name}/commit/${lastPublished.value}` : ""
 );
 
 function apply(result: PagesSettings): void {
@@ -167,7 +161,7 @@ watch(() => props.repositoryId, load, { immediate: true });
           <template v-if="lastPublished">
             <code>{{ lastPublished.slice(0, 12) }}</code>
             <small v-if="settings.lastPublishedAt">{{ d(settings.lastPublishedAt, "long") }}</small>
-            <a :href="previewUrl" target="_blank" rel="noreferrer">{{ t("pagesOpenCommit") }}</a>
+            <RouterLink :to="commitPath">{{ t("pagesOpenCommit") }}</RouterLink>
           </template>
           <small v-else>{{ t("pagesNeverPublished") }}</small>
         </div>
