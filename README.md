@@ -42,7 +42,7 @@ The remaining e2e scripts need these inputs. `test/e2e/browser-accounts.mjs` run
 
 ## Git and agents
 
-Repository pages issue scoped, expiring GitEdge credentials through Auth. Keep credentials in process environment or a credential helper, and keep the remote URL free of credentials. Standard Git clone, fetch and push use `https://<host>/<owner>/<repository>.git`; public repositories allow anonymous clone. Agent session credentials use the isolated Artifacts workspace remote returned when the session is created.
+Personal access tokens are the primary credential for Git and the API. Create one under Settings, Access tokens (or press Generate token on a repository page): choose scopes (`repo:read`, `repo:write`, `issues:write`, `pulls:write`, `org:read`, `admin`), an expiry of 7, 30, 90 or 365 days, and optionally restrict it to specific repositories. The plaintext `gep_...` value is shown once; only its hash is stored. Standard Git clone, fetch and push use `https://<host>/<owner>/<repository>.git`: Git prompts for a username (any value) and the token as the password, which a credential helper (`osxkeychain`, `manager` or `libsecret`) then remembers. API clients send `Authorization: Bearer gep_...`. Read-only tokens cannot push or write through the API, and tokens can neither mint other tokens nor use deployment credentials. Public repositories allow anonymous clone. Per-repository Git credentials remain available under Settings, HTTPS credentials. Agent session credentials use the isolated Artifacts workspace remote returned when the session is created.
 
 Account agent sessions return their API and Git tokens once. Use the API token as `Authorization: Bearer <session-token>` and the Git token for the returned workspace remote. Tokens cannot manage account credentials or grant Cloudflare deployment access. Revoking a session disables its API identity and revokes its issued Git token.
 
@@ -95,7 +95,7 @@ Configure `PRIVATE_REPOSITORY_RESPONSE` in `workers/gateway/wrangler.jsonc` and 
 - `not_found` (default): unauthorized private repositories return the same 404 response as missing repositories.
 - `forbidden`: unauthorized private repositories return 403 with an explicit access-denied message. This discloses repository existence, but never its contents.
 
-Unset or invalid values use `not_found`. The policy covers browser repository routes, Forge and Git APIs, and anonymous Git HTTPS reads. Missing repositories remain 404 in both modes. Repository listings continue to omit inaccessible repositories. Invalid Git credentials still receive an authentication challenge.
+Unset or invalid values use `not_found`. The policy covers browser repository routes and the Forge and Git APIs. Anonymous Git HTTPS requests that cannot be served, whether the repository is private or missing, receive the same Basic authentication challenge so Git prompts for a token; authenticated callers without access follow the policy. Missing repositories remain 404 in both modes elsewhere. Repository listings continue to omit inaccessible repositories. Invalid Git credentials still receive an authentication challenge.
 
 ## License
 

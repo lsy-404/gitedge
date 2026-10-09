@@ -25,6 +25,8 @@ import { createLogger } from "../../../src/worker/common/logger";
 import {
   GitMergeInputSchema,
   GitOidSchema,
+  accessTokenAllows,
+  requiredAccessTokenScope,
   sha256Hex,
 } from "../../../packages/contracts/src/index";
 import { listRepositorySessions, resolveGitAccess, resolveWorkspace, type GitEnv } from "./access";
@@ -71,6 +73,13 @@ export async function handleGitApi(
   const access = await resolveGitAccess(request, env, repositoryId);
   if (access instanceof Response) return access;
   if (!access) return repositoryNotFound();
+  const requiredScope = requiredAccessTokenScope("git", request.method, parts);
+  if (access.user?.token && !accessTokenAllows(access.user.token, requiredScope))
+    return errorResponse(
+      403,
+      "insufficient_scope",
+      `Access token requires the ${requiredScope} scope.`
+    );
   if (!access.repository.artifactName)
     return errorResponse(
       409,

@@ -5,6 +5,7 @@ import { resolveRepositoryPath } from "../../../src/worker/common/repositories";
 import { branchRules, matchingBranchRules } from "../../../src/worker/common/branch-protection";
 import { readReceiveCommands, InvalidReceiveCommands } from "./receive-commands";
 import { z } from "zod";
+import { accessTokenAllows } from "../../../packages/contracts/src/access-tokens";
 import { resolveGitAccess, type GitEnv } from "./access";
 import { errorResponse } from "../../../src/worker/common/http";
 import { createLogger } from "../../../src/worker/common/logger";
@@ -55,7 +56,8 @@ export async function proxyGitTransport(
       !grant?.success ||
       grant.data.repositoryId !== repository.id ||
       grant.data.permission !== "write" ||
-      access.user?.agentSession?.permission === "read")
+      access.user?.agentSession?.permission === "read" ||
+      (access.user?.token && !accessTokenAllows(access.user.token, "repo:write")))
   )
     return new Response("Git push requires a repository write credential.\n", {
       status: 401,

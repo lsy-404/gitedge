@@ -650,6 +650,12 @@ async function handleDeployRequest(
       "agent_deploy_forbidden",
       "Agent sessions cannot access Cloudflare deployment credentials."
     );
+  if (request.headers.has("X-GitEdge-Access-Token"))
+    return errorResponse(
+      403,
+      "token_deploy_forbidden",
+      "Access tokens cannot access Cloudflare deployment credentials."
+    );
   const user = readTrustedUser(request);
   if (!user) return errorResponse(401, "unauthorized", "Trusted user context is required.");
   if (!sameOrigin(request, env))

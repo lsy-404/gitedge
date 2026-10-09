@@ -1,3 +1,4 @@
+import { AccessTokenIdentitySchema } from "./access-tokens";
 import { AgentSessionIdentitySchema, type Actor } from "./forge";
 import type { TrustedUser } from "./index";
 
@@ -9,6 +10,7 @@ export const TRUSTED_USER_HEADERS = [
   "x-gitedge-user-name",
   "x-gitedge-user-group",
   "x-gitedge-agent-session",
+  "x-gitedge-access-token",
   "x-gitedge-git-grant",
   REPOSITORY_ACCESS_DENIED_HEADER,
 ] as const;
@@ -19,10 +21,20 @@ export function readTrustedUser(request: Request): TrustedUser | null {
   const groupKey = request.headers.get("X-GitEdge-User-Group");
   if (!id || !identifier || !groupKey) return null;
   const rawSession = request.headers.get("X-GitEdge-Agent-Session");
-  if (!rawSession) return { id, identifier, groupKey };
+  const rawToken = request.headers.get("X-GitEdge-Access-Token");
   try {
-    const parsed = AgentSessionIdentitySchema.safeParse(JSON.parse(rawSession));
-    return parsed.success ? { id, identifier, groupKey, agentSession: parsed.data } : null;
+    const agentSession = rawSession
+      ? AgentSessionIdentitySchema.safeParse(JSON.parse(rawSession))
+      : null;
+    const token = rawToken ? AccessTokenIdentitySchema.safeParse(JSON.parse(rawToken)) : null;
+    if ((agentSession && !agentSession.success) || (token && !token.success)) return null;
+    return {
+      id,
+      identifier,
+      groupKey,
+      ...(agentSession?.success ? { agentSession: agentSession.data } : {}),
+      ...(token?.success ? { token: token.data } : {}),
+    };
   } catch {
     return null;
   }
@@ -43,6 +55,7 @@ export function trustedHeaders(user?: TrustedUser): Headers {
     headers.set("X-GitEdge-User-Group", user.groupKey);
     if (user.agentSession)
       headers.set("X-GitEdge-Agent-Session", JSON.stringify(user.agentSession));
+    if (user.token) headers.set("X-GitEdge-Access-Token", JSON.stringify(user.token));
   }
   return headers;
 }

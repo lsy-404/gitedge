@@ -1,9 +1,11 @@
 import { z } from "zod";
+import type { AccessTokenIdentity } from "./access-tokens";
 import { GitBranchSchema, type AgentSessionIdentity } from "./forge";
 import { RepositorySlugSchema } from "./repository-controls";
 export * from "./repository-controls";
 export * from "./forge";
 export * from "./agents";
+export * from "./access-tokens";
 export * from "./tasks";
 export * from "./trust";
 export * from "./account";
@@ -35,6 +37,7 @@ export type TrustedUser = {
   readonly identifier: string;
   readonly groupKey: string;
   readonly agentSession?: AgentSessionIdentity;
+  readonly token?: AccessTokenIdentity;
 };
 
 export type UserGroupLimits = {

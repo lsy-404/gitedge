@@ -1,6 +1,8 @@
 import { repositoryAccessDenied } from "../../../src/worker/common/repository-response";
 import { repositoryRole, writableRole } from "../../../src/worker/common/repositories";
 import {
+  accessTokenAllows,
+  accessTokenAllowsRepository,
   readTrustedUser,
   type AgentSession,
   type TrustedUser,
@@ -40,6 +42,12 @@ export async function resolveGitAccess(
 ): Promise<GitRepositoryAccess | Response | null> {
   const user = readTrustedUser(request);
   if (user?.agentSession && user.agentSession.repositoryId !== repositoryId) return null;
+  if (
+    user?.token &&
+    (!accessTokenAllowsRepository(user.token, repositoryId) ||
+      !accessTokenAllows(user.token, "repo:read"))
+  )
+    return null;
   const repository = await env.DB.prepare(
     "SELECT r.id, r.namespace_id AS namespaceId, r.artifact_name AS artifactName, r.remote, r.default_branch AS defaultBranch, r.visibility, n.slug AS owner, r.slug, r.archived, r.agents_enabled AS agentsEnabled, r.graph_enabled AS graphEnabled,r.online_editing_enabled AS onlineEditingEnabled,0 AS canWrite FROM repositories r JOIN namespaces n ON n.id = r.namespace_id WHERE r.id = ?"
   )
