@@ -6,6 +6,8 @@ import RepositoryForks from "../../apps/web/src/components/RepositoryForks.vue";
 import RepositorySocialBar from "../../apps/web/src/components/RepositorySocialBar.vue";
 import RepositoryTopicsEditor from "../../apps/web/src/components/RepositoryTopicsEditor.vue";
 import { i18n } from "../../apps/web/src/i18n";
+// Lazily loaded routes import preferences, which resets the locale when first evaluated.
+import "../../apps/web/src/lib/preferences";
 import { ApiError, api, type ExploreRepository, type Repository } from "../../apps/web/src/lib/api";
 import { fill, h, mountAt, repository, settle, submit, unmountAll } from "./task-support";
 
