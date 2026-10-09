@@ -27,6 +27,7 @@ export * from "./notifications";
 export * from "./webhooks";
 export * from "./text-lines";
 export * from "./releases";
+export * from "./social";
 
 export const ErrorCodeSchema = z.enum([
   "bad_request",
@@ -217,14 +218,19 @@ export const UpdateIssueInputSchema = z
   })
   .refine((value) => Object.keys(value).length > 0);
 
-export const CreatePullRequestInputSchema = z.object({
-  title: z.string().trim().min(1).max(200),
-  body: z.string().max(50_000).default(""),
-  baseRef: GitBranchSchema,
-  headRef: GitBranchSchema,
-  headSessionId: z.string().nullable().default(null),
-  draft: z.boolean().default(false),
-});
+export const CreatePullRequestInputSchema = z
+  .object({
+    title: z.string().trim().min(1).max(200),
+    body: z.string().max(50_000).default(""),
+    baseRef: GitBranchSchema,
+    headRef: GitBranchSchema,
+    headSessionId: z.string().nullable().default(null),
+    headRepositoryId: z.string().min(1).nullable().default(null),
+    draft: z.boolean().default(false),
+  })
+  .refine((value) => !(value.headSessionId && value.headRepositoryId), {
+    message: "A pull request head is a session or a fork, not both.",
+  });
 
 export const UpdatePullRequestInputSchema = z
   .object({

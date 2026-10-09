@@ -10,6 +10,10 @@ import type { RepositoryTag } from "../../packages/contracts/src/releases";
 import { confirmClick, settle } from "./task-support";
 
 const repository: Repository = {
+  topics: [],
+  starCount: 0,
+  forkCount: 0,
+  forkOf: null,
   id: "repo-1",
   namespaceId: "ns",
   owner: "example",

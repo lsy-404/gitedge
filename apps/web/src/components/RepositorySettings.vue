@@ -16,6 +16,7 @@ import { oneOf } from "../ui/formEvents";
 import { useUnsavedGuard } from "../lib/unsavedGuard";
 import ConfirmButton from "./ConfirmButton.vue";
 import NoticeBar from "./NoticeBar.vue";
+import RepositoryTopicsEditor from "./RepositoryTopicsEditor.vue";
 import StatusState from "./StatusState.vue";
 import BranchProtectionSettings from "./BranchProtectionSettings.vue";
 import AuditLogList from "./AuditLogList.vue";
@@ -112,7 +113,10 @@ const editableFields = [
 ] as const satisfies readonly (keyof RepositoryDraft)[];
 
 const props = defineProps<{ repository: Repository }>();
-const emit = defineEmits<{ updated: [settings: RepositorySettings] }>();
+const emit = defineEmits<{
+  updated: [settings: RepositorySettings];
+  topicsSaved: [topics: string[]];
+}>();
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
@@ -638,6 +642,11 @@ watch(() => props.repository.id, load, { immediate: true });
         </div>
       </div>
     </form>
+    <RepositoryTopicsEditor
+      v-if="!loading && !error && settings && settings.canManage"
+      :repository="repository"
+      @saved="emit('topicsSaved', $event)"
+    />
   </section>
 </template>
 

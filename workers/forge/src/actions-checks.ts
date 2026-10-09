@@ -75,7 +75,7 @@ export async function actionsCheck(
     .first<{ id: string }>();
   if (latest?.id !== run.id) return dataResponse({ superseded: true });
   const pulls = await env.DB.prepare(
-    "SELECT id, number, merge_started_at FROM forge_pull_requests WHERE repository_id=? AND head_ref=? AND head_session_id IS NULL AND state='open' LIMIT 101"
+    "SELECT id, number, merge_started_at FROM forge_pull_requests WHERE repository_id=? AND head_ref=? AND head_session_id IS NULL AND head_repository_id IS NULL AND state='open' LIMIT 101"
   )
     .bind(run.repository_id, run.source_ref)
     .all<{ id: string; number: number; merge_started_at: number | null }>();

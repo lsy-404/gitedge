@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { RepositoryRole } from "./repository-controls";
+import type { RepositoryForkOrigin } from "./social";
 
 export const ActorSchema = z.object({
   kind: z.enum(["user", "agent", "ci"]),
@@ -50,6 +51,11 @@ export interface Repository {
   requirePassingChecks: boolean;
   createdAt: number;
   updatedAt: number;
+  topics: string[];
+  starCount: number;
+  forkCount: number;
+  /** The parent repository when the viewer can read it. */
+  forkOf: RepositoryForkOrigin | null;
   /** The viewer's effective role, null when unknown or anonymous. */
   viewerRole: RepositoryRole | null;
   canWrite: boolean;
@@ -81,6 +87,8 @@ export interface PullRequest {
   baseRef: string;
   headRef: string;
   headSessionId: string | null;
+  headRepositoryId: string | null;
+  headRepository: { owner: string; name: string } | null;
   draft: boolean;
   mergedOid: string | null;
   assignees: Assignee[];
@@ -362,6 +370,7 @@ export const GitMergeInputSchema = z.object({
   baseRef: GitBranchSchema,
   headRef: GitBranchSchema,
   headSessionId: z.string().nullable().optional(),
+  headRepositoryId: z.string().nullable().optional(),
   expectedBaseOid: GitOidSchema,
   expectedHeadOid: GitOidSchema,
   author: z.object({ name: z.string().min(1).max(100), email: z.string().min(1).max(200) }),

@@ -4,6 +4,7 @@ import {
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
 import { readTextLimited } from "../../../src/worker/common/readText";
+import { repositorySocialFields } from "./social";
 import { repoResponse, type ForgeEnv, type RepositoryRow } from "./common";
 import { z } from "zod";
 import { createLogger } from "../../../src/worker/common/logger";
@@ -74,10 +75,13 @@ export async function publicProfile(
       await response.body?.cancel();
     }
   }
+  const social = await repositorySocialFields(env, repos.results.slice(0, 100), user?.id ?? null);
   return dataResponse({
     ...profile,
     readme,
-    repositories: repos.results.slice(0, 100).map((repo) => repoResponse(repo)),
+    repositories: repos.results
+      .slice(0, 100)
+      .map((repo) => repoResponse(repo, null, false, social.get(repo.id))),
     truncated: repos.results.length > 100,
   });
 }

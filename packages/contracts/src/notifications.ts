@@ -8,6 +8,7 @@ export const NotificationReasons = [
   "check_failed",
   "merged",
   "invited",
+  "watching",
 ] as const;
 export const NotificationReasonSchema = z.enum(NotificationReasons);
 export type NotificationReason = z.infer<typeof NotificationReasonSchema>;

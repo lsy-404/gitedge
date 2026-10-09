@@ -18,11 +18,20 @@ import {
 } from "./review-comments";
 import { mentionAgents, pullRequestEvent, revokeAgentSessions } from "./agent-events";
 import { publicProfile } from "./profiles";
+import { detachForks, publicForkList, repositoryForks, type ForkContext } from "./forks";
+import {
+  handleExplore,
+  handleStarred,
+  repositorySocial,
+  repositorySocialFields,
+  socialFieldsFor,
+} from "./social";
 import {
   handleNotifications,
   outcomeNotificationStatement,
   purgeReadNotifications,
   threadNotificationStatements,
+  watcherNotificationStatement,
 } from "./notifications";
 import {
   checkRunWebhook,
@@ -148,7 +157,8 @@ type ForgeTable = "forge_issues" | "forge_pull_requests" | "forge_discussions";
 /** Extra select column carrying the assignee and reviewer sets of issues and pull requests. */
 function assignmentsSelect(table: ForgeTable, alias: string): string {
   if (table === "forge_issues") return `, ${assignmentsColumn("issue", alias)}`;
-  if (table === "forge_pull_requests") return `, ${assignmentsColumn("pull_request", alias)}`;
+  if (table === "forge_pull_requests")
+    return `, ${assignmentsColumn("pull_request", alias)}, (SELECT n.slug FROM repositories h JOIN namespaces n ON n.id = h.namespace_id WHERE h.id = ${alias}.head_repository_id AND h.deleted_at IS NULL) AS head_owner, (SELECT h.slug FROM repositories h WHERE h.id = ${alias}.head_repository_id AND h.deleted_at IS NULL) AS head_name`;
   return "";
 }
 
@@ -271,6 +281,13 @@ function boundedList<T>(
   });
 }
 
+/** Names the pull request head: an agent session fork, a user fork, or neither for the base repository. */
+function setHeadParams(url: URL, pull: Record<string, unknown>): void {
+  if (pull.head_session_id) url.searchParams.set("headSessionId", String(pull.head_session_id));
+  if (pull.head_repository_id)
+    url.searchParams.set("headRepositoryId", String(pull.head_repository_id));
+}
+
 function compareRequest(
   requestUrl: string,
   repository: RepositoryRow,
@@ -288,7 +305,7 @@ function compareRequest(
     "head",
     range?.head ?? String(merged ? pull.merge_head_oid : pull.head_ref)
   );
-  if (pull.head_session_id) gitUrl.searchParams.set("headSessionId", String(pull.head_session_id));
+  setHeadParams(gitUrl, pull);
   return new Request(gitUrl, { headers: trustedHeaders(user) });
 }
 
@@ -301,7 +318,7 @@ async function pullRequestHeadOid(
 ): Promise<string | Response> {
   const gitUrl = new URL(`/repositories/${repository.id}/pull-head`, requestUrl);
   gitUrl.searchParams.set("head", String(pull.head_ref));
-  if (pull.head_session_id) gitUrl.searchParams.set("headSessionId", String(pull.head_session_id));
+  setHeadParams(gitUrl, pull);
   const response = await env.GIT.fetch(new Request(gitUrl, { headers: trustedHeaders(user) }));
   if (response.status === 404)
     return errorResponse(409, "stale_commit", "The pull request head is no longer available.");
@@ -332,10 +349,10 @@ async function reviewCommentHead(
 ): Promise<string | null> {
   if (pull.state === "merged")
     return typeof pull.merge_head_oid === "string" ? pull.merge_head_oid : null;
-  if (pull.state === "closed" && pull.head_session_id) return null;
+  if (pull.state === "closed" && (pull.head_session_id || pull.head_repository_id)) return null;
   const gitUrl = new URL(`/repositories/${repository.id}/pull-head`, requestUrl);
   gitUrl.searchParams.set("head", String(pull.head_ref));
-  if (pull.head_session_id) gitUrl.searchParams.set("headSessionId", String(pull.head_session_id));
+  setHeadParams(gitUrl, pull);
   const response = await env.GIT.fetch(
     new Request(gitUrl, { headers: trustedHeaders(user ?? undefined) })
   );
@@ -416,6 +433,11 @@ function presentForgeRow(resource: string, row: Record<string, unknown>): Record
       baseRef: row.base_ref ?? row.baseRef,
       headRef: row.head_ref ?? row.headRef,
       headSessionId: row.head_session_id ?? row.headSessionId ?? null,
+      headRepositoryId: row.head_repository_id ?? null,
+      headRepository:
+        typeof row.head_owner === "string" && typeof row.head_name === "string"
+          ? { owner: row.head_owner, name: row.head_name }
+          : null,
       draft: row.draft === 1 || row.draft === true,
       mergedOid: row.merged_oid ?? row.mergedOid ?? null,
       ...parseAssignments(row.assignments_json),
@@ -511,7 +533,12 @@ async function publicRepositoryRead(
   const parts = ["public", "repositories", repository.owner, repository.slug, ...suffix];
   if (!repository.artifact_name || !repository.remote)
     return errorResponse(503, "internal_error", "Repository storage is unavailable.");
-  if (parts.length === 4) return dataResponse(repoResponse(repository));
+  if (parts.length === 4)
+    return dataResponse(
+      repoResponse(repository, null, false, await socialFieldsFor(env, repository, null))
+    );
+  if (parts[4] === "forks" && parts.length === 5 && request.method === "GET")
+    return publicForkList(env, repository);
 
   const resource = parts[4];
   const disabled =
@@ -633,7 +660,7 @@ async function publicRepositoryRead(
       .first<Record<string, unknown>>();
     if (!pull) return errorResponse(404, "not_found", "Pull request was not found.");
     if (parts[6] === "diff") {
-      if (pull.state === "closed" && pull.head_session_id)
+      if (pull.state === "closed" && (pull.head_session_id || pull.head_repository_id))
         return errorResponse(404, "not_found", "Pull request head was not found.");
       const gitUrl = new URL(`/repositories/${repository.id}/compare`, request.url);
       gitUrl.searchParams.set(
@@ -644,8 +671,7 @@ async function publicRepositoryRead(
         "head",
         String(pull.state === "merged" ? pull.merge_head_oid : pull.head_ref)
       );
-      if (pull.head_session_id)
-        gitUrl.searchParams.set("headSessionId", String(pull.head_session_id));
+      setHeadParams(gitUrl, pull);
       createLogger(env.LOG_LEVEL, { service: "forge" }).debug("forge:public-pull-request-diff", {
         repositoryId: repository.id,
         number: parts[5],
@@ -804,6 +830,7 @@ async function featureRequest(
           now,
           now
         ),
+        watcherNotificationStatement(env.DB, repository, user, { kind: "issue", id, number }),
         ...(await threadNotificationStatements(
           env,
           repository,
@@ -869,12 +896,40 @@ async function featureRequest(
             "Pull request head session is not active for this repository."
           );
       }
+      if (parsed.data.headRepositoryId) {
+        if (actor.kind !== "user")
+          return errorResponse(
+            403,
+            "forbidden",
+            "Only a user can propose a pull request from a fork."
+          );
+        const fork = await env.DB.prepare(
+          "SELECT id, visibility FROM repositories WHERE id = ? AND fork_of = ? AND deleted_at IS NULL AND artifact_name IS NOT NULL"
+        )
+          .bind(parsed.data.headRepositoryId, repository.id)
+          .first<{ id: string; visibility: "public" | "private" }>();
+        const forkRole = fork ? await repositoryRole(env.DB, fork.id, user.id) : null;
+        if (
+          !fork ||
+          (fork.visibility === "private" &&
+            (forkRole === null ||
+              (user.token && !accessTokenAllowsRepository(user.token, fork.id))))
+        )
+          return errorResponse(404, "not_found", "Pull request head repository was not found.");
+        // Opening the pull request discloses a private fork's head to every base reader.
+        if (fork.visibility === "private" && !writableRole(forkRole))
+          return errorResponse(
+            403,
+            "forbidden",
+            "Publishing a private fork branch requires write access to the fork."
+          );
+      }
       const number = await nextNumber(env, targetTable, repository.id),
         id = crypto.randomUUID(),
         now = Date.now();
       await env.DB.batch([
         env.DB.prepare(
-          "INSERT INTO forge_pull_requests (id, repository_id, number, author_id, actor_json, title, body, base_ref, head_ref, head_session_id, draft, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)"
+          "INSERT INTO forge_pull_requests (id, repository_id, number, author_id, actor_json, title, body, base_ref, head_ref, head_session_id, head_repository_id, draft, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)"
         ).bind(
           id,
           repository.id,
@@ -886,10 +941,16 @@ async function featureRequest(
           parsed.data.baseRef,
           parsed.data.headRef,
           parsed.data.headSessionId,
+          parsed.data.headRepositoryId,
           parsed.data.draft ? 1 : 0,
           now,
           now
         ),
+        watcherNotificationStatement(env.DB, repository, user, {
+          kind: "pull_request",
+          id,
+          number,
+        }),
         ...(await threadNotificationStatements(
           env,
           repository,
@@ -915,7 +976,11 @@ async function featureRequest(
         ),
         ...syncLinkStatements(env, repository, id, parsed.data.title, parsed.data.body, now),
       ]);
-      if (repository.actions_enabled === 1 && !parsed.data.headSessionId)
+      if (
+        repository.actions_enabled === 1 &&
+        !parsed.data.headSessionId &&
+        !parsed.data.headRepositoryId
+      )
         await attachActionChecks(env, repository.id, id, parsed.data.headRef);
       await mentionAgents(env, repository, user, parsed.data.body, {
         targetKind: "pull_request",
@@ -969,6 +1034,7 @@ async function featureRequest(
         now,
         now
       ),
+      watcherNotificationStatement(env.DB, repository, user, { kind: "discussion", id, number }),
       ...(await threadNotificationStatements(
         env,
         repository,
@@ -1734,6 +1800,8 @@ async function featureRequest(
       const gitUrl = new URL(`/repositories/${repository.id}/merge`, request.url);
       const headSessionId =
         current.head_session_id == null ? null : String(current.head_session_id);
+      const headRepositoryId =
+        current.head_repository_id == null ? null : String(current.head_repository_id);
       const gitHeaders = trustedHeaders(user);
       gitHeaders.set("Content-Type", "application/json");
       const gitResponse = await env.GIT.fetch(
@@ -1747,6 +1815,7 @@ async function featureRequest(
             baseRef: current.base_ref,
             headRef: current.head_ref,
             headSessionId,
+            headRepositoryId,
             expectedBaseOid: parsed.data.expectedBaseOid,
             expectedHeadOid: parsed.data.expectedHeadOid,
             author: { name: user.identifier, email: `${user.identifier}@users.gitedge.invalid` },
@@ -1866,6 +1935,7 @@ async function featureRequest(
         if (
           repository.delete_branch_on_merge === 1 &&
           !headSessionId &&
+          !headRepositoryId &&
           current.head_ref !== repository.default_branch &&
           current.head_ref !== current.base_ref
         ) {
@@ -2046,9 +2116,35 @@ async function databaseHealth(env: ForgeEnv, logger: Logger) {
   }
 }
 
+function forkContext(env: ForgeEnv, user: TrustedUser): ForkContext {
+  return {
+    async resolveOwner(slug) {
+      const namespace = await namespaceForUser(env, user.id, slug);
+      return namespace
+        ? {
+            id: namespace.id,
+            slug: namespace.slug,
+            canCreate: canCreateRepository(namespace, user.id),
+          }
+        : null;
+    },
+    async checkQuota() {
+      const limits = groupLimitsFor(env, user);
+      const used = await countCreatedRepositories(env, user.id);
+      return used >= limits.maxRepositories
+        ? quotaExceededResponse(
+            "Repository limit reached for this user group. Deleted repositories count until they are purged.",
+            { resource: "repositories", used, limit: limits.maxRepositories }
+          )
+        : null;
+    },
+  };
+}
+
 const PERSONAL_RESOURCES: ReadonlySet<string> = new Set([
   "notifications",
   "notification-preferences",
+  "stars",
 ]);
 const WEBHOOK_CRON = "* * * * *";
 
@@ -2083,6 +2179,7 @@ const worker = {
         pull.base_ref !== input.data.baseRef ||
         pull.head_ref !== input.data.headRef ||
         (pull.head_session_id ?? null) !== (input.data.headSessionId ?? null) ||
+        (pull.head_repository_id ?? null) !== (input.data.headRepositoryId ?? null) ||
         pull.merge_started_at !== input.data.leaseAt ||
         input.data.leaseAt < Date.now() - 300_000 ||
         pull.merge_base_oid !== input.data.expectedBaseOid ||
@@ -2098,6 +2195,8 @@ const worker = {
     }
     if (request.method === "GET" && parts[0] === "profiles" && parts.length === 2)
       return publicProfile(env, request, parts[1], user);
+    const exploring = await handleExplore(env, request, parts);
+    if (exploring) return exploring;
     if (!user) {
       if (request.method !== "GET" || parts[0] !== "repositories")
         return errorResponse(401, "unauthorized", "Trusted user context is required.");
@@ -2145,6 +2244,8 @@ const worker = {
 
     const personal = await handleNotifications(env, request, user, parts);
     if (personal) return personal;
+    const starred = await handleStarred(env, request, user, parts);
+    if (starred) return starred;
 
     const imported = await handleRepositoryImports({
       request,
@@ -2286,6 +2387,7 @@ const worker = {
             namespaceId: organization.id,
             userId: result.user_id,
           });
+          await detachForks(env, { namespaceId: organization.id, level: env.LOG_LEVEL });
           logger.info("forge:organization-member-removed", {
             organizationId: organization.id,
             identifier: memberIdentifier,
@@ -2363,7 +2465,10 @@ const worker = {
           "internal_error",
           "One or more repositories have unavailable storage."
         );
-      return dataResponse(rows.results.map((row) => repoResponse(row, null, row.can_write === 1)));
+      const social = await repositorySocialFields(env, rows.results, user.id);
+      return dataResponse(
+        rows.results.map((row) => repoResponse(row, null, row.can_write === 1, social.get(row.id)))
+      );
     }
     if (request.method === "POST" && url.pathname === "/repositories") {
       const parsed = CreateRepositoryInputSchema.safeParse(await parseJson(request));
@@ -2513,7 +2618,8 @@ const worker = {
         repoResponse(
           named,
           role,
-          writableRole(role) && canWriteSession(user, named.id)
+          writableRole(role) && canWriteSession(user, named.id),
+          await socialFieldsFor(env, named, user.id)
         ) satisfies Repository
       );
     }
@@ -2529,7 +2635,8 @@ const worker = {
         repoResponse(
           repository,
           role,
-          writableRole(role) && canWriteSession(user, repositoryId)
+          writableRole(role) && canWriteSession(user, repositoryId),
+          await socialFieldsFor(env, repository, user.id)
         ) satisfies Repository
       );
     }
@@ -2556,6 +2663,17 @@ const worker = {
       const memory = await memoryTaskRequest(env, request, repository, viewer, parts.slice(2));
       if (memory) return memory;
     }
+    const socialRoute = await repositorySocial(env, request, repository, user, parts);
+    if (socialRoute) return socialRoute;
+    const forks = await repositoryForks(
+      env,
+      request,
+      repository,
+      user,
+      parts,
+      forkContext(env, user)
+    );
+    if (forks) return forks;
     const lifecycle = await repositoryLifecycle(env, request, repository, user, parts);
     if (lifecycle) return lifecycle;
     const controls = await repositoryControls(env, request, repository, user, parts);
@@ -2575,6 +2693,7 @@ const worker = {
       return;
     }
     await purgeDueRepositories(env);
+    await detachForks(env, { level: env.LOG_LEVEL });
     await purgeReadNotifications(env);
     await purgeWebhookDeliveries(env);
   },

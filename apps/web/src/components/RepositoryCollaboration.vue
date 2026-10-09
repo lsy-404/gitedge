@@ -120,6 +120,8 @@ const form = ref<{
   category: Discussion["category"];
   slug: string;
   headSessionId: string;
+  headRepositoryId: string;
+  headFork: string;
   draft: boolean;
 }>({
   title: "",
@@ -130,6 +132,8 @@ const form = ref<{
   category: "general",
   slug: "",
   headSessionId: "",
+  headRepositoryId: "",
+  headFork: "",
   draft: false,
 });
 function applyCommunityTemplate(value: { title: string; body: string }) {
@@ -291,7 +295,9 @@ const viewedRevisionPatch = computed(() => {
     current.content
   );
 });
-const headBranchFromSession = computed(() => form.value.headSessionId !== "");
+const headBranchFromSession = computed(
+  () => form.value.headSessionId !== "" || form.value.headRepositoryId !== ""
+);
 const resource = computed<"issues" | "pull-requests" | "discussions">(() =>
   props.section === "issues"
     ? "issues"
@@ -634,6 +640,8 @@ function resetForm() {
     category: "general",
     slug: "",
     headSessionId: "",
+    headRepositoryId: "",
+    headFork: "",
     draft: false,
   };
 }
@@ -658,6 +666,7 @@ async function submitCreate() {
         headRef: form.value.headRef,
         baseRef: form.value.baseRef,
         headSessionId: form.value.headSessionId || null,
+        headRepositoryId: form.value.headRepositoryId || null,
         draft: form.value.draft,
       });
       await goTo(created.number);
@@ -959,6 +968,7 @@ watch(
     route.query.base,
     route.query.head,
     route.query.headSessionId,
+    route.query.headRepositoryId,
     route.query.title,
   ],
   () => {
@@ -968,6 +978,8 @@ watch(
     form.value.baseRef = routeQuery("base") || props.repository.defaultBranch;
     form.value.headRef = routeQuery("head");
     form.value.headSessionId = routeQuery("headSessionId");
+    form.value.headRepositoryId = routeQuery("headRepositoryId");
+    form.value.headFork = routeQuery("headFork");
     showForm.value = true;
   },
   { immediate: true }
@@ -1099,8 +1111,11 @@ watch(
             <FluentCheckbox id="create-draft" v-model="form.draft">{{
               t("draftPull")
             }}</FluentCheckbox>
+            <NoticeBar v-if="form.headRepositoryId" intent="info">{{
+              t("pullFromFork", { name: form.headFork || form.headRepositoryId })
+            }}</NoticeBar>
             <SelectField
-              v-if="repository.agentsEnabled"
+              v-if="repository.agentsEnabled && !form.headRepositoryId"
               v-model="form.headSessionId"
               :label="t('sessionFork')"
             >
@@ -1226,6 +1241,11 @@ watch(
                   ><StatusBadge v-if="row.draft">{{ t("draftPull") }}</StatusBadge
                   ><StatusBadge v-if="row.headSessionId" tone="brand">{{
                     t("agentSession")
+                  }}</StatusBadge
+                  ><StatusBadge v-if="row.headRepository" tone="brand">{{
+                    t("pullFromFork", {
+                      name: `${row.headRepository.owner}/${row.headRepository.name}`,
+                    })
                   }}</StatusBadge></span
                 ><span class="collab-row-meta"
                   >#{{ row.number }} · {{ t("openedBy", { author: actorName(row) }) }} ·
@@ -1444,9 +1464,17 @@ watch(
                   :repository="markdownRepository"
                 />
                 <div
-                  v-if="'headRef' in item && (item.headSessionId || item.mergedOid)"
+                  v-if="
+                    'headRef' in item &&
+                    (item.headSessionId || item.headRepository || item.mergedOid)
+                  "
                   class="pull-meta"
                 >
+                  <StatusBadge v-if="item.headRepository" tone="brand">{{
+                    t("pullFromFork", {
+                      name: `${item.headRepository.owner}/${item.headRepository.name}`,
+                    })
+                  }}</StatusBadge>
                   <StatusBadge v-if="item.headSessionId" tone="brand"
                     >{{ t("sessionFork") }} · {{ item.headSessionId }}</StatusBadge
                   ><StatusBadge v-if="item.mergedOid" tone="done"

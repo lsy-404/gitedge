@@ -293,6 +293,10 @@ export class FixtureArtifacts implements Artifacts {
           `artifacts:${repository.info.name}`,
           repository.commits[0] ?? baseCommit
         );
+        for (const [hash, entries] of repository.trees) forked.trees.set(hash, entries);
+        for (const [hash, bytes] of repository.blobs) forked.blobs.set(hash, bytes);
+        for (const [ref, commits] of repository.branchCommits)
+          forked.branchCommits.set(ref, [...commits]);
         fixture.repositories.set(name, forked);
         return created;
       },

@@ -18,6 +18,7 @@ import { scopedInvitations } from "./invitations";
 import { repositoryRole } from "../../../src/worker/common/repositories";
 import { createLogger } from "../../../src/worker/common/logger";
 import { revokeAgentSessions } from "./agent-events";
+import { detachForks } from "./forks";
 import { parseJson, type ForgeEnv, type RepositoryRow } from "./common";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 
@@ -205,6 +206,7 @@ export async function repositoryControls(
           "Collaborator was not found or has inherited access."
         );
       logger.info("collaborator:removed", { userId: id });
+      await detachForks(env, { parentId: repo.id, level: env.LOG_LEVEL });
       await audit("collaborator.removed", { type: "user", id });
       const stillHasAccess = (await repositoryRole(env.DB, repo.id, id)) !== null;
       const revoked =

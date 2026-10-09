@@ -63,7 +63,11 @@ const target = computed(() => {
 function failure(cause: unknown): string {
   if (cause instanceof ApiError && cause.status === 404) return t("inviteNotFound");
   if (cause instanceof ApiError && cause.status === 409)
-    return cause.code === "already_member" ? t("inviteAlreadyMember") : t("inviteClosed");
+    return cause.code === "already_member"
+      ? t("inviteAlreadyMember")
+      : cause.code === "fork_collaborator_not_allowed"
+        ? t("inviteForkParentRequired")
+        : t("inviteClosed");
   return t("apiError");
 }
 

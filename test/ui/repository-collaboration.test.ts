@@ -22,6 +22,10 @@ import type {
 
 const human: Actor = { kind: "user", id: "user-1", name: "Example User" };
 const repository: Repository = {
+  topics: [],
+  starCount: 0,
+  forkCount: 0,
+  forkOf: null,
   id: "repo-1",
   namespaceId: "namespace-1",
   owner: "acme",

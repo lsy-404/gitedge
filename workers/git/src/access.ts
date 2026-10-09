@@ -113,6 +113,48 @@ export async function resolveWorkspace(
   return row;
 }
 
+export interface ProposalHead {
+  sessionId?: string | null;
+  repositoryId?: string | null;
+  ref: string;
+}
+
+/**
+ * Artifacts name that holds a proposal head: the base repository itself, an agent session fork or a
+ * fork owned by a user. A private fork is readable only by its members and through a published
+ * pull request for exactly that head ref. Null when the head is unavailable to the caller.
+ */
+export async function resolveProposalHead(
+  env: GitEnv,
+  access: GitRepositoryAccess,
+  head: ProposalHead
+): Promise<string | null> {
+  if (head.sessionId && head.repositoryId) return null;
+  if (head.sessionId)
+    return (await resolveWorkspace(env, access, head.sessionId, head.ref))?.workspaceName ?? null;
+  if (!head.repositoryId) return access.repository.artifactName;
+  const fork = await env.DB.prepare(
+    "SELECT id, artifact_name AS artifactName, visibility FROM repositories WHERE id = ? AND fork_of = ? AND deleted_at IS NULL AND artifact_name IS NOT NULL"
+  )
+    .bind(head.repositoryId, access.repository.id)
+    .first<{ id: string; artifactName: string; visibility: "public" | "private" }>();
+  if (!fork) return null;
+  const user = access.user;
+  // Membership reaches a private fork only for credentials not scoped to another repository.
+  const member =
+    user !== null &&
+    !user.agentSession &&
+    (!user.token || accessTokenAllowsRepository(user.token, fork.id)) &&
+    (await repositoryRole(env.DB, fork.id, user.id)) !== null;
+  if (fork.visibility === "public" || member) return fork.artifactName;
+  const published = await env.DB.prepare(
+    "SELECT id FROM forge_pull_requests WHERE repository_id = ? AND head_repository_id = ? AND ((state = 'open' AND head_ref = ?) OR (state = 'merged' AND merge_head_oid = ?))"
+  )
+    .bind(access.repository.id, fork.id, head.ref, head.ref)
+    .first<{ id: string }>();
+  return published ? fork.artifactName : null;
+}
+
 export async function listRepositorySessions(
   env: GitEnv,
   access: GitRepositoryAccess

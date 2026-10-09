@@ -118,6 +118,16 @@ import type {
   RepositoryTag,
   UpdateReleaseInput,
 } from "../../../../packages/contracts/src/releases";
+import type {
+  ExplorePage,
+  ExploreQuery,
+  ExploreTopic,
+  ForkRepositoryInput,
+  ForkSyncResult,
+  RepositorySocial,
+  StarredPage,
+  WatchLevel,
+} from "../../../../packages/contracts/src/social";
 import type { CommitPayload } from "./repositoryCommit";
 import type { SsoIdentity, SsoProviderSummary } from "../../../../packages/contracts/src/sso";
 import type {
@@ -169,6 +179,15 @@ export type {
   User,
 } from "../../../../packages/contracts/src/account";
 export type { DeletedRepository } from "../../../../packages/contracts/src/lifecycle";
+export type {
+  ExplorePage,
+  ExploreRepository,
+  ExploreTopic,
+  ForkSyncResult,
+  RepositorySocial,
+  StarredPage,
+  WatchLevel,
+} from "../../../../packages/contracts/src/social";
 export type {
   AdminGroup,
   AdminPage,
@@ -793,6 +812,38 @@ export const api = {
         initializeReadme: payload.initializeReadme,
       }),
     }),
+  explore: (filters: Partial<Pick<ExploreQuery, "sort" | "q" | "topic" | "cursor" | "limit">>) =>
+    request<ExplorePage>(`/api/forge/explore${query(filters)}`),
+  exploreTopics: () => request<ExploreTopic[]>("/api/forge/explore/topics"),
+  starredRepositories: (cursor?: string) =>
+    request<StarredPage>(`/api/forge/stars${query({ cursor })}`),
+  repositorySocial: (repositoryId: string) =>
+    request<RepositorySocial>(repositoryPath(repositoryId, "social")),
+  setStar: (repositoryId: string, starred: boolean) =>
+    request<RepositorySocial>(repositoryPath(repositoryId, "star"), {
+      method: starred ? "PUT" : "DELETE",
+    }),
+  setWatchLevel: (repositoryId: string, level: WatchLevel) =>
+    request<RepositorySocial>(repositoryPath(repositoryId, "watch"), {
+      method: "PUT",
+      body: JSON.stringify({ level }),
+    }),
+  setRepositoryTopics: (repositoryId: string, topics: string[]) =>
+    request<{ topics: string[] }>(repositoryPath(repositoryId, "topics"), {
+      method: "PUT",
+      body: JSON.stringify({ topics }),
+    }),
+  forks: (repositoryId: string) => requestPage<Repository>(repositoryPath(repositoryId, "forks")),
+  forkRepository: (repositoryId: string, payload: ForkRepositoryInput) =>
+    request<Repository>(repositoryPath(repositoryId, "forks"), {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  syncFork: (repositoryId: string, branch: string) =>
+    request<ForkSyncResult>(gitPath(repositoryId, "fork-sync"), {
+      method: "POST",
+      body: JSON.stringify({ branch }),
+    }),
   importRepository: (payload: CreateRepositoryImportInput) =>
     request<RepositoryImport>("/api/forge/repository-imports", {
       method: "POST",
@@ -1010,11 +1061,22 @@ export const api = {
     request<GitCommit[]>(gitPath(repositoryId, `commits${query({ ref, offset, limit })}`)),
   graph: (repositoryId: string, ref: string, limit: number) =>
     request<GitGraph>(gitPath(repositoryId, `graph${query({ ref, limit })}`)),
-  compare: (repositoryId: string, base: string, head: string, headSessionId?: string | null) =>
+  compare: (
+    repositoryId: string,
+    base: string,
+    head: string,
+    headSessionId?: string | null,
+    headRepositoryId?: string | null
+  ) =>
     request<GitComparison>(
       gitPath(
         repositoryId,
-        `compare${query({ base, head, headSessionId: headSessionId ?? undefined })}`
+        `compare${query({
+          base,
+          head,
+          headSessionId: headSessionId ?? undefined,
+          headRepositoryId: headRepositoryId ?? undefined,
+        })}`
       )
     ),
   createCloneToken: (payload: {
@@ -1059,6 +1121,7 @@ export const api = {
       headRef: string;
       baseRef: string;
       headSessionId?: string | null;
+      headRepositoryId?: string | null;
       draft?: boolean;
     }
   ) =>
