@@ -136,6 +136,8 @@ async function markScope(repositoryId?: string): Promise<void> {
 }
 
 function subjectPath(item: Notification): string {
+  // Pending invitations are answered from the dashboard; the repository may still be private.
+  if (item.reason === "invited") return "/dashboard";
   const base = `/${encodeURIComponent(item.repository.owner)}/${encodeURIComponent(item.repository.name)}`;
   if (item.subjectKind === "repository" || item.subjectNumber === null) return base;
   const section =

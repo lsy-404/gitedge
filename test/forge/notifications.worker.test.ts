@@ -85,6 +85,22 @@ async function pull(person: Person, title: string): Promise<{ number: number }> 
   );
 }
 
+async function invite(person: Person, role: "read" | "write"): Promise<string> {
+  const created = await json<{ id: string }>(
+    await call("/repositories/rp/invitations", "POST", "owner", {
+      identifier: people[person].identifier,
+      role,
+    }),
+    201
+  );
+  return created.id;
+}
+
+async function addCollaborator(person: Person, role: "read" | "write"): Promise<void> {
+  const id = await invite(person, role);
+  await json(await call(`/invitations/${id}/accept`, "POST", person), 200);
+}
+
 async function reasons(person: Person): Promise<Record<string, string>> {
   const page = await inbox(person, "?limit=50");
   return Object.fromEntries(
@@ -118,10 +134,7 @@ beforeAll(async () => {
     ["writer", "write"],
     ["reader", "read"],
   ] as const)
-    await call("/repositories/rp/collaborators", "PUT", "owner", {
-      identifier: people[person].identifier,
-      role,
-    });
+    await addCollaborator(person, role);
 });
 
 describe("notification generation", () => {
@@ -204,8 +217,7 @@ describe("notification generation", () => {
     for (const role of ["read", "write"] as const)
       expect(
         (
-          await call("/repositories/rp/collaborators", "PUT", "owner", {
-            identifier: "writer",
+          await call(`/repositories/rp/collaborators/${people.writer.id}`, "PATCH", "owner", {
             role,
           })
         ).status
@@ -319,10 +331,7 @@ describe("notification listing", () => {
     expect(stored?.total).toBeGreaterThan(0);
     expect(secret.number).toBeGreaterThan(0);
 
-    await call("/repositories/rp/collaborators", "PUT", "owner", {
-      identifier: "reader",
-      role: "read",
-    });
+    await addCollaborator("reader", "read");
     expect((await inbox("reader", "?limit=50")).items.length).toBeGreaterThan(0);
   });
 
@@ -435,5 +444,27 @@ INSERT INTO auth_agent_sessions (id,agent_id,user_id,repository_id,token_hash,gi
       },
     });
     expect(agent.status).toBe(403);
+  });
+
+  it("shows a pending private invitation to its invitee until it is cancelled", async () => {
+    const id = await invite("outsider", "read");
+    const pending = await inbox("outsider");
+    expect(pending.items).toHaveLength(1);
+    expect(pending.items[0]).toMatchObject({
+      reason: "invited",
+      subjectKind: "repository",
+      repository: { id: "rp", owner: "owner", name: "secret" },
+    });
+    expect(
+      (
+        await json<NotificationUnreadCount>(
+          await call("/notifications/unread-count", "GET", "outsider"),
+          200
+        )
+      ).unread
+    ).toBe(1);
+
+    expect((await call(`/repositories/rp/invitations/${id}`, "DELETE", "owner")).status).toBe(200);
+    expect((await inbox("outsider")).items).toEqual([]);
   });
 });

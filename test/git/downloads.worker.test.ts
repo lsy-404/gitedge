@@ -90,10 +90,11 @@ beforeAll(async () => {
   ).run();
   repositories.public = await createRepository("open", "public");
   repositories.private = await createRepository("closed", "private");
-  await forgeCall(`/repositories/${repositories.private}/collaborators`, "PUT", {
-    identifier: "reader",
-    role: "read",
-  });
+  await env.DB.prepare(
+    "INSERT INTO repository_collaborators(repository_id,user_id,role,created_at) SELECT ?, id, 'read', 1 FROM users WHERE identifier = 'reader'"
+  )
+    .bind(repositories.private)
+    .run();
 });
 afterEach(() => vi.unstubAllGlobals());
 

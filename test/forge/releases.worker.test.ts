@@ -167,11 +167,11 @@ beforeAll(async () => {
       .data.id;
     if (slug === "open") repositoryId = id;
     else privateId = id;
-    for (const [identifier, role] of [
-      ["writer", "write"],
-      ["reader", "read"],
-    ] as const)
-      await call(`/repositories/${id}/collaborators`, "PUT", { body: { identifier, role } });
+    await env.DB.prepare(
+      "INSERT INTO repository_collaborators(repository_id,user_id,role,created_at) SELECT ?, id, CASE identifier WHEN 'writer' THEN 'write' ELSE 'read' END, 1 FROM users WHERE identifier IN ('writer','reader')"
+    )
+      .bind(id)
+      .run();
   }
   await env.DB.prepare(
     "INSERT INTO auth_agents(id,user_id,name,created_at) VALUES('a','owner-id','Agent',1)"

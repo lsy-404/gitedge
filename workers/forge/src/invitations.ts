@@ -16,6 +16,7 @@ import { auditActor, recordAudit } from "../../../src/worker/common/audit";
 import { randomHex } from "../../../src/worker/common/encoding";
 import { dataResponse, errorResponse, jsonResponse } from "../../../src/worker/common/http";
 import { createLogger } from "../../../src/worker/common/logger";
+import { invitationNotificationStatement } from "./notifications";
 import { parseJson, type ForgeEnv, type RepositoryRow } from "./common";
 
 const TOKEN_PREFIX = "gei_";
@@ -157,24 +158,36 @@ async function createInvitation(
   const id = crypto.randomUUID();
   const token = inviteeId === null ? `${TOKEN_PREFIX}${randomHex(32)}` : null;
   const expiresAt = now + INVITATION_TTL_MS;
+  const insert = env.DB.prepare(
+    "INSERT INTO invitations (id, kind, namespace_id, repository_id, role, inviter_id, invitee_user_id, invitee_email, token_hash, status, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)"
+  ).bind(
+    id,
+    scope.kind,
+    scope.namespaceId,
+    scope.repository?.id ?? null,
+    input.role,
+    user.id,
+    inviteeId,
+    input.email ?? null,
+    token === null ? null : await sha256Hex(token),
+    expiresAt,
+    now
+  );
   try {
-    await env.DB.prepare(
-      "INSERT INTO invitations (id, kind, namespace_id, repository_id, role, inviter_id, invitee_user_id, invitee_email, token_hash, status, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)"
-    )
-      .bind(
-        id,
-        scope.kind,
-        scope.namespaceId,
-        scope.repository?.id ?? null,
-        input.role,
-        user.id,
-        inviteeId,
-        input.email ?? null,
-        token === null ? null : await sha256Hex(token),
-        expiresAt,
-        now
-      )
-      .run();
+    // Notifications are repository-scoped, so only repository invitations addressed to a user notify.
+    await env.DB.batch(
+      scope.repository && inviteeId !== null
+        ? [
+            insert,
+            invitationNotificationStatement(
+              env.DB,
+              { id, repositoryId: scope.repository.id, inviteeId },
+              user.id,
+              now
+            ),
+          ]
+        : [insert]
+    );
   } catch (cause) {
     if (cause instanceof Error && cause.message.includes("UNIQUE"))
       return errorResponse(409, "invitation_pending", "An invitation is already pending.");
@@ -182,7 +195,6 @@ async function createInvitation(
   }
   const row = await env.DB.prepare(`${SELECT} WHERE i.id = ?`).bind(id).first<InvitationRow>();
   if (!row) return errorResponse(500, "internal_error", "Invitation could not be created.");
-  // Notification delivery attaches to this event.
   logger.info("forge:invitation-created", {
     invitationId: id,
     kind: scope.kind,

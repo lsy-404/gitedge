@@ -79,7 +79,7 @@ describe("notifications page", () => {
     expect(links.map((link) => link.getAttribute("href"))).toEqual([
       "/acme/project/issues/4",
       "/acme/project/pulls/9",
-      "/acme/other",
+      "/dashboard",
     ]);
     expect(mounted.root.textContent).toContain(
       "You were invited to collaborate on this repository"
@@ -200,7 +200,7 @@ describe("mentions in Markdown", () => {
       "Thanks @octocat and acme/@helper, not `@code` or me@example.com.\n\n```\n@fenced\n```",
       undefined,
       false,
-      true
+      { mentions: true }
     );
     const root = document.createElement("div");
     root.innerHTML = html;

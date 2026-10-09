@@ -33,6 +33,10 @@ const PURGE_BATCH = 500;
 
 /** Read access to repository `r` for user `u`: public, namespace member or collaborator. */
 const USER_CAN_READ = `(r.visibility = 'public' OR EXISTS (SELECT 1 FROM namespace_memberships m WHERE m.namespace_id = r.namespace_id AND m.user_id = u.id) OR EXISTS (SELECT 1 FROM repository_collaborators c WHERE c.repository_id = r.id AND c.user_id = u.id))`;
+/** A pending, unexpired invitation of user `u` to repository `r`, which lets them see that one notification. */
+const PENDING_INVITATION = `EXISTS (SELECT 1 FROM invitations iv WHERE iv.repository_id = r.id AND iv.invitee_user_id = u.id AND iv.status = 'pending' AND iv.expires_at > CAST(strftime('%s', 'now') AS INTEGER) * 1000)`;
+/** Listing access: readable repositories, plus invitations the user has not answered yet. */
+const USER_CAN_SEE = `(${USER_CAN_READ} OR (n.reason = 'invited' AND ${PENDING_INVITATION}))`;
 const REASON_NOT_MUTED = `NOT EXISTS (SELECT 1 FROM forge_notification_preferences p, json_each(p.muted_reasons_json) j WHERE p.user_id = u.id AND j.value = ?)`;
 const UPSERT = `ON CONFLICT(recipient_id, subject_kind, subject_id) DO UPDATE SET reason = excluded.reason, subject_number = excluded.subject_number, actor_id = excluded.actor_id, created_at = excluded.created_at, read_at = NULL`;
 
@@ -92,11 +96,12 @@ function insertNotifications(
   actorId: string | null,
   recipients: RecipientSet,
   now: number,
-  when?: StatementCondition
+  when?: StatementCondition,
+  access = USER_CAN_READ
 ): D1PreparedStatement {
   return db
     .prepare(
-      `INSERT INTO forge_notifications (id, recipient_id, repository_id, subject_kind, subject_id, subject_number, reason, actor_id, created_at, read_at) SELECT lower(hex(randomblob(16))), u.id, r.id, ?, ?, ?, ?, ?, ?, NULL FROM users u JOIN repositories r ON r.id = ? WHERE u.id IN (${recipients.sql}) AND u.id IS NOT ? AND r.deleted_at IS NULL AND ${USER_CAN_READ} AND ${REASON_NOT_MUTED}${when ? ` AND (${when.sql})` : ""} ${UPSERT}`
+      `INSERT INTO forge_notifications (id, recipient_id, repository_id, subject_kind, subject_id, subject_number, reason, actor_id, created_at, read_at) SELECT lower(hex(randomblob(16))), u.id, r.id, ?, ?, ?, ?, ?, ?, NULL FROM users u JOIN repositories r ON r.id = ? WHERE u.id IN (${recipients.sql}) AND u.id IS NOT ? AND r.deleted_at IS NULL AND ${access} AND ${REASON_NOT_MUTED}${when ? ` AND (${when.sql})` : ""} ${UPSERT}`
     )
     .bind(
       subject.kind,
@@ -228,26 +233,26 @@ export function outcomeNotificationStatement(
   );
 }
 
-/** Notifies a collaborator added at `addedAt`; role changes of an existing collaborator stay silent. */
+/** Notifies the invitee of a pending repository invitation, even before they can read the repository. */
 export function invitationNotificationStatement(
   db: D1Database,
-  repositoryId: string,
+  invitation: { id: string; repositoryId: string; inviteeId: string },
   actorId: string,
-  inviteeId: string,
-  addedAt: number
+  now: number
 ): D1PreparedStatement {
   return insertNotifications(
     db,
-    repositoryId,
-    { kind: "repository", id: repositoryId, number: null },
+    invitation.repositoryId,
+    { kind: "repository", id: invitation.repositoryId, number: null },
     "invited",
     actorId,
-    userIds([inviteeId]),
-    addedAt,
+    userIds([invitation.inviteeId]),
+    now,
     {
-      sql: "EXISTS (SELECT 1 FROM repository_collaborators WHERE repository_id = ? AND user_id = ? AND created_at = ?)",
-      binds: [repositoryId, inviteeId, addedAt],
-    }
+      sql: "EXISTS (SELECT 1 FROM invitations WHERE id = ? AND status = 'pending')",
+      binds: [invitation.id],
+    },
+    `(${USER_CAN_READ} OR ${PENDING_INVITATION})`
   );
 }
 
@@ -301,7 +306,7 @@ async function listNotifications(
     binds.push(Number(createdAt), Number(createdAt), id);
   }
   const rows = await env.DB.prepare(
-    `SELECT n.id, n.reason, n.subject_kind AS subjectKind, n.subject_number AS subjectNumber, CASE n.subject_kind WHEN 'issue' THEN i.title WHEN 'pull_request' THEN p.title WHEN 'discussion' THEN d.title END AS title, n.created_at AS createdAt, n.read_at AS readAt, r.id AS repositoryId, r.slug AS repositoryName, ns.slug AS owner, actor.identifier AS actor FROM forge_notifications n JOIN users u ON u.id = n.recipient_id JOIN repositories r ON r.id = n.repository_id AND r.deleted_at IS NULL JOIN namespaces ns ON ns.id = r.namespace_id LEFT JOIN users actor ON actor.id = n.actor_id LEFT JOIN forge_issues i ON n.subject_kind = 'issue' AND i.id = n.subject_id LEFT JOIN forge_pull_requests p ON n.subject_kind = 'pull_request' AND p.id = n.subject_id LEFT JOIN forge_discussions d ON n.subject_kind = 'discussion' AND d.id = n.subject_id WHERE n.recipient_id = ? AND ${USER_CAN_READ}${filters.map((filter) => ` AND ${filter}`).join("")}${scope.sql} ORDER BY n.created_at DESC, n.id DESC LIMIT ?`
+    `SELECT n.id, n.reason, n.subject_kind AS subjectKind, n.subject_number AS subjectNumber, CASE n.subject_kind WHEN 'issue' THEN i.title WHEN 'pull_request' THEN p.title WHEN 'discussion' THEN d.title END AS title, n.created_at AS createdAt, n.read_at AS readAt, r.id AS repositoryId, r.slug AS repositoryName, ns.slug AS owner, actor.identifier AS actor FROM forge_notifications n JOIN users u ON u.id = n.recipient_id JOIN repositories r ON r.id = n.repository_id AND r.deleted_at IS NULL JOIN namespaces ns ON ns.id = r.namespace_id LEFT JOIN users actor ON actor.id = n.actor_id LEFT JOIN forge_issues i ON n.subject_kind = 'issue' AND i.id = n.subject_id LEFT JOIN forge_pull_requests p ON n.subject_kind = 'pull_request' AND p.id = n.subject_id LEFT JOIN forge_discussions d ON n.subject_kind = 'discussion' AND d.id = n.subject_id WHERE n.recipient_id = ? AND ${USER_CAN_SEE}${filters.map((filter) => ` AND ${filter}`).join("")}${scope.sql} ORDER BY n.created_at DESC, n.id DESC LIMIT ?`
   )
     .bind(...binds, ...scope.binds, query.limit + 1)
     .all<NotificationRow>();
@@ -327,7 +332,7 @@ async function listNotifications(
 async function unreadCount(env: ForgeEnv, user: TrustedUser): Promise<Response> {
   const scope = allowlist(user);
   const row = await env.DB.prepare(
-    `SELECT COUNT(*) AS total FROM (SELECT 1 FROM forge_notifications n JOIN users u ON u.id = n.recipient_id JOIN repositories r ON r.id = n.repository_id AND r.deleted_at IS NULL WHERE n.recipient_id = ? AND n.read_at IS NULL AND ${USER_CAN_READ}${scope.sql} LIMIT ?)`
+    `SELECT COUNT(*) AS total FROM (SELECT 1 FROM forge_notifications n JOIN users u ON u.id = n.recipient_id JOIN repositories r ON r.id = n.repository_id AND r.deleted_at IS NULL WHERE n.recipient_id = ? AND n.read_at IS NULL AND ${USER_CAN_SEE}${scope.sql} LIMIT ?)`
   )
     .bind(user.id, ...scope.binds, NOTIFICATION_UNREAD_COUNT_CAP + 1)
     .first<{ total: number }>();

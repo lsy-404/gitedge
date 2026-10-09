@@ -15,7 +15,7 @@ describe("issue references in Markdown", () => {
       "Fixes #12 and acme/project#3, see also Other/Repo#4.",
       undefined,
       false,
-      repository
+      { repository }
     );
     expect(html).toContain('<a href="/acme/project/issues/12" rel="noreferrer noopener">#12</a>');
     expect(html).toContain('href="/acme/project/issues/3"');
@@ -28,7 +28,7 @@ describe("issue references in Markdown", () => {
       "`#1`\n\n```\n#2\n```\n\n[#3](https://example.com)\n\nabc#4 and C#5 and &#39;",
       undefined,
       false,
-      repository
+      { repository }
     );
     expect(html).not.toContain("/issues/");
     expect(html).toContain('href="https://example.com"');
