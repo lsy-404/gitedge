@@ -80,7 +80,12 @@ function rawRepo(content: Uint8Array): RawRepository {
     },
   };
 }
-const options = { publicRepository: true, forceDownload: false, head: false, ifNoneMatch: null };
+const options = {
+  audience: { shared: true, anonymous: true },
+  forceDownload: false,
+  head: false,
+  ifNoneMatch: null,
+};
 
 describe("raw responses", () => {
   it("sends nosniff, a sandbox CSP and an inline disposition for text", async () => {
@@ -110,7 +115,9 @@ describe("raw responses", () => {
   it("keys public cache validation on the blob id and answers 304", async () => {
     const first = await serveRaw(rawRepo(encode("x")), { ref: "main", path: "file.txt" }, options);
     expect(first.headers.get("ETag")).toBe(`"${"b".repeat(40)}"`);
-    expect(first.headers.get("Cache-Control")).toBe("public, max-age=0, must-revalidate");
+    expect(first.headers.get("Cache-Control")).toBe(
+      "public, max-age=0, s-maxage=30, must-revalidate"
+    );
     const conditional = await serveRaw(
       rawRepo(encode("x")),
       { ref: "main", path: "file.txt" },
@@ -122,13 +129,16 @@ describe("raw responses", () => {
       { ref: "a".repeat(40), path: "file.txt" },
       options
     );
-    expect(pinned.headers.get("Cache-Control")).toBe("public, max-age=300");
+    expect(pinned.headers.get("Cache-Control")).toBe(
+      "public, max-age=86400, s-maxage=3600, immutable"
+    );
+    expect(pinned.headers.get("X-GitEdge-Cache")).toBe("bypass");
   });
   it("never lets shared caches keep private content", async () => {
     const response = await serveRaw(
       rawRepo(encode("x")),
       { ref: "main", path: "file.txt" },
-      { ...options, publicRepository: false }
+      { ...options, audience: { shared: false, anonymous: true } }
     );
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
   });

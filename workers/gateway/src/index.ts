@@ -101,6 +101,12 @@ export function withSecurityHeaders(response: Response, pathname: string): Respo
   if (pathname.startsWith("/api/") && !headers.has("Cache-Control")) {
     headers.set("Cache-Control", "private, no-store");
   }
+  // A response that sets a cookie must never be reusable by another visitor.
+  if (
+    headers.has("Set-Cookie") &&
+    !/\b(?:private|no-store)\b/i.test(headers.get("Cache-Control") ?? "")
+  )
+    headers.set("Cache-Control", "private, no-store");
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,

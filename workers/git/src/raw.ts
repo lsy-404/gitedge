@@ -2,6 +2,7 @@ import { contentDisposition } from "../../../src/worker/common/content-dispositi
 import { errorResponse } from "../../../src/worker/common/http";
 import { GitOidSchema } from "../../../packages/contracts/src/index";
 import { readArtifactTree } from "./read";
+import { edgeDownloadHeaders, matchesEtag, type EdgeAudience } from "./edge-cache";
 
 export const RAW_MAX_BYTES = 64 * 1024 * 1024;
 const TEXT_SNIFF_BYTES = 8192;
@@ -74,7 +75,7 @@ export async function splitRawSpec(
 }
 
 export interface RawOptions {
-  publicRepository: boolean;
+  audience: EdgeAudience;
   forceDownload: boolean;
   head: boolean;
   ifNoneMatch: string | null;
@@ -95,21 +96,17 @@ export async function serveRaw(
   const entry = parent?.entries.find((item) => item.path === target.path && item.type === "blob");
   if (!entry) return errorResponse(404, "not_found", "File was not found.");
   const etag = `"${entry.oid}"`;
-  const immutable = GitOidSchema.safeParse(target.ref).success;
-  const cacheControl = options.publicRepository
-    ? immutable
-      ? "public, max-age=300"
-      : "public, max-age=0, must-revalidate"
-    : "private, no-store";
   const headers: Record<string, string> = {
     ETag: etag,
-    "Cache-Control": cacheControl,
+    ...edgeDownloadHeaders(
+      { kind: GitOidSchema.safeParse(target.ref).success ? "immutable" : "ref", oid: entry.oid },
+      options.audience
+    ),
     "X-Content-Type-Options": "nosniff",
     "Content-Security-Policy": SANDBOX_CSP,
     "Referrer-Policy": "no-referrer",
   };
-  if (options.ifNoneMatch?.split(",").some((value) => value.trim() === etag))
-    return new Response(null, { status: 304, headers });
+  if (matchesEtag(options.ifNoneMatch, etag)) return new Response(null, { status: 304, headers });
   let blob: Blob | null;
   try {
     blob = await repo.readBlob(entry.oid);

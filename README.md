@@ -129,6 +129,10 @@ Configure `PRIVATE_REPOSITORY_RESPONSE` in `workers/gateway/wrangler.jsonc` and 
 
 Unset or invalid values use `not_found`. The policy covers browser repository routes and the Forge and Git APIs. Anonymous Git HTTPS requests that cannot be served, whether the repository is private or missing, receive the same Basic authentication challenge so Git prompts for a token; authenticated callers without access follow the policy. A valid token outside its scopes or repository allowlist receives 403, and a read-only credential that pushes receives 403, so Git keeps working credentials in its helper. Missing repositories remain 404 in both modes elsewhere. Repository listings continue to omit inaccessible repositories. Invalid Git credentials still receive an authentication challenge.
 
+## Edge caching
+
+Public repository reads are cached close to readers and never shared for private data. Commit-addressed responses are immutable; branch and tag reads are resolved to their commit on each request, so a push is visible immediately and conditional requests answer 304. Visibility changes, transfers, renames and deletion take effect at once: access is checked before any cache lookup, and each of those changes moves the repository to a new cache generation. Inspect the `X-GitEdge-Cache` response header (`hit`, `miss`, `revalidated`, `bypass`) to verify behavior; the classes and limits are described in [docs/architecture.md](docs/architecture.md#edge-caching).
+
 ## License
 
 [MIT](LICENSE). The retained upstream logger attribution is in [LICENSES/MIT-git-on-cloudflare.txt](LICENSES/MIT-git-on-cloudflare.txt).
