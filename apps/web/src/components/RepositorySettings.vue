@@ -19,11 +19,12 @@ import NoticeBar from "./NoticeBar.vue";
 import StatusState from "./StatusState.vue";
 import BranchProtectionSettings from "./BranchProtectionSettings.vue";
 import RepositoryCollaborators from "./RepositoryCollaborators.vue";
+import RepositoryDangerActions from "./RepositoryDangerActions.vue";
 import "../styles/settings.css";
 
 type RepositoryDraft = Omit<RepositorySettings, "canManage">;
 type SettingsSection =
-  "general" | "features" | "merge" | "branchRules" | "collaborators" | "agents" | "archive";
+  "general" | "features" | "merge" | "branchRules" | "collaborators" | "agents" | "danger";
 
 const sections = [
   ["general", "repoSettingsGeneral"],
@@ -32,7 +33,7 @@ const sections = [
   ["branchRules", "repoSettingsBranchRules"],
   ["collaborators", "repoSettingsCollaborators"],
   ["agents", "repoSettingsAgentsMemory"],
-  ["archive", "repoSettingsArchive"],
+  ["danger", "repoSettingsDangerZone"],
 ] as const satisfies ReadonlyArray<readonly [SettingsSection, string]>;
 const visibilities = ["public", "private"] as const;
 const memoryVisibilities = ["members", "public"] as const;
@@ -546,9 +547,9 @@ watch(() => props.repository.id, load, { immediate: true });
             </div>
           </section>
 
-          <section v-else class="box box-danger" aria-labelledby="settings-archive-title">
+          <section v-else class="box box-danger" aria-labelledby="settings-danger-title">
             <header class="box-header">
-              <h3 id="settings-archive-title">{{ sectionName("archive") }}</h3>
+              <h3 id="settings-danger-title">{{ sectionName("danger") }}</h3>
             </header>
             <div class="box-row settings-row">
               <div class="row-copy">
@@ -564,6 +565,7 @@ watch(() => props.repository.id, load, { immediate: true });
             <div v-if="draft.archived" class="box-form">
               <NoticeBar intent="warning">{{ t("repoSettingsArchived") }}</NoticeBar>
             </div>
+            <RepositoryDangerActions :repository="props.repository" :can-manage="canManage" />
           </section>
 
           <NoticeBar v-if="branchesError && activeSection !== 'general'" intent="warning">{{

@@ -113,7 +113,7 @@ export async function repositoryCommunity(
     "Pull request template"
   );
   const shared = await env.DB.prepare(
-    "SELECT r.id,r.artifact_name AS artifactName,r.default_branch AS defaultBranch FROM repositories r WHERE r.namespace_id=? AND r.slug='.github' AND r.visibility='public' AND r.id<>?"
+    "SELECT r.id,r.artifact_name AS artifactName,r.default_branch AS defaultBranch FROM repositories r WHERE r.namespace_id=? AND r.slug='.github' AND r.deleted_at IS NULL AND r.visibility='public' AND r.id<>?"
   )
     .bind(repository.namespaceId, repository.id)
     .first<{ id: string; artifactName: string | null; defaultBranch: string }>();

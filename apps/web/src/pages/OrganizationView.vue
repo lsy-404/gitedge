@@ -10,6 +10,7 @@ import SelectField from "../components/SelectField.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import { oneOf } from "../ui/formEvents";
 import StatusState from "../components/StatusState.vue";
+import TypeToConfirm from "../components/TypeToConfirm.vue";
 import TextField from "../components/TextField.vue";
 import "../styles/workspace.css";
 const route = useRoute();
@@ -25,6 +26,8 @@ const error = ref("");
 const formError = ref("");
 const memberError = ref("");
 const saving = ref(false);
+const deleting = ref(false);
+const deleteError = ref("");
 const removingIdentifier = ref("");
 const memberNotice = ref("");
 const revocationIncomplete = ref(false);
@@ -84,9 +87,24 @@ async function removeMember(member: OrganizationMember) {
     removingIdentifier.value = "";
   }
 }
+async function deleteOrganization() {
+  if (deleting.value) return;
+  const target = slug.value;
+  deleting.value = true;
+  deleteError.value = "";
+  try {
+    await api.deleteOrganization(target, target);
+    await router.replace("/organizations");
+  } catch (cause) {
+    deleteError.value = errorMessage(cause, t, { 409: "organizationDeleteBlocked" });
+  } finally {
+    deleting.value = false;
+  }
+}
 watch(
   slug,
   () => {
+    deleteError.value = "";
     formError.value = "";
     memberError.value = "";
     memberNotice.value = "";
@@ -220,6 +238,23 @@ watch(
               </button>
             </div>
           </form>
+        </section>
+        <section v-if="organization?.role === 'owner'" class="box box-danger">
+          <div class="box-header workspace-panel-heading">
+            <div>
+              <h2>{{ t("dangerZone") }}</h2>
+              <p class="muted">{{ t("organizationDeleteHint") }}</p>
+            </div>
+          </div>
+          <div class="box-form">
+            <TypeToConfirm
+              :expected="slug"
+              :action-label="t('organizationDeleteAction')"
+              :busy="deleting"
+              @confirm="deleteOrganization"
+            />
+            <NoticeBar v-if="deleteError" intent="error">{{ deleteError }}</NoticeBar>
+          </div>
         </section>
       </div>
     </div>

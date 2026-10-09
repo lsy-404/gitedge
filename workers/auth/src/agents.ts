@@ -91,7 +91,7 @@ async function repositoryForOwner(
   const role = await repositoryRole(env.DB, repositoryId, userId);
   if (!role) return null;
   const row = await env.DB.prepare(
-    "SELECT r.id,r.artifact_name AS artifactName,n.slug AS owner,r.slug,r.archived,r.agents_enabled AS agentsEnabled,0 AS writable FROM repositories r JOIN namespaces n ON n.id=r.namespace_id WHERE r.id=?"
+    "SELECT r.id,r.artifact_name AS artifactName,n.slug AS owner,r.slug,r.archived,r.agents_enabled AS agentsEnabled,0 AS writable FROM repositories r JOIN namespaces n ON n.id=r.namespace_id WHERE r.id=? AND r.deleted_at IS NULL"
   )
     .bind(repositoryId)
     .first<RepositoryRow>();
@@ -100,7 +100,7 @@ async function repositoryForOwner(
 
 const activeSessionSelect =
   sessionSelect +
-  " JOIN repositories r ON r.id=s.repository_id LEFT JOIN namespace_memberships m ON m.namespace_id=r.namespace_id AND m.user_id=s.user_id LEFT JOIN repository_collaborators c ON c.repository_id=r.id AND c.user_id=s.user_id WHERE s.status='active' AND s.expires_at>? AND a.disabled_at IS NULL AND r.agents_enabled=1 AND (m.user_id IS NOT NULL OR c.role IN ('write','admin') OR (s.permission='read' AND c.role='read'))";
+  " JOIN repositories r ON r.id=s.repository_id LEFT JOIN namespace_memberships m ON m.namespace_id=r.namespace_id AND m.user_id=s.user_id LEFT JOIN repository_collaborators c ON c.repository_id=r.id AND c.user_id=s.user_id WHERE s.status='active' AND s.expires_at>? AND a.disabled_at IS NULL AND r.deleted_at IS NULL AND r.agents_enabled=1 AND (m.user_id IS NOT NULL OR c.role IN ('write','admin') OR (s.permission='read' AND c.role='read'))";
 
 export async function authenticateAgentSession(
   env: AgentAuthEnv,

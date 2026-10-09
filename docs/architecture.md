@@ -12,4 +12,6 @@ Deploy reads a strict manifest and its declared files from Git. It binds the rev
 
 Actions parses `.github/workflows/*.yml` from a bounded source snapshot and runs each run in its own Container, limited in time, logs and input, with networking off by default. Git notifies it on push through `/internal/push`. Its Durable Objects use only their own storage and container. Only Actions may publish workflow check records; Forge stores them keyed to the exact commit OID.
 
+Repository deletion is a soft delete in Forge (`deleted_at`, `purge_after`); the repository name is released by renaming the row to a tombstone slug and dropping its path aliases. Forge's scheduled purge asks Auth to revoke agent sessions, asks Git (`/internal/purge`, reachable only through the service binding) to delete the Artifacts repository and session forks, and finally deletes the D1 rows. Each step is persisted in `purge_state`, so interrupted runs resume without repeating work and no distributed transaction is needed.
+
 Rate limiting uses sharded SQLite Durable Objects. Repository storage and refs remain entirely under Artifacts.

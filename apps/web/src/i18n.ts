@@ -1,4 +1,5 @@
 import repositorySettingsMessages from "./i18n/repositorySettings";
+import lifecycleMessages from "./i18n/lifecycle";
 import { settingsMessages } from "./i18n/settings";
 import { createI18n } from "vue-i18n";
 import github from "./i18n/github";
@@ -847,6 +848,7 @@ export const i18n = createI18n({
       ...collaborationMessages["zh-CN"],
       ...settingsMessages["zh-CN"],
       ...repositorySettingsMessages["zh-CN"],
+      ...lifecycleMessages["zh-CN"],
       ...avatarMessages["zh-CN"],
       ...agentsMessages["zh-CN"],
       ...repositoryControlsMessages["zh-CN"],
@@ -862,6 +864,7 @@ export const i18n = createI18n({
       ...collaborationMessages.en,
       ...settingsMessages.en,
       ...repositorySettingsMessages.en,
+      ...lifecycleMessages.en,
       ...avatarMessages.en,
       ...agentsMessages.en,
       ...repositoryControlsMessages.en,

@@ -14,6 +14,12 @@ import {
 import { branchRules, matchingBranchRules } from "../../../src/worker/common/branch-protection";
 import { repositoryControls } from "./controls";
 import {
+  deleteOrganization,
+  deletedRepositories,
+  purgeDueRepositories,
+  repositoryLifecycle,
+} from "./lifecycle";
+import {
   AddOrganizationMemberInputSchema,
   CreateOrganizationInputSchema,
   CreateIssueInputSchema,
@@ -109,7 +115,7 @@ function actorKey(actor: Actor): string {
 
 async function repositoryById(env: ForgeEnv, repositoryId: string): Promise<RepositoryRow | null> {
   return env.DB.prepare(
-    "SELECT repositories.*, namespaces.slug AS owner FROM repositories JOIN namespaces ON namespaces.id = repositories.namespace_id WHERE repositories.id = ?"
+    "SELECT repositories.*, namespaces.slug AS owner FROM repositories JOIN namespaces ON namespaces.id = repositories.namespace_id WHERE repositories.id = ? AND repositories.deleted_at IS NULL"
   )
     .bind(repositoryId)
     .first<RepositoryRow>();
@@ -1712,12 +1718,18 @@ export default {
           return new Response(null, { status: 204 });
         }
       }
+      if (request.method === "DELETE" && parts.length === 2) {
+        if (!organizationOwner(organization))
+          return errorResponse(403, "forbidden", "Organization owner access is required.");
+        return deleteOrganization(env, request, organization, user);
+      }
       return errorResponse(405, "method_not_allowed", "Method is not allowed for this endpoint.");
     }
+    if (parts[0] === "deleted-repositories") return deletedRepositories(env, request, user, parts);
 
     if (request.method === "GET" && url.pathname === "/repositories") {
       const rows = await env.DB.prepare(
-        "SELECT repositories.*, namespaces.slug AS owner, CASE WHEN m.user_id IS NOT NULL OR c.role IN ('write','admin') THEN 1 ELSE 0 END AS can_write FROM repositories JOIN namespaces ON namespaces.id = repositories.namespace_id LEFT JOIN namespace_memberships m ON m.namespace_id=repositories.namespace_id AND m.user_id=? LEFT JOIN repository_collaborators c ON c.repository_id=repositories.id AND c.user_id=? WHERE m.user_id IS NOT NULL OR c.user_id IS NOT NULL ORDER BY repositories.updated_at DESC LIMIT 1001"
+        "SELECT repositories.*, namespaces.slug AS owner, CASE WHEN m.user_id IS NOT NULL OR c.role IN ('write','admin') THEN 1 ELSE 0 END AS can_write FROM repositories JOIN namespaces ON namespaces.id = repositories.namespace_id LEFT JOIN namespace_memberships m ON m.namespace_id=repositories.namespace_id AND m.user_id=? LEFT JOIN repository_collaborators c ON c.repository_id=repositories.id AND c.user_id=? WHERE repositories.deleted_at IS NULL AND (m.user_id IS NOT NULL OR c.user_id IS NOT NULL) ORDER BY repositories.updated_at DESC LIMIT 1001"
       )
         .bind(user.id, user.id)
         .all<RepositoryRow>();
@@ -1737,7 +1749,7 @@ export default {
       const limits = parseUserGroupLimits(env.USER_GROUP_LIMITS_JSON);
       const groupLimits = limits[user.groupKey] ?? limits.free;
       const repositoryCount = await env.DB.prepare(
-        "SELECT COUNT(*) AS count FROM repositories WHERE created_by = ?"
+        "SELECT COUNT(*) AS count FROM repositories WHERE created_by = ? AND deleted_at IS NULL"
       )
         .bind(user.id)
         .first<{ count: number }>();
@@ -1912,11 +1924,16 @@ export default {
       const memory = await memoryTaskRequest(env, request, repository, viewer, parts.slice(2));
       if (memory) return memory;
     }
+    const lifecycle = await repositoryLifecycle(env, request, repository, user, parts);
+    if (lifecycle) return lifecycle;
     const controls = await repositoryControls(env, request, repository, user, parts);
     if (controls) return controls;
     const feature = await featureRequest(env, user, repository, parts, request);
     if (feature) return feature;
 
     return errorResponse(405, "method_not_allowed", "Method is not allowed for this endpoint.");
+  },
+  async scheduled(_controller: ScheduledController, env: ForgeEnv): Promise<void> {
+    await purgeDueRepositories(env);
   },
 };

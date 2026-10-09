@@ -29,12 +29,12 @@ export async function publicProfile(
     }>();
   if (!profile) return errorResponse(404, "not_found", "Profile was not found.");
   const repos = await env.DB.prepare(
-    "SELECT r.*,n.slug AS owner FROM repositories r JOIN namespaces n ON n.id=r.namespace_id WHERE n.slug=? AND r.visibility='public' AND r.artifact_name IS NOT NULL ORDER BY r.updated_at DESC LIMIT 101"
+    "SELECT r.*,n.slug AS owner FROM repositories r JOIN namespaces n ON n.id=r.namespace_id WHERE n.slug=? AND r.deleted_at IS NULL AND r.visibility='public' AND r.artifact_name IS NOT NULL ORDER BY r.updated_at DESC LIMIT 101"
   )
     .bind(profile.owner)
     .all<RepositoryRow>();
   const sameName = await env.DB.prepare(
-    "SELECT r.*,n.slug AS owner FROM repositories r JOIN namespaces n ON n.id=r.namespace_id WHERE n.slug=? AND r.slug=? AND r.visibility='public' AND r.artifact_name IS NOT NULL"
+    "SELECT r.*,n.slug AS owner FROM repositories r JOIN namespaces n ON n.id=r.namespace_id WHERE n.slug=? AND r.slug=? AND r.deleted_at IS NULL AND r.visibility='public' AND r.artifact_name IS NOT NULL"
   )
     .bind(profile.owner, profile.owner)
     .first<RepositoryRow>();

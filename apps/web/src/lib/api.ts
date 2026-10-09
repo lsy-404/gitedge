@@ -13,6 +13,7 @@ import type {
   OrganizationMember,
   User,
 } from "../../../../packages/contracts/src/account";
+import type { DeletedRepository } from "../../../../packages/contracts/src/lifecycle";
 import type { DeployPlan } from "../../../../packages/contracts/src/deploy";
 import type {
   AgentProfile,
@@ -96,6 +97,7 @@ export type {
   OrganizationMember,
   User,
 } from "../../../../packages/contracts/src/account";
+export type { DeletedRepository } from "../../../../packages/contracts/src/lifecycle";
 export type {
   EditRepositoryFileInput,
   RepositoryBranch,
@@ -487,6 +489,33 @@ export const api = {
     );
     return envelope?.data.revocationIncomplete === true;
   },
+  deleteOrganization: (slug: string, confirm: string) =>
+    request(
+      `/api/forge/organizations/${encodeURIComponent(slug)}`,
+      { method: "DELETE", body: JSON.stringify({ confirm }) },
+      true
+    ),
+  deleteRepository: (repositoryId: string, confirm: string) =>
+    request<{ deletedAt: number; purgeAfter: number }>(
+      `/api/forge/repositories/${encodeURIComponent(repositoryId)}`,
+      { method: "DELETE", body: JSON.stringify({ confirm }) }
+    ),
+  transferRepository: (repositoryId: string, payload: { owner: string; confirm: string }) =>
+    request<Repository & RevocationOutcome>(repositoryPath(repositoryId, "transfer"), {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  deletedRepositories: () => requestPage<DeletedRepository>("/api/forge/deleted-repositories"),
+  restoreRepository: (repositoryId: string) =>
+    request<Repository>(
+      `/api/forge/deleted-repositories/${encodeURIComponent(repositoryId)}/restore`,
+      { method: "POST" }
+    ),
+  purgeRepository: (repositoryId: string, confirm: string) =>
+    request<{ purged: boolean }>(
+      `/api/forge/deleted-repositories/${encodeURIComponent(repositoryId)}`,
+      { method: "DELETE", body: JSON.stringify({ confirm }) }
+    ),
   refs: (repositoryId: string) => request<GitRef[]>(gitPath(repositoryId, "refs")),
   tree: (repositoryId: string, ref: string, path: string) =>
     request<GitTree>(gitPath(repositoryId, `tree${query({ ref, path })}`)),

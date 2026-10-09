@@ -88,6 +88,12 @@ jobs:
 
 Workflow check names are their file paths, for example `.github/workflows/verify.yml`. Only the Actions service may publish these system CI checks. Agent webhooks use an encrypted signing secret configured through `WEBHOOK_ENCRYPTION_KEY`; see [configuration](docs/configuration.md#auth). Events are signed with HMAC-SHA256 and retried up to five times.
 
+## Repository and organization lifecycle
+
+Repository settings include a danger zone. Deleting a repository requires typing its full name; it then behaves as missing everywhere and is listed under Recently deleted on the dashboard for 7 days, where it can be restored (unless its name was taken in the meantime) or purged immediately. A scheduled job in the Forge worker (every 15 minutes) permanently removes expired repositories: it revokes agent sessions, deletes the Artifacts repository and session forks, then deletes the database rows, resuming safely after any interruption.
+
+Transferring a repository moves it to your own account or an organization you own. Old web URLs and Git remotes keep redirecting, explicit collaborators keep their roles, inherited access follows the new owner and active agent sessions are revoked, so agents must start new sessions. Deleting an organization requires its slug and an empty organization: transfer or delete every repository first, and wait for deleted ones to be purged (or purge them immediately). Redirect aliases that pointed into a deleted organization are removed with it.
+
 ## Private repository access responses
 
 Configure `PRIVATE_REPOSITORY_RESPONSE` in `workers/gateway/wrangler.jsonc` and redeploy the Gateway:
