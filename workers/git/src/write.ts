@@ -7,7 +7,7 @@ import { resolveCommit } from "./read";
 
 export class GitWriteConflict extends Error {}
 export class GitWriteInputError extends Error {}
-const ZERO_OID = "0".repeat(40);
+export const ZERO_OID = "0".repeat(40);
 export function editablePath(path: string): boolean {
   return (
     path.length <= 1000 &&

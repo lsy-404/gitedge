@@ -99,6 +99,11 @@ export function requiredAccessTokenScope(
 ): AccessTokenScope {
   const reading = method === "GET" || method === "HEAD";
   if (service === "forge" && parts[0] === "organizations") return reading ? "org:read" : "admin";
+  // Marking notifications read only changes the caller's inbox, so it rides on read access.
+  if (service === "forge" && parts[0] === "notifications") return "repo:read";
+  if (service === "forge" && parts[0] === "notification-preferences")
+    return reading ? "repo:read" : "admin";
+  if (service === "forge" && parts[0] === "repositories" && parts[2] === "webhooks") return "admin";
   if (reading) return "repo:read";
   if (service === "git") return parts[2] === "merge" ? "pulls:write" : "repo:write";
   if (service === "actions") return "repo:write";

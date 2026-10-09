@@ -1,5 +1,6 @@
 import { repositoryRole, writableRole } from "../../../src/worker/common/repositories";
 import { agentEvent } from "./agent-events";
+import { assignmentNotificationStatement } from "./notifications";
 import {
   AgentAssignmentPolicySchema,
   type AgentAssignmentPolicy,
@@ -172,7 +173,7 @@ export async function replaceAssignments(
   env: ForgeEnv,
   repository: RepositoryRow,
   user: TrustedUser,
-  target: { kind: TaskLinkKind; id: string },
+  target: { kind: TaskLinkKind; id: string; number: number },
   input: SetAssignmentsInput
 ): Promise<Response | null> {
   const logger = createLogger(env.LOG_LEVEL, { service: "forge" });
@@ -214,6 +215,14 @@ export async function replaceAssignments(
           user.id,
           now
         )
+      ),
+      ...assignmentNotificationStatement(
+        env.DB,
+        repository,
+        user,
+        target,
+        input.role,
+        added.filter((ref) => ref.kind === "user").map((ref) => ref.id)
       ),
     ]);
   }

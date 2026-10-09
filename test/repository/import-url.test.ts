@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { repositoryNameFromUrl, validateImportUrl } from "../../packages/contracts/src/import-url";
 import { canTransition, IMPORT_TRANSITIONS } from "../../workers/forge/src/imports";
-import { isNonPublicAddress, resolvePublicHost } from "../../workers/git/src/public-host";
+import { isNonPublicAddress, resolvePublicHost } from "../../src/worker/common/public-host";
 
 describe("import URL validation", () => {
   it("accepts public https remotes and strips query and fragment", () => {

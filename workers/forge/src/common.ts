@@ -14,6 +14,7 @@ export type ForgeEnv = {
   readonly AUTH?: { fetch(request: Request): Promise<Response> };
   readonly GIT: { fetch(request: Request): Promise<Response> };
   readonly LOG_LEVEL?: string;
+  readonly WEBHOOK_ENCRYPTION_KEY?: string;
   readonly USER_GROUP_LIMITS_JSON?: string;
 };
 export type RepositoryRow = {

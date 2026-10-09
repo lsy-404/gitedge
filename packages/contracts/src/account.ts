@@ -19,6 +19,7 @@ export const ReservedAccountIdentifiers: ReadonlySet<string> = new Set([
   "login",
   "logout",
   "new",
+  "notifications",
   "organizations",
   "profile",
   "pulls",

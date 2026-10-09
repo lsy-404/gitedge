@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { createLogger } from "../../../src/worker/common/logger";
-import { parseJson, type ForgeEnv } from "./common";
+import { parseJson, type ForgeEnv, type RepositoryRow } from "./common";
+import { outcomeNotificationStatement } from "./notifications";
+import { checkRunWebhook, queueWebhookEvent } from "./webhook-events";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 
 const CheckInput = z
@@ -29,7 +31,8 @@ function checkStatement(
   pullId: string,
   status: string,
   conclusion: string | null,
-  summary: string
+  summary: string,
+  now: number
 ): D1PreparedStatement {
   return db
     .prepare(
@@ -46,11 +49,17 @@ function checkStatement(
       conclusion,
       summary,
       run.created_at,
-      Date.now()
+      now
     );
 }
 
-export async function actionsCheck(request: Request, env: ForgeEnv): Promise<Response> {
+const CI_SENDER = { id: "gitedge-actions", identifier: "gitedge-actions" } as const;
+
+export async function actionsCheck(
+  request: Request,
+  env: ForgeEnv,
+  loadRepository: (repositoryId: string) => Promise<RepositoryRow | null>
+): Promise<Response> {
   if (new URL(request.url).hostname !== "forge.internal" || request.method !== "POST")
     return errorResponse(404, "not_found", "Endpoint was not found.");
   const parsed = CheckInput.safeParse(await parseJson(request));
@@ -66,10 +75,10 @@ export async function actionsCheck(request: Request, env: ForgeEnv): Promise<Res
     .first<{ id: string }>();
   if (latest?.id !== run.id) return dataResponse({ superseded: true });
   const pulls = await env.DB.prepare(
-    "SELECT id, merge_started_at FROM forge_pull_requests WHERE repository_id=? AND head_ref=? AND head_session_id IS NULL AND state='open' LIMIT 101"
+    "SELECT id, number, merge_started_at FROM forge_pull_requests WHERE repository_id=? AND head_ref=? AND head_session_id IS NULL AND state='open' LIMIT 101"
   )
     .bind(run.repository_id, run.source_ref)
-    .all<{ id: string; merge_started_at: number | null }>();
+    .all<{ id: string; number: number; merge_started_at: number | null }>();
   if (pulls.results.length > 100)
     return errorResponse(413, "pull_limit", "Too many pull requests for this head.");
   if (
@@ -78,19 +87,60 @@ export async function actionsCheck(request: Request, env: ForgeEnv): Promise<Res
     )
   )
     return errorResponse(409, "merge_in_progress", "Retry check delivery after the active merge.");
-  if (pulls.results.length > 0)
+  const repository = pulls.results.length > 0 ? await loadRepository(run.repository_id) : null;
+  if (pulls.results.length > 0) {
+    const now = Date.now();
     await env.DB.batch(
-      pulls.results.map((pull) =>
-        checkStatement(
-          env.DB,
-          run,
-          pull.id,
-          parsed.data.status,
-          parsed.data.conclusion,
-          parsed.data.summary
-        )
-      )
+      pulls.results.flatMap((pull) => {
+        const applied = {
+          sql: "EXISTS (SELECT 1 FROM forge_check_runs WHERE pull_request_id = ? AND commit_oid = ? AND name = ? AND actor_key = 'ci:gitedge-actions' AND updated_at = ?)",
+          binds: [pull.id, run.commit_oid, run.path, now],
+        };
+        const number = pull.number;
+        return [
+          checkStatement(
+            env.DB,
+            run,
+            pull.id,
+            parsed.data.status,
+            parsed.data.conclusion,
+            parsed.data.summary,
+            now
+          ),
+          ...(parsed.data.conclusion === "failure"
+            ? [
+                outcomeNotificationStatement(
+                  env.DB,
+                  { id: run.repository_id },
+                  null,
+                  { kind: "pull_request", id: pull.id, number },
+                  "check_failed",
+                  "owners",
+                  applied
+                ),
+              ]
+            : []),
+          ...(repository
+            ? [
+                queueWebhookEvent(
+                  env.DB,
+                  run.repository_id,
+                  checkRunWebhook(repository, CI_SENDER, {
+                    name: run.path,
+                    status: parsed.data.status,
+                    conclusion: parsed.data.conclusion,
+                    commitOid: run.commit_oid,
+                    summary: parsed.data.summary,
+                    pullRequestNumber: number,
+                  }),
+                  applied
+                ),
+              ]
+            : []),
+        ];
+      })
     );
+  }
   createLogger(env.LOG_LEVEL, { service: "forge", repoId: run.repository_id }).info(
     "actions:check-published",
     { runId: run.id, count: pulls.results.length, oid: run.commit_oid }
@@ -122,7 +172,8 @@ export async function attachActionChecks(
         pullId,
         run.check_status ?? "queued",
         run.check_conclusion,
-        `GitEdge Actions run ${run.id}`
+        `GitEdge Actions run ${run.id}`,
+        Date.now()
       )
     );
   }

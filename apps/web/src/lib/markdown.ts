@@ -10,6 +10,7 @@ import bash from "highlight.js/lib/languages/bash";
 import python from "highlight.js/lib/languages/python";
 import sql from "highlight.js/lib/languages/sql";
 import yaml from "highlight.js/lib/languages/yaml";
+import { findMentions } from "../../../../packages/contracts/src/mentions";
 
 for (const [name, language] of Object.entries({
   javascript,
@@ -59,7 +60,39 @@ export function highlightedCode(source: string, filename: string = ""): string {
     ? hljs.highlight(source, { language, ignoreIllegals: true }).value
     : escapeHtml(source);
 }
-export function renderMarkdown(source: string, baseUrl?: string, allowImages = false): string {
+function linkMentions(fragment: DocumentFragment): void {
+  const walker = document.createTreeWalker(fragment, NodeFilter.SHOW_TEXT);
+  const texts: Text[] = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode())
+    if (node instanceof Text && !node.parentElement?.closest("a, code, pre")) texts.push(node);
+  for (const node of texts) {
+    const mentions = findMentions(node.data);
+    if (mentions.length === 0) continue;
+    const parts: Array<string | HTMLAnchorElement> = [];
+    let cursor = 0;
+    for (const mention of mentions) {
+      parts.push(node.data.slice(cursor, mention.start));
+      const link = document.createElement("a");
+      link.href =
+        mention.kind === "user"
+          ? `/${encodeURIComponent(mention.login)}`
+          : `/${encodeURIComponent(mention.owner)}/@${encodeURIComponent(mention.handle)}`;
+      link.className = "mention";
+      link.setAttribute("rel", "noreferrer noopener");
+      link.textContent = node.data.slice(mention.start, mention.end);
+      parts.push(link);
+      cursor = mention.end;
+    }
+    parts.push(node.data.slice(cursor));
+    node.replaceWith(...parts);
+  }
+}
+export function renderMarkdown(
+  source: string,
+  baseUrl?: string,
+  allowImages = false,
+  mentions = false
+): string {
   const renderer = new Renderer();
   if (!allowImages) {
     renderer.html = ({ text }) => escapeHtml(text);
@@ -132,6 +165,7 @@ export function renderMarkdown(source: string, baseUrl?: string, allowImages = f
       element.setAttribute("referrerpolicy", "no-referrer");
     }
   }
+  if (mentions) linkMentions(fragment);
   for (const block of fragment.querySelectorAll("pre code")) {
     const language = block.className.match(/language-([\w-]+)/)?.[1] ?? "";
     block.innerHTML = highlightedCode(block.textContent ?? "", language);

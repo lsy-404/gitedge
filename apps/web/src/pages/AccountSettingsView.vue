@@ -12,11 +12,13 @@ import BrowserSessions from "../components/BrowserSessions.vue";
 import AccountUsage from "../components/AccountUsage.vue";
 import AccountActivity from "../components/AccountActivity.vue";
 import AccountDataSettings from "../components/AccountDataSettings.vue";
+import NotificationPreferences from "../components/NotificationPreferences.vue";
 import "../styles/settings.css";
 const route = useRoute();
 const sections = [
   "profile",
   "preferences",
+  "notifications",
   "tokens",
   "security",
   "credentials",
@@ -41,6 +43,7 @@ const section = computed(() =>
         v-if="section === 'profile' || section === 'preferences'"
         :section="section"
       />
+      <NotificationPreferences v-else-if="section === 'notifications'" />
       <AccessTokenSettings v-else-if="section === 'tokens'" />
       <AccountSecuritySettings v-else-if="section === 'security'" />
       <CredentialSettings v-else-if="section === 'credentials'" />

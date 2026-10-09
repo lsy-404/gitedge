@@ -88,6 +88,23 @@
   align-items: center;
   gap: var(--space-2);
 }
+.notification-bell {
+  position: relative;
+}
+.notification-badge {
+  position: absolute;
+  top: calc(var(--space-1) * -1);
+  right: calc(var(--space-1) * -1);
+  min-width: var(--space-4);
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-full);
+  background: var(--accent-emphasis);
+  color: var(--fg-on-accent);
+  font-size: var(--font-size-meta);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--space-4);
+  text-align: center;
+}
 details.user-menu {
   border: 0;
   background: transparent;

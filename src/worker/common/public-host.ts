@@ -1,4 +1,4 @@
-import { readTextLimited } from "../../../src/worker/common/readText";
+import { readTextLimited } from "./readText";
 
 export type HostResolution =
   | { readonly ok: true }

@@ -5,6 +5,11 @@ import { useRoute, useRouter } from "vue-router";
 import AppIcon from "./components/AppIcon.vue";
 import BrowserAccountMenu from "./components/BrowserAccountMenu.vue";
 import { api } from "./lib/api";
+import {
+  notificationState,
+  startNotificationPolling,
+  stopNotificationPolling,
+} from "./lib/notifications";
 import { clearSession, refreshSession, sessionState } from "./lib/session";
 import {
   listenForBrowserIdentityChanges,
@@ -223,6 +228,14 @@ function refreshIdentityOnFocus() {
   void refreshIdentityOnReturn();
 }
 watch(() => route.fullPath, closeMenus);
+watch(
+  () => (sessionState.user && sessionState.view === "account" ? sessionState.user.id : null),
+  (userId) => {
+    if (userId) startNotificationPolling();
+    else stopNotificationPolling();
+  },
+  { immediate: true }
+);
 watch(locale, (value) => {
   document.documentElement.lang = value;
 });
@@ -241,6 +254,7 @@ onMounted(() => {
   document.addEventListener("visibilitychange", refreshIdentityWhenVisible);
 });
 onUnmounted(() => {
+  stopNotificationPolling();
   document.removeEventListener("keydown", keyboard);
   document.removeEventListener("pointerdown", dismissHeaderMenus);
   window.removeEventListener("focus", refreshIdentityOnFocus);
@@ -304,6 +318,23 @@ if (!sessionState.checked) void refreshSession();
           </button>
           <div class="global-actions">
             <template v-if="sessionState.user && !guestView && !authPage">
+              <RouterLink
+                class="btn icon-button notification-bell"
+                to="/notifications"
+                :aria-label="
+                  notificationState.unread
+                    ? t('notificationsBellLabel', { count: notificationState.unread })
+                    : t('notificationsBellEmpty')
+                "
+              >
+                <AppIcon name="bell" />
+                <span
+                  v-if="notificationState.unread"
+                  class="notification-badge"
+                  aria-hidden="true"
+                  >{{ notificationState.capped ? "99+" : notificationState.unread }}</span
+                >
+              </RouterLink>
               <details
                 ref="createMenu"
                 class="dropdown create-menu"

@@ -1,7 +1,8 @@
-import type {
-  AgentWebhookEvent,
-  RevokeAgentSessionsInput,
-  TrustedUser,
+import {
+  extractMentions,
+  type AgentWebhookEvent,
+  type RevokeAgentSessionsInput,
+  type TrustedUser,
 } from "../../../packages/contracts/src/index";
 import { createLogger } from "../../../src/worker/common/logger";
 import { repositoryRole } from "../../../src/worker/common/repositories";
@@ -77,17 +78,16 @@ export async function mentionAgents(
   target: Record<string, unknown>
 ): Promise<void> {
   if (!env.AUTH || repository.agents_enabled === 0) return;
-  const mentions = [...body.matchAll(/\b([a-z0-9][a-z0-9-]{2,62})\/@([a-z0-9][a-z0-9-]{0,39})\b/g)];
-  const unique = new Map(mentions.map((match) => [`${match[1]}/${match[2]}`, match]));
-  if (unique.size > 10)
+  const { agents: mentions } = extractMentions(body);
+  if (mentions.length > 10)
     createLogger(env.LOG_LEVEL, { service: "forge" }).warn("agent:mentions-truncated", {
-      count: unique.size,
+      count: mentions.length,
     });
-  for (const [, match] of [...unique].slice(0, 10)) {
+  for (const match of mentions.slice(0, 10)) {
     const agent = await env.DB.prepare(
       "SELECT a.id, a.user_id AS ownerId FROM auth_agents a JOIN users u ON u.id=a.user_id WHERE u.identifier=? AND a.handle=? AND a.disabled_at IS NULL"
     )
-      .bind(match[1], match[2])
+      .bind(match.owner, match.handle)
       .first<{ id: string; ownerId: string }>();
     if (!agent) continue;
     if ((await repositoryRole(env.DB, repository.id, agent.ownerId)) === null) {

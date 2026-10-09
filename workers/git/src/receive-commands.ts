@@ -99,3 +99,85 @@ export async function readReceiveCommands(body: ReadableStream<Uint8Array> | nul
     throw error;
   }
 }
+
+const REPORT_LIMIT_BYTES = 65_536;
+
+function packetLines(bytes: Uint8Array): { lines: Uint8Array[]; rest: Uint8Array } | null {
+  const lines: Uint8Array[] = [];
+  let offset = 0;
+  while (bytes.length - offset >= 4) {
+    const header = new TextDecoder().decode(bytes.subarray(offset, offset + 4));
+    if (!/^[0-9a-f]{4}$/i.test(header)) return null;
+    const length = Number.parseInt(header, 16);
+    if (length < 4) {
+      offset += 4;
+      continue;
+    }
+    if (bytes.length - offset < length) break;
+    lines.push(bytes.subarray(offset + 4, offset + length));
+    offset += length;
+  }
+  return { lines, rest: bytes.slice(offset) };
+}
+
+function concat(left: Uint8Array, right: Uint8Array): Uint8Array {
+  const joined = new Uint8Array(left.length + right.length);
+  joined.set(left);
+  joined.set(right, left.length);
+  return joined;
+}
+
+/** Re-frames a plain report line so plain and side-band reports share one parser. */
+function framePacket(payload: Uint8Array): Uint8Array {
+  const header = new TextEncoder().encode((payload.length + 4).toString(16).padStart(4, "0"));
+  return concat(header, payload);
+}
+
+/**
+ * Follows a receive-pack response and collects the refs reported as `ok`, with or without
+ * side-band multiplexing. `accepted()` is null when no parseable report-status was seen.
+ */
+export class ReceiveReport {
+  private pending: Uint8Array = new Uint8Array(0);
+  private report: Uint8Array = new Uint8Array(0);
+  private sideband: boolean | null = null;
+  private broken = false;
+  private fatal = false;
+
+  feed(chunk: Uint8Array): void {
+    if (this.broken) return;
+    const parsed = packetLines(concat(this.pending, chunk));
+    if (!parsed || parsed.rest.length > REPORT_LIMIT_BYTES) {
+      this.broken = true;
+      return;
+    }
+    this.pending = parsed.rest;
+    for (const line of parsed.lines) {
+      this.sideband ??= line[0] === 1 || line[0] === 2 || line[0] === 3;
+      if (this.sideband && line[0] === 3) this.fatal = true;
+      const data = this.sideband ? (line[0] === 1 ? line.subarray(1) : null) : framePacket(line);
+      if (!data) continue;
+      if (this.report.length + data.length > REPORT_LIMIT_BYTES) {
+        this.broken = true;
+        return;
+      }
+      this.report = concat(this.report, data);
+    }
+  }
+
+  accepted(): Set<string> | null {
+    if (this.fatal) return new Set();
+    if (this.broken) return null;
+    const parsed = packetLines(this.report);
+    if (!parsed) return null;
+    const accepted = new Set<string>();
+    let unpacked: boolean | null = null;
+    for (const line of parsed.lines) {
+      const text = new TextDecoder().decode(line).replace(/\n$/, "");
+      if (text.startsWith("unpack ")) unpacked = text === "unpack ok";
+      else if (text.startsWith("ok ")) accepted.add(text.slice(3));
+    }
+    if (unpacked === null) return null;
+    return unpacked ? accepted : new Set();
+  }
+}

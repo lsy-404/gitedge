@@ -7,7 +7,7 @@ import {
 import { createLogger, type Logger } from "../../../src/worker/common/logger";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 import { readJsonLimited } from "../../../src/worker/common/readText";
-import { resolvePublicHost, type HostResolver } from "./public-host";
+import { resolvePublicHost, type HostResolver } from "../../../src/worker/common/public-host";
 
 interface ImportEnv {
   ARTIFACTS: Artifacts;

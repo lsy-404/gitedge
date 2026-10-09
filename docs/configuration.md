@@ -67,9 +67,13 @@ Create a GitHub OAuth application and register the callback URL `https://<gatewa
 
 ## Forge
 
-| Name                     | Kind | Default                        | Purpose                                              |
-| ------------------------ | ---- | ------------------------------ | ---------------------------------------------------- |
-| `USER_GROUP_LIMITS_JSON` | var  | built-in `free`/`team`/`admin` | Same value as on the Gateway; see the Gateway table. |
+| Name                     | Kind   | Default                        | Purpose                                                                     |
+| ------------------------ | ------ | ------------------------------ | --------------------------------------------------------------------------- |
+| `USER_GROUP_LIMITS_JSON` | var    | built-in `free`/`team`/`admin` | Same value as on the Gateway; see the Gateway table.                        |
+| `WEBHOOK_ENCRYPTION_KEY` | secret | none                           | Same key as on Auth; encrypts repository webhook secrets. Webhooks need it. |
+| `LOG_LEVEL`              | var    | logger default                 | Minimum structured log level.                                               |
+
+Forge runs two cron triggers: every 15 minutes for repository purges and retention, and every minute to retry webhook deliveries. Use the same `WEBHOOK_ENCRYPTION_KEY` on Auth and Forge; replacing it makes existing webhook secrets undecryptable until they are rotated. Forge sets `global_fetch_strictly_public` so webhook requests can never reach private addresses.
 
 ## Git
 

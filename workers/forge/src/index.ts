@@ -7,6 +7,26 @@ import { authorizeMerge } from "./merge-policy";
 import { mentionAgents, pullRequestEvent, revokeAgentSessions } from "./agent-events";
 import { publicProfile } from "./profiles";
 import {
+  handleNotifications,
+  outcomeNotificationStatement,
+  purgeReadNotifications,
+  threadNotificationStatements,
+} from "./notifications";
+import {
+  checkRunWebhook,
+  commentWebhook,
+  issueWebhook,
+  pullRequestWebhook,
+  queueWebhookEvent,
+  reviewWebhook,
+} from "./webhook-events";
+import {
+  drainWebhookDeliveries,
+  handlePushEvent,
+  handleRepositoryWebhooks,
+  purgeWebhookDeliveries,
+} from "./webhooks";
+import {
   repositoryRole,
   resolveRepositoryPath,
   writableRole,
@@ -677,10 +697,10 @@ async function featureRequest(
       const number = await nextNumber(env, targetTable, repository.id),
         id = crypto.randomUUID(),
         now = Date.now();
-      await env.DB.prepare(
-        "INSERT INTO forge_issues (id, repository_id, number, author_id, actor_json, title, body, state, labels_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)"
-      )
-        .bind(
+      await env.DB.batch([
+        env.DB.prepare(
+          "INSERT INTO forge_issues (id, repository_id, number, author_id, actor_json, title, body, state, labels_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)"
+        ).bind(
           id,
           repository.id,
           number,
@@ -691,8 +711,26 @@ async function featureRequest(
           JSON.stringify(parsed.data.labels),
           now,
           now
-        )
-        .run();
+        ),
+        ...(await threadNotificationStatements(
+          env,
+          repository,
+          user,
+          { kind: "issue", id, number },
+          { body: parsed.data.body, participants: false }
+        )),
+        queueWebhookEvent(
+          env.DB,
+          repository.id,
+          issueWebhook(repository, user, "opened", {
+            number,
+            title: parsed.data.title,
+            body: parsed.data.body,
+            state: "open",
+            author: user.identifier,
+          })
+        ),
+      ]);
       logger.info("forge:issue-created", {
         repositoryId: repository.id,
         issueNumber: number,
@@ -742,10 +780,10 @@ async function featureRequest(
       const number = await nextNumber(env, targetTable, repository.id),
         id = crypto.randomUUID(),
         now = Date.now();
-      await env.DB.prepare(
-        "INSERT INTO forge_pull_requests (id, repository_id, number, author_id, actor_json, title, body, base_ref, head_ref, head_session_id, draft, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)"
-      )
-        .bind(
+      await env.DB.batch([
+        env.DB.prepare(
+          "INSERT INTO forge_pull_requests (id, repository_id, number, author_id, actor_json, title, body, base_ref, head_ref, head_session_id, draft, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)"
+        ).bind(
           id,
           repository.id,
           number,
@@ -759,8 +797,31 @@ async function featureRequest(
           parsed.data.draft ? 1 : 0,
           now,
           now
-        )
-        .run();
+        ),
+        ...(await threadNotificationStatements(
+          env,
+          repository,
+          user,
+          { kind: "pull_request", id, number },
+          { body: parsed.data.body, participants: false }
+        )),
+        queueWebhookEvent(
+          env.DB,
+          repository.id,
+          pullRequestWebhook(repository, user, "opened", {
+            number,
+            title: parsed.data.title,
+            body: parsed.data.body,
+            state: "open",
+            author: user.identifier,
+            baseRef: parsed.data.baseRef,
+            headRef: parsed.data.headRef,
+            draft: parsed.data.draft,
+            merged: false,
+            mergedOid: null,
+          })
+        ),
+      ]);
       if (repository.actions_enabled === 1 && !parsed.data.headSessionId)
         await attachActionChecks(env, repository.id, id, parsed.data.headRef);
       await mentionAgents(env, repository, user, parsed.data.body, {
@@ -800,10 +861,10 @@ async function featureRequest(
     const id = crypto.randomUUID(),
       now = Date.now();
     const number = await nextNumber(env, "forge_discussions", repository.id);
-    await env.DB.prepare(
-      "INSERT INTO forge_discussions (id, repository_id, number, author_id, actor_json, title, body, category, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)"
-    )
-      .bind(
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO forge_discussions (id, repository_id, number, author_id, actor_json, title, body, category, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)"
+      ).bind(
         id,
         repository.id,
         number,
@@ -814,8 +875,15 @@ async function featureRequest(
         parsed.data.category,
         now,
         now
-      )
-      .run();
+      ),
+      ...(await threadNotificationStatements(
+        env,
+        repository,
+        user,
+        { kind: "discussion", id, number },
+        { body: parsed.data.body, participants: false }
+      )),
+    ]);
     logger.info("forge:discussion-created", {
       repositoryId: repository.id,
       discussionNumber: number,
@@ -874,10 +942,15 @@ async function featureRequest(
       if (!parsed.success) return errorResponse(400, "bad_request", "Invalid comment payload.");
       const id = crypto.randomUUID(),
         now = Date.now();
-      await env.DB.prepare(
-        "INSERT INTO forge_comments (id, repository_id, target_kind, target_id, actor_json, author_id, body, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-      )
-        .bind(
+      const commentTarget = {
+        kind: targetKind,
+        id: String(current.id),
+        number,
+      } as const;
+      await env.DB.batch([
+        env.DB.prepare(
+          "INSERT INTO forge_comments (id, repository_id, target_kind, target_id, actor_json, author_id, body, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        ).bind(
           id,
           repository.id,
           targetKind,
@@ -887,8 +960,27 @@ async function featureRequest(
           parsed.data.body,
           now,
           now
-        )
-        .run();
+        ),
+        ...(await threadNotificationStatements(env, repository, user, commentTarget, {
+          body: parsed.data.body,
+          participants: true,
+        })),
+        ...(targetKind === "discussion"
+          ? []
+          : [
+              queueWebhookEvent(
+                env.DB,
+                repository.id,
+                commentWebhook(
+                  repository,
+                  user,
+                  "created",
+                  { kind: targetKind, number, title: String(current.title) },
+                  { id, body: parsed.data.body }
+                )
+              ),
+            ]),
+      ]);
       await mentionAgents(env, repository, user, parsed.data.body, {
         targetKind,
         targetId: String(current.id),
@@ -934,6 +1026,21 @@ async function featureRequest(
         await env.DB.batch([
           env.DB.prepare("DELETE FROM forge_comments WHERE id = ?").bind(subitem),
           ...(targetKind === "discussion"
+            ? []
+            : [
+                queueWebhookEvent(
+                  env.DB,
+                  repository.id,
+                  commentWebhook(
+                    repository,
+                    user,
+                    "deleted",
+                    { kind: targetKind, number, title: String(current.title) },
+                    { id: subitem, body: comment.body }
+                  )
+                ),
+              ]),
+          ...(targetKind === "discussion"
             ? [
                 env.DB.prepare(
                   "UPDATE forge_discussions SET answer_comment_id = NULL, updated_at = ? WHERE id = ? AND answer_comment_id = ?"
@@ -945,9 +1052,35 @@ async function featureRequest(
       }
       const parsed = CreateCommentInputSchema.safeParse(await parseJson(request));
       if (!parsed.success) return errorResponse(400, "bad_request", "Invalid comment payload.");
-      await env.DB.prepare("UPDATE forge_comments SET body = ?, updated_at = ? WHERE id = ?")
-        .bind(parsed.data.body, Date.now(), subitem)
-        .run();
+      await env.DB.batch([
+        env.DB.prepare("UPDATE forge_comments SET body = ?, updated_at = ? WHERE id = ?").bind(
+          parsed.data.body,
+          Date.now(),
+          subitem
+        ),
+        ...(await threadNotificationStatements(
+          env,
+          repository,
+          user,
+          { kind: targetKind, id: String(current.id), number },
+          { body: parsed.data.body, previousBody: comment.body, participants: false }
+        )),
+        ...(targetKind === "discussion"
+          ? []
+          : [
+              queueWebhookEvent(
+                env.DB,
+                repository.id,
+                commentWebhook(
+                  repository,
+                  user,
+                  "edited",
+                  { kind: targetKind, number, title: String(current.title) },
+                  { id: subitem, body: parsed.data.body }
+                )
+              ),
+            ]),
+      ]);
       const updatedComment = await env.DB.prepare("SELECT * FROM forge_comments WHERE id = ?")
         .bind(subitem)
         .first<Record<string, unknown>>();
@@ -1000,6 +1133,31 @@ async function featureRequest(
                 now
               )
             : []),
+          ...(p.body !== undefined
+            ? await threadNotificationStatements(
+                env,
+                repository,
+                user,
+                { kind: "issue", id: String(current.id), number },
+                { body: p.body, previousBody: String(current.body), participants: false }
+              )
+            : []),
+          queueWebhookEvent(
+            env.DB,
+            repository.id,
+            issueWebhook(
+              repository,
+              user,
+              stateChanged ? (p.state === "closed" ? "closed" : "reopened") : "edited",
+              {
+                number,
+                title: p.title ?? String(current.title),
+                body: p.body ?? String(current.body),
+                state: p.state ?? String(current.state),
+                author: String(current.author),
+              }
+            )
+          ),
         ]);
         if (changed.meta.changes !== 1)
           return errorResponse(409, "conflict", "Issue changed while it was being updated.");
@@ -1018,6 +1176,10 @@ async function featureRequest(
         const p = parsed.data;
         const now = Date.now();
         const stateChanged = p.state !== undefined && p.state !== current.state;
+        const updateApplied = {
+          sql: "EXISTS (SELECT 1 FROM forge_pull_requests WHERE id = ? AND updated_at = ?)",
+          binds: [current.id, now],
+        };
         const [changed] = await env.DB.batch([
           env.DB.prepare(
             "UPDATE forge_pull_requests SET title = COALESCE(?, title), body = COALESCE(?, body), state = COALESCE(?, state), draft = COALESCE(?, draft), updated_at = ?, merge_started_at = NULL, merge_base_oid = NULL, merge_head_oid = NULL WHERE id = ? AND state != 'merged' AND (merge_started_at IS NULL OR merge_started_at < ?)"
@@ -1039,6 +1201,42 @@ async function featureRequest(
                 now
               )
             : []),
+          ...(p.body !== undefined
+            ? await threadNotificationStatements(
+                env,
+                repository,
+                user,
+                { kind: "pull_request", id: String(current.id), number },
+                {
+                  body: p.body,
+                  previousBody: String(current.body),
+                  participants: false,
+                  when: updateApplied,
+                }
+              )
+            : []),
+          queueWebhookEvent(
+            env.DB,
+            repository.id,
+            pullRequestWebhook(
+              repository,
+              user,
+              stateChanged ? (p.state === "closed" ? "closed" : "reopened") : "edited",
+              {
+                number,
+                title: p.title ?? String(current.title),
+                body: p.body ?? String(current.body),
+                state: p.state ?? String(current.state),
+                author: String(current.author),
+                baseRef: String(current.base_ref),
+                headRef: String(current.head_ref),
+                draft: p.draft ?? current.draft === 1,
+                merged: false,
+                mergedOid: null,
+              }
+            ),
+            updateApplied
+          ),
         ]);
         if (changed.meta.changes !== 1)
           return errorResponse(
@@ -1069,19 +1267,28 @@ async function featureRequest(
               "Answer comment must belong to this discussion."
             );
         }
-        const changed = await env.DB.prepare(
-          "UPDATE forge_discussions SET title = COALESCE(?, title), body = COALESCE(?, body), state = COALESCE(?, state), answer_comment_id = CASE WHEN ? THEN ? ELSE answer_comment_id END, updated_at = ? WHERE id = ?"
-        )
-          .bind(
+        const [changed] = await env.DB.batch([
+          env.DB.prepare(
+            "UPDATE forge_discussions SET title = COALESCE(?, title), body = COALESCE(?, body), state = COALESCE(?, state), answer_comment_id = CASE WHEN ? THEN ? ELSE answer_comment_id END, updated_at = ? WHERE id = ?"
+          ).bind(
             p.title ?? null,
             p.body ?? null,
             p.state ?? null,
             p.answerCommentId === null ? 1 : p.answerCommentId ? 1 : 0,
-            p.answerCommentId,
+            p.answerCommentId ?? null,
             Date.now(),
             current.id
-          )
-          .run();
+          ),
+          ...(p.body !== undefined
+            ? await threadNotificationStatements(
+                env,
+                repository,
+                user,
+                { kind: "discussion", id: String(current.id), number },
+                { body: p.body, previousBody: String(current.body), participants: false }
+              )
+            : []),
+        ]);
         if (changed.meta.changes !== 1)
           return errorResponse(409, "conflict", "Discussion changed while it was being updated.");
       }
@@ -1105,7 +1312,11 @@ async function featureRequest(
         env,
         repository,
         user,
-        { kind: targetTable === "forge_issues" ? "issue" : "pull_request", id: String(current.id) },
+        {
+          kind: targetTable === "forge_issues" ? "issue" : "pull_request",
+          id: String(current.id),
+          number,
+        },
         parsed.data
       );
       if (failure) return failure;
@@ -1147,10 +1358,10 @@ async function featureRequest(
         return errorResponse(409, "stale_commit", "The commit is no longer the pull request head.");
       const id = crypto.randomUUID(),
         now = Date.now();
-      await env.DB.prepare(
-        "INSERT INTO forge_reviews (id, repository_id, pull_request_id, actor_json, author_id, actor_key, state, body, commit_oid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-      )
-        .bind(
+      await env.DB.batch([
+        env.DB.prepare(
+          "INSERT INTO forge_reviews (id, repository_id, pull_request_id, actor_json, author_id, actor_key, state, body, commit_oid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        ).bind(
           id,
           repository.id,
           String(current.id),
@@ -1161,8 +1372,30 @@ async function featureRequest(
           parsed.data.body,
           parsed.data.commitOid,
           now
-        )
-        .run();
+        ),
+        ...(await threadNotificationStatements(
+          env,
+          repository,
+          user,
+          { kind: "pull_request", id: String(current.id), number },
+          { body: parsed.data.body, participants: true }
+        )),
+        queueWebhookEvent(
+          env.DB,
+          repository.id,
+          reviewWebhook(
+            repository,
+            user,
+            { number, title: String(current.title) },
+            {
+              id,
+              state: parsed.data.state,
+              body: parsed.data.body,
+              commitOid: parsed.data.commitOid,
+            }
+          )
+        ),
+      ]);
       logger.info("forge:review-submitted", {
         repositoryId: repository.id,
         pullRequestNumber: number,
@@ -1208,10 +1441,14 @@ async function featureRequest(
       const id = crypto.randomUUID(),
         now = Date.now(),
         key = actorKey(actor);
-      const check = await env.DB.prepare(
-        "INSERT INTO forge_check_runs (id, repository_id, pull_request_id, actor_json, actor_key, name, commit_oid, status, conclusion, summary, details_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(pull_request_id, commit_oid, name, actor_key) DO UPDATE SET actor_json = excluded.actor_json, status = excluded.status, conclusion = excluded.conclusion, summary = excluded.summary, details_url = excluded.details_url, updated_at = excluded.updated_at WHERE (forge_check_runs.status = 'queued' AND excluded.status IN ('queued', 'in_progress', 'completed')) OR (forge_check_runs.status = 'in_progress' AND excluded.status IN ('in_progress', 'completed')) OR (forge_check_runs.status = 'completed' AND excluded.status = 'completed') RETURNING *"
-      )
-        .bind(
+      const checkApplied = {
+        sql: "EXISTS (SELECT 1 FROM forge_check_runs WHERE pull_request_id = ? AND commit_oid = ? AND name = ? AND actor_key = ? AND updated_at = ?)",
+        binds: [String(current.id), parsed.data.commitOid, parsed.data.name, key, now],
+      };
+      const [upserted] = await env.DB.batch<Record<string, unknown>>([
+        env.DB.prepare(
+          "INSERT INTO forge_check_runs (id, repository_id, pull_request_id, actor_json, actor_key, name, commit_oid, status, conclusion, summary, details_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(pull_request_id, commit_oid, name, actor_key) DO UPDATE SET actor_json = excluded.actor_json, status = excluded.status, conclusion = excluded.conclusion, summary = excluded.summary, details_url = excluded.details_url, updated_at = excluded.updated_at WHERE (forge_check_runs.status = 'queued' AND excluded.status IN ('queued', 'in_progress', 'completed')) OR (forge_check_runs.status = 'in_progress' AND excluded.status IN ('in_progress', 'completed')) OR (forge_check_runs.status = 'completed' AND excluded.status = 'completed') RETURNING *"
+        ).bind(
           id,
           repository.id,
           String(current.id),
@@ -1225,8 +1462,35 @@ async function featureRequest(
           parsed.data.detailsUrl,
           now,
           now
-        )
-        .first<Record<string, unknown>>();
+        ),
+        ...(parsed.data.status === "completed" && parsed.data.conclusion === "failure"
+          ? [
+              outcomeNotificationStatement(
+                env.DB,
+                repository,
+                user.id,
+                { kind: "pull_request", id: String(current.id), number },
+                "check_failed",
+                "owners",
+                checkApplied
+              ),
+            ]
+          : []),
+        queueWebhookEvent(
+          env.DB,
+          repository.id,
+          checkRunWebhook(repository, user, {
+            name: parsed.data.name,
+            status: parsed.data.status,
+            conclusion: parsed.data.conclusion,
+            commitOid: parsed.data.commitOid,
+            summary: parsed.data.summary,
+            pullRequestNumber: number,
+          }),
+          checkApplied
+        ),
+      ]);
+      const check = upserted.results[0];
       if (!check)
         return errorResponse(
           409,
@@ -1356,6 +1620,10 @@ async function featureRequest(
         );
       }
       const now = Date.now();
+      const mergeApplied = {
+        sql: "EXISTS (SELECT 1 FROM forge_pull_requests WHERE id = ? AND state = 'merged' AND merged_oid = ? AND updated_at = ?)",
+        binds: [current.id, oid, now],
+      };
       // Task binding and the progress entry share the batch with the merge record.
       await env.DB.batch([
         env.DB.prepare(
@@ -1379,6 +1647,32 @@ async function featureRequest(
           actor,
           now,
         }),
+        outcomeNotificationStatement(
+          env.DB,
+          repository,
+          user.id,
+          { kind: "pull_request", id: String(current.id), number },
+          "merged",
+          "participants",
+          mergeApplied
+        ),
+        queueWebhookEvent(
+          env.DB,
+          repository.id,
+          pullRequestWebhook(repository, user, "closed", {
+            number,
+            title: String(current.title),
+            body: String(current.body),
+            state: "merged",
+            author: String(current.author),
+            baseRef: String(current.base_ref),
+            headRef: String(current.head_ref),
+            draft: false,
+            merged: true,
+            mergedOid: oid,
+          }),
+          mergeApplied
+        ),
       ]);
       const merged = await env.DB.prepare(
         `SELECT pull.*, users.identifier AS author${assignmentsSelect("forge_pull_requests", "pull")} FROM forge_pull_requests AS pull JOIN users ON users.id = pull.author_id WHERE pull.id = ?`
@@ -1588,7 +1882,13 @@ async function databaseHealth(env: ForgeEnv, logger: Logger) {
   }
 }
 
-export default {
+const PERSONAL_RESOURCES: ReadonlySet<string> = new Set([
+  "notifications",
+  "notification-preferences",
+]);
+const WEBHOOK_CRON = "* * * * *";
+
+const worker = {
   async fetch(request: Request, env: ForgeEnv, ctx?: ExecutionContext): Promise<Response> {
     const logger = createLogger(env.LOG_LEVEL, { service: "forge" });
     const url = new URL(request.url);
@@ -1599,7 +1899,10 @@ export default {
     if (request.method === "GET" && url.pathname === "/internal/health/d1")
       return databaseHealth(env, logger);
 
-    if (url.pathname === "/internal/actions-check") return actionsCheck(request, env);
+    if (url.pathname === "/internal/actions-check")
+      return actionsCheck(request, env, (id) => repositoryById(env, id));
+    if (url.pathname === "/internal/push-event")
+      return handlePushEvent(env, request, (id) => repositoryById(env, id));
     const user = trustedUser(request);
     if (url.pathname === "/internal/merge-authorization") {
       if (url.hostname !== "forge.internal" || request.method !== "POST" || !user)
@@ -1654,6 +1957,7 @@ export default {
         );
       if (
         user.token.repositoryIds &&
+        !PERSONAL_RESOURCES.has(parts[0] ?? "") &&
         (parts[0] !== "repositories" ||
           !parts[1] ||
           (parts[1] !== "by-name" && !user.token.repositoryIds.includes(parts[1])))
@@ -1662,7 +1966,8 @@ export default {
     }
     if (
       user.agentSession &&
-      (parts[0] !== "repositories" ||
+      (PERSONAL_RESOURCES.has(parts[0] ?? "") ||
+        parts[0] !== "repositories" ||
         !parts[1] ||
         (parts[1] !== user.agentSession.repositoryId && parts[1] !== "by-name"))
     )
@@ -1673,6 +1978,9 @@ export default {
         "forbidden",
         "Agent sessions cannot resolve repositories by name for writes."
       );
+
+    const personal = await handleNotifications(env, request, user, parts);
+    if (personal) return personal;
 
     const imported = await handleRepositoryImports({
       request,
@@ -2088,12 +2396,31 @@ export default {
     if (lifecycle) return lifecycle;
     const controls = await repositoryControls(env, request, repository, user, parts);
     if (controls) return controls;
+    const hooks = await handleRepositoryWebhooks(env, request, repository, user, parts);
+    if (hooks) return hooks;
     const feature = await featureRequest(env, user, repository, parts, request);
     if (feature) return feature;
 
     return errorResponse(405, "method_not_allowed", "Method is not allowed for this endpoint.");
   },
-  async scheduled(_controller: ScheduledController, env: ForgeEnv): Promise<void> {
+  async scheduled(controller: ScheduledController, env: ForgeEnv): Promise<void> {
+    if (controller.cron === WEBHOOK_CRON) {
+      await drainWebhookDeliveries(env);
+      return;
+    }
     await purgeDueRepositories(env);
+    await purgeReadNotifications(env);
+    await purgeWebhookDeliveries(env);
   },
+};
+
+export default {
+  async fetch(request: Request, env: ForgeEnv, ctx?: ExecutionContext): Promise<Response> {
+    const response = await worker.fetch(request, env, ctx);
+    // Deliver freshly queued webhooks right after a successful write instead of waiting for the next cron tick.
+    if (ctx && response.ok && request.method !== "GET" && request.method !== "HEAD")
+      ctx.waitUntil(drainWebhookDeliveries(env));
+    return response;
+  },
+  scheduled: worker.scheduled,
 };

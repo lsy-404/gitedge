@@ -20,6 +20,7 @@ import StatusState from "./StatusState.vue";
 import BranchProtectionSettings from "./BranchProtectionSettings.vue";
 import AuditLogList from "./AuditLogList.vue";
 import RepositoryCollaborators from "./RepositoryCollaborators.vue";
+import RepositoryWebhooks from "./RepositoryWebhooks.vue";
 import RepositoryDangerActions from "./RepositoryDangerActions.vue";
 import "../styles/settings.css";
 
@@ -30,6 +31,7 @@ type SettingsSection =
   | "merge"
   | "branchRules"
   | "collaborators"
+  | "webhooks"
   | "agents"
   | "audit"
   | "danger";
@@ -40,6 +42,7 @@ const sections = [
   ["merge", "repoSettingsMergeRules"],
   ["branchRules", "repoSettingsBranchRules"],
   ["collaborators", "repoSettingsCollaborators"],
+  ["webhooks", "repoSettingsWebhooks"],
   ["agents", "repoSettingsAgentsMemory"],
   ["audit", "auditLogTitle"],
   ["danger", "repoSettingsDangerZone"],
@@ -507,6 +510,11 @@ watch(() => props.repository.id, load, { immediate: true });
           />
           <RepositoryCollaborators
             v-else-if="activeSection === 'collaborators'"
+            :repository-id="props.repository.id"
+            :can-manage="canManage"
+          />
+          <RepositoryWebhooks
+            v-else-if="activeSection === 'webhooks'"
             :repository-id="props.repository.id"
             :can-manage="canManage"
           />
