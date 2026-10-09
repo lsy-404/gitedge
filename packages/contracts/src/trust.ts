@@ -24,16 +24,12 @@ export function readTrustedUser(request: Request): TrustedUser | null {
   const rawSession = request.headers.get("X-GitEdge-Agent-Session");
   const rawRecent = request.headers.get(RECENT_AUTH_HEADER);
   const recent = rawRecent && /^\d{1,16}$/.test(rawRecent) ? Number(rawRecent) : undefined;
-  const base = {
-    id,
-    identifier,
-    groupKey,
-    ...(recent === undefined ? {} : { recentAuthAt: recent }),
-  };
-  if (!rawSession) return base;
+  if (!rawSession)
+    return { id, identifier, groupKey, ...(recent === undefined ? {} : { recentAuthAt: recent }) };
   try {
+    // Agent sessions never carry a recent human confirmation.
     const parsed = AgentSessionIdentitySchema.safeParse(JSON.parse(rawSession));
-    return parsed.success ? { ...base, agentSession: parsed.data } : null;
+    return parsed.success ? { id, identifier, groupKey, agentSession: parsed.data } : null;
   } catch {
     return null;
   }
@@ -52,7 +48,8 @@ export function trustedHeaders(user?: TrustedUser): Headers {
     headers.set("X-GitEdge-User-Id", user.id);
     headers.set("X-GitEdge-User-Name", user.identifier);
     headers.set("X-GitEdge-User-Group", user.groupKey);
-    if (user.recentAuthAt !== undefined) headers.set(RECENT_AUTH_HEADER, String(user.recentAuthAt));
+    if (user.recentAuthAt !== undefined && !user.agentSession)
+      headers.set(RECENT_AUTH_HEADER, String(user.recentAuthAt));
     if (user.agentSession)
       headers.set("X-GitEdge-Agent-Session", JSON.stringify(user.agentSession));
   }

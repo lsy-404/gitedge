@@ -33,4 +33,24 @@ describe("recent authentication claim", () => {
       readTrustedUser(new Request("https://forge.internal/x", { headers }))?.recentAuthAt
     ).toBeUndefined();
   });
+
+  it("never attaches the claim to an agent session", () => {
+    const agentSession = {
+      id: "s1",
+      agentId: "a1",
+      agentName: "helper",
+      repositoryId: "r1",
+      workspaceName: "w1",
+      permission: "write" as const,
+    };
+    const user = { id: "u1", identifier: "ada", groupKey: "free", agentSession };
+    expect(trustedHeaders({ ...user, recentAuthAt: Date.now() }).has("X-GitEdge-Recent-Auth")).toBe(
+      false
+    );
+    const headers = trustedHeaders(user);
+    headers.set("X-GitEdge-Recent-Auth", String(Date.now()));
+    const read = readTrustedUser(new Request("https://forge.internal/x", { headers }));
+    expect(read?.agentSession?.id).toBe("s1");
+    expect(read?.recentAuthAt).toBeUndefined();
+  });
 });

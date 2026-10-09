@@ -31,7 +31,7 @@ export function findAccountByIdentifier(
 
 /**
  * Replaces the password and revokes every session except `keepTokenHash` (none when null), plus any
- * outstanding reset links.
+ * outstanding reset links and sign-ins still waiting for a second factor.
  */
 export async function replacePassword(
   env: Pick<SecurityEnv, "DB">,
@@ -51,6 +51,9 @@ export async function replacePassword(
     ).bind(userId, keepTokenHash, keepTokenHash),
     env.DB.prepare(
       "DELETE FROM auth_one_time_tokens WHERE user_id = ? AND purpose = 'reset_password'"
+    ).bind(userId),
+    env.DB.prepare(
+      "DELETE FROM auth_challenges WHERE user_id = ? AND purpose = 'login_second_factor'"
     ).bind(userId),
   ]);
 }

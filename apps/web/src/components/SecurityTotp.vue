@@ -18,6 +18,7 @@ const password = ref("");
 const disabling = ref(false);
 const busy = ref(false);
 const error = ref("");
+// QR codes stay dark-on-light in both themes because many scanners cannot read inverted codes.
 const qr = computed(() =>
   enrollment.value
     ? renderSVG(enrollment.value.otpauthUri, {

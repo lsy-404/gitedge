@@ -184,11 +184,13 @@ async function setEmail(request: Request, env: SecurityEnv, session: HumanSessio
   )
     .bind(email, session.user.id)
     .first();
-  await env.DB.prepare(
-    "INSERT INTO auth_emails (user_id, email, verified_at, created_at) VALUES (?, ?, NULL, ?) ON CONFLICT(user_id) DO UPDATE SET email = excluded.email, verified_at = NULL, created_at = excluded.created_at"
-  )
-    .bind(session.user.id, email, Date.now())
-    .run();
+  // Links sent to the previous address stop working once it is replaced.
+  await env.DB.batch([
+    env.DB.prepare(
+      "INSERT INTO auth_emails (user_id, email, verified_at, created_at) VALUES (?, ?, NULL, ?) ON CONFLICT(user_id) DO UPDATE SET email = excluded.email, verified_at = NULL, created_at = excluded.created_at"
+    ).bind(session.user.id, email, Date.now()),
+    env.DB.prepare("DELETE FROM auth_one_time_tokens WHERE user_id = ?").bind(session.user.id),
+  ]);
   // Addresses verified elsewhere get no message, so the response never discloses another account.
   if (!taken) {
     const token = await issueOneTimeToken(env, {

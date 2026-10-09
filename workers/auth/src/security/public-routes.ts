@@ -35,6 +35,11 @@ import { consumeOneTimeToken, issueOneTimeToken, peekOneTimeToken } from "./toke
 import { verifyTotpCode } from "./totp";
 
 const INVALID_SIGN_IN = "Invalid or expired sign-in.";
+const SECOND_FACTOR_ATTEMPTS_PER_MINUTE = 5;
+
+function secondFactorKey(userId: string): string {
+  return `second-factor:${userId}`;
+}
 
 async function readBody<T>(request: Request, schema: z.ZodType<T>): Promise<T | null> {
   const parsed = schema.safeParse(await readJsonLimited(request, SMALL_JSON_BYTES));
@@ -60,6 +65,14 @@ async function completeSecondFactor(request: Request, env: SecurityEnv): Promise
   const pending = await attemptSecondFactorChallenge(env, body.mfaToken);
   if (!pending) return errorResponse(401, "unauthorized", INVALID_SIGN_IN);
   const logger = createLogger(env.LOG_LEVEL, { service: "auth" });
+  // Fresh password sign-ins each grant new attempts, so codes are also limited per account.
+  const limited = await limitAttempts(env.RATE_LIMITER, [
+    [secondFactorKey(pending.userId), SECOND_FACTOR_ATTEMPTS_PER_MINUTE],
+  ]);
+  if (limited) {
+    logger.warn("auth:second-factor-rate-limited", { userId: pending.userId });
+    return limited;
+  }
   const accepted = await verifySecondFactor(
     env,
     request,
@@ -137,11 +150,13 @@ async function resetWithRecoveryCode(request: Request, env: SecurityEnv): Promis
   ]);
   if (limited) return limited;
   const account = await findAccountByIdentifier(env, body.identifier);
-  const accepted =
-    account !== null &&
-    account.passwordEnabled === 1 &&
-    (await consumeRecoveryCode(env, account.id, body.recoveryCode));
-  if (!accepted) return errorResponse(401, "unauthorized", INVALID_RECOVERY);
+  const eligible = account !== null && account.passwordEnabled === 1;
+  // The lookup runs for unknown accounts too, so both outcomes take the same path.
+  const consumed = await consumeRecoveryCode(env, eligible ? account.id : "", body.recoveryCode);
+  if (!eligible || !consumed) {
+    createLogger(env.LOG_LEVEL, { service: "auth" }).warn("auth:recovery-rejected");
+    return errorResponse(401, "unauthorized", INVALID_RECOVERY);
+  }
   await replacePassword(env, account.id, body.newPassword, null);
   createLogger(env.LOG_LEVEL, { service: "auth" }).info("auth:password-reset", {
     userId: account.id,
@@ -206,6 +221,10 @@ async function confirmEmailReset(request: Request, env: SecurityEnv): Promise<Re
   if (methods.length > 0) {
     if (!body.factor)
       return errorResponse(401, "second_factor_required", "A second factor is required.");
+    const factorLimited = await limitAttempts(env.RATE_LIMITER, [
+      [secondFactorKey(subject.userId), SECOND_FACTOR_ATTEMPTS_PER_MINUTE],
+    ]);
+    if (factorLimited) return factorLimited;
     const accepted =
       body.factor.method === "totp"
         ? await verifyTotpCode(env, subject.userId, body.factor.code)
@@ -238,8 +257,12 @@ async function verifyEmail(request: Request, env: SecurityEnv): Promise<Response
       .bind(Date.now(), subject.userId, subject.email)
       .first();
     if (!updated) return invalid;
-  } catch {
+  } catch (cause) {
     // Another account verified this address first.
+    createLogger(env.LOG_LEVEL, { service: "auth" }).warn("account:email-verify-conflict", {
+      userId: subject.userId,
+      reason: cause instanceof Error ? cause.name : "unknown",
+    });
     return invalid;
   }
   createLogger(env.LOG_LEVEL, { service: "auth" }).info("account:email-verified", {

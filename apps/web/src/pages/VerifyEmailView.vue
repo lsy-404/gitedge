@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import AppLink from "../components/AppLink.vue";
 import NoticeBar from "../components/NoticeBar.vue";
 import StatusState from "../components/StatusState.vue";
@@ -10,10 +10,13 @@ import "../styles/auth.css";
 
 const { t } = useI18n();
 const route = useRoute();
+const router = useRouter();
 const state = ref<"working" | "verified" | "failed">("working");
 
 onMounted(async () => {
   const token = typeof route.query.token === "string" ? route.query.token : "";
+  // Keep the single-use token out of browser history and the Referer header.
+  if (route.query.token !== undefined) void router.replace({ path: route.path, query: {} });
   try {
     await api.verifyEmail(token);
     state.value = "verified";

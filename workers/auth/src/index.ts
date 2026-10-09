@@ -18,7 +18,7 @@ import {
 } from "../../../packages/contracts/src/index";
 import { createLogger } from "../../../src/worker/common/logger";
 import { readCookie, issueSession, hashToken, createToken } from "./session";
-import { createPasswordCredential, verifyPassword } from "./password";
+import { createPasswordCredential, rejectPassword, verifyPassword } from "./password";
 import {
   authenticateAgentSession,
   authenticateGitToken,
@@ -260,23 +260,14 @@ export async function login(env: AuthEnv, input: unknown): Promise<ServiceResult
   )
     .bind(identifier)
     .first<UserRow>();
-  if (!user)
-    return {
-      ok: false,
-      status: 401,
-      error: { code: "unauthorized", message: "Invalid identifier or password." },
-    };
-  if (user.password_auth_enabled !== 1)
-    return {
-      ok: false,
-      status: 401,
-      error: { code: "unauthorized", message: "Invalid identifier or password." },
-    };
-  const passwordMatches = await verifyPassword(parsed.data.password, {
-    salt: user.password_salt,
-    hash: user.password_hash,
-  });
-  if (!passwordMatches)
+  const passwordMatches =
+    user && user.password_auth_enabled === 1
+      ? await verifyPassword(parsed.data.password, {
+          salt: user.password_salt,
+          hash: user.password_hash,
+        })
+      : await rejectPassword(parsed.data.password);
+  if (!user || !passwordMatches)
     return {
       ok: false,
       status: 401,

@@ -182,10 +182,11 @@ export async function verifyAssertion(
       },
     });
     if (!verification.verified) return null;
+    // Compare-and-set on the counter that was verified, so concurrent assertions cannot both advance it.
     const updated = await env.DB.prepare(
-      "UPDATE auth_passkeys SET counter = ?, last_used_at = ? WHERE id = ? RETURNING id"
+      "UPDATE auth_passkeys SET counter = ?, last_used_at = ? WHERE id = ? AND counter = ? RETURNING id"
     )
-      .bind(verification.authenticationInfo.newCounter, Date.now(), row.id)
+      .bind(verification.authenticationInfo.newCounter, Date.now(), row.id, row.counter)
       .first();
     return updated ? row.userId : null;
   } catch (cause) {

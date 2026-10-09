@@ -29,13 +29,13 @@ Generate the webhook key with `openssl rand -base64 32`. Agent webhooks return a
 
 ### Account security
 
-Generate the authenticator key with `openssl rand -base64 32` and store it with `wrangler secret put TOTP_ENCRYPTION_KEY`. Set `PUBLIC_ORIGIN` when the public hostname differs from the Worker's request host, because the WebAuthn relying party ID is that hostname.
+Generate the authenticator key with `openssl rand -base64 32` and store it with `wrangler secret put TOTP_ENCRYPTION_KEY`. Keep the key stable: enrolled authenticator secrets are encrypted with it, so replacing or removing it makes every enrolled authenticator code fail until the original key is restored. Set `PUBLIC_ORIGIN` when the public hostname differs from the Worker's request host, because the WebAuthn relying party ID is that hostname. Changing that hostname invalidates registered passkeys.
 
-Email is optional and ships disabled. To enable it, onboard a sending domain (`pnpm exec wrangler email sending enable <domain>`), then add to `workers/auth/wrangler.jsonc`:
+Email is optional and ships disabled. To enable it, onboard a sending domain (`pnpm exec wrangler email sending enable <domain>`), then add the binding to `workers/auth/wrangler.jsonc` and `EMAIL_FROM` to its existing `vars` object:
 
 ```jsonc
 "send_email": [{ "name": "EMAIL" }],
-"vars": { "EMAIL_FROM": "no-reply@<domain>" }
+"vars": { /* existing vars */ "EMAIL_FROM": "no-reply@<domain>" }
 ```
 
 See the [Email Service Workers binding](https://developers.cloudflare.com/email-service/) documentation. See [account security](account-security.md) for behavior.

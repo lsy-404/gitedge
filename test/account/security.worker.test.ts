@@ -314,6 +314,62 @@ describe("authenticator app", () => {
     expect(late.status).toBe(401);
   });
 
+  it("limits second-factor attempts per account across fresh sign-ins", async () => {
+    const account = await register();
+    await enableTotp(account);
+    const limited = { RATE_LIMITER: countingRateLimiter() };
+    const statuses: number[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      const challenge = await data<{ mfaToken: string }>(
+        await call("/login", "POST", "", { identifier: account.identifier, password }, limited)
+      );
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const response = await call(
+          "/login/second-factor",
+          "POST",
+          "",
+          { mfaToken: challenge.mfaToken, factor: { method: "totp", code: "000000" } },
+          limited
+        );
+        statuses.push(response.status);
+      }
+    }
+    expect(statuses.slice(0, 5)).toEqual([401, 401, 401, 401, 401]);
+    expect(statuses.slice(5)).toEqual([429, 429, 429]);
+  });
+
+  it("cancels pending second-factor sign-ins when the password is reset", async () => {
+    const account = await register();
+    const { secret, recoveryCodes } = await enableTotp(account);
+    const pending = await data<{ mfaToken: string }>(await signIn(account));
+    const reset = await call("/recovery/password", "POST", "", {
+      identifier: account.identifier,
+      recoveryCode: recoveryCodes[0],
+      newPassword: "after-reset-password-1",
+    });
+    expect(reset.status).toBe(200);
+    const stale = await call("/login/second-factor", "POST", "", {
+      mfaToken: pending.mfaToken,
+      factor: { method: "totp", code: totpFor(secret, 1) },
+    });
+    expect(stale.status).toBe(401);
+  });
+
+  it("answers unknown usernames and wrong passwords identically", async () => {
+    const account = await register();
+    const known = await call("/login", "POST", "", {
+      identifier: account.identifier,
+      password: "not-the-right-password",
+    });
+    const unknown = await call("/login", "POST", "", {
+      identifier: "no-such-login-account",
+      password: "not-the-right-password",
+    });
+    expect(known.status).toBe(401);
+    expect(unknown.status).toBe(401);
+    expect(await known.text()).toBe(await unknown.text());
+  });
+
   it("disables only with the password and a current code", async () => {
     const account = await register();
     const { secret } = await enableTotp(account);
@@ -470,6 +526,25 @@ describe("email verification and reset", () => {
       newPassword: "reset-by-email-123",
     });
     expect(reset.status).toBe(400);
+  });
+
+  it("invalidates outstanding reset links when the address changes", async () => {
+    const account = await register();
+    await verifiedEmail(account, "old-address@example.test");
+    sent.length = 0;
+    await call("/recovery/email", "POST", "", { email: "old-address@example.test" });
+    const token = sent[0].text.match(/token=([\w-]+)/)?.[1];
+    expect(token).toBeTruthy();
+    const changed = await call("/security/email", "PUT", account.cookie, {
+      email: "new-address@example.test",
+    });
+    expect(changed.status).toBe(202);
+    const reset = await call("/recovery/email/confirm", "POST", "", {
+      token,
+      newPassword: "reset-by-old-address-1",
+    });
+    expect(reset.status).toBe(400);
+    expect((await call("/session", "GET", account.cookie)).status).toBe(200);
   });
 
   it("does not reveal whether an address belongs to an account", async () => {

@@ -41,3 +41,14 @@ export async function verifyPassword(
     return false;
   }
 }
+
+const UNMATCHED_CREDENTIAL = {
+  salt: bytesToBase64(new Uint8Array(16)),
+  hash: bytesToBase64(new Uint8Array(32)),
+};
+
+/** Spends the same derivation cost as a real check so a missing account is not distinguishable by timing. */
+export async function rejectPassword(password: string): Promise<false> {
+  await verifyPassword(password, UNMATCHED_CREDENTIAL);
+  return false;
+}

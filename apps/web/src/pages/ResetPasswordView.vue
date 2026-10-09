@@ -1,18 +1,21 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import AppLink from "../components/AppLink.vue";
 import NoticeBar from "../components/NoticeBar.vue";
 import TextField from "../components/TextField.vue";
 import { ApiError, api, errorMessage } from "../lib/api";
 import "../styles/auth.css";
+import "../styles/security.css";
 
 const { t } = useI18n();
 const route = useRoute();
-const token = computed(() => {
-  const value = route.query.token;
-  return typeof value === "string" ? value : "";
+const router = useRouter();
+const token = ref(typeof route.query.token === "string" ? route.query.token : "");
+// Keep the single-use token out of browser history and the Referer header.
+onMounted(() => {
+  if (route.query.token !== undefined) void router.replace({ path: route.path, query: {} });
 });
 const newPassword = ref("");
 const factorNeeded = ref(false);
@@ -71,7 +74,7 @@ async function submit(): Promise<void> {
           >{{ t("newPassword") }}</TextField
         >
         <template v-if="factorNeeded">
-          <fieldset class="form-stack">
+          <fieldset class="security-choices">
             <legend class="field-label">{{ t("secondFactorTitle") }}</legend>
             <label class="inline-choice"
               ><input v-model="factorMethod" type="radio" value="totp" />
