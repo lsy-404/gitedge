@@ -9,6 +9,14 @@ import {
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
 
+/** The part of the Workers AI binding used for text generation with a configurable model id. */
+export type TextGenerationBinding = {
+  run(
+    model: string,
+    inputs: Record<string, unknown>,
+    options?: AiOptions
+  ): Promise<Record<string, unknown>>;
+};
 export type ForgeEnv = {
   readonly DB: D1Database;
   readonly ARTIFACTS: Artifacts;
@@ -19,6 +27,10 @@ export type ForgeEnv = {
   readonly LOG_LEVEL?: string;
   readonly WEBHOOK_ENCRYPTION_KEY?: string;
   readonly USER_GROUP_LIMITS_JSON?: string;
+  readonly AI?: TextGenerationBinding;
+  readonly AI_SUMMARIES_DISABLED?: string;
+  readonly AI_SUMMARY_MODEL?: string;
+  readonly AI_SUMMARY_HOURLY_LIMIT?: string;
 };
 export type RepositoryRow = {
   id: string;
@@ -43,6 +55,8 @@ export type RepositoryRow = {
   actions_enabled?: number;
   actions_network_enabled?: number;
   online_editing_enabled?: number;
+  ai_summaries_enabled?: number;
+  ai_summaries_private_consent?: number;
   allow_merge_commit?: number;
   allow_squash_merge?: number;
   allow_rebase_merge?: number;
@@ -171,3 +185,4 @@ export function repoResponse(
     canWrite,
   } satisfies Omit<Repository, "createdAt"> & { createdAt: number };
 }
+

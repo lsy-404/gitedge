@@ -34,6 +34,7 @@ import StatusBadge from "./StatusBadge.vue";
 import StatusState from "./StatusState.vue";
 import TextField from "./TextField.vue";
 import TextAreaField from "./TextAreaField.vue";
+import PullRequestAiSummary from "./PullRequestAiSummary.vue";
 import MarkdownContent from "./MarkdownContent.vue";
 import DiffViewer from "./DiffViewer.vue";
 import ReviewThread from "./ReviewThread.vue";
@@ -1571,6 +1572,14 @@ watch(
               </div>
             </div>
           </article>
+
+          <PullRequestAiSummary
+            v-if="section === 'pulls' && detailTab === 'conversation' && item && detailNumber"
+            :repository="repository"
+            :number="detailNumber"
+            :head-oid="diff?.headOid ?? ''"
+            :open="pullIsOpen"
+          />
 
           <section v-if="section === 'pulls' && detailTab === 'files' && diff" class="pull-review">
             <div class="box">

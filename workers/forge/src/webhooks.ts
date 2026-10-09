@@ -28,6 +28,7 @@ import {
   webhookRetryDelay,
 } from "../../../src/worker/common/webhooks";
 import { z } from "zod";
+import { enqueueAiSummariesForPush } from "./ai-summary";
 import { parseJson, type ForgeEnv, type RepositoryRow } from "./common";
 import {
   pushWebhook,
@@ -597,6 +598,12 @@ export async function handlePushEvent(
   const events: WebhookEvent[] = updates.map((update) => pushWebhook(repository, pusher, update));
   await env.DB.batch(events.map((event) => queueWebhookEvent(env.DB, repository.id, event)));
   await followEnablerPushes(env, repository.id, pusher.id, parsed.data.updates);
+  await enqueueAiSummariesForPush(
+    env,
+    repository,
+    pusher.id,
+    updates.map((update) => update.ref)
+  );
   return dataResponse({
     queued: events.length,
     truncated: parsed.data.updates.length > updates.length,

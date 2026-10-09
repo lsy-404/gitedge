@@ -24,9 +24,10 @@ export function setHeadParams(url: URL, head: PullHead | null): void {
   if (head?.repositoryId) url.searchParams.set("headRepositoryId", head.repositoryId);
 }
 
+/** Git comparison of a pull request as `user`; merged pull requests compare their recorded OIDs. */
 export function compareRequest(
   requestUrl: string,
-  repository: RepositoryRow,
+  repository: Pick<RepositoryRow, "id">,
   pull: Record<string, unknown>,
   user: TrustedUser,
   range?: { base: string; head: string }

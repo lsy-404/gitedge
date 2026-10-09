@@ -30,6 +30,7 @@ export * from "./text-lines";
 export * from "./releases";
 export * from "./social";
 export * from "./auto-merge";
+export * from "./ai-summary";
 
 export const ErrorCodeSchema = z.enum([
   "bad_request",

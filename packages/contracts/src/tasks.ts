@@ -163,6 +163,11 @@ export interface RepositorySettings {
   actionsEnabled: boolean;
   actionsNetworkEnabled: boolean;
   onlineEditingEnabled: boolean;
+  /** Read-only: the site has a Workers AI binding and has not switched summaries off. */
+  aiSummariesAvailable: boolean;
+  aiSummariesEnabled: boolean;
+  /** Explicit opt-in to send private repository diffs to Workers AI. */
+  aiSummariesPrivateConsent: boolean;
   allowMergeCommit: boolean;
   allowSquashMerge: boolean;
   allowRebaseMerge: boolean;
@@ -256,6 +261,8 @@ export const UpdateRepositorySettingsInputSchema = z
     actionsEnabled: z.boolean().optional(),
     actionsNetworkEnabled: z.boolean().optional(),
     onlineEditingEnabled: z.boolean().optional(),
+    aiSummariesEnabled: z.boolean().optional(),
+    aiSummariesPrivateConsent: z.boolean().optional(),
     allowMergeCommit: z.boolean().optional(),
     allowSquashMerge: z.boolean().optional(),
     allowRebaseMerge: z.boolean().optional(),

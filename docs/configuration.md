@@ -77,6 +77,30 @@ Create a GitHub OAuth application and register the callback URL `https://<gatewa
 
 Forge runs two cron triggers: every 15 minutes for repository purges and retention, and every minute to re-evaluate auto-merge settings and merge queues (at most two merges per run) and retry webhook deliveries. Use the same `WEBHOOK_ENCRYPTION_KEY` on Auth and Forge; replacing it makes existing webhook secrets undecryptable until they are rotated. Forge sets `global_fetch_strictly_public` so webhook requests can never reach private addresses.
 
+### AI pull request summaries
+
+Pull request summaries are optional and ship disabled. Enable them for the whole site by adding a Workers AI binding to `workers/forge/wrangler.jsonc`:
+
+```jsonc
+"ai": { "binding": "AI" }
+```
+
+Without the binding the feature is hidden: the repository setting is not offered, pull request pages show no panel and nothing is sent anywhere. Local `wrangler dev` connects Workers AI remotely and needs a logged-in account.
+
+| Name                      | Kind    | Default                                   | Purpose                                                                                        |
+| ------------------------- | ------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `AI`                      | binding | none                                      | Workers AI binding. Required for any summary.                                                  |
+| `AI_SUMMARIES_DISABLED`   | var     | none                                      | Site-wide kill switch: the exact value `true` stops queuing and running summaries.             |
+| `AI_SUMMARY_MODEL`        | var     | `@cf/meta/llama-4-scout-17b-16e-instruct` | Workers AI text-generation model id. Pick one with a context window of at least 24,000 tokens. |
+| `AI_SUMMARY_HOURLY_LIMIT` | var     | `20`                                      | Model calls per repository per rolling hour, regenerations included.                           |
+
+Cost and privacy:
+
+- Each summary is one Workers AI request billed to this Cloudflare account. The prompt holds the pull request title and description, commit subjects, the changed file list and patches, at most 48,000 characters in total; larger diffs are shortened evenly and the summary is marked as truncated for readers.
+- The diff leaves the Git service only to reach Workers AI in this account; GitEdge sends it nowhere else and logs only identifiers, never diff or summary text.
+- A repository administrator must switch the feature on per repository (off by default). A private repository additionally needs an explicit consent to send its code to Workers AI; without it nothing is generated even if the switch is on, and a settings change that would leave summaries on for a private repository without consent is rejected. Changing either setting is recorded in the audit log.
+- A summary is cached per pull request and head commit, so a commit is never summarized twice unless a writer presses Regenerate. Summaries run on the Forge Worker from a D1 queue drained by the per-minute cron, because a model call can outlast the 30 seconds `waitUntil` allows after a response; expect a summary one to two minutes after a pull request opens or its head branch moves. A pull request whose head is an agent session is summarized when it opens; later session pushes are flagged as outdated on the panel until a writer presses Regenerate.
+
 ## Git
 
 | Name        | Kind | Default | Purpose                       |

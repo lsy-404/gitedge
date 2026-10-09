@@ -3,6 +3,12 @@ import {
   repositoryNotFound,
 } from "../../../src/worker/common/repository-response";
 import { actionsCheck, attachActionChecks } from "./actions-checks";
+import {
+  aiSummaryRequest,
+  drainAiSummaries,
+  enqueueAiSummary,
+  purgeAiSummaryRecords,
+} from "./ai-summary";
 import { authorizeMerge, blockerResponse } from "./merge-policy";
 import { reconcileRepository, sweepMergeAutomation } from "./merge-automation";
 import { mergeAutomationRoutes } from "./merge-routes";
@@ -465,6 +471,8 @@ async function publicRepositoryRead(
     const releases = await publicReleaseRead(env, repository, suffix, request);
     if (releases) return releases;
   }
+  const aiSummary = await aiSummaryRequest(env, request, repository, null, suffix);
+  if (aiSummary) return aiSummary;
   if (resource === "issues" && parts.length === 5) {
     const rows = await env.DB.prepare(
       `SELECT forge_issues.*, users.identifier AS author${assignmentsSelect("forge_issues", "forge_issues")} FROM forge_issues JOIN users ON users.id = forge_issues.author_id WHERE forge_issues.repository_id = ? ORDER BY forge_issues.number DESC LIMIT ?`
@@ -903,6 +911,7 @@ async function featureRequest(
         number,
       });
       await pullRequestEvent(env, repository, user, id, { number, state: "open" });
+      await enqueueAiSummary(env, repository, id, user.id, false);
       logger.info("forge:pull-request-created", {
         repositoryId: repository.id,
         pullRequestNumber: number,
@@ -2419,6 +2428,8 @@ const worker = {
     if (releases) return releases;
     const mergeAutomation = await mergeAutomationRoutes(env, request, repository, user, parts);
     if (mergeAutomation) return mergeAutomation;
+    const aiSummary = await aiSummaryRequest(env, request, repository, user, parts.slice(2));
+    if (aiSummary) return aiSummary;
     const feature = await featureRequest(env, user, repository, parts, request);
     if (feature) return feature;
 
@@ -2428,6 +2439,7 @@ const worker = {
     if (controller.cron === WEBHOOK_CRON) {
       await sweepMergeAutomation(env);
       await drainWebhookDeliveries(env);
+      await drainAiSummaries(env);
       return;
     }
     await purgeDueRepositories(env);
@@ -2436,6 +2448,7 @@ const worker = {
     await releaseExpiredTaskLeases(env);
     await purgeReadNotifications(env);
     await purgeWebhookDeliveries(env);
+    await purgeAiSummaryRecords(env);
   },
 };
 

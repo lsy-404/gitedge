@@ -6,6 +6,7 @@ export const AuditActions = [
   "repository.renamed",
   "repository.archived",
   "repository.unarchived",
+  "repository.ai_summaries_changed",
   "repository.deleted",
   "repository.restored",
   "repository.purge_requested",
