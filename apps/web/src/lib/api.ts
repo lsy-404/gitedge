@@ -69,9 +69,10 @@ import type {
   RepositoryImport,
 } from "../../../../packages/contracts/src/imports";
 import type {
-  EditRepositoryFileInput,
+  CommitRepositoryChangesResult,
   RepositoryBranch,
 } from "../../../../packages/contracts/src/repository-controls";
+import type { CommitPayload } from "./repositoryCommit";
 import type { SsoIdentity, SsoProviderSummary } from "../../../../packages/contracts/src/sso";
 import type {
   BrowserAccounts,
@@ -123,7 +124,7 @@ export type {
 } from "../../../../packages/contracts/src/account";
 export type { DeletedRepository } from "../../../../packages/contracts/src/lifecycle";
 export type {
-  EditRepositoryFileInput,
+  CommitRepositoryChangesResult,
   RepositoryBranch,
 } from "../../../../packages/contracts/src/repository-controls";
 export type {
@@ -391,7 +392,7 @@ async function requestEnvelope<T>(
     ...init,
     credentials: "include",
     headers: {
-      "Content-Type": "application/json",
+      ...(init?.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
       ...expectedIdentityHeaders(path, (init?.method ?? "GET").toUpperCase()),
       ...init?.headers,
     },
@@ -752,11 +753,15 @@ export const api = {
       method: "DELETE",
       body: JSON.stringify(payload),
     }),
-  editRepositoryFile: (repositoryId: string, payload: EditRepositoryFileInput) =>
-    request<{ oid: string; branch: string; path: string }>(gitPath(repositoryId, "edit"), {
+  commitRepositoryChanges: (repositoryId: string, payload: CommitPayload) => {
+    const form = new FormData();
+    form.set("manifest", JSON.stringify(payload.manifest));
+    for (const [part, content] of payload.files) form.set(part, content);
+    return request<CommitRepositoryChangesResult>(gitPath(repositoryId, "commit"), {
       method: "POST",
-      body: JSON.stringify(payload),
-    }),
+      body: form,
+    });
+  },
   commits: (repositoryId: string, ref: string, offset: number, limit: number) =>
     request<GitCommit[]>(gitPath(repositoryId, `commits${query({ ref, offset, limit })}`)),
   graph: (repositoryId: string, ref: string, limit: number) =>

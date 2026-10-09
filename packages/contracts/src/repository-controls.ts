@@ -54,6 +54,72 @@ export const EditRepositoryFileSchema = z.object({
   message: z.string().trim().min(1).max(500),
 });
 export type EditRepositoryFileInput = z.infer<typeof EditRepositoryFileSchema>;
+export const REPOSITORY_COMMIT_LIMITS = {
+  changes: 100,
+  fileBytes: 5 * 1024 * 1024,
+  totalBytes: 10 * 1024 * 1024,
+  manifestBytes: 256 * 1024,
+} as const;
+export function editablePath(path: string): boolean {
+  return (
+    path.length > 0 &&
+    path.length <= 1000 &&
+    !path.startsWith("/") &&
+    !path.includes("\\") &&
+    !/[\x00-\x1f\x7f]/.test(path) &&
+    path
+      .split("/")
+      .every(
+        (part) => part !== "" && part !== "." && part !== ".." && part.toLowerCase() !== ".git"
+      ) &&
+    path.split("/").length <= 32
+  );
+}
+const EditablePathSchema = z.string().refine(editablePath, "Invalid repository path");
+export const RepositoryChangeSchema = z.discriminatedUnion("op", [
+  z.object({ op: z.literal("put"), path: EditablePathSchema, part: z.string().min(1).max(64) }),
+  z.object({ op: z.literal("delete"), path: EditablePathSchema }),
+  z.object({ op: z.literal("move"), from: EditablePathSchema, to: EditablePathSchema }),
+]);
+export type RepositoryChangeInput = z.infer<typeof RepositoryChangeSchema>;
+function touchedPaths(change: RepositoryChangeInput): string[] {
+  return change.op === "move" ? [change.from, change.to] : [change.path];
+}
+function nested(parent: string, child: string): boolean {
+  return child === parent || child.startsWith(parent + "/");
+}
+/** True when two changes touch the same path or one path contains another, which makes order matter. */
+export function repositoryChangesOverlap(changes: readonly RepositoryChangeInput[]): boolean {
+  const owned = changes.flatMap((change, index) =>
+    touchedPaths(change).map((path) => ({ path, index }))
+  );
+  return owned.some((a, i) =>
+    owned.some((b, j) => i < j && (nested(a.path, b.path) || nested(b.path, a.path)))
+  );
+}
+export const CommitRepositoryChangesSchema = z
+  .object({
+    branch: GitBranchSchema,
+    newBranch: GitBranchSchema.optional(),
+    expectedOid: GitOidSchema.nullable(),
+    message: z.string().trim().min(1).max(500),
+    changes: z.array(RepositoryChangeSchema).min(1).max(REPOSITORY_COMMIT_LIMITS.changes),
+  })
+  .refine((value) => !repositoryChangesOverlap(value.changes), "Changes must not overlap")
+  .refine(
+    (value) =>
+      value.changes.every((change) => change.op !== "move" || !nested(change.from, change.to)),
+    "A path cannot move into itself"
+  )
+  .refine((value) => {
+    const parts = value.changes.flatMap((change) => (change.op === "put" ? [change.part] : []));
+    return new Set(parts).size === parts.length;
+  }, "File parts must be unique");
+export type CommitRepositoryChangesInput = z.infer<typeof CommitRepositoryChangesSchema>;
+export interface CommitRepositoryChangesResult {
+  oid: string;
+  branch: string;
+}
 export const CreateBranchInputSchema = z.object({
   name: GitBranchSchema,
   source: GitBranchSchema,

@@ -46,6 +46,7 @@ import {
   Tag,
   Target,
   Terminal,
+  Upload,
   UserRound,
   X,
 } from "@lucide/vue";
@@ -97,6 +98,7 @@ const icons = {
   target: Target,
   task: ListTodo,
   terminal: Terminal,
+  upload: Upload,
   wiki: BookOpen,
   clock: History,
   close: X,

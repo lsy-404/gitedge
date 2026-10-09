@@ -16,6 +16,13 @@ Repository import: `POST /api/forge/repository-imports` with `sourceUrl`, `owner
 
 Git: `/api/git/repositories/:id/refs`, `tree`, `file`, `raw`, `commits`, `graph` and `compare`. Reads accept appropriate `ref`, `path`, `offset` or `limit` queries. Comparisons accept `base`, `head` and a validated `headSessionId`. Agent sessions operate on their own workspace by default.
 
+Git writes (require `repo:write`, repository write access, online editing enabled and a non-archived repository; protected branches reject direct commits with 403 and require a new branch):
+
+- `POST /api/git/repositories/:id/edit` commits one UTF-8 text file (JSON: `branch`, optional `newBranch`, `expectedOid`, `path`, `content` or `null` to delete, `message`).
+- `POST /api/git/repositories/:id/commit` commits several changes atomically. The body is `multipart/form-data` with a `manifest` JSON field (`branch`, optional `newBranch`, `expectedOid`, `message`, `changes`) and one binary-safe file field per `put` change. A change is `{ "op": "put", "path", "part" }` (adds or replaces the file in the field named `part`), `{ "op": "delete", "path" }` (file or directory) or `{ "op": "move", "from", "to" }` (file or directory; the destination must not exist). Changes must not overlap, paths cannot be empty, absolute, contain `..`, `.`, backslashes, control characters or `.git` components, and are limited to 32 levels.
+- Limits: 100 changes, 5 MiB per file, 10 MiB of file content per commit (413 `file_too_large` / `payload_too_large`). The commit succeeds only if the branch still points at `expectedOid` (409 `refs_changed` otherwise) and the ref update is a non-force push. Commits made on the web are unsigned, so branches whose rules require signed commits are only reachable through a pull request from a new branch.
+- Both endpoints return `{ data: { oid, branch } }` (`edit` also echoes `path`).
+
 Actions: `/api/actions/repositories/:id[/...]`, `/api/actions/runs/:id` and `/api/actions/runs/:id/cancel`. Starting a run beyond six per repository per hour returns 429 `run_limit` with a `Retry-After` header.
 
 Deploy: `/api/deploy/plan`, `session`, `account`, `resources`, `provision`, `migrate` and `deploy`. See [the deployment manifest](deploy.md) for source and permission requirements.

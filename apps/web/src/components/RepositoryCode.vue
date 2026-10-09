@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { useRoute, useRouter } from "vue-router";
+import { NavigationFailureType, isNavigationFailure, useRoute, useRouter } from "vue-router";
 import type {
   GitCommit,
   GitComparison,
@@ -42,6 +42,7 @@ import CommitSignatureStatus from "./CommitSignatureStatus.vue";
 import { preferencesState } from "../lib/preferences";
 import RepositoryBranches from "./RepositoryBranches.vue";
 import RepositoryFileEditor from "./RepositoryFileEditor.vue";
+import RepositoryChangeForm, { type CommittedChanges } from "./RepositoryChangeForm.vue";
 import RepositoryCommunity from "./RepositoryCommunity.vue";
 
 const props = withDefaults(
@@ -59,6 +60,7 @@ const fileHeadOid = ref<string | null>(null);
 const managedBranches = ref<RepositoryBranch[]>([]);
 const branchRefreshKey = ref(0);
 const showFileEditor = ref(false);
+const changeMode = ref<"upload" | "move" | "delete" | null>(null);
 const editorCreatesNew = ref(false);
 const initialEditorPath = ref("");
 const savedFile = ref<{ oid: string; branch: string; path: string; deleted?: boolean } | null>(
@@ -129,6 +131,9 @@ const selectedFileCanEdit = computed(
     file.value?.content !== null &&
     (selectedFileEntry.value?.mode === "100644" || selectedFileEntry.value?.mode === "100755") &&
     (file.value?.size ?? Infinity) <= 1_000_000
+);
+const currentDirectory = computed(() =>
+  isBlob.value ? filePath.value.split("/").slice(0, -1).join("/") : filePath.value
 );
 const canEditCurrentRef = computed(
   () => Boolean(selectedBranchHeadOid.value) || emptyRepository.value
@@ -326,7 +331,12 @@ async function loadMore() {
     loadingMore.value = false;
   }
 }
+function openChangeForm(mode: "upload" | "move" | "delete") {
+  showFileEditor.value = false;
+  changeMode.value = mode;
+}
 function openNewFile() {
+  changeMode.value = null;
   editorCreatesNew.value = true;
   const directory = isBlob.value
     ? filePath.value.split("/").slice(0, -1).join("/")
@@ -336,13 +346,13 @@ function openNewFile() {
   showFileEditor.value = true;
 }
 function openExistingFileEditor() {
+  changeMode.value = null;
   editorCreatesNew.value = false;
   initialEditorPath.value = "";
   savedFile.value = null;
   showFileEditor.value = true;
 }
-function onFileSaved(result: { oid: string; branch: string; path: string; deleted?: boolean }) {
-  savedFile.value = result;
+function recordCommit(result: { oid: string; branch: string }) {
   branchRefreshKey.value += 1;
   const current = managedBranches.value.find((branch) => branch.name === result.branch);
   if (current) {
@@ -356,6 +366,32 @@ function onFileSaved(result: { oid: string; branch: string; path: string; delete
     ];
   }
   void refreshRefs();
+}
+function onFileSaved(result: { oid: string; branch: string; path: string; deleted?: boolean }) {
+  savedFile.value = result;
+  recordCommit(result);
+}
+async function onChangesCommitted(result: CommittedChanges) {
+  changeMode.value = null;
+  recordCommit(result);
+  emit("changed");
+  const { owner, name } = props.repository;
+  const failure = await router.push(
+    result.pull
+      ? {
+          path: `/${owner}/${name}/pulls`,
+          query: {
+            new: "1",
+            base: result.pull.base,
+            head: result.pull.head,
+            title: result.pull.title,
+          },
+        }
+      : result.directory
+        ? repositoryCodeLocation(owner, name, "tree", result.directory, result.branch)
+        : { path: `/${owner}/${name}`, query: { ref: result.branch } }
+  );
+  if (isNavigationFailure(failure, NavigationFailureType.duplicated)) await load();
 }
 async function closeFileEditor() {
   showFileEditor.value = false;
@@ -504,6 +540,7 @@ watch(
     queryText.value = "";
     fileMode.value = "preview";
     showFileEditor.value = false;
+    changeMode.value = null;
     savedFile.value = null;
   }
 );
@@ -620,6 +657,21 @@ onUnmounted(() => {
           @click="openNewFile"
           ><AppIcon name="plus" />{{ t("codeNewFile") }}</FluentButton
         >
+        <FluentButton
+          v-if="canManageCode && canEditCurrentRef"
+          type="button"
+          tone="secondary"
+          @click="openChangeForm('upload')"
+          ><AppIcon name="upload" />{{ t("codeUploadFiles") }}</FluentButton
+        >
+        <template v-if="canManageCode && canEditCurrentRef && !isBlob && filePath">
+          <FluentButton type="button" tone="secondary" @click="openChangeForm('move')">{{
+            t("codeMoveFolder")
+          }}</FluentButton>
+          <FluentButton type="button" tone="secondary" @click="openChangeForm('delete')">{{
+            t("codeDeleteFolder")
+          }}</FluentButton>
+        </template>
 
         <div class="clone-menu-wrap">
           <button
@@ -733,6 +785,18 @@ onUnmounted(() => {
         @close="closeFileEditor"
         @saved="onFileSaved"
         @changed="emit('changed')"
+      />
+      <RepositoryChangeForm
+        v-if="changeMode && canManageCode"
+        :repository="repository"
+        :mode="changeMode"
+        :branch="repository.defaultBranch"
+        :expected-oid="null"
+        :branch-info="null"
+        :branches="managedBranches"
+        :directory="currentDirectory"
+        @close="changeMode = null"
+        @committed="onChangesCommitted"
       />
     </div>
     <template v-else-if="section === 'code'">
@@ -893,6 +957,18 @@ onUnmounted(() => {
         @close="closeFileEditor"
         @saved="onFileSaved"
         @changed="emit('changed')"
+      />
+      <RepositoryChangeForm
+        v-if="changeMode && canManageCode && canEditCurrentRef && !emptyRepository"
+        :repository="repository"
+        :mode="changeMode"
+        :branch="selectedBranchHeadOid ? refName : repository.defaultBranch"
+        :expected-oid="fileHeadOid"
+        :branch-info="selectedBranchInfo"
+        :branches="managedBranches"
+        :directory="currentDirectory"
+        @close="changeMode = null"
+        @committed="onChangesCommitted"
       />
       <aside v-if="!isBlob" class="about-panel" :aria-label="t('about')">
         <div class="about-heading">

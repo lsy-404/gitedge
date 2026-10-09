@@ -14,12 +14,14 @@ import {
 } from "../../../src/worker/common/branch-protection";
 import { readJsonLimited } from "../../../src/worker/common/readText";
 import {
-  editRepositoryFile,
+  commitRepositoryChanges,
   createRepositoryBranch,
   deleteRepositoryBranch,
   GitWriteConflict,
-  GitWriteInputError,
+  type RepositoryCommitInput,
 } from "./write";
+import { GitWriteInputError } from "./changes";
+import { CommitRequestError, commitFromEdit, readCommitRequest } from "./commit-request";
 import { repositorySnapshot } from "./snapshot";
 import { createLogger } from "../../../src/worker/common/logger";
 import {
@@ -114,20 +116,34 @@ export async function handleGitApi(
   logger.debug("artifacts:request", { resource, sessionId: session?.id });
   if (resource === "graph" && access.repository.graphEnabled === 0)
     return errorResponse(404, "feature_disabled", "Commit graph is disabled.");
-  if ((resource === "edit" || resource === "branches") && request.method !== "GET") {
+  const committing = resource === "edit" || resource === "commit";
+  if ((committing || resource === "branches") && request.method !== "GET") {
     if (!access.user || !access.repository.canWrite || userSession?.permission === "read")
       return errorResponse(403, "forbidden", "Repository write access is required.");
     if (access.repository.archived)
       return errorResponse(409, "repository_archived", "Archived repositories are read-only.");
-    if (resource === "edit" && access.repository.onlineEditingEnabled === 0)
+    if (committing && access.repository.onlineEditingEnabled === 0)
       return errorResponse(404, "feature_disabled", "Online editing is disabled.");
     if (session && !userSession && session.userId !== access.user.id)
       return errorResponse(404, "not_found", "Session workspace was not found.");
-    const value = await readJsonLimited(request, 2_100_000);
-    const edit =
-      resource === "edit" && request.method === "POST"
-        ? EditRepositoryFileSchema.safeParse(value)
-        : null;
+    let commit: RepositoryCommitInput | null = null;
+    let editedPath: string | null = null;
+    try {
+      if (resource === "commit" && request.method === "POST")
+        commit = await readCommitRequest(request);
+      else if (resource === "edit" && request.method === "POST") {
+        const edit = EditRepositoryFileSchema.safeParse(await readJsonLimited(request, 2_100_000));
+        if (edit.success) {
+          commit = commitFromEdit(edit.data);
+          editedPath = edit.data.path;
+        }
+      }
+    } catch (cause) {
+      if (cause instanceof CommitRequestError)
+        return errorResponse(cause.status, cause.code, cause.message);
+      throw cause;
+    }
+    const value = committing ? null : await readJsonLimited(request, 2_100_000);
     const create =
       resource === "branches" && request.method === "POST"
         ? CreateBranchInputSchema.safeParse(value)
@@ -136,8 +152,8 @@ export async function handleGitApi(
       resource === "branches" && request.method === "DELETE"
         ? DeleteBranchInputSchema.safeParse(value)
         : null;
-    const target = edit?.success
-      ? (edit.data.newBranch ?? edit.data.branch)
+    const target = commit
+      ? (commit.newBranch ?? commit.branch)
       : create?.success
         ? create.data.name
         : remove?.success
@@ -159,7 +175,7 @@ export async function handleGitApi(
         latest instanceof Response ||
         !latest?.repository.canWrite ||
         latest.repository.archived ||
-        (resource === "edit" && latest.repository.onlineEditingEnabled === 0) ||
+        (committing && latest.repository.onlineEditingEnabled === 0) ||
         (!session && (await protectedBranch(env.DB, repositoryId, target))) ||
         (remove?.success && latest.repository.defaultBranch === target)
       )
@@ -181,17 +197,21 @@ export async function handleGitApi(
       else await operation;
     };
     try {
-      if (edit?.success) {
-        const result = await editRepositoryFile(
+      if (commit) {
+        const result = await commitRepositoryChanges(
           repo,
-          edit.data,
+          commit,
           access.user,
           beforeWrite,
           env.LOG_LEVEL
         );
         await written(result.branch, result.oid);
-        logger.info("git:file-committed", { branch: result.branch, oid: result.oid });
-        return dataResponse(result, 201);
+        logger.info("git:changes-committed", {
+          branch: result.branch,
+          oid: result.oid,
+          changes: commit.changes.length,
+        });
+        return dataResponse(editedPath === null ? result : { ...result, path: editedPath }, 201);
       }
       if (create?.success) {
         const result = await createRepositoryBranch(

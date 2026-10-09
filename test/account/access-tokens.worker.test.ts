@@ -482,6 +482,18 @@ describe("scope enforcement in privileged services", () => {
     );
     expect(edit.status).toBe(403);
     expect(await edit.json()).toMatchObject({ error: { code: "insufficient_scope" } });
+    const commitForm = new FormData();
+    commitForm.set("manifest", "{}");
+    const commit = await git.fetch(
+      new Request("https://git.test/repositories/r1/commit", {
+        method: "POST",
+        headers: trustedHeaders(identity(readOnly)),
+        body: commitForm,
+      }),
+      gitEnv
+    );
+    expect(commit.status).toBe(403);
+    expect(await commit.json()).toMatchObject({ error: { code: "insufficient_scope" } });
 
     const pushHeaders = trustedHeaders(identity(readOnly));
     pushHeaders.set(

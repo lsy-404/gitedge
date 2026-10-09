@@ -866,10 +866,12 @@ watch(
     route.query.base,
     route.query.head,
     route.query.headSessionId,
+    route.query.title,
   ],
   () => {
     if (props.section !== "pulls" || routeQuery("new") !== "1" || !canCreate.value) return;
     resetForm();
+    form.value.title = routeQuery("title");
     form.value.baseRef = routeQuery("base") || props.repository.defaultBranch;
     form.value.headRef = routeQuery("head");
     form.value.headSessionId = routeQuery("headSessionId");

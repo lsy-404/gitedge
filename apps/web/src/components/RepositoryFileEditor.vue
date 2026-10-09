@@ -3,19 +3,13 @@ import { repositoryCodeLocation } from "../lib/gitGraphView";
 import { computed, ref, watch } from "vue";
 import { useUnsavedGuard } from "../lib/unsavedGuard";
 import { useI18n } from "vue-i18n";
-import {
-  EditRepositoryFileSchema,
-  GitBranchSchema,
-} from "../../../../packages/contracts/src/index";
-import type {
-  EditRepositoryFileInput,
-  GitFile,
-  GitTreeEntry,
-  Repository,
-  RepositoryBranch,
-} from "../lib/api";
+import { editablePath } from "../../../../packages/contracts/src/repository-controls";
+import type { GitFile, GitTreeEntry, Repository, RepositoryBranch } from "../lib/api";
 import { ApiError, api } from "../lib/api";
+import { useCommitTarget } from "../lib/commitTarget";
+import { commitPayload, type StagedChange } from "../lib/repositoryCommit";
 import AppIcon from "./AppIcon.vue";
+import CommitTargetFields from "./CommitTargetFields.vue";
 import NoticeBar from "./NoticeBar.vue";
 import TextAreaField from "./TextAreaField.vue";
 import TextField from "./TextField.vue";
@@ -35,13 +29,15 @@ const emit = defineEmits<{ close: []; saved: [result: SavedFile]; changed: [] }>
 const { t } = useI18n();
 const path = ref(props.file?.path ?? props.initialPath ?? "");
 const content = ref(props.file?.content ?? "");
-const message = ref("");
-const newBranch = ref("");
-const createPull = ref(false);
+const target = useCommitTarget(
+  () => props.branches,
+  () => props.branchInfo
+);
+const { message, newBranch, createPull, protectedRejected, protectedBranch, targetBranch } = target;
+const { targetBranchValid } = target;
 const saving = ref(false);
 const saveError = ref("");
 const conflict = ref(false);
-const protectedRejected = ref(false);
 const saved = ref<SavedFile | null>(null);
 const pullCreated = ref(false);
 const createdPullNumber = ref<number | null>(null);
@@ -54,7 +50,7 @@ const dirty = computed(
     saved.value === null &&
     (content.value !== (props.file?.content ?? "") ||
       message.value.trim() !== "" ||
-      (isNew.value && path.value !== (props.initialPath ?? "")))
+      path.value !== (props.file?.path ?? props.initialPath ?? ""))
 );
 const { confirmDiscard } = useUnsavedGuard(dirty);
 const regularTextFile = computed(() => {
@@ -75,22 +71,15 @@ const directlyEditable = computed(
     !props.repository.archived &&
     regularTextFile.value
 );
-const protectedBranch = computed(() =>
-  Boolean(props.branchInfo?.protected || protectedRejected.value)
-);
-const targetBranch = computed(() => newBranch.value.trim());
-const targetBranchValid = computed(() => {
-  if (!targetBranch.value) return !protectedBranch.value;
-  return (
-    GitBranchSchema.safeParse(targetBranch.value).success &&
-    !props.branches.some((branch) => branch.name === targetBranch.value)
-  );
-});
 const contentBytes = computed(() => new TextEncoder().encode(content.value).byteLength);
+const trimmedPath = computed(() => path.value.trim());
+const renamed = computed(() => !isNew.value && trimmedPath.value !== props.file?.path);
+const contentChanged = computed(() => content.value !== (props.file?.content ?? ""));
 const canSave = computed(
   () =>
     directlyEditable.value &&
-    path.value.trim().length > 0 &&
+    editablePath(trimmedPath.value) &&
+    (isNew.value || renamed.value || contentChanged.value) &&
     message.value.trim().length > 0 &&
     contentBytes.value <= 1_000_000 &&
     targetBranchValid.value
@@ -99,7 +88,6 @@ const canDelete = computed(
   () =>
     directlyEditable.value &&
     Boolean(props.file) &&
-    path.value.trim().length > 0 &&
     message.value.trim().length > 0 &&
     targetBranchValid.value
 );
@@ -119,11 +107,9 @@ watch(
     if (saved.value) return;
     path.value = props.file?.path ?? props.initialPath ?? "";
     content.value = props.file?.content ?? "";
-    message.value = "";
-    newBranch.value = "";
+    target.reset();
     saved.value = null;
     conflict.value = false;
-    protectedRejected.value = false;
     pullCreated.value = false;
     createdPullNumber.value = null;
     pullError.value = "";
@@ -138,36 +124,48 @@ function saveErrorFor(cause: unknown): string {
   if (cause instanceof ApiError && cause.status === 413) return t("codeFileTooLarge");
   return t("apiError");
 }
-async function saveFile() {
-  if (!canSave.value) return;
+function fileChanges(): StagedChange[] {
+  const body = { op: "put" as const, path: trimmedPath.value, content: new Blob([content.value]) };
+  if (!props.file || !renamed.value) return [body];
+  if (!contentChanged.value) return [{ op: "move", from: props.file.path, to: trimmedPath.value }];
+  return [{ op: "delete", path: props.file.path }, body];
+}
+async function commitChanges(changes: StagedChange[]): Promise<SavedFile | null> {
   saving.value = true;
   saveError.value = "";
   conflict.value = false;
   try {
-    const input: EditRepositoryFileInput = {
-      branch: props.branch,
-      ...(targetBranch.value ? { newBranch: targetBranch.value } : {}),
-      expectedOid: props.expectedOid,
-      path: path.value.trim(),
-      content: content.value,
-      message: message.value.trim(),
-    };
-    const parsed = EditRepositoryFileSchema.safeParse(input);
-    if (!parsed.success) {
+    const payload = commitPayload(
+      {
+        branch: props.branch,
+        ...(targetBranch.value ? { newBranch: targetBranch.value } : {}),
+        expectedOid: props.expectedOid,
+        message: message.value.trim(),
+      },
+      changes
+    );
+    if (!payload) {
       saveError.value = t("codeEditInvalid");
-      return;
+      return null;
     }
-    const result = await api.editRepositoryFile(props.repository.id, parsed.data);
-    saved.value = result;
-    if (createPull.value) await createPullRequest(false);
-    emit("saved", result);
-    emit("changed");
+    const result = await api.commitRepositoryChanges(props.repository.id, payload);
+    return { ...result, path: trimmedPath.value };
   } catch (cause) {
     if (cause instanceof ApiError && cause.status === 409) conflict.value = true;
     saveError.value = saveErrorFor(cause);
+    return null;
   } finally {
     saving.value = false;
   }
+}
+async function saveFile() {
+  if (!canSave.value) return;
+  const result = await commitChanges(fileChanges());
+  if (!result) return;
+  saved.value = result;
+  if (createPull.value) await createPullRequest(false);
+  emit("saved", result);
+  emit("changed");
 }
 async function createPullRequest(notifyChange = true) {
   const result = saved.value;
@@ -192,35 +190,13 @@ async function createPullRequest(notifyChange = true) {
 }
 async function deleteFile() {
   if (!props.file || !canDelete.value) return;
-  saving.value = true;
-  saveError.value = "";
-  conflict.value = false;
-  try {
-    const input: EditRepositoryFileInput = {
-      branch: props.branch,
-      ...(targetBranch.value ? { newBranch: targetBranch.value } : {}),
-      expectedOid: props.expectedOid,
-      path: props.file.path,
-      content: null,
-      message: message.value.trim(),
-    };
-    const parsed = EditRepositoryFileSchema.safeParse(input);
-    if (!parsed.success) {
-      saveError.value = t("codeEditInvalid");
-      return;
-    }
-    const result = await api.editRepositoryFile(props.repository.id, parsed.data);
-    saved.value = { ...result, deleted: true };
-    deleteOpen.value = false;
-    if (createPull.value) await createPullRequest(false);
-    emit("saved", saved.value);
-    emit("changed");
-  } catch (cause) {
-    if (cause instanceof ApiError && cause.status === 409) conflict.value = true;
-    saveError.value = saveErrorFor(cause);
-  } finally {
-    saving.value = false;
-  }
+  const result = await commitChanges([{ op: "delete", path: props.file.path }]);
+  if (!result) return;
+  saved.value = { ...result, path: props.file.path, deleted: true };
+  deleteOpen.value = false;
+  if (createPull.value) await createPullRequest(false);
+  emit("saved", saved.value);
+  emit("changed");
 }
 function close() {
   if (!confirmDiscard()) return;
@@ -246,12 +222,16 @@ function close() {
     </p>
     <form v-else class="form-stack editor-body" @submit.prevent="saveFile">
       <fieldset class="editor-fields" :disabled="Boolean(saved)">
-        <TextField v-if="isNew" v-model="path" required maxlength="1000">{{
-          t("codeFilePath")
-        }}</TextField>
-        <p v-else class="muted">
-          <code>{{ file?.path }}</code>
-        </p>
+        <TextField
+          v-model="path"
+          required
+          maxlength="1000"
+          :hint="isNew ? undefined : t('codeRenameHint')"
+          >{{ t("codeFilePath") }}</TextField
+        >
+        <small v-if="trimmedPath && !editablePath(trimmedPath)" class="field-error">{{
+          t("codePathInvalid")
+        }}</small>
         <TextAreaField
           v-model="content"
           :label="t('codeFileContent')"
@@ -260,33 +240,17 @@ function close() {
           spellcheck="false"
         />
         <p class="muted">{{ t("codeFileSize", { bytes: contentBytes }) }}</p>
-        <TextField v-model="message" required maxlength="500">{{
-          t("codeCommitMessage")
-        }}</TextField>
-        <div v-if="protectedBranch" class="branch-guidance" role="status">
-          <strong>{{ t("codeProtectedEditNeedsBranch") }}</strong>
-          <p>{{ t("codeProtectedBranchSource", { name: branch }) }}</p>
-          <TextField v-model="newBranch" required maxlength="251">{{
-            t("codeNewBranchName")
-          }}</TextField>
-          <small v-if="!saved && newBranch && !targetBranchValid" class="field-error">{{
-            t("codeBranchNameInvalidOrExists")
-          }}</small>
-        </div>
-        <template v-else>
-          <TextField v-model="newBranch" maxlength="251">{{
-            t("codeOptionalNewBranch")
-          }}</TextField>
-          <small v-if="!saved && newBranch && !targetBranchValid" class="field-error">{{
-            t("codeBranchNameInvalidOrExists")
-          }}</small>
-        </template>
-        <FluentCheckbox
-          v-if="repository.pullsEnabled && targetBranch && targetBranchValid"
-          v-model="createPull"
-        >
-          {{ t("codeCreatePullAfterSave") }}
-        </FluentCheckbox>
+        <CommitTargetFields
+          v-model:message="message"
+          v-model:new-branch="newBranch"
+          v-model:create-pull="createPull"
+          :branch="branch"
+          :pulls-enabled="repository.pullsEnabled"
+          :protected-branch="protectedBranch"
+          :target-branch="targetBranch"
+          :target-branch-valid="targetBranchValid"
+          :saved="Boolean(saved)"
+        />
       </fieldset>
       <div v-if="saved" class="save-result" role="status">
         <strong>{{ t("codeFileSaved", { branch: saved.branch }) }}</strong>
@@ -361,10 +325,6 @@ function close() {
 .editor-body {
   padding: var(--space-4);
 }
-.field-error {
-  color: var(--danger-fg);
-  font-size: var(--font-size-meta);
-}
 .editor-fields {
   display: grid;
   gap: var(--space-3);
@@ -373,7 +333,6 @@ function close() {
   padding: 0;
   border: 0;
 }
-.branch-guidance,
 .save-result {
   display: grid;
   gap: var(--space-2);

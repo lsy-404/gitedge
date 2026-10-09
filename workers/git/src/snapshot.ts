@@ -4,7 +4,7 @@ import type {
   RepositorySnapshotFile,
 } from "../../../packages/contracts/src/repository-controls";
 import { GitResourceLimitError } from "./http";
-import { editablePath } from "./write";
+import { editablePath } from "../../../packages/contracts/src/repository-controls";
 export async function repositorySnapshot(
   repo: ArtifactsRepo,
   oid: string
