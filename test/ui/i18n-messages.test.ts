@@ -68,6 +68,8 @@ const dynamicKeys: Record<string, readonly string[]> = {
     "check_failed",
     "merged",
     "invited",
+    "auto_merge_disabled",
+    "queue_ejected",
   ],
   notificationKind_: ["issue", "pull_request", "discussion", "repository"],
   webhookEvent_: [

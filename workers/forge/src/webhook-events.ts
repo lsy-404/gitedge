@@ -103,9 +103,18 @@ function pullRequestFields(pull: PullRequestFields): Record<string, unknown> {
 
 export function pullRequestWebhook(
   repository: RepositoryRow,
-  user: TrustedUser,
-  action: "opened" | "edited" | "closed" | "reopened",
-  pull: PullRequestFields
+  user: Pick<TrustedUser, "id" | "identifier">,
+  action:
+    | "opened"
+    | "edited"
+    | "closed"
+    | "reopened"
+    | "auto_merge_enabled"
+    | "auto_merge_disabled"
+    | "enqueued"
+    | "dequeued",
+  pull: PullRequestFields,
+  extra: Record<string, unknown> = {}
 ): WebhookEvent {
   return {
     event: "pull_request",
@@ -113,6 +122,7 @@ export function pullRequestWebhook(
     body: envelope(repository, user, action, {
       number: pull.number,
       pull_request: pullRequestFields(pull),
+      ...extra,
     }),
   };
 }

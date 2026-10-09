@@ -17,6 +17,7 @@ function rule(
     requireLinearHistory: false,
     requireSignedCommits: false,
     requireConversationResolution: false,
+    requireMergeQueue: false,
     createdAt: 1,
     updatedAt: 1,
     ...overrides,

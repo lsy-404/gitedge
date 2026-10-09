@@ -1,3 +1,4 @@
+import { followEnablerPushes } from "./merge-automation";
 import {
   CreateRepositoryWebhookInputSchema,
   PushEventInputSchema,
@@ -595,6 +596,7 @@ export async function handlePushEvent(
     logger.warn("webhook:push-refs-truncated", { count: parsed.data.updates.length });
   const events: WebhookEvent[] = updates.map((update) => pushWebhook(repository, pusher, update));
   await env.DB.batch(events.map((event) => queueWebhookEvent(env.DB, repository.id, event)));
+  await followEnablerPushes(env, repository.id, pusher.id, parsed.data.updates);
   return dataResponse({
     queued: events.length,
     truncated: parsed.data.updates.length > updates.length,

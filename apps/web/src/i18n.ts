@@ -9,6 +9,7 @@ import codeMessages from "./i18n/code";
 import { codeNavigationMessages } from "./i18n/codeNavigation";
 import collaborationMessages from "./i18n/collaboration";
 import reviewThreadMessages from "./i18n/reviewThreads";
+import autoMergeMessages from "./i18n/autoMerge";
 import avatarMessages from "./i18n/avatar";
 import agentsMessages from "./i18n/agents";
 import repositoryControlsMessages from "./i18n/repositoryControls";
@@ -853,6 +854,7 @@ export const i18n = createI18n({
       ...codeNavigationMessages["zh-CN"],
       ...collaborationMessages["zh-CN"],
       ...reviewThreadMessages["zh-CN"],
+      ...autoMergeMessages["zh-CN"],
       ...settingsMessages["zh-CN"],
       ...repositorySettingsMessages["zh-CN"],
       ...lifecycleMessages["zh-CN"],
@@ -878,6 +880,7 @@ export const i18n = createI18n({
       ...codeNavigationMessages.en,
       ...collaborationMessages.en,
       ...reviewThreadMessages.en,
+      ...autoMergeMessages.en,
       ...settingsMessages.en,
       ...repositorySettingsMessages.en,
       ...lifecycleMessages.en,

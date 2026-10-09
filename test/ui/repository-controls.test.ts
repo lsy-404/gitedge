@@ -35,6 +35,7 @@ const rule: BranchProtectionRule = {
   requireLinearHistory: false,
   requireSignedCommits: false,
   requireConversationResolution: false,
+  requireMergeQueue: false,
   createdAt: 1,
   updatedAt: 2,
 };
@@ -150,6 +151,7 @@ describe("branch protection controls", () => {
       requireLinearHistory: false,
       requireSignedCommits: false,
       requireConversationResolution: false,
+      requireMergeQueue: false,
     });
 
     await confirmClick(findButton(mounted.root, "Delete"));

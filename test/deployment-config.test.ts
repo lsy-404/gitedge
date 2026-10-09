@@ -109,7 +109,9 @@ describe("deployment isolation", () => {
           "utf8"
         );
         expect(source).toMatch(
-          new RegExp(`(export class ${binding.class_name}\\b|as ${binding.class_name}\\s*\\})`)
+          new RegExp(
+            `(export class ${binding.class_name}\\b|as ${binding.class_name}\\s*\\}|export \\{ ${binding.class_name} \\} from)`
+          )
         );
       }
     }
