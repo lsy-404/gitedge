@@ -1519,7 +1519,13 @@ async function featureRequest(
         ),
         ...publishPendingStatements(env, String(current.id), id, actor),
       ]);
-      await announcePublishedComments(env, repository, user, String(current.id), id);
+      await announcePublishedComments(
+        env,
+        repository,
+        user,
+        { id: String(current.id), number },
+        id
+      );
       logger.info("forge:review-submitted", {
         repositoryId: repository.id,
         pullRequestNumber: number,

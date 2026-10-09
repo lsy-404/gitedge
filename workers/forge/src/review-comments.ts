@@ -12,6 +12,7 @@ import { dataResponse, errorResponse, jsonResponse } from "../../../src/worker/c
 import { createLogger } from "../../../src/worker/common/logger";
 import { mentionAgents } from "./agent-events";
 import { parseActor, parseJson, type ForgeEnv, type RepositoryRow } from "./common";
+import { threadNotificationStatements, type NotificationTarget } from "./notifications";
 
 const MAX_COMMENT_ROWS = 1000;
 
@@ -133,6 +134,11 @@ export async function reviewCommentRequest(
   const logger = createLogger(env.LOG_LEVEL, { service: "forge", repoId: repository.id });
   const pullRequestId = String(pull.id);
   const key = reviewActorKey(actor);
+  const subject: NotificationTarget = {
+    kind: "pull_request",
+    id: pullRequestId,
+    number: Number(pull.number),
+  };
 
   if (method === "POST" && !id) {
     if (pull.state !== "open")
@@ -192,29 +198,37 @@ export async function reviewCommentRequest(
       if ((count?.total ?? 0) >= MAX_PENDING_REVIEW_COMMENTS)
         return errorResponse(409, "pending_limit", "Too many pending review comments.");
     }
-    await env.DB.prepare(
+    const insert = env.DB.prepare(
       "INSERT INTO forge_review_comments (id, repository_id, pull_request_id, in_reply_to, actor_json, actor_key, author_id, commit_oid, path, side, line, start_line, diff_hunk, body, pending, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    )
-      .bind(
-        newId,
-        repository.id,
-        pullRequestId,
-        inReplyTo,
-        JSON.stringify(actor),
-        key,
-        user.id,
-        target.commit_oid,
-        target.path,
-        target.side,
-        target.line,
-        target.start_line,
-        target.diff_hunk,
-        input.body,
-        target.pending,
-        now,
-        now
-      )
-      .run();
+    ).bind(
+      newId,
+      repository.id,
+      pullRequestId,
+      inReplyTo,
+      JSON.stringify(actor),
+      key,
+      user.id,
+      target.commit_oid,
+      target.path,
+      target.side,
+      target.line,
+      target.start_line,
+      target.diff_hunk,
+      input.body,
+      target.pending,
+      now,
+      now
+    );
+    // Pending comments notify mentioned users when their review publishes them.
+    await env.DB.batch([
+      insert,
+      ...(target.pending === 0
+        ? await threadNotificationStatements(env, repository, user, subject, {
+            body: input.body,
+            participants: false,
+          })
+        : []),
+    ]);
     if (target.pending === 0)
       await mentionAgents(env, repository, user, input.body, {
         targetKind: "pull_request",
@@ -244,9 +258,20 @@ export async function reviewCommentRequest(
       return errorResponse(403, "forbidden", "Only the comment author may edit this comment.");
     const parsed = UpdateReviewCommentInputSchema.safeParse(await parseJson(request));
     if (!parsed.success) return errorResponse(400, "bad_request", "Invalid review comment.");
-    await env.DB.prepare("UPDATE forge_review_comments SET body = ?, updated_at = ? WHERE id = ?")
-      .bind(parsed.data.body, Date.now(), id)
-      .run();
+    await env.DB.batch([
+      env.DB.prepare("UPDATE forge_review_comments SET body = ?, updated_at = ? WHERE id = ?").bind(
+        parsed.data.body,
+        Date.now(),
+        id
+      ),
+      ...(row.pending === 0
+        ? await threadNotificationStatements(env, repository, user, subject, {
+            body: parsed.data.body,
+            previousBody: row.body,
+            participants: false,
+          })
+        : []),
+    ]);
     logger.info("forge:review-comment-edited", { pullRequestId, actorKind: actor.kind });
     const updated = await fetchRow(env, pullRequestId, id);
     return updated
@@ -329,21 +354,31 @@ export function publishPendingStatements(
   ];
 }
 
-/** Notifies agents mentioned in the comments a review just published, in one bounded pass. */
+/** Notifies users and agents mentioned in the comments a review just published, in one bounded pass. */
 export async function announcePublishedComments(
   env: ForgeEnv,
   repository: RepositoryRow,
   user: TrustedUser,
-  pullRequestId: string,
+  pull: { id: string; number: number },
   reviewId: string
 ): Promise<void> {
+  const pullRequestId = pull.id;
   const rows = await env.DB.prepare(
     "SELECT body FROM forge_review_comments WHERE pull_request_id = ? AND review_id = ? ORDER BY created_at ASC LIMIT ?"
   )
     .bind(pullRequestId, reviewId, MAX_PENDING_REVIEW_COMMENTS)
     .all<{ body: string }>();
   if (!rows.results.length) return;
-  await mentionAgents(env, repository, user, rows.results.map((row) => row.body).join("\n"), {
+  const bodies = rows.results.map((row) => row.body).join("\n");
+  const notifications = await threadNotificationStatements(
+    env,
+    repository,
+    user,
+    { kind: "pull_request", id: pullRequestId, number: pull.number },
+    { body: bodies, participants: false }
+  );
+  if (notifications.length) await env.DB.batch(notifications);
+  await mentionAgents(env, repository, user, bodies, {
     targetKind: "pull_request",
     targetId: pullRequestId,
     reviewId,

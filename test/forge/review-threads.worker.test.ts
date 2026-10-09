@@ -439,3 +439,44 @@ describe("Conversation resolution rule", () => {
     expect(merged.status).toBe(200);
   });
 });
+
+describe("Review comment mentions", () => {
+  async function mentionedIn(who: [string, string]): Promise<number[]> {
+    const page = await data<{
+      items: Array<{ reason: string; subjectKind: string; subjectNumber: number }>;
+    }>(await call("/notifications?reason=mentioned&limit=50", "GET", who));
+    return page.items
+      .filter((item) => item.subjectKind === "pull_request")
+      .map((item) => item.subjectNumber);
+  }
+
+  it("notifies users mentioned in published, edited and review-published comments", async () => {
+    const published = await openPull();
+    const base = `/repositories/r1/pull-requests/${published}/review-comments`;
+    const comment = await data<Thread>(
+      await call(base, "POST", bob, threadInput({ body: "cc @eve" }))
+    );
+    expect(await mentionedIn(eve)).toContain(published);
+    expect(await mentionedIn(bob)).not.toContain(published);
+
+    await call(`${base}/${comment.id}`, "PATCH", bob, { body: "cc @eve and @alice" });
+    expect(await mentionedIn(alice)).toContain(published);
+
+    const pendingPull = await openPull();
+    const pendingBase = `/repositories/r1/pull-requests/${pendingPull}/review-comments`;
+    await call(pendingBase, "POST", bob, threadInput({ body: "later @eve", pending: true }));
+    expect(await mentionedIn(eve)).not.toContain(pendingPull);
+    const review = await call(
+      `/repositories/r1/pull-requests/${pendingPull}/reviews`,
+      "POST",
+      bob,
+      {
+        state: "commented",
+        body: "Inline notes",
+        commitOid: head,
+      }
+    );
+    expect(review.status).toBe(201);
+    expect(await mentionedIn(eve)).toContain(pendingPull);
+  });
+});
