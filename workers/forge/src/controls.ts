@@ -7,6 +7,7 @@ import { branchRules } from "../../../src/worker/common/branch-protection";
 import { repositoryRole } from "../../../src/worker/common/repositories";
 import { createLogger } from "../../../src/worker/common/logger";
 import { revokeAgentSessions } from "./agent-events";
+import { invitationNotificationStatement } from "./notifications";
 import { parseJson, type ForgeEnv, type RepositoryRow } from "./common";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 
@@ -122,11 +123,12 @@ export async function repositoryControls(
         .first<{ count: number }>();
       if ((count?.count ?? 0) >= 80)
         return errorResponse(409, "member_limit", "Collaborator limit reached.");
-      await env.DB.prepare(
-        "INSERT INTO repository_collaborators(repository_id,user_id,role,created_at) VALUES (?,?,?,?) ON CONFLICT(repository_id,user_id) DO UPDATE SET role=excluded.role"
-      )
-        .bind(repo.id, person.id, parsed.data.role, Date.now())
-        .run();
+      await env.DB.batch([
+        env.DB.prepare(
+          "INSERT INTO repository_collaborators(repository_id,user_id,role,created_at) VALUES (?,?,?,?) ON CONFLICT(repository_id,user_id) DO UPDATE SET role=excluded.role"
+        ).bind(repo.id, person.id, parsed.data.role, Date.now()),
+        invitationNotificationStatement(env.DB, repo.id, user.id, person.id),
+      ]);
       logger.info("collaborator:saved", { userId: person.id, role: parsed.data.role });
       return dataResponse({
         id: person.id,

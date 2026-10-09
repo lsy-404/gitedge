@@ -1,5 +1,5 @@
 import { repositoryNotFound } from "../../../src/worker/common/repository-response";
-import { recordGitWrite } from "./events";
+import { recordGitWrite, reportPushEvent } from "./events";
 import type { RefUpdate } from "./receive-commands";
 import { resolveRepositoryPath } from "../../../src/worker/common/repositories";
 import { branchRules, matchingBranchRules } from "../../../src/worker/common/branch-protection";
@@ -170,6 +170,16 @@ export async function proxyGitTransport(
                     update.ref.startsWith("refs/heads/") && update.newOid !== "0".repeat(40)
                 );
                 const notify = async () => {
+                  await reportPushEvent(
+                    env,
+                    repository.id,
+                    writer,
+                    updates.map((update) => ({
+                      ref: update.ref,
+                      before: update.oldOid,
+                      after: update.newOid,
+                    }))
+                  );
                   for (const update of changed.slice(0, 3))
                     await recordGitWrite(
                       env,

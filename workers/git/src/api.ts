@@ -1,6 +1,6 @@
 import { repositoryNotFound } from "../../../src/worker/common/repository-response";
 import { trustedHeaders } from "../../../packages/contracts/src/trust";
-import { recordGitWrite } from "./events";
+import { recordGitWrite, reportPushEvent } from "./events";
 import { repositoryCommunity } from "./community";
 import {
   EditRepositoryFileSchema,
@@ -19,6 +19,7 @@ import {
   deleteRepositoryBranch,
   GitWriteConflict,
   GitWriteInputError,
+  ZERO_OID,
 } from "./write";
 import { repositorySnapshot } from "./snapshot";
 import { createLogger } from "../../../src/worker/common/logger";
@@ -167,16 +168,21 @@ export async function handleGitApi(
           "Repository permissions or protection changed. Reload before retrying."
         );
     };
-    const written = async (branch: string, oid: string) => {
+    const written = async (branch: string, oid: string, before: string) => {
       if (session || !access.user) return;
-      const operation = recordGitWrite(
-        env,
-        repositoryId,
-        access.repository.artifactName!,
-        access.user,
-        branch,
-        oid
-      );
+      const operation = Promise.all([
+        recordGitWrite(
+          env,
+          repositoryId,
+          access.repository.artifactName!,
+          access.user,
+          branch,
+          oid
+        ),
+        reportPushEvent(env, repositoryId, access.user, [
+          { ref: `refs/heads/${branch}`, before, after: oid },
+        ]),
+      ]);
       if (ctx) ctx.waitUntil(operation);
       else await operation;
     };
@@ -189,7 +195,11 @@ export async function handleGitApi(
           beforeWrite,
           env.LOG_LEVEL
         );
-        await written(result.branch, result.oid);
+        await written(
+          result.branch,
+          result.oid,
+          edit.data.newBranch ? ZERO_OID : (edit.data.expectedOid ?? ZERO_OID)
+        );
         logger.info("git:file-committed", { branch: result.branch, oid: result.oid });
         return dataResponse(result, 201);
       }
@@ -202,7 +212,7 @@ export async function handleGitApi(
           beforeWrite,
           env.LOG_LEVEL
         );
-        await written(result.name, result.oid);
+        await written(result.name, result.oid, ZERO_OID);
         logger.info("git:branch-created", { branch: result.name });
         return dataResponse(result, 201);
       }
@@ -214,6 +224,17 @@ export async function handleGitApi(
           beforeWrite,
           env.LOG_LEVEL
         );
+        if (!session && access.user) {
+          const reported = reportPushEvent(env, repositoryId, access.user, [
+            {
+              ref: `refs/heads/${remove.data.name}`,
+              before: remove.data.expectedOid,
+              after: ZERO_OID,
+            },
+          ]);
+          if (ctx) ctx.waitUntil(reported);
+          else await reported;
+        }
         logger.info("git:branch-deleted", { branch: remove.data.name });
         return dataResponse({ deleted: true });
       }
@@ -324,14 +345,23 @@ export async function handleGitApi(
         }[result.reason]
       );
     }
-    const operation = recordGitWrite(
-      env,
-      repositoryId,
-      access.repository.artifactName,
-      access.user,
-      input.data.baseRef,
-      result.oid
-    );
+    const operation = Promise.all([
+      recordGitWrite(
+        env,
+        repositoryId,
+        access.repository.artifactName,
+        access.user,
+        input.data.baseRef,
+        result.oid
+      ),
+      reportPushEvent(env, repositoryId, access.user, [
+        {
+          ref: `refs/heads/${input.data.baseRef}`,
+          before: current?.hash ?? ZERO_OID,
+          after: result.oid,
+        },
+      ]),
+    ]);
     if (ctx) ctx.waitUntil(operation);
     else await operation;
     logger.info("artifacts:merged", { oid: result.oid });
