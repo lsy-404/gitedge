@@ -61,10 +61,10 @@ describe("webhook and notification contracts", () => {
     expect(
       CreateRepositoryWebhookInputSchema.safeParse({
         url: "https://hooks.example.com/x",
-        events: ["push", "issues"],
+        events: ["push", "issues", "release"],
       }).success
     ).toBe(true);
-    for (const events of [[], ["push", "push"], ["release"]])
+    for (const events of [[], ["push", "push"], ["deployment"]])
       expect(
         CreateRepositoryWebhookInputSchema.safeParse({ url: "https://hooks.example.com/x", events })
           .success
