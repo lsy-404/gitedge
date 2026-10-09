@@ -19,6 +19,7 @@ import type {
   WikiPage,
   WikiPageSummary,
 } from "../lib/api";
+import { PAGES_CHECK_NAME } from "../../../../packages/contracts/src/pages";
 import { ApiError, api, errorMessage } from "../lib/api";
 import { sessionState } from "../lib/session";
 import { oneOf } from "../ui/formEvents";
@@ -328,6 +329,16 @@ interface MergeStatusRow {
   tone: MarkTone | "muted" | "warning";
   text: string;
 }
+const previewCheck = computed(() =>
+  props.section === "pulls" && diff.value
+    ? (checks.value.find(
+        (check) =>
+          check.name === PAGES_CHECK_NAME &&
+          check.commitOid === diff.value?.headOid &&
+          check.detailsUrl
+      ) ?? null)
+    : null
+);
 /** Reviews and checks bound to the current head, summarized next to the merge controls. */
 const mergeStatusRows = computed<MergeStatusRow[]>(() => {
   const head = diff.value?.headOid ?? "";
@@ -354,7 +365,9 @@ const mergeStatusRows = computed<MergeStatusRow[]>(() => {
       text: t("mergeReviewsApproved", { count: approvals }),
     });
   else rows.push({ key: "reviews", icon: "circle", tone: "muted", text: t("mergeReviewsNone") });
-  const current = checks.value.filter((check) => check.commitOid === head);
+  const current = checks.value.filter(
+    (check) => check.commitOid === head && check.name !== PAGES_CHECK_NAME
+  );
   const pending = current.filter((check) => check.status !== "completed").length;
   const failing = current.filter(
     (check) =>
@@ -1443,6 +1456,15 @@ watch(
                   :source="'content' in item ? item.content : item.body"
                   :repository="markdownRepository"
                 />
+                <div v-if="previewCheck" class="pull-meta">
+                  <a
+                    class="btn btn-sm"
+                    :href="previewCheck.detailsUrl ?? undefined"
+                    target="_blank"
+                    rel="noreferrer"
+                    ><AppIcon name="external" :size="14" />{{ t("pagesPreviewLink") }}</a
+                  >
+                </div>
                 <div
                   v-if="'headRef' in item && (item.headSessionId || item.mergedOid)"
                   class="pull-meta"

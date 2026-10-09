@@ -20,6 +20,7 @@ import {
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
 import { createLogger, type Logger } from "../../../src/worker/common/logger";
+import { matchHostSite, matchPathSite, siteRequest, sitesHostOwner, type SiteMatch } from "./sites";
 
 export interface GatewayService {
   fetch(request: Request): Promise<Response>;
@@ -36,6 +37,8 @@ export interface GatewayEnv {
   IP_RPM_LIMIT?: string;
   USER_GROUP_LIMITS_JSON?: string;
   PRIVATE_REPOSITORY_RESPONSE?: string;
+  SITES_HOST?: string;
+  SITE_IP_RPM_LIMIT?: string;
 }
 
 interface AuthenticatedSession extends TrustedUser {
@@ -93,9 +96,21 @@ const unavailableMessages: Readonly<Record<string, string>> = {
   "/api/deploy": "Deployment service is unavailable.",
 };
 
-export function withSecurityHeaders(response: Response, pathname: string): Response {
+export function isSitesHost(hostname: string, sitesHost: string | undefined): boolean {
+  const suffix = sitesHost?.trim().toLowerCase();
+  const host = hostname.toLowerCase();
+  return Boolean(suffix) && (host === suffix || host.endsWith(`.${suffix}`));
+}
+
+export function withSecurityHeaders(
+  response: Response,
+  pathname: string,
+  siteHost = false
+): Response {
   const headers = new Headers(response.headers);
   for (const [name, value] of Object.entries(securityHeaders)) {
+    // Pages content brings its own policy; the application policy would break it.
+    if (siteHost && name === "Content-Security-Policy") continue;
     if (!headers.has(name)) headers.set(name, value);
   }
   if (pathname.startsWith("/api/") && !headers.has("Cache-Control")) {
@@ -424,8 +439,46 @@ async function serveSpa(request: Request, assets: GatewayService): Promise<Respo
   return assets.fetch(withPath(request, "/index.html"));
 }
 
+const SITE_RPM_LIMIT = 1200;
+
+/** Pages visitors are anonymous: no cookies or credentials reach the Git service. */
+async function handleSite(request: Request, env: GatewayEnv, match: SiteMatch): Promise<Response> {
+  if (request.method !== "GET" && request.method !== "HEAD")
+    return new Response("Method not allowed\n", { status: 405, headers: { Allow: "GET, HEAD" } });
+  if (match.kind === "not-found")
+    return new Response("Site not found\n", {
+      status: 404,
+      headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+    });
+  if (match.kind === "redirect")
+    return new Response(null, {
+      status: 308,
+      headers: { Location: match.location, "Cache-Control": "no-store" },
+    });
+  const limited = rateLimitedResponse(
+    await consumeRateLimit(
+      env.RATE_LIMITER,
+      `site:ip:${rateLimitIpKey(request.headers.get("CF-Connecting-IP") || "unknown")}`,
+      parsePositiveLimit(env.SITE_IP_RPM_LIMIT, SITE_RPM_LIMIT)
+    )
+  );
+  if (limited) return limited;
+  return env.GIT.fetch(siteRequest(request, match.target));
+}
+
 export async function handleGatewayRequest(request: Request, env: GatewayEnv): Promise<Response> {
   const url = new URL(request.url);
+
+  if (isSitesHost(url.hostname, env.SITES_HOST)) {
+    const owner = sitesHostOwner(url.hostname, env.SITES_HOST);
+    return handleSite(
+      request,
+      env,
+      owner === null ? { kind: "not-found" } : matchHostSite(url, owner)
+    );
+  }
+  const pathSite = matchPathSite(url);
+  if (pathSite) return handleSite(request, env, pathSite);
 
   if (/^\/api\/(?:auth|forge|git|deploy|actions)\/_?internal(?:\/|$)/.test(url.pathname))
     return new Response("Not found\n", { status: 404 });
@@ -726,7 +779,8 @@ export default {
   async fetch(request: Request, env: GatewayEnv): Promise<Response> {
     return withSecurityHeaders(
       await handleGatewayRequest(request, env),
-      new URL(request.url).pathname
+      new URL(request.url).pathname,
+      isSitesHost(new URL(request.url).hostname, env.SITES_HOST)
     );
   },
 };

@@ -21,6 +21,7 @@ import BranchProtectionSettings from "./BranchProtectionSettings.vue";
 import AuditLogList from "./AuditLogList.vue";
 import RepositoryCollaborators from "./RepositoryCollaborators.vue";
 import RepositoryWebhooks from "./RepositoryWebhooks.vue";
+import RepositoryPages from "./RepositoryPages.vue";
 import RepositoryDangerActions from "./RepositoryDangerActions.vue";
 import "../styles/settings.css";
 
@@ -31,6 +32,7 @@ type SettingsSection =
   | "merge"
   | "branchRules"
   | "collaborators"
+  | "pages"
   | "webhooks"
   | "agents"
   | "audit"
@@ -42,6 +44,7 @@ const sections = [
   ["merge", "repoSettingsMergeRules"],
   ["branchRules", "repoSettingsBranchRules"],
   ["collaborators", "repoSettingsCollaborators"],
+  ["pages", "repoSettingsPages"],
   ["webhooks", "repoSettingsWebhooks"],
   ["agents", "repoSettingsAgentsMemory"],
   ["audit", "auditLogTitle"],
@@ -73,6 +76,7 @@ const featureSwitches = [
   ["tasksEnabled", "repoSettingsTasks", "repoSettingsTasksHint"],
   ["agentsEnabled", "repoSettingsAgents", "repoSettingsAgentsHint"],
   ["deploymentsEnabled", "repoSettingsDeployments", "repoSettingsDeploymentsHint"],
+  ["pagesEnabled", "repoSettingsPagesToggle", "repoSettingsPagesToggleHint"],
   ["graphEnabled", "repoSettingsGraph", "repoSettingsGraphHint"],
   ["actionsEnabled", "repoSettingsActions", "repoSettingsActionsHint"],
   ["actionsNetworkEnabled", "repoSettingsActionsNetwork", "repoSettingsActionsNetworkHint"],
@@ -97,6 +101,7 @@ const editableFields = [
   "tasksEnabled",
   "agentsEnabled",
   "deploymentsEnabled",
+  "pagesEnabled",
   "graphEnabled",
   "actionsEnabled",
   "actionsNetworkEnabled",
@@ -247,7 +252,10 @@ async function save() {
   saved.value = false;
   revocationIncomplete.value = false;
   try {
-    const payload: RepositoryDraft = { ...draft.value };
+    const payload: RepositoryDraft = {
+      ...draft.value,
+      pagesEnabled: draft.value.pagesEnabled && draft.value.visibility === "public",
+    };
     const result = await api.updateRepositorySettings(props.repository.id, payload);
     const renamed = result.slug !== props.repository.slug;
     const owner = props.repository.owner;
@@ -448,7 +456,11 @@ watch(() => props.repository.id, load, { immediate: true });
                 <span>{{ t(label) }}</span>
                 <p>{{ t(hint) }}</p>
               </div>
-              <FluentSwitch v-model="draft[key]" :label="t(label)" :disabled="!canManage" />
+              <FluentSwitch
+                v-model="draft[key]"
+                :label="t(label)"
+                :disabled="!canManage || (key === 'pagesEnabled' && draft.visibility !== 'public')"
+              />
             </div>
           </section>
 
@@ -512,6 +524,14 @@ watch(() => props.repository.id, load, { immediate: true });
             v-else-if="activeSection === 'collaborators'"
             :repository-id="props.repository.id"
             :can-manage="canManage"
+          />
+          <RepositoryPages
+            v-else-if="activeSection === 'pages'"
+            :repository-id="props.repository.id"
+            :owner="props.repository.owner"
+            :name="props.repository.name"
+            :can-manage="canManage"
+            :pages-enabled="draft.pagesEnabled"
           />
           <RepositoryWebhooks
             v-else-if="activeSection === 'webhooks'"

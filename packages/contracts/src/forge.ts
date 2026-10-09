@@ -38,6 +38,7 @@ export interface Repository {
   tasksEnabled: boolean;
   agentsEnabled: boolean;
   deploymentsEnabled: boolean;
+  pagesEnabled: boolean;
   graphEnabled: boolean;
   actionsEnabled: boolean;
   actionsNetworkEnabled: boolean;

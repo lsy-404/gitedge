@@ -12,6 +12,7 @@ import {
   type SavedRepositoryWebhook,
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
+import { syncPagesAfterPush } from "./pages";
 import { auditActor, recordAudit } from "../../../src/worker/common/audit";
 import { randomHex } from "../../../src/worker/common/encoding";
 import { dataResponse, errorResponse, requireRecentAuth } from "../../../src/worker/common/http";
@@ -595,6 +596,13 @@ export async function handlePushEvent(
     logger.warn("webhook:push-refs-truncated", { count: parsed.data.updates.length });
   const events: WebhookEvent[] = updates.map((update) => pushWebhook(repository, pusher, update));
   await env.DB.batch(events.map((event) => queueWebhookEvent(env.DB, repository.id, event)));
+  try {
+    await syncPagesAfterPush(env, repository, updates);
+  } catch (cause) {
+    logger.error("pages:push-sync-failed", {
+      error: cause instanceof Error ? cause.message : "unknown",
+    });
+  }
   return dataResponse({
     queued: events.length,
     truncated: parsed.data.updates.length > updates.length,

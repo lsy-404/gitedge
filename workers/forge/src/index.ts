@@ -46,6 +46,7 @@ import {
 import { branchRules, matchingBranchRules } from "../../../src/worker/common/branch-protection";
 import { repositoryControls } from "./controls";
 import { publicReleaseRead, repositoryReleases } from "./releases";
+import { handleRepositoryPages, recordPreviewCheck } from "./pages";
 import {
   deleteOrganization,
   deletedRepositories,
@@ -320,6 +321,25 @@ async function pullRequestHeadOid(
     return errorResponse(502, "git_unavailable", "The pull request head could not be resolved.");
   }
   return headOid;
+}
+
+/** Best effort: a Git outage must not fail the pull request request that triggered the preview. */
+async function ensurePreviewCheck(
+  env: ForgeEnv,
+  requestUrl: string,
+  repository: RepositoryRow,
+  user: TrustedUser,
+  pull: Record<string, unknown>
+): Promise<void> {
+  try {
+    const head = await pullRequestHeadOid(env, requestUrl, repository, pull, user);
+    if (typeof head === "string") await recordPreviewCheck(env, repository, String(pull.id), head);
+  } catch (cause) {
+    createLogger(env.LOG_LEVEL, { service: "forge-pages", repoId: repository.id }).warn(
+      "pages:preview-check-failed",
+      { error: cause instanceof Error ? cause.message : "unknown" }
+    );
+  }
 }
 
 /** Head used to decide whether review comments are outdated; null when it cannot be resolved. */
@@ -917,6 +937,12 @@ async function featureRequest(
       ]);
       if (repository.actions_enabled === 1 && !parsed.data.headSessionId)
         await attachActionChecks(env, repository.id, id, parsed.data.headRef);
+      if (repository.pages_enabled === 1)
+        await ensurePreviewCheck(env, request.url, repository, user, {
+          id,
+          head_ref: parsed.data.headRef,
+          head_session_id: parsed.data.headSessionId ?? null,
+        });
       await mentionAgents(env, repository, user, parsed.data.body, {
         targetKind: "pull_request",
         targetId: id,
@@ -1541,6 +1567,8 @@ async function featureRequest(
       (request.method === "GET" || request.method === "POST")
     ) {
       if (request.method === "GET") {
+        if (repository.pages_enabled === 1 && current.state === "open")
+          await ensurePreviewCheck(env, request.url, repository, user, current);
         const rows = await env.DB.prepare(
           "SELECT * FROM forge_check_runs WHERE pull_request_id = ? ORDER BY created_at DESC"
         )
@@ -2564,6 +2592,8 @@ const worker = {
     if (hooks) return hooks;
     const releases = await repositoryReleases(env, request, repository, user, parts);
     if (releases) return releases;
+    const pages = await handleRepositoryPages(env, request, repository, user, parts);
+    if (pages) return pages;
     const feature = await featureRequest(env, user, repository, parts, request);
     if (feature) return feature;
 

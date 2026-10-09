@@ -27,6 +27,7 @@ export const AuditActions = [
   "repository_webhook.created",
   "repository_webhook.deleted",
   "release.published",
+  "pages.updated",
   "access_token.created",
   "access_token.revoked",
   "two_factor.totp_enabled",

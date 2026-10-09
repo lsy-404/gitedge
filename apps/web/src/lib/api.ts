@@ -49,6 +49,7 @@ import type {
   TotpEnrollment,
 } from "../../../../packages/contracts/src/security";
 import type { DeployPlan } from "../../../../packages/contracts/src/deploy";
+import type { PagesSettings, UpdatePagesInput } from "../../../../packages/contracts/src/pages";
 import type {
   ListNotificationsQuery,
   MarkNotificationsReadInput,
@@ -1489,6 +1490,13 @@ export const api = {
     request<NotificationPreferences>("/api/forge/notification-preferences"),
   saveNotificationPreferences: (payload: NotificationPreferences) =>
     request<NotificationPreferences>("/api/forge/notification-preferences", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  pagesSettings: (repositoryId: string) =>
+    request<PagesSettings>(repositoryPath(repositoryId, "pages")),
+  updatePages: (repositoryId: string, payload: UpdatePagesInput) =>
+    request<PagesSettings>(repositoryPath(repositoryId, "pages"), {
       method: "PUT",
       body: JSON.stringify(payload),
     }),

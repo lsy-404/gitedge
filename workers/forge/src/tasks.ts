@@ -213,7 +213,7 @@ async function repositorySettings(
   repositoryId: string
 ): Promise<Omit<RepositorySettings, "canManage">> {
   const row = await env.DB.prepare(
-    "SELECT slug, description, visibility, default_branch, archived, issues_enabled, pulls_enabled, discussions_enabled, wiki_enabled, required_approvals, require_passing_checks, tasks_enabled, agents_enabled, deployments_enabled, graph_enabled, actions_enabled, actions_network_enabled, online_editing_enabled, allow_merge_commit, allow_squash_merge, allow_rebase_merge, delete_branch_on_merge, memory_visibility, agent_assignment_policy FROM repositories WHERE id = ?"
+    "SELECT slug, description, visibility, default_branch, archived, issues_enabled, pulls_enabled, discussions_enabled, wiki_enabled, required_approvals, require_passing_checks, tasks_enabled, agents_enabled, deployments_enabled, pages_enabled, graph_enabled, actions_enabled, actions_network_enabled, online_editing_enabled, allow_merge_commit, allow_squash_merge, allow_rebase_merge, delete_branch_on_merge, memory_visibility, agent_assignment_policy FROM repositories WHERE id = ?"
   )
     .bind(repositoryId)
     .first<{
@@ -229,6 +229,7 @@ async function repositorySettings(
       tasks_enabled: number;
       agents_enabled: number;
       deployments_enabled: number;
+      pages_enabled: number;
       graph_enabled: number;
       actions_enabled: number;
       actions_network_enabled: number;
@@ -256,6 +257,7 @@ async function repositorySettings(
     tasksEnabled: row?.tasks_enabled !== 0,
     agentsEnabled: row?.agents_enabled !== 0,
     deploymentsEnabled: row?.deployments_enabled !== 0,
+    pagesEnabled: row?.pages_enabled === 1,
     graphEnabled: row?.graph_enabled !== 0,
     actionsEnabled: row?.actions_enabled === 1,
     actionsNetworkEnabled: row?.actions_network_enabled === 1,
@@ -1081,6 +1083,8 @@ async function settingsRequest(
     !(input.allowRebaseMerge ?? repository.allow_rebase_merge !== 0)
   )
     return errorResponse(400, "bad_request", "At least one merge method must be enabled.");
+  if (input.pagesEnabled && (input.visibility ?? repository.visibility) !== "public")
+    return errorResponse(400, "bad_request", "Pages are available for public repositories only.");
   if (slug && slug !== repository.slug) {
     const collision = await env.DB.prepare(
       "SELECT 1 AS found FROM repository_paths WHERE namespace_id = ? AND slug = ? AND repository_id != ?"
@@ -1112,7 +1116,7 @@ async function settingsRequest(
   const memoryVisibility = visibility === "private" ? "members" : (input.memoryVisibility ?? null);
   try {
     const mutation = env.DB.prepare(
-      "UPDATE repositories SET slug = COALESCE(?, slug), description = COALESCE(?, description), visibility = COALESCE(?, visibility), default_branch = COALESCE(?, default_branch), archived = COALESCE(?, archived), issues_enabled = COALESCE(?, issues_enabled), pulls_enabled = COALESCE(?, pulls_enabled), discussions_enabled = COALESCE(?, discussions_enabled), wiki_enabled = COALESCE(?, wiki_enabled), required_approvals = COALESCE(?, required_approvals), require_passing_checks = COALESCE(?, require_passing_checks), tasks_enabled = COALESCE(?, tasks_enabled), agents_enabled = COALESCE(?, agents_enabled), deployments_enabled = COALESCE(?, deployments_enabled), graph_enabled = COALESCE(?, graph_enabled), actions_enabled = COALESCE(?, actions_enabled), actions_network_enabled = COALESCE(?, actions_network_enabled), online_editing_enabled = COALESCE(?, online_editing_enabled), allow_merge_commit = COALESCE(?, allow_merge_commit), allow_squash_merge = COALESCE(?, allow_squash_merge), allow_rebase_merge = COALESCE(?, allow_rebase_merge), delete_branch_on_merge = COALESCE(?, delete_branch_on_merge), memory_visibility = COALESCE(?, memory_visibility), agent_assignment_policy = COALESCE(?, agent_assignment_policy), updated_at = ? WHERE id = ? AND deleted_at IS NULL AND (? IS NULL OR ? = 'members' OR COALESCE(?, visibility) = 'public')"
+      "UPDATE repositories SET slug = COALESCE(?, slug), description = COALESCE(?, description), visibility = COALESCE(?, visibility), default_branch = COALESCE(?, default_branch), archived = COALESCE(?, archived), issues_enabled = COALESCE(?, issues_enabled), pulls_enabled = COALESCE(?, pulls_enabled), discussions_enabled = COALESCE(?, discussions_enabled), wiki_enabled = COALESCE(?, wiki_enabled), required_approvals = COALESCE(?, required_approvals), require_passing_checks = COALESCE(?, require_passing_checks), tasks_enabled = COALESCE(?, tasks_enabled), agents_enabled = COALESCE(?, agents_enabled), deployments_enabled = COALESCE(?, deployments_enabled), pages_enabled = CASE WHEN COALESCE(?, visibility) = 'public' THEN COALESCE(?, pages_enabled) ELSE 0 END, graph_enabled = COALESCE(?, graph_enabled), actions_enabled = COALESCE(?, actions_enabled), actions_network_enabled = COALESCE(?, actions_network_enabled), online_editing_enabled = COALESCE(?, online_editing_enabled), allow_merge_commit = COALESCE(?, allow_merge_commit), allow_squash_merge = COALESCE(?, allow_squash_merge), allow_rebase_merge = COALESCE(?, allow_rebase_merge), delete_branch_on_merge = COALESCE(?, delete_branch_on_merge), memory_visibility = COALESCE(?, memory_visibility), agent_assignment_policy = COALESCE(?, agent_assignment_policy), updated_at = ? WHERE id = ? AND deleted_at IS NULL AND (? IS NULL OR ? = 'members' OR COALESCE(?, visibility) = 'public')"
     ).bind(
       slug ?? null,
       input.description ?? null,
@@ -1128,6 +1132,8 @@ async function settingsRequest(
       input.tasksEnabled === undefined ? null : Number(input.tasksEnabled),
       input.agentsEnabled === undefined ? null : Number(input.agentsEnabled),
       input.deploymentsEnabled === undefined ? null : Number(input.deploymentsEnabled),
+      visibility,
+      input.pagesEnabled === undefined ? null : Number(input.pagesEnabled),
       input.graphEnabled === undefined ? null : Number(input.graphEnabled),
       input.actionsEnabled === undefined ? null : Number(input.actionsEnabled),
       input.actionsNetworkEnabled === undefined ? null : Number(input.actionsNetworkEnabled),

@@ -7,6 +7,7 @@ import { proxyGitTransport } from "./transport";
 import { GitResourceLimitError } from "./http";
 import type { GitEnv } from "./access";
 import { purgeRepositoryArtifacts } from "./purge";
+import { serveSite } from "./site";
 
 export default {
   async fetch(request: Request, env: GitEnv, ctx: ExecutionContext): Promise<Response> {
@@ -18,6 +19,8 @@ export default {
         return request.method === "POST"
           ? await purgeRepositoryArtifacts(request, env)
           : errorResponse(405, "method_not_allowed", "Method is not allowed for this endpoint.");
+      if (url.hostname === "git.internal" && url.pathname === "/internal/site")
+        return await serveSite(request, env, ctx);
       if (url.pathname.startsWith("/internal/imports"))
         return await handleInternalImports(request, env);
       return url.pathname.includes(".git/")
