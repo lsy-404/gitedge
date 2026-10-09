@@ -9,14 +9,8 @@ import {
 import { createLogger } from "../../../src/worker/common/logger";
 import { gitHttpClient } from "./http";
 import { listArtifactRefs } from "./read";
-import {
-  GitWriteConflict,
-  GitWriteInputError,
-  ZERO_OID,
-  author,
-  checkout,
-  revokeWriteToken,
-} from "./write";
+import { GitWriteInputError } from "./changes";
+import { GitWriteConflict, ZERO_OID, author, checkout, revokeWriteToken } from "./write";
 
 const TAG_PREFIX = "refs/tags/";
 const HEAD_PREFIX = "refs/heads/";

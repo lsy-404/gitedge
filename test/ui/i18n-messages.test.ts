@@ -41,6 +41,9 @@ const dynamicKeys: Record<string, readonly string[]> = {
     "merge_method_disabled",
   ],
   "deployWizard.steps.": ["provision", "migrate", "deploy"],
+  codeUploadRejected_: ["path", "fileSize", "totalSize", "count"],
+  codeChange_: ["upload", "move", "delete"],
+  codeChangeSubmit_: ["upload", "move", "delete"],
   importError_: [
     "invalid_url",
     "remote_auth_required",

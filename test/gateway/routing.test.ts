@@ -148,6 +148,32 @@ describe("Gateway routing", () => {
     expect(response.status).toBe(405);
     expect(forwarded).toBe(false);
   });
+  it("forwards multipart commits to the Git service with the body intact", async () => {
+    let received: FormData | null = null;
+    const form = new FormData();
+    form.set("manifest", "{}");
+    form.set("f0", new File([new Uint8Array([0, 255])], "a.bin"));
+    const response = await handleGatewayRequest(
+      new Request("https://gitedge.example.com/api/git/repositories/r1/commit", {
+        method: "POST",
+        headers: { Origin: "https://gitedge.example.com", Cookie: "session=valid" },
+        body: form,
+      }),
+      environment({
+        auth: service(() =>
+          Response.json({ data: { id: "user-1", identifier: "owner", groupKey: "free" } })
+        ),
+        git: service(async (request) => {
+          received = await request.formData();
+          return Response.json({ data: { oid: "o", branch: "main" } }, { status: 201 });
+        }),
+      })
+    );
+    expect(response.status).toBe(201);
+    expect(received).not.toBeNull();
+    const file = (received as unknown as FormData).get("f0");
+    expect(file instanceof File && [...new Uint8Array(await file.arrayBuffer())]).toEqual([0, 255]);
+  });
   it("forwards auth routes directly to the Auth binding", async () => {
     const response = await handleGatewayRequest(
       new Request("https://gitedge.example.com/api/auth/session"),

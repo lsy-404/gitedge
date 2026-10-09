@@ -53,6 +53,31 @@ async function gitCall(
     { DB: env.DB, ARTIFACTS: artifacts }
   );
 }
+async function commitCall(
+  manifest: unknown,
+  files: Record<string, Uint8Array> = {},
+  user: keyof typeof users = "owner",
+  search = ""
+) {
+  const form = new FormData();
+  form.set("manifest", JSON.stringify(manifest));
+  for (const [name, content] of Object.entries(files)) form.set(name, new File([content], name));
+  return gitWorker.fetch(
+    new Request(`https://forge.test/repositories/${repositoryId}/commit${search}`, {
+      method: "POST",
+      headers: trustedHeaders(users[user]),
+      body: form,
+    }),
+    { DB: env.DB, ARTIFACTS: artifacts }
+  );
+}
+const upload = {
+  branch: "main",
+  expectedOid: null as string | null,
+  message: "Upload files",
+  changes: [{ op: "put", path: "assets/logo.bin", part: "f0" }],
+};
+const bytes = { f0: new Uint8Array([0, 1, 2, 3]) };
 function receivePack(commands: string[]): Request {
   const headers = trustedHeaders(users.owner);
   headers.set("X-GitEdge-Git-Grant", JSON.stringify({ repositoryId, permission: "write" }));
@@ -134,6 +159,65 @@ describe("Git mutation guards", () => {
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ error: { code: "refs_changed" } });
     expect(tokenCount()).toBe(before);
+  });
+
+  it("rejects a multi-file commit whose parent is stale without minting a write token", async () => {
+    const before = tokenCount();
+    const response = await commitCall({ ...upload, expectedOid: oid("f") }, bytes);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: { code: "refs_changed" } });
+    expect(tokenCount()).toBe(before);
+  });
+
+  it("refuses a multi-file commit onto an existing new branch name", async () => {
+    const response = await commitCall({ ...upload, newBranch: "main" }, bytes);
+    expect(response.status).toBe(409);
+  });
+
+  it("validates commit paths, parts and sizes before any storage access", async () => {
+    const before = tokenCount();
+    for (const path of ["../escape.txt", ".git/hooks/pre-commit", "/abs.txt", "a//b.txt"]) {
+      const response = await commitCall(
+        { ...upload, changes: [{ op: "put", path, part: "f0" }] },
+        bytes
+      );
+      expect(response.status, path).toBe(400);
+    }
+    expect((await commitCall(upload)).status).toBe(400);
+    const oversized = await commitCall(upload, { f0: new Uint8Array(5 * 1024 * 1024 + 1) });
+    expect(oversized.status).toBe(413);
+    expect(await oversized.json()).toMatchObject({ error: { code: "file_too_large" } });
+    expect(tokenCount()).toBe(before);
+  });
+
+  it("rejects JSON bodies on the commit endpoint and admits write collaborators", async () => {
+    const json = await gitCall("commit", "POST", upload);
+    expect(json.status).toBe(415);
+    expect((await commitCall(upload, bytes, "writer")).status).not.toBe(403);
+  });
+
+  it("blocks commits that target protected branches or branch names", async () => {
+    const rule = await forgeCall(`/repositories/${repositoryId}/branch-rules`, "POST", {
+      pattern: "release/*",
+      requireSignedCommits: true,
+    });
+    expect(rule.status).toBe(201);
+    const before = tokenCount();
+    const response = await commitCall({ ...upload, newBranch: "release/1" }, bytes);
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: { code: "protected_branch" } });
+    expect(tokenCount()).toBe(before);
+  });
+
+  it("honors the online editing switch for multi-file commits", async () => {
+    const toggle = (enabled: boolean) =>
+      forgeCall(`/repositories/${repositoryId}/settings`, "PATCH", {
+        onlineEditingEnabled: enabled,
+      });
+    expect((await toggle(false)).status).toBe(200);
+    const response = await commitCall(upload, bytes);
+    expect((await toggle(true)).status).toBe(200);
+    expect(response.status).toBe(404);
   });
 
   it("rejects merges with stale head or base OIDs before minting tokens", async () => {
@@ -236,6 +320,29 @@ describe("Agent session workspace access", () => {
     );
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ error: { code: "refs_changed" } });
+  });
+
+  it("commits multi-file changes into the session workspace, not the repository", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("clone unavailable");
+      })
+    );
+    const fork = artifacts.repositories.get(forkName);
+    const [head] = fork?.commits ?? [];
+    fork?.branchCommits.set("agent-work", [{ ...head, hash: oid("9") }]);
+    const forkBefore = artifacts.snapshot(forkName).tokens.length;
+    const repositoryBefore = tokenCount();
+    const response = await commitCall(
+      { ...upload, branch: "agent-work", expectedOid: oid("9") },
+      bytes,
+      "owner",
+      `?sessionId=${sessionId}`
+    );
+    expect(response.status).not.toBe(409);
+    expect(artifacts.snapshot(forkName).tokens.length).toBe(forkBefore + 1);
+    expect(tokenCount()).toBe(repositoryBefore);
   });
 
   describe("published pull request heads", () => {

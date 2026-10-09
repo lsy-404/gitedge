@@ -19,13 +19,15 @@ import {
 } from "../../../src/worker/common/branch-protection";
 import { readJsonLimited } from "../../../src/worker/common/readText";
 import {
-  editRepositoryFile,
+  commitRepositoryChanges,
   createRepositoryBranch,
   deleteRepositoryBranch,
   GitWriteConflict,
-  GitWriteInputError,
   ZERO_OID,
+  type RepositoryCommitInput,
 } from "./write";
+import { GitWriteInputError } from "./changes";
+import { CommitRequestError, commitFromEdit, readCommitRequest } from "./commit-request";
 import { repositorySnapshot } from "./snapshot";
 import { GitTagExists, createRepositoryTag, deleteRepositoryTag, listRepositoryTags } from "./tags";
 import { serveRaw, splitRawSpec } from "./raw";
@@ -161,11 +163,13 @@ export async function handleGitApi(
   const resource = parts[2];
   const proposalComparison =
     (resource === "compare" || resource === "pull-head") && url.searchParams.has("headSessionId");
-  // Commit lookups answer whether the repository itself holds a commit, never a private fork.
+  const committing = (resource === "edit" || resource === "commit") && request.method === "POST";
+  // Commit lookups answer whether the repository itself holds a commit, never a private fork;
+  // commit writes stay in the session workspace like every other mutation.
   const repositoryScoped =
     proposalComparison ||
     resource === "pull-head" ||
-    resource === "commit" ||
+    (resource === "commit" && !committing) ||
     resource === "commit-diff" ||
     resource === "signature" ||
     resource === "snapshot" ||
@@ -230,20 +234,37 @@ export async function handleGitApi(
       throw cause;
     }
   }
-  if ((resource === "edit" || resource === "branches") && request.method !== "GET") {
+  if (
+    (resource === "edit" || resource === "commit" || resource === "branches") &&
+    request.method !== "GET" &&
+    request.method !== "HEAD"
+  ) {
     if (!access.user || !access.repository.canWrite || userSession?.permission === "read")
       return errorResponse(403, "forbidden", "Repository write access is required.");
     if (access.repository.archived)
       return errorResponse(409, "repository_archived", "Archived repositories are read-only.");
-    if (resource === "edit" && access.repository.onlineEditingEnabled === 0)
+    if (committing && access.repository.onlineEditingEnabled === 0)
       return errorResponse(404, "feature_disabled", "Online editing is disabled.");
     if (session && !userSession && session.userId !== access.user.id)
       return errorResponse(404, "not_found", "Session workspace was not found.");
-    const value = await readJsonLimited(request, 2_100_000);
-    const edit =
-      resource === "edit" && request.method === "POST"
-        ? EditRepositoryFileSchema.safeParse(value)
-        : null;
+    let commit: RepositoryCommitInput | null = null;
+    let editedPath: string | null = null;
+    try {
+      if (resource === "commit" && request.method === "POST")
+        commit = await readCommitRequest(request);
+      else if (resource === "edit" && request.method === "POST") {
+        const edit = EditRepositoryFileSchema.safeParse(await readJsonLimited(request, 2_100_000));
+        if (edit.success) {
+          commit = commitFromEdit(edit.data);
+          editedPath = edit.data.path;
+        }
+      }
+    } catch (cause) {
+      if (!(cause instanceof CommitRequestError)) throw cause;
+      logger.warn("git:commit-request-rejected", { resource, code: cause.code });
+      return errorResponse(cause.status, cause.code, cause.message);
+    }
+    const value = committing ? null : await readJsonLimited(request, 2_100_000);
     const create =
       resource === "branches" && request.method === "POST"
         ? CreateBranchInputSchema.safeParse(value)
@@ -252,8 +273,8 @@ export async function handleGitApi(
       resource === "branches" && request.method === "DELETE"
         ? DeleteBranchInputSchema.safeParse(value)
         : null;
-    const target = edit?.success
-      ? (edit.data.newBranch ?? edit.data.branch)
+    const target = commit
+      ? (commit.newBranch ?? commit.branch)
       : create?.success
         ? create.data.name
         : remove?.success
@@ -275,7 +296,7 @@ export async function handleGitApi(
         latest instanceof Response ||
         !latest?.repository.canWrite ||
         latest.repository.archived ||
-        (resource === "edit" && latest.repository.onlineEditingEnabled === 0) ||
+        (committing && latest.repository.onlineEditingEnabled === 0) ||
         (!session && (await protectedBranch(env.DB, repositoryId, target))) ||
         (remove?.success && latest.repository.defaultBranch === target)
       )
@@ -302,10 +323,10 @@ export async function handleGitApi(
       else await operation;
     };
     try {
-      if (edit?.success) {
-        const result = await editRepositoryFile(
+      if (commit) {
+        const result = await commitRepositoryChanges(
           repo,
-          edit.data,
+          commit,
           access.user,
           beforeWrite,
           env.LOG_LEVEL
@@ -313,10 +334,14 @@ export async function handleGitApi(
         await written(
           result.branch,
           result.oid,
-          edit.data.newBranch ? ZERO_OID : (edit.data.expectedOid ?? ZERO_OID)
+          commit.newBranch ? ZERO_OID : (commit.expectedOid ?? ZERO_OID)
         );
-        logger.info("git:file-committed", { branch: result.branch, oid: result.oid });
-        return dataResponse(result, 201);
+        logger.info("git:changes-committed", {
+          branch: result.branch,
+          oid: result.oid,
+          changes: commit.changes.length,
+        });
+        return dataResponse(editedPath === null ? result : { ...result, path: editedPath }, 201);
       }
       if (create?.success) {
         const result = await createRepositoryBranch(

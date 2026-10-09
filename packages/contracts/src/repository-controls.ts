@@ -52,6 +52,85 @@ export const EditRepositoryFileSchema = z.object({
   message: z.string().trim().min(1).max(500),
 });
 export type EditRepositoryFileInput = z.infer<typeof EditRepositoryFileSchema>;
+export const REPOSITORY_COMMIT_LIMITS = {
+  changes: 100,
+  fileBytes: 5 * 1024 * 1024,
+  totalBytes: 10 * 1024 * 1024,
+  manifestBytes: 256 * 1024,
+} as const;
+/** Git's own `.git` guards: HFS+ ignores these code points and NTFS trims dots and spaces. */
+function gitDirectoryAlias(part: string): boolean {
+  const folded = part
+    .replace(/[\u200c-\u200f\u202a-\u202e\u206a-\u206f\ufeff]/g, "")
+    .replace(/[. ]+$/, "")
+    .toLowerCase();
+  return folded === ".git" || folded === "git~1";
+}
+export function editablePath(path: string): boolean {
+  const parts = path.split("/");
+  return (
+    path.length > 0 &&
+    path.length <= 1000 &&
+    !path.startsWith("/") &&
+    !path.includes("\\") &&
+    !/[\x00-\x1f\x7f]/.test(path) &&
+    parts.length <= 32 &&
+    parts.every((part) => part !== "" && part !== "." && part !== ".." && !gitDirectoryAlias(part))
+  );
+}
+const EditablePathSchema = z.string().refine(editablePath, "Invalid repository path");
+const FilePartSchema = z.string().min(1).max(64);
+export const RepositoryChangeSchema = z.discriminatedUnion("op", [
+  z.object({ op: z.literal("put"), path: EditablePathSchema, part: FilePartSchema }),
+  z.object({ op: z.literal("delete"), path: EditablePathSchema }),
+  z.object({
+    op: z.literal("move"),
+    from: EditablePathSchema,
+    to: EditablePathSchema,
+    part: FilePartSchema.optional(),
+  }),
+]);
+export type RepositoryChangeInput = z.infer<typeof RepositoryChangeSchema>;
+function touchedPaths(change: RepositoryChangeInput): string[] {
+  return change.op === "move" ? [change.from, change.to] : [change.path];
+}
+function nested(parent: string, child: string): boolean {
+  return child === parent || child.startsWith(parent + "/");
+}
+/** True when two changes touch the same path or one path contains another, which makes order matter. */
+export function repositoryChangesOverlap(changes: readonly RepositoryChangeInput[]): boolean {
+  const owned = changes.flatMap((change, index) =>
+    touchedPaths(change).map((path) => ({ path, index }))
+  );
+  return owned.some((a, i) =>
+    owned.some((b, j) => i < j && (nested(a.path, b.path) || nested(b.path, a.path)))
+  );
+}
+export const CommitRepositoryChangesSchema = z
+  .object({
+    branch: GitBranchSchema,
+    newBranch: GitBranchSchema.optional(),
+    expectedOid: GitOidSchema.nullable(),
+    message: z.string().trim().min(1).max(500),
+    changes: z.array(RepositoryChangeSchema).min(1).max(REPOSITORY_COMMIT_LIMITS.changes),
+  })
+  .refine((value) => !repositoryChangesOverlap(value.changes), "Changes must not overlap")
+  .refine(
+    (value) =>
+      value.changes.every((change) => change.op !== "move" || !nested(change.from, change.to)),
+    "A path cannot move into itself"
+  )
+  .refine((value) => {
+    const parts = value.changes.flatMap((change) =>
+      change.op !== "delete" && change.part ? [change.part] : []
+    );
+    return new Set(parts).size === parts.length && !parts.includes("manifest");
+  }, "File parts must be unique");
+export type CommitRepositoryChangesInput = z.infer<typeof CommitRepositoryChangesSchema>;
+export interface CommitRepositoryChangesResult {
+  oid: string;
+  branch: string;
+}
 export const CreateBranchInputSchema = z.object({
   name: GitBranchSchema,
   source: GitBranchSchema,

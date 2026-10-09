@@ -1,27 +1,13 @@
 import * as git from "isomorphic-git";
 import { Volume, createFsFromVolume } from "memfs";
-import type { EditRepositoryFileInput } from "../../../packages/contracts/src/repository-controls";
+import type { CommitRepositoryChangesResult } from "../../../packages/contracts/src/repository-controls";
+import { applyRepositoryChanges, GitWriteInputError, type RepositoryChange } from "./changes";
 import { createLogger, type Logger } from "../../../src/worker/common/logger";
 import { gitHttpClient } from "./http";
 import { resolveCommit } from "./read";
 
 export class GitWriteConflict extends Error {}
-export class GitWriteInputError extends Error {}
 export const ZERO_OID = "0".repeat(40);
-export function editablePath(path: string): boolean {
-  return (
-    path.length <= 1000 &&
-    !path.startsWith("/") &&
-    !path.includes("\\") &&
-    !/[\x00-\x1f\x7f]/.test(path) &&
-    path
-      .split("/")
-      .every(
-        (part) => part !== "" && part !== "." && part !== ".." && part.toLowerCase() !== ".git"
-      ) &&
-    path.split("/").length <= 32
-  );
-}
 export function author(name: string, id: string): git.CommitObject["author"] {
   return {
     name,
@@ -79,70 +65,33 @@ export async function checkout(
     throw error;
   }
 }
-export async function editRepositoryFile(
+export interface RepositoryCommitInput {
+  branch: string;
+  newBranch?: string;
+  expectedOid: string | null;
+  message: string;
+  changes: RepositoryChange[];
+}
+export async function commitRepositoryChanges(
   repo: ArtifactsRepo,
-  input: EditRepositoryFileInput,
+  input: RepositoryCommitInput,
   user: { id: string; identifier: string },
   beforePush: () => Promise<void>,
   level?: string
-): Promise<{ oid: string; branch: string; path: string }> {
-  if (
-    !editablePath(input.path) ||
-    (input.content !== null && new TextEncoder().encode(input.content).byteLength > 1_000_000)
-  )
-    throw new GitWriteInputError("Invalid path or file size.");
+): Promise<CommitRepositoryChangesResult> {
   const target = input.newBranch ?? input.branch;
   if (input.newBranch && (await resolveCommit(repo, target)))
     throw new GitWriteConflict("The new branch already exists.");
   const state = await checkout(repo, input.branch, input.expectedOid, level);
   const { fs, dir, http, info, token, current, logger } = state;
   try {
-    const blob =
-      input.content === null
-        ? null
-        : await git.writeBlob({ fs, dir, blob: new TextEncoder().encode(input.content) });
-    async function updateTree(oid: string | null, parts: string[]): Promise<string> {
-      const entries: git.TreeEntry[] = oid ? (await git.readTree({ fs, dir, oid })).tree : [];
-      const [name, ...rest] = parts,
-        existing = entries.find((entry) => entry.path === name);
-      if (rest.length) {
-        if (existing && existing.type !== "tree")
-          throw new GitWriteInputError("A parent path is not a directory.");
-        const next = await updateTree(existing?.oid ?? null, rest);
-        const entry: git.TreeEntry = { path: name, mode: "040000", type: "tree", oid: next };
-        if (existing) entries.splice(entries.indexOf(existing), 1, entry);
-        else entries.push(entry);
-      } else {
-        if (existing && (existing.type !== "blob" || existing.mode === "120000"))
-          throw new GitWriteInputError("Only regular text files can be edited.");
-        if (existing && input.content !== null) {
-          const original = await git.readBlob({ fs, dir, oid: existing.oid });
-          if (original.blob.byteLength > 1_000_000 || original.blob.includes(0))
-            throw new GitWriteInputError("Only text files under 1 MB can be edited.");
-          try {
-            new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(original.blob);
-          } catch {
-            throw new GitWriteInputError("Only UTF-8 text files can be edited.");
-          }
-        }
-        if (blob === null) {
-          if (!existing) throw new GitWriteInputError("The file does not exist.");
-          entries.splice(entries.indexOf(existing), 1);
-        } else {
-          const entry: git.TreeEntry = {
-            path: name,
-            mode: existing?.mode === "100755" ? "100755" : "100644",
-            type: "blob",
-            oid: blob,
-          };
-          if (existing) entries.splice(entries.indexOf(existing), 1, entry);
-          else entries.push(entry);
-        }
-      }
-      return git.writeTree({ fs, dir, tree: entries });
-    }
-    const tree = await updateTree(current?.treeHash ?? null, input.path.split("/"));
-    if (current?.treeHash === tree) throw new GitWriteInputError("The file has not changed.");
+    const tree = await applyRepositoryChanges(
+      { fs, dir },
+      current?.treeHash ?? null,
+      input.changes
+    );
+    if (current?.treeHash === tree)
+      throw new GitWriteInputError("The commit does not change any file.");
     const identity = author(user.identifier, user.id);
     const oid = await git.writeCommit({
       fs,
@@ -171,7 +120,7 @@ export async function editRepositoryFile(
     });
     if (!pushed.ok)
       throw new GitWriteConflict("The branch changed before the commit could be saved.");
-    return { oid, branch: target, path: input.path };
+    return { oid, branch: target };
   } catch (error) {
     if (
       error instanceof git.Errors.PushRejectedError ||

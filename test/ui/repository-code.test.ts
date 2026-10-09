@@ -146,7 +146,8 @@ function mockCodeApi(
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), "https://gitedge.test");
     const method = init?.method ?? "GET";
-    const body = typeof init?.body === "string" ? init.body : "";
+    const form = init?.body instanceof FormData ? init.body : null;
+    const body = typeof init?.body === "string" ? init.body : String(form?.get("manifest") ?? "");
     requests.push({ path: url.pathname, method, body, ref: url.searchParams.get("ref") });
     if (url.pathname.endsWith("/community"))
       return jsonResponse({
@@ -223,14 +224,25 @@ function mockCodeApi(
         binary: options.file?.binary ?? false,
         content: options.file?.content ?? "initial",
       });
-    if (url.pathname.endsWith("/edit")) {
-      const input = JSON.parse(body) as { branch: string; newBranch?: string; path: string };
+    if (url.pathname.endsWith("/commit")) {
+      const manifest = JSON.parse(body) as {
+        branch: string;
+        newBranch?: string;
+        changes: Array<{ op: string; path?: string; to?: string; part?: string }>;
+      };
+      const first = manifest.changes.at(-1);
+      const part = first?.part ? form?.get(first.part) : null;
+      const input = {
+        ...manifest,
+        path: first?.path ?? first?.to ?? "",
+        content: part instanceof File ? await part.text() : null,
+        files: Object.fromEntries(
+          [...(form?.entries() ?? [])].filter(([key]) => key !== "manifest")
+        ),
+      };
       const response =
         options.onEdit?.(input) ??
-        jsonResponse(
-          { oid: "commit-v2", branch: input.newBranch ?? input.branch, path: input.path },
-          201
-        );
+        jsonResponse({ oid: "commit-v2", branch: input.newBranch ?? input.branch }, 201);
       if (response.ok) {
         const target = input.newBranch ?? input.branch;
         branches = branches.some((item) => item.name === target)
@@ -504,7 +516,7 @@ describe("repository Code view", () => {
     await settle();
     const editor = mounted.root.querySelector<HTMLFormElement>(".file-editor form");
     const textarea = editor?.querySelector<HTMLTextAreaElement>("textarea");
-    const message = editor?.querySelector<HTMLInputElement>("input");
+    const message = editor?.querySelector<HTMLInputElement>('input[maxlength="500"]');
     if (!editor || !textarea || !message) throw new Error("File editor fields were not rendered.");
     fill(textarea, "draft kept");
     fill(message, "Update readme");
@@ -514,14 +526,13 @@ describe("repository Code view", () => {
     submit(editor);
     await settle();
 
-    expect(mock.requests.some((request) => request.path.endsWith("/edit"))).toBe(true);
-    const editRequest = mock.requests.find((request) => request.path.endsWith("/edit"));
+    expect(mock.requests.some((request) => request.path.endsWith("/commit"))).toBe(true);
+    const editRequest = mock.requests.find((request) => request.path.endsWith("/commit"));
     expect(editRequest?.method).toBe("POST");
     expect(JSON.parse(editRequest?.body ?? "{}")).toMatchObject({
       branch: "main",
       expectedOid: commitOid,
-      path: "readme.md",
-      content: "draft kept",
+      changes: [{ op: "put", path: "readme.md" }],
       message: "Update readme",
     });
     expect(mock.requests.find((request) => request.path.endsWith("/file"))?.ref).toBe(commitOid);
@@ -567,7 +578,7 @@ describe("repository Code view", () => {
       path: "README.md",
       content: "# First commit",
     });
-    expect(mock.requests.filter((request) => request.path.endsWith("/edit"))).toHaveLength(1);
+    expect(mock.requests.filter((request) => request.path.endsWith("/commit"))).toHaveLength(1);
     mounted.unmount();
   });
 
@@ -575,7 +586,7 @@ describe("repository Code view", () => {
     i18n.global.locale.value = "en";
     mockCodeApi({
       onEdit: () =>
-        new Response(JSON.stringify({ error: { code: "conflict", message: "stale" } }), {
+        new Response(JSON.stringify({ error: { code: "refs_changed", message: "stale" } }), {
           status: 409,
         }),
     });
@@ -590,7 +601,7 @@ describe("repository Code view", () => {
     await settle();
     const editor = mounted.root.querySelector<HTMLFormElement>(".file-editor form");
     const textarea = editor?.querySelector<HTMLTextAreaElement>("textarea");
-    const message = editor?.querySelector<HTMLInputElement>("input");
+    const message = editor?.querySelector<HTMLInputElement>('input[maxlength="500"]');
     if (!editor || !textarea || !message) throw new Error("File editor fields were not rendered.");
     fill(textarea, "preserve this draft");
     fill(message, "Resolve later");
@@ -629,7 +640,7 @@ describe("repository Code view", () => {
     editButton?.click();
     await settle();
     const editor = mounted.root.querySelector<HTMLFormElement>(".file-editor form");
-    const message = editor?.querySelector<HTMLInputElement>("input");
+    const message = editor?.querySelector<HTMLInputElement>('input[maxlength="500"]');
     const deleteTrigger = Array.from(
       editor?.querySelectorAll<HTMLButtonElement>("button") ?? []
     ).find((button) => button.textContent?.includes("Delete file"));
@@ -710,8 +721,8 @@ describe("repository Code view", () => {
     const editor = mounted.root.querySelector<HTMLFormElement>(".file-editor form");
     const textarea = editor?.querySelector<HTMLTextAreaElement>("textarea");
     const fields = editor?.querySelectorAll<HTMLInputElement>("input");
-    const message = fields?.[0];
-    const newBranch = fields?.[1];
+    const message = fields?.[1];
+    const newBranch = fields?.[2];
     if (!editor || !textarea || !message || !newBranch)
       throw new Error("Protected branch editor controls were not rendered.");
     fill(textarea, "protected draft");
@@ -770,9 +781,12 @@ describe("repository Code view", () => {
         editBodies.push(body);
         attempt += 1;
         return attempt === 1
-          ? new Response(JSON.stringify({ error: { code: "forbidden", message: "protected" } }), {
-              status: 403,
-            })
+          ? new Response(
+              JSON.stringify({ error: { code: "protected_branch", message: "protected" } }),
+              {
+                status: 403,
+              }
+            )
           : jsonResponse(
               { oid: createdCommitOid, branch: "feature/editor", path: "readme.md" },
               201
@@ -791,7 +805,7 @@ describe("repository Code view", () => {
     const editor = mounted.root.querySelector<HTMLFormElement>(".file-editor form");
     const textarea = editor?.querySelector<HTMLTextAreaElement>("textarea");
     const fields = editor?.querySelectorAll<HTMLInputElement>("input");
-    const message = fields?.[0];
+    const message = fields?.[1];
     if (!editor || !textarea || !message) throw new Error("File editor fields were not rendered.");
     fill(textarea, "keep this protected draft");
     fill(message, "Move file from protected branch");
@@ -803,7 +817,7 @@ describe("repository Code view", () => {
       "Create a branch"
     );
     expect(textarea.value).toBe("keep this protected draft");
-    const newBranch = editor.querySelectorAll<HTMLInputElement>("input")[1];
+    const newBranch = editor.querySelectorAll<HTMLInputElement>("input")[2];
     if (!newBranch) throw new Error("New branch input was not shown after 403.");
     fill(newBranch, "feature/editor");
     await settle();
@@ -901,7 +915,7 @@ describe("repository Code view", () => {
     expect(editButton?.disabled).toBe(true);
     editButton?.click();
     expect(binaryMounted.root.querySelector(".file-editor")).toBeNull();
-    expect(binaryMock.requests.some((request) => request.path.endsWith("/edit"))).toBe(false);
+    expect(binaryMock.requests.some((request) => request.path.endsWith("/commit"))).toBe(false);
     binaryMounted.unmount();
 
     const disabledMock = mockCodeApi();
@@ -917,7 +931,7 @@ describe("repository Code view", () => {
     ).toBe(false);
     expect(
       disabledMock.requests.some(
-        (request) => request.path.endsWith("/branches") || request.path.endsWith("/edit")
+        (request) => request.path.endsWith("/branches") || request.path.endsWith("/commit")
       )
     ).toBe(false);
     disabledMounted.unmount();
@@ -936,7 +950,7 @@ describe("repository Code view", () => {
       ).toBe(false);
       expect(
         gatedMock.requests.some(
-          (request) => request.path.endsWith("/branches") || request.path.endsWith("/edit")
+          (request) => request.path.endsWith("/branches") || request.path.endsWith("/commit")
         )
       ).toBe(false);
       gatedMounted.unmount();
@@ -1218,6 +1232,419 @@ describe("repository Code view interactions", () => {
     pending[0]?.();
     await settle();
     expect(button(mounted.root, "Load more")?.hasAttribute("disabled")).toBe(false);
+    mounted.unmount();
+  });
+});
+
+function dropFiles(target: Element, files: File[]) {
+  const event = new Event("drop", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "dataTransfer", { value: { items: [], files } });
+  target.dispatchEvent(event);
+}
+
+function pickFiles(input: HTMLInputElement, files: File[]) {
+  Object.defineProperty(input, "files", { configurable: true, value: files });
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function fileWithPath(name: string, relativePath: string, content = "data"): File {
+  const file = new File([content], name);
+  Object.defineProperty(file, "webkitRelativePath", { value: relativePath });
+  return file;
+}
+
+function changeForm(root: HTMLElement) {
+  const form = root.querySelector<HTMLFormElement>(".change-form form");
+  if (!form) throw new Error("Change form was not rendered.");
+  return form;
+}
+
+function buttonWithText(root: ParentNode, text: string) {
+  const button = Array.from(root.querySelectorAll<HTMLButtonElement>("button")).find(
+    (candidate) => candidate.textContent?.trim() === text
+  );
+  if (!button) throw new Error(`Button ${text} was not rendered.`);
+  return button;
+}
+
+function enableDialogs() {
+  Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
+    configurable: true,
+    value(this: HTMLDialogElement) {
+      this.open = true;
+    },
+  });
+  Object.defineProperty(HTMLDialogElement.prototype, "close", {
+    configurable: true,
+    value(this: HTMLDialogElement) {
+      this.open = false;
+    },
+  });
+}
+
+const writer = { canWrite: true, onlineEditingEnabled: true, pullsEnabled: true };
+
+describe("repository web file operations", () => {
+  it("uploads dropped files and a picked folder into the current directory in one commit", async () => {
+    i18n.global.locale.value = "en";
+    let sent: Record<string, unknown> | null = null;
+    mockCodeApi({
+      onEdit: (body) => {
+        sent = body;
+        return jsonResponse({ oid: createdCommitOid, branch: "main" }, 201);
+      },
+    });
+    const mounted = await mountCode("/example/sample/tree/docs?ref=main", "code", writer);
+    buttonWithText(mounted.root, "Upload files").click();
+    await settle();
+    expect(mounted.root.querySelector(".change-form")?.textContent).toContain("5.0 MiB");
+    expect(mounted.root.querySelector(".change-form")?.textContent).toContain("10 MiB");
+
+    const zone = mounted.root.querySelector(".drop-zone");
+    if (!zone) throw new Error("Drop zone was not rendered.");
+    dropFiles(zone, [new File(["one"], "a.txt"), new File(["two"], "b.bin")]);
+    await settle();
+    const folderInput = mounted.root.querySelector<HTMLInputElement>(
+      'input[type="file"][webkitdirectory]'
+    );
+    if (!folderInput) throw new Error("Folder picker was not rendered.");
+    pickFiles(folderInput, [fileWithPath("c.txt", "assets/img/c.txt", "three")]);
+    await settle();
+
+    const staged = Array.from(mounted.root.querySelectorAll(".staged-list code")).map(
+      (item) => item.textContent
+    );
+    expect(staged).toEqual(["docs/a.txt", "docs/b.bin", "docs/assets/img/c.txt"]);
+
+    const form = changeForm(mounted.root);
+    fill(form.querySelector<HTMLInputElement>('input[maxlength="500"]')!, "Add assets");
+    await settle();
+    submit(form);
+    await settle();
+
+    expect(sent).toMatchObject({
+      branch: "main",
+      expectedOid: commitOid,
+      message: "Add assets",
+      changes: [
+        { op: "put", path: "docs/a.txt" },
+        { op: "put", path: "docs/b.bin" },
+        { op: "put", path: "docs/assets/img/c.txt" },
+      ],
+    });
+    expect(Object.keys((sent as unknown as { files: object }).files)).toEqual(["f0", "f1", "f2"]);
+    expect(router.currentRoute.value.path).toBe("/example/sample/tree/docs");
+    expect(router.currentRoute.value.query.ref).toBe("main");
+    mounted.unmount();
+  });
+
+  it("rejects oversized files and invalid paths before staging them", async () => {
+    i18n.global.locale.value = "en";
+    mockCodeApi();
+    const mounted = await mountCode("/example/sample?ref=main", "code", writer);
+    buttonWithText(mounted.root, "Upload files").click();
+    await settle();
+    const zone = mounted.root.querySelector(".drop-zone");
+    if (!zone) throw new Error("Drop zone was not rendered.");
+    dropFiles(zone, [
+      new File([new Uint8Array(5 * 1024 * 1024 + 1)], "huge.bin"),
+      new File(["x"], ".git"),
+      new File(["ok"], "ok.txt"),
+    ]);
+    await settle();
+
+    const text = mounted.root.querySelector(".change-form")?.textContent ?? "";
+    expect(text).toContain("huge.bin");
+    expect(text).toContain("per-file size limit");
+    expect(text).toContain("invalid path");
+    expect(
+      Array.from(mounted.root.querySelectorAll(".staged-list code")).map((i) => i.textContent)
+    ).toEqual(["ok.txt"]);
+    mounted.unmount();
+  });
+
+  it("opens the pull request form prefilled after committing to a new branch", async () => {
+    i18n.global.locale.value = "en";
+    let sent: Record<string, unknown> | null = null;
+    mockCodeApi({
+      onEdit: (body) => {
+        sent = body;
+        return jsonResponse({ oid: createdCommitOid, branch: "feature/upload" }, 201);
+      },
+    });
+    const mounted = await mountCode("/example/sample?ref=main", "code", writer);
+    buttonWithText(mounted.root, "Upload files").click();
+    await settle();
+    const zone = mounted.root.querySelector(".drop-zone");
+    if (!zone) throw new Error("Drop zone was not rendered.");
+    dropFiles(zone, [new File(["x"], "new.txt")]);
+    await settle();
+    const form = changeForm(mounted.root);
+    const fields = form.querySelectorAll<HTMLInputElement>('input:not([type="file"])');
+    fill(fields[0], "Upload new file");
+    fill(fields[1], "feature/upload");
+    await settle();
+    const checkbox = form.querySelector<HTMLInputElement>(".fluent-checkbox__input");
+    if (!checkbox) throw new Error("Pull request option was not rendered.");
+    expect(checkbox.checked).toBe(true);
+    submit(form);
+    await settle();
+
+    expect(sent).toMatchObject({ branch: "main", newBranch: "feature/upload" });
+    expect(router.currentRoute.value.path).toBe("/example/sample/pulls");
+    expect(router.currentRoute.value.query).toMatchObject({
+      new: "1",
+      base: "main",
+      head: "feature/upload",
+      title: "Upload new file",
+    });
+    mounted.unmount();
+  });
+
+  it("opens the new branch instead of a pull request form when pull requests are disabled", async () => {
+    i18n.global.locale.value = "en";
+    mockCodeApi({
+      onEdit: () => jsonResponse({ oid: createdCommitOid, branch: "feature/upload" }, 201),
+    });
+    const mounted = await mountCode("/example/sample?ref=main", "code", {
+      ...writer,
+      pullsEnabled: false,
+    });
+    buttonWithText(mounted.root, "Upload files").click();
+    await settle();
+    const zone = mounted.root.querySelector(".drop-zone");
+    if (!zone) throw new Error("Drop zone was not rendered.");
+    dropFiles(zone, [new File(["x"], "new.txt")]);
+    await settle();
+    const form = changeForm(mounted.root);
+    const fields = form.querySelectorAll<HTMLInputElement>('input:not([type="file"])');
+    fill(fields[0], "Upload new file");
+    fill(fields[1], "feature/upload");
+    await settle();
+    expect(form.querySelector(".fluent-checkbox__input")).toBeNull();
+    submit(form);
+    await settle();
+
+    expect(router.currentRoute.value.path).toBe("/example/sample");
+    expect(router.currentRoute.value.query.ref).toBe("feature/upload");
+    mounted.unmount();
+  });
+
+  it("keeps staged files and links the latest branch when the parent is stale", async () => {
+    i18n.global.locale.value = "en";
+    mockCodeApi({
+      onEdit: () =>
+        new Response(JSON.stringify({ error: { code: "refs_changed", message: "changed" } }), {
+          status: 409,
+        }),
+    });
+    const mounted = await mountCode("/example/sample?ref=main", "code", writer);
+    buttonWithText(mounted.root, "Upload files").click();
+    await settle();
+    const zone = mounted.root.querySelector(".drop-zone");
+    if (!zone) throw new Error("Drop zone was not rendered.");
+    dropFiles(zone, [new File(["x"], "new.txt")]);
+    await settle();
+    const form = changeForm(mounted.root);
+    fill(form.querySelector<HTMLInputElement>('input[maxlength="500"]')!, "Upload");
+    await settle();
+    submit(form);
+    await settle();
+
+    expect(form.textContent).toContain("The branch changed");
+    expect(form.querySelector("a")?.getAttribute("href")).toContain("base=" + commitOid);
+    expect(mounted.root.querySelectorAll(".staged-list li")).toHaveLength(1);
+    mounted.unmount();
+  });
+
+  it("asks for a new branch when a protected branch rejects the upload", async () => {
+    i18n.global.locale.value = "en";
+    mockCodeApi({
+      branches: [branch("main", commitOid, { protected: true, rules: ["main"] })],
+    });
+    const mounted = await mountCode("/example/sample?ref=main", "code", writer);
+    buttonWithText(mounted.root, "Upload files").click();
+    await settle();
+    expect(mounted.root.querySelector(".change-form .branch-guidance")).not.toBeNull();
+    const zone = mounted.root.querySelector(".drop-zone");
+    if (!zone) throw new Error("Drop zone was not rendered.");
+    dropFiles(zone, [new File(["x"], "new.txt")]);
+    await settle();
+    const form = changeForm(mounted.root);
+    fill(form.querySelector<HTMLInputElement>('input[maxlength="500"]')!, "Upload");
+    await settle();
+    expect(buttonWithText(form, "Commit upload").disabled).toBe(true);
+    mounted.unmount();
+  });
+
+  it("deletes a folder after confirmation and returns to the parent directory", async () => {
+    i18n.global.locale.value = "en";
+    enableDialogs();
+    let sent: Record<string, unknown> | null = null;
+    mockCodeApi({
+      onEdit: (body) => {
+        sent = body;
+        return jsonResponse({ oid: createdCommitOid, branch: "main" }, 201);
+      },
+    });
+    const mounted = await mountCode("/example/sample/tree/docs/guide?ref=main", "code", writer);
+    buttonWithText(
+      mounted.root.querySelector(".code-toolbar") as HTMLElement,
+      "Delete folder"
+    ).click();
+    await settle();
+    const form = changeForm(mounted.root);
+    fill(form.querySelector<HTMLInputElement>('input[maxlength="500"]')!, "Remove guide");
+    await settle();
+    submit(form);
+    await settle();
+    expect(sent).toBeNull();
+    const confirm = Array.from(mounted.root.querySelectorAll<HTMLButtonElement>("dialog button"))
+      .filter((button) => button.textContent?.trim() === "Delete folder")
+      .at(-1);
+    confirm?.click();
+    await settle();
+
+    expect(sent).toMatchObject({
+      expectedOid: commitOid,
+      changes: [{ op: "delete", path: "docs/guide" }],
+    });
+    expect(router.currentRoute.value.path).toBe("/example/sample/tree/docs");
+    mounted.unmount();
+  });
+
+  it("renames a folder to a new path with a single move", async () => {
+    i18n.global.locale.value = "en";
+    let sent: Record<string, unknown> | null = null;
+    mockCodeApi({
+      onEdit: (body) => {
+        sent = body;
+        return jsonResponse({ oid: createdCommitOid, branch: "main" }, 201);
+      },
+    });
+    const mounted = await mountCode("/example/sample/tree/docs?ref=main", "code", writer);
+    buttonWithText(
+      mounted.root.querySelector(".code-toolbar") as HTMLElement,
+      "Rename folder"
+    ).click();
+    await settle();
+    const form = changeForm(mounted.root);
+    const fields = form.querySelectorAll<HTMLInputElement>("input");
+    fill(fields[0], "docs/../escape");
+    await settle();
+    expect(buttonWithText(form, "Commit move").disabled).toBe(true);
+    fill(fields[0], "guides/handbook");
+    fill(form.querySelector<HTMLInputElement>('input[maxlength="500"]')!, "Move docs");
+    await settle();
+    submit(form);
+    await settle();
+
+    expect(sent).toMatchObject({ changes: [{ op: "move", from: "docs", to: "guides/handbook" }] });
+    expect(router.currentRoute.value.path).toBe("/example/sample/tree/guides/handbook");
+    mounted.unmount();
+  });
+
+  it("renames a file from the editor path, moving it when the content is unchanged", async () => {
+    i18n.global.locale.value = "en";
+    const sent: Array<Record<string, unknown>> = [];
+    mockCodeApi({
+      onEdit: (body) => {
+        sent.push(body);
+        return jsonResponse({ oid: createdCommitOid, branch: "main" }, 201);
+      },
+    });
+    const mounted = await mountCode("/example/sample/blob/readme.md?ref=main", "code", writer);
+    const edit = Array.from(
+      mounted.root.querySelectorAll<HTMLButtonElement>(".file-actions button")
+    ).find((button) => button.textContent?.includes("Edit"));
+    edit?.click();
+    await settle();
+    const editor = mounted.root.querySelector<HTMLFormElement>(".file-editor form");
+    if (!editor) throw new Error("File editor was not rendered.");
+    const pathField = editor.querySelector<HTMLInputElement>('input[maxlength="1000"]');
+    if (!pathField) throw new Error("Path field was not rendered.");
+    fill(pathField, "docs/README.md");
+    fill(editor.querySelector<HTMLInputElement>('input[maxlength="500"]')!, "Move readme");
+    await settle();
+    submit(editor);
+    await settle();
+
+    expect(sent[0]).toMatchObject({
+      expectedOid: commitOid,
+      changes: [{ op: "move", from: "readme.md", to: "docs/README.md" }],
+    });
+    mounted.unmount();
+  });
+
+  it("shows the server reason when a rename targets an existing path", async () => {
+    i18n.global.locale.value = "en";
+    mockCodeApi({
+      onEdit: () =>
+        new Response(
+          JSON.stringify({
+            error: { code: "bad_request", message: "The destination already exists." },
+          }),
+          { status: 400 }
+        ),
+    });
+    const mounted = await mountCode("/example/sample/blob/readme.md?ref=main", "code", writer);
+    Array.from(mounted.root.querySelectorAll<HTMLButtonElement>(".file-actions button"))
+      .find((button) => button.textContent?.includes("Edit"))
+      ?.click();
+    await settle();
+    const editor = mounted.root.querySelector<HTMLFormElement>(".file-editor form");
+    if (!editor) throw new Error("File editor was not rendered.");
+    fill(editor.querySelector<HTMLInputElement>('input[maxlength="1000"]')!, "docs/taken.md");
+    fill(editor.querySelector<HTMLInputElement>('input[maxlength="500"]')!, "Move readme");
+    await settle();
+    submit(editor);
+    await settle();
+
+    expect(mounted.root.querySelector(".file-editor")?.textContent).toContain(
+      "The server rejected this change: The destination already exists."
+    );
+    mounted.unmount();
+  });
+
+  it("moves the file with its new content when a rename also edits content", async () => {
+    i18n.global.locale.value = "en";
+    const sent: Array<Record<string, unknown>> = [];
+    mockCodeApi({
+      onEdit: (body) => {
+        sent.push(body);
+        return jsonResponse({ oid: createdCommitOid, branch: "main" }, 201);
+      },
+    });
+    const mounted = await mountCode("/example/sample/blob/readme.md?ref=main", "code", writer);
+    Array.from(mounted.root.querySelectorAll<HTMLButtonElement>(".file-actions button"))
+      .find((button) => button.textContent?.includes("Edit"))
+      ?.click();
+    await settle();
+    const editor = mounted.root.querySelector<HTMLFormElement>(".file-editor form");
+    if (!editor) throw new Error("File editor was not rendered.");
+    fill(editor.querySelector<HTMLInputElement>('input[maxlength="1000"]')!, "docs/readme.md");
+    fill(editor.querySelector<HTMLTextAreaElement>("textarea")!, "changed");
+    fill(editor.querySelector<HTMLInputElement>('input[maxlength="500"]')!, "Move and edit");
+    await settle();
+    submit(editor);
+    await settle();
+
+    expect(sent[0]).toMatchObject({
+      changes: [{ op: "move", from: "readme.md", to: "docs/readme.md", part: "f0" }],
+      content: "changed",
+    });
+    mounted.unmount();
+  });
+
+  it("does not offer web file operations when online editing is disabled", async () => {
+    i18n.global.locale.value = "en";
+    mockCodeApi();
+    const mounted = await mountCode("/example/sample/tree/docs?ref=main", "code", {
+      canWrite: true,
+      onlineEditingEnabled: false,
+    });
+    expect(mounted.root.textContent).not.toContain("Upload files");
+    expect(mounted.root.textContent).not.toContain("Delete folder");
     mounted.unmount();
   });
 });

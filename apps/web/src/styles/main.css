@@ -831,3 +831,8 @@ a.box-row:focus-visible {
     align-items: flex-start;
   }
 }
+
+.field-error {
+  color: var(--danger-fg);
+  font-size: var(--font-size-meta);
+}

@@ -1,10 +1,10 @@
 import { Buffer } from "node:buffer";
-import type {
-  RepositorySnapshot,
-  RepositorySnapshotFile,
+import {
+  editablePath,
+  type RepositorySnapshot,
+  type RepositorySnapshotFile,
 } from "../../../packages/contracts/src/repository-controls";
 import { GitResourceLimitError } from "./http";
-import { editablePath } from "./write";
 export async function repositorySnapshot(
   repo: ArtifactsRepo,
   oid: string
