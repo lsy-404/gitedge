@@ -11,6 +11,7 @@ import SelectField from "../components/SelectField.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import { oneOf } from "../ui/formEvents";
 import TextField from "../components/TextField.vue";
+import DeletedRepositories from "../components/DeletedRepositories.vue";
 import { FluentCheckbox } from "@platform-kit/fluent/vue";
 import { RepositorySlugSchema } from "../../../../packages/contracts/src/repository-controls";
 import "../styles/workspace.css";
@@ -278,6 +279,7 @@ onMounted(load);
               </div>
             </div>
           </section>
+          <DeletedRepositories @restored="load" />
         </div>
 
         <aside class="dashboard-right-column">

@@ -311,7 +311,7 @@ describe("RepositorySettings", () => {
       .mockResolvedValueOnce({ ...settings, archived: false });
     const mounted = await mountSettings(repository);
 
-    navigation(mounted.root, "Archive").click();
+    navigation(mounted.root, "Danger zone").click();
     await settle();
     expect(mounted.root.textContent).toContain(
       "This repository is archived. Writes, merges, and new write credentials are disabled"
@@ -347,7 +347,7 @@ describe("RepositorySettings", () => {
       "Branch protection",
       "Collaborators",
       "Agents & memory",
-      "Archive",
+      "Danger zone",
     ]) {
       navigation(mounted.root, section).click();
       await settle();

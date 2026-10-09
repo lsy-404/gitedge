@@ -72,7 +72,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 async function repositoryFor(env: ActionsEnv, id: string): Promise<RepositoryRow | null> {
   return env.DB.prepare(
-    "SELECT id, visibility, archived, actions_enabled, actions_network_enabled, default_branch FROM repositories WHERE id = ?"
+    "SELECT id, visibility, archived, actions_enabled, actions_network_enabled, default_branch FROM repositories WHERE id = ? AND deleted_at IS NULL"
   )
     .bind(id)
     .first<RepositoryRow>();

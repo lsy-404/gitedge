@@ -412,7 +412,7 @@ async function rescheduleOutbox(
 
 async function eventIsAuthorized(env: AgentWebhookEnv, event: AgentEventRow): Promise<boolean> {
   const agent = await env.DB.prepare(
-    "SELECT a.user_id AS ownerId, a.disabled_at AS disabledAt, r.agents_enabled AS agentsEnabled FROM auth_agents a JOIN repositories r ON r.id = ? WHERE a.id = ?"
+    "SELECT a.user_id AS ownerId, a.disabled_at AS disabledAt, r.agents_enabled AS agentsEnabled FROM auth_agents a JOIN repositories r ON r.id = ? WHERE a.id = ? AND r.deleted_at IS NULL"
   )
     .bind(event.repositoryId, event.agentId)
     .first<{ ownerId: string; disabledAt: number | null; agentsEnabled: number }>();

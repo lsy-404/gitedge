@@ -5,13 +5,19 @@ import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 import { proxyGitTransport } from "./transport";
 import { GitResourceLimitError } from "./http";
 import type { GitEnv } from "./access";
+import { purgeRepositoryArtifacts } from "./purge";
 
 export default {
   async fetch(request: Request, env: GitEnv, ctx: ExecutionContext): Promise<Response> {
     if (request.method === "GET" && new URL(request.url).pathname === "/internal/health")
       return dataResponse({ ok: true });
     try {
-      return new URL(request.url).pathname.includes(".git/")
+      const url = new URL(request.url);
+      if (url.hostname === "git.internal" && url.pathname === "/internal/purge")
+        return request.method === "POST"
+          ? await purgeRepositoryArtifacts(request, env)
+          : errorResponse(405, "method_not_allowed", "Method is not allowed for this endpoint.");
+      return url.pathname.includes(".git/")
         ? await proxyGitTransport(request, env, ctx)
         : await handleGitApi(request, env, ctx);
     } catch (error) {

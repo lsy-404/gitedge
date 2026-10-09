@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import type { AgentSession, Repository, RepositorySettings } from "../lib/api";
 import { ApiError, api } from "../lib/api";
 import AppIcon, { type IconName } from "../components/AppIcon.vue";
@@ -15,6 +15,7 @@ import RepositorySettingsPanel from "../components/RepositorySettings.vue";
 import RepositoryTasks from "../components/RepositoryTasks.vue";
 const RepositoryActions = defineAsyncComponent(() => import("../components/RepositoryActions.vue"));
 const route = useRoute();
+const router = useRouter();
 const { t, d } = useI18n();
 const owner = computed(() => String(route.params.owner));
 const repoName = computed(() => String(route.params.repo));
@@ -147,6 +148,16 @@ async function load() {
   try {
     const result = await api.repository(owner.value, repoName.value);
     if (version !== loadVersion) return;
+    if (
+      result.owner.toLowerCase() !== owner.value.toLowerCase() ||
+      result.name.toLowerCase() !== repoName.value.toLowerCase()
+    ) {
+      const rest = route.fullPath.replace(/^\/[^/?#]+\/[^/?#]+/, "");
+      await router.replace(
+        `/${encodeURIComponent(result.owner)}/${encodeURIComponent(result.name)}${rest}`
+      );
+      return;
+    }
     repository.value = result;
     void loadCounts(result, version);
   } catch (cause) {

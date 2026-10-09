@@ -220,7 +220,7 @@ async function repositoryForUser(
 ): Promise<boolean> {
   if ((await repositoryRole(env.DB, repositoryId, userId)) !== "admin") return false;
   const row = await env.DB.prepare(
-    "SELECT id FROM repositories WHERE id=? AND archived=0 AND deployments_enabled=1"
+    "SELECT id FROM repositories WHERE id=? AND deleted_at IS NULL AND archived=0 AND deployments_enabled=1"
   )
     .bind(repositoryId)
     .first<{ id: string }>();
