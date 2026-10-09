@@ -42,7 +42,7 @@ const agentsMessages = {
     agentDeliveryMode_pull: "仅拉取",
     agentDeliveryMode_both: "Webhook 与拉取",
     agentDeliveryPullHint:
-      "拉取：GET /api/forge/repositories/{id}/agent-events?cursor=&wait=25，或 SSE 端点 /agent-events/stream，使用 Session Bearer Token。",
+      "拉取：使用 Session Bearer Token 请求仓库的 /agent-events 接口（cursor 与 wait 参数，最多等待 25 秒），或 SSE 端点 /agent-events/stream。",
     agentDeliverySaved: "投递方式已保存。",
     agentFeedStatus: "拉取状态",
     agentFeedLastPoll: "最近一次拉取",
@@ -106,7 +106,7 @@ const agentsMessages = {
     agentDeliveryMode_pull: "Pull only",
     agentDeliveryMode_both: "Webhook and pull",
     agentDeliveryPullHint:
-      "Pull: GET /api/forge/repositories/{id}/agent-events?cursor=&wait=25, or the SSE endpoint /agent-events/stream, with the session bearer token.",
+      "Pull: call the repository /agent-events endpoint with the session bearer token (cursor and wait parameters, waiting up to 25 seconds), or the SSE endpoint /agent-events/stream.",
     agentDeliverySaved: "Delivery mode saved.",
     agentFeedStatus: "Pull status",
     agentFeedLastPoll: "Last poll",

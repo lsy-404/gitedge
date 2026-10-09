@@ -5,10 +5,12 @@ ALTER TABLE auth_agents ADD COLUMN delivery_mode TEXT NOT NULL DEFAULT 'webhook'
 ALTER TABLE auth_agent_sessions ADD COLUMN renewal_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE auth_agent_sessions ADD COLUMN renewed_at INTEGER;
 
--- Task claim lease. All three columns are NULL when the task is not claimed.
+-- Task claim lease. The agent and times are NULL when the task is not claimed; lease_assigned
+-- marks an assignee set by the claim itself, which is cleared again when the claim lapses.
 ALTER TABLE forge_tasks ADD COLUMN lease_agent_id TEXT;
 ALTER TABLE forge_tasks ADD COLUMN lease_claimed_at INTEGER;
 ALTER TABLE forge_tasks ADD COLUMN lease_expires_at INTEGER;
+ALTER TABLE forge_tasks ADD COLUMN lease_assigned INTEGER NOT NULL DEFAULT 0 CHECK (lease_assigned IN (0, 1));
 CREATE INDEX idx_forge_tasks_lease ON forge_tasks(lease_expires_at) WHERE lease_expires_at IS NOT NULL;
 
 -- The webhook outbox now carries every agent event name, so the event CHECK is dropped.

@@ -280,7 +280,12 @@ async function renew(session: AgentSession) {
     sessions.value = sessions.value.map((row) => (row.id === session.id ? summary : row));
     renewedSession.value = renewed;
   } catch (cause) {
-    actionError.value = errorMessage(cause, t, { 409: "sessionRenewLimit" });
+    actionError.value =
+      cause instanceof ApiError && cause.code === "session_lifetime_exceeded"
+        ? t("sessionRenewLimit")
+        : cause instanceof ApiError && cause.code === "session_expired"
+          ? t("sessionExpiredHint")
+          : errorMessage(cause, t);
   } finally {
     renewingId.value = "";
   }

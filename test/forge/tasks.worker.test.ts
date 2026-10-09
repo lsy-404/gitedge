@@ -1284,9 +1284,39 @@ describe("Task leases and merge completion", () => {
       "lease_expired"
     );
     const detail = await data(await call(`/repositories/r1/tasks/${task.number}`, "GET", alice));
-    expect(detail).toMatchObject({ status: "pending", lease: null });
-    await call(`/repositories/r1/tasks/${task.number}/assignee`, "PUT", alice, { assignee: null });
+    expect(detail).toMatchObject({ status: "pending", lease: null, assignee: null });
+    const late = await lease(task.number, "complete", bob, writeSession);
+    expect(late.status).toBe(409);
+    expect(((await late.json()) as { error: { code: string } }).error.code).toBe("not_claimed");
     expect((await lease(task.number, "claim", alice, aliceAgent)).status).toBe(200);
+  });
+
+  it("keeps an explicit assignment when the claim lapses or is released", async () => {
+    const task = await createTask("Assigned work");
+    expect(
+      (
+        await call(`/repositories/r1/tasks/${task.number}/assignee`, "PUT", bob, {
+          assignee: { kind: "agent", id: "a1" },
+        })
+      ).status
+    ).toBe(200);
+    await lease(task.number, "claim", bob, writeSession);
+    await env.DB.prepare("UPDATE forge_tasks SET lease_expires_at = ? WHERE id = ?")
+      .bind(Date.now() - 1_000, task.id)
+      .run();
+    const lapsed = await data(await call(`/repositories/r1/tasks/${task.number}`, "GET", alice));
+    expect(lapsed).toMatchObject({ status: "pending", lease: null });
+    expect(lapsed.assignee).toMatchObject({ kind: "agent", id: "a1" });
+    expect((await lease(task.number, "claim", alice, aliceAgent)).status).toBe(409);
+    await lease(task.number, "claim", bob, writeSession);
+    const released = await data(await lease(task.number, "release", alice));
+    expect(released.assignee).toMatchObject({ kind: "agent", id: "a1" });
+
+    const open = await createTask("Released claim");
+    await lease(open.number, "claim", bob, writeSession);
+    expect(
+      (await data(await lease(open.number, "release", bob, writeSession))).assignee
+    ).toBeNull();
   });
 
   it("lets the claimant release and complete, and a human complete or release any claim", async () => {
@@ -1340,6 +1370,18 @@ describe("Task leases and merge completion", () => {
     expect(
       (await data(await call(`/repositories/r1/tasks/${referenced.number}`, "GET", alice))).status
     ).toBe("done");
+  });
+
+  it("ignores task references in pull requests opened by non-members", async () => {
+    const task = await createTask("Outside reference");
+    const created = await call("/repositories/r1/pull-requests", "POST", eve, {
+      title: `Implements task #${task.number}`,
+      baseRef: "main",
+      headRef: "outside",
+    });
+    expect(created.status).toBe(201);
+    const detail = await data(await call(`/repositories/r1/tasks/${task.number}`, "GET", alice));
+    expect(detail.links).toEqual([]);
   });
 });
 

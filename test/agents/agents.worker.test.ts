@@ -1116,6 +1116,41 @@ describe("Agent delivery mode and session renewal", () => {
     expect(cookie).not.toBe(second.cookie);
   });
 
+  it("refuses renewal once the session's repository no longer allows it", async () => {
+    const { cookie, agent, session } = await fixture();
+    await env.DB.prepare("UPDATE repositories SET archived = 1 WHERE id = ?")
+      .bind(session.repositoryId)
+      .run();
+    const archived = await accountApi(
+      `/agents/${agent.id}/sessions/${session.id}/renew`,
+      "POST",
+      cookie,
+      {}
+    );
+    expect(archived.status).toBe(409);
+    expect(await archived.json()).toMatchObject({ error: { code: "session_ineligible" } });
+    await env.DB.prepare("UPDATE repositories SET archived = 0, agents_enabled = 0 WHERE id = ?")
+      .bind(session.repositoryId)
+      .run();
+    expect((await renew(session.token)).status).toBe(401);
+    const tokens = artifacts.snapshot(session.workspaceName).tokens;
+    expect(tokens.filter((token) => token.state === "active")).toHaveLength(1);
+    await env.DB.prepare("UPDATE repositories SET agents_enabled = 1 WHERE id = ?")
+      .bind(session.repositoryId)
+      .run();
+    await env.DB.prepare("UPDATE auth_agent_sessions SET expires_at = ? WHERE id = ?")
+      .bind(Date.now() - 1000, session.id)
+      .run();
+    const expired = await accountApi(
+      `/agents/${agent.id}/sessions/${session.id}/renew`,
+      "POST",
+      cookie,
+      {}
+    );
+    expect(expired.status).toBe(409);
+    expect(await expired.json()).toMatchObject({ error: { code: "session_expired" } });
+  });
+
   it("lets the agent owner renew a session from the account UI", async () => {
     const { cookie, agent, session } = await fixture();
     const response = await accountApi(

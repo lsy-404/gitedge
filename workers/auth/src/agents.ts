@@ -306,7 +306,9 @@ async function revokeSession(env: AgentAuthEnv, row: AgentSessionRow): Promise<v
 
 export type RenewalOutcome =
   | { kind: "renewed"; session: RenewedAgentSession }
+  | { kind: "expired" }
   | { kind: "lifetime_exceeded" }
+  | { kind: "ineligible" }
   | { kind: "conflict" };
 
 const MIN_RENEWAL_REMAINING_MS = 60_000;
@@ -324,24 +326,36 @@ export async function renewAgentSession(
   const logger = createLogger(env.LOG_LEVEL, { service: "agent-auth" });
   const ceiling = row.createdAt + AGENT_SESSION_MAX_LIFETIME_MS;
   const expiresAt = Math.min(Math.max(now + ttlSeconds * 1000, row.expiresAt), ceiling);
-  if (row.status !== "active" || row.expiresAt <= now) return { kind: "conflict" };
+  if (row.status !== "active") return { kind: "conflict" };
+  if (row.expiresAt <= now) return { kind: "expired" };
   if (row.expiresAt >= ceiling || expiresAt - now < MIN_RENEWAL_REMAINING_MS) {
     logger.info("agent:session-renewal-refused", { sessionId: row.id, agentId: row.agentId });
     return { kind: "lifetime_exceeded" };
   }
+  // Same checks as session authentication, plus the archive rule that applies to new sessions.
+  const eligible = await env.DB.prepare(
+    activeSessionSelect + " AND s.id=? AND (s.permission='read' OR r.archived=0)"
+  )
+    .bind(now, row.id)
+    .first<{ id: string }>();
+  if (!eligible) {
+    logger.info("agent:session-renewal-ineligible", { sessionId: row.id, agentId: row.agentId });
+    return { kind: "ineligible" };
+  }
   using workspace = await env.ARTIFACTS.get(row.workspaceName);
   const next = await workspace.createToken(row.permission, Math.floor((expiresAt - now) / 1000));
+  let moved: D1Result;
   try {
     await revokeArtifactsToken(workspace, row.gitTokenId);
+    moved = await env.DB.prepare(
+      "UPDATE auth_agent_sessions SET git_token_id = ?, expires_at = ?, renewal_count = renewal_count + 1, renewed_at = ? WHERE id = ? AND status = 'active' AND git_token_id = ?"
+    )
+      .bind(next.id, Date.parse(next.expiresAt), now, row.id, row.gitTokenId)
+      .run();
   } catch (error) {
     await workspace.revokeToken(next.id);
     throw error;
   }
-  const moved = await env.DB.prepare(
-    "UPDATE auth_agent_sessions SET git_token_id = ?, expires_at = ?, renewal_count = renewal_count + 1, renewed_at = ? WHERE id = ? AND status = 'active' AND git_token_id = ?"
-  )
-    .bind(next.id, Date.parse(next.expiresAt), now, row.id, row.gitTokenId)
-    .run();
   if (moved.meta.changes !== 1) {
     await workspace.revokeToken(next.id);
     return { kind: "conflict" };
@@ -362,14 +376,28 @@ export async function renewAgentSession(
   };
 }
 
+const SESSION_EXPIRED_MESSAGE =
+  "The agent session has expired. Ask its owner to create a new session in Settings, Agents.";
+
 function renewalFailure(outcome: Exclude<RenewalOutcome, { kind: "renewed" }>): Response {
-  return outcome.kind === "lifetime_exceeded"
-    ? errorResponse(
+  switch (outcome.kind) {
+    case "expired":
+      return errorResponse(409, "session_expired", SESSION_EXPIRED_MESSAGE);
+    case "lifetime_exceeded":
+      return errorResponse(
         409,
         "session_lifetime_exceeded",
         "The session reached its maximum lifetime. Create a new session to continue."
-      )
-    : errorResponse(409, "conflict", "Session changed or is no longer active.");
+      );
+    case "ineligible":
+      return errorResponse(
+        409,
+        "session_ineligible",
+        "The repository no longer allows this session. Create a new session to continue."
+      );
+    case "conflict":
+      return errorResponse(409, "conflict", "Session changed or is no longer active.");
+  }
 }
 
 /** Lets an agent renew its own session with the session token; expired sessions explain the next step. */
@@ -393,16 +421,14 @@ export async function handleAgentSessionRenewal(
   if (!row || row.status === "revoked")
     return errorResponse(401, "unauthorized", "Agent session is invalid or revoked.");
   if (row.expiresAt <= Date.now() || row.status !== "active")
-    return errorResponse(
-      401,
-      "session_expired",
-      "The agent session has expired. Ask its owner to create a new session in Settings, Agents."
-    );
-  if (!(await authenticateAgentSession(env, token)))
-    return errorResponse(401, "unauthorized", "Agent session is invalid or revoked.");
+    return errorResponse(401, "session_expired", SESSION_EXPIRED_MESSAGE);
   try {
     const outcome = await renewAgentSession(env, row, parsed.data.ttlSeconds);
-    return outcome.kind === "renewed" ? dataResponse(outcome.session) : renewalFailure(outcome);
+    if (outcome.kind === "renewed") return dataResponse(outcome.session);
+    // An ineligible session can no longer authenticate either, so answer like a revoked one.
+    return outcome.kind === "ineligible"
+      ? errorResponse(401, "unauthorized", "Agent session is invalid or revoked.")
+      : renewalFailure(outcome);
   } catch {
     createLogger(env.LOG_LEVEL, { service: "agent-auth" }).error("agent:session-renewal-failed", {
       sessionId: row.id,

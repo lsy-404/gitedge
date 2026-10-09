@@ -923,9 +923,9 @@ async function featureRequest(
           env,
           repository,
           id,
-          parsed.data.title,
-          parsed.data.body,
+          parsed.data,
           actor,
+          member && writeAllowed,
           now
         ),
       ]);
@@ -1360,9 +1360,9 @@ async function featureRequest(
                 env,
                 repository,
                 String(current.id),
-                p.title ?? String(current.title),
-                p.body ?? String(current.body),
+                { title: p.title ?? String(current.title), body: p.body ?? String(current.body) },
                 actor,
+                true,
                 now
               )
             : []),

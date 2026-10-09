@@ -382,6 +382,13 @@ export function mergeBindingStatements(
   ];
 }
 
+/** Lease columns cleared while the assignee stays, for explicit status or assignment changes. */
+const CLEAR_LEASE =
+  "lease_agent_id = NULL, lease_claimed_at = NULL, lease_expires_at = NULL, lease_assigned = 0";
+/** Ends a claim and drops the assignment the claim itself created, so others can claim again. */
+const RELEASE_LEASE = `assignee_kind = CASE WHEN lease_assigned = 1 THEN NULL ELSE assignee_kind END, assignee_id = CASE WHEN lease_assigned = 1 THEN NULL ELSE assignee_id END, ${CLEAR_LEASE}`;
+const LEASE_SWEEP_BATCH = 500;
+
 /**
  * Completes the task a pull request is linked to once it merged into the default branch. The
  * progress entry is guarded by the task update, so a task that was already done is untouched.
@@ -394,7 +401,7 @@ export function mergeCompletionStatements(
   if (merge.baseRef !== defaultBranch) return [];
   return [
     env.DB.prepare(
-      "UPDATE forge_tasks SET status = 'done', lease_agent_id = NULL, lease_claimed_at = NULL, lease_expires_at = NULL, updated_at = ? WHERE status IN ('pending', 'in_progress') AND id = (SELECT task_id FROM forge_task_links WHERE target_kind = 'pull_request' AND target_id = ?) AND EXISTS (SELECT 1 FROM forge_pull_requests WHERE id = ? AND state = 'merged' AND merged_oid = ?)"
+      `UPDATE forge_tasks SET status = 'done', ${CLEAR_LEASE}, updated_at = ? WHERE status IN ('pending', 'in_progress') AND id = (SELECT task_id FROM forge_task_links WHERE target_kind = 'pull_request' AND target_id = ?) AND EXISTS (SELECT 1 FROM forge_pull_requests WHERE id = ? AND state = 'merged' AND merged_oid = ?)`
     ).bind(merge.now, merge.pullRequestId, merge.pullRequestId, merge.oid),
     ...systemProgressStatements(
       env,
@@ -406,17 +413,22 @@ export function mergeCompletionStatements(
   ];
 }
 
-/** Links a pull request to the task named as "task #n" in its title or body, unless it is linked or merged. */
+/**
+ * Links a pull request to the task named as "task #n" in its title or body, unless it is linked
+ * or merged. Only writers may link, matching the explicit link endpoint, so outside authors of
+ * public pull requests cannot complete tasks through a merge.
+ */
 export function taskReferenceStatements(
   env: ForgeEnv,
   repository: RepositoryRow,
   pullRequestId: string,
-  title: string,
-  body: string,
+  text: { title: string; body: string },
   actor: Actor,
+  canWrite: boolean,
   now: number
 ): D1PreparedStatement[] {
-  const number = parseTaskReference(`${title}\n${body}`);
+  if (!canWrite || repository.tasks_enabled === 0) return [];
+  const number = parseTaskReference(`${text.title}\n${text.body}`);
   if (number === null) return [];
   return [
     env.DB.prepare(
@@ -440,9 +452,9 @@ export async function releaseExpiredTaskLeases(
   now = Date.now()
 ): Promise<void> {
   const released = await env.DB.prepare(
-    "UPDATE forge_tasks SET status = CASE WHEN status = 'in_progress' THEN 'pending' ELSE status END, lease_agent_id = NULL, lease_claimed_at = NULL, lease_expires_at = NULL WHERE lease_expires_at IS NOT NULL AND lease_expires_at <= ? AND (? IS NULL OR repository_id = ?)"
+    `UPDATE forge_tasks SET status = CASE WHEN status = 'in_progress' THEN 'pending' ELSE status END, ${RELEASE_LEASE} WHERE id IN (SELECT id FROM forge_tasks WHERE lease_expires_at IS NOT NULL AND lease_expires_at <= ? AND (? IS NULL OR repository_id = ?) LIMIT ?)`
   )
-    .bind(now, repositoryId, repositoryId)
+    .bind(now, repositoryId, repositoryId, LEASE_SWEEP_BATCH)
     .run();
   if (released.meta.changes > 0)
     createLogger(env.LOG_LEVEL, { service: "forge" }).info("forge:task-leases-released", {
@@ -710,15 +722,13 @@ async function updateTask(
   const statusChanged = p.status !== undefined && p.status !== task.status;
   await env.DB.batch([
     env.DB.prepare(
-      "UPDATE forge_tasks SET type = COALESCE(?, type), title = COALESCE(?, title), motivation = COALESCE(?, motivation), description = COALESCE(?, description), status = COALESCE(?, status), lease_agent_id = CASE WHEN ? THEN NULL ELSE lease_agent_id END, lease_claimed_at = CASE WHEN ? THEN NULL ELSE lease_claimed_at END, lease_expires_at = CASE WHEN ? THEN NULL ELSE lease_expires_at END, updated_at = ? WHERE id = ?"
+      "UPDATE forge_tasks SET type = COALESCE(?, type), title = COALESCE(?, title), motivation = COALESCE(?, motivation), description = COALESCE(?, description), status = COALESCE(?, status), lease_agent_id = CASE WHEN ?6 THEN NULL ELSE lease_agent_id END, lease_claimed_at = CASE WHEN ?6 THEN NULL ELSE lease_claimed_at END, lease_expires_at = CASE WHEN ?6 THEN NULL ELSE lease_expires_at END, lease_assigned = CASE WHEN ?6 THEN 0 ELSE lease_assigned END, updated_at = ?7 WHERE id = ?8"
     ).bind(
       p.type ?? null,
       p.title ?? null,
       p.motivation ?? null,
       p.description ?? null,
       p.status ?? null,
-      Number(statusChanged),
-      Number(statusChanged),
       Number(statusChanged),
       now,
       task.id
@@ -759,17 +769,9 @@ async function assignTask(
     id = resolved.assignee.id;
   }
   await env.DB.prepare(
-    "UPDATE forge_tasks SET assignee_kind = ?, assignee_id = ?, lease_claimed_at = CASE WHEN lease_agent_id IS ? THEN lease_claimed_at END, lease_expires_at = CASE WHEN lease_agent_id IS ? THEN lease_expires_at END, lease_agent_id = CASE WHEN lease_agent_id IS ? THEN lease_agent_id END, updated_at = ? WHERE id = ?"
+    "UPDATE forge_tasks SET assignee_kind = ?1, assignee_id = ?2, lease_claimed_at = CASE WHEN lease_agent_id IS ?3 THEN lease_claimed_at END, lease_expires_at = CASE WHEN lease_agent_id IS ?3 THEN lease_expires_at END, lease_agent_id = CASE WHEN lease_agent_id IS ?3 THEN lease_agent_id END, lease_assigned = 0, updated_at = ?4 WHERE id = ?5"
   )
-    .bind(
-      kind,
-      id,
-      kind === "agent" ? id : null,
-      kind === "agent" ? id : null,
-      kind === "agent" ? id : null,
-      Date.now(),
-      task.id
-    )
+    .bind(kind, id, kind === "agent" ? id : null, Date.now(), task.id)
     .run();
   if (kind === "agent" && id)
     await agentEvent(env, repository, user, id, "agent.assigned", {
@@ -793,7 +795,6 @@ type LeaseState = {
   lease_claimed_at: number | null;
   lease_expires_at: number | null;
 };
-const CLEAR_LEASE = "lease_agent_id = NULL, lease_claimed_at = NULL, lease_expires_at = NULL";
 
 async function leaseState(env: ForgeEnv, taskId: string): Promise<LeaseState | null> {
   return env.DB.prepare(
@@ -874,7 +875,7 @@ async function leaseRequest(
         now
       );
     const claimed = await env.DB.prepare(
-      "UPDATE forge_tasks SET status = 'in_progress', assignee_kind = 'agent', assignee_id = ?1, lease_agent_id = ?1, lease_claimed_at = ?2, lease_expires_at = ?3, updated_at = ?2 WHERE id = ?4 AND status = 'pending' AND (lease_expires_at IS NULL OR lease_expires_at <= ?2) AND (assignee_id IS NULL OR (assignee_kind = 'agent' AND assignee_id = ?1))"
+      "UPDATE forge_tasks SET status = 'in_progress', lease_assigned = CASE WHEN assignee_id IS NULL THEN 1 ELSE 0 END, assignee_kind = 'agent', assignee_id = ?1, lease_agent_id = ?1, lease_claimed_at = ?2, lease_expires_at = ?3, updated_at = ?2 WHERE id = ?4 AND status = 'pending' AND (lease_expires_at IS NULL OR lease_expires_at <= ?2) AND (assignee_id IS NULL OR (assignee_kind = 'agent' AND assignee_id = ?1))"
     )
       .bind(agentId, now, now + ttlMs, task.id)
       .run();
@@ -909,8 +910,9 @@ async function leaseRequest(
       now
     );
   }
-  const holder = agentId !== null && state.lease_agent_id === agentId;
-  if (agentId !== null && !holder)
+  if (agentId !== null && state.lease_agent_id === null)
+    return errorResponse(409, "not_claimed", "The task has no active claim. Claim it first.");
+  if (agentId !== null && state.lease_agent_id !== agentId)
     return errorResponse(403, "forbidden", "Only the claiming agent or a human can do this.");
   if (action === "release" && !leased)
     return errorResponse(409, "not_claimed", "The task has no active claim.");
@@ -919,7 +921,7 @@ async function leaseRequest(
   const actorName = actorForUser(user).name;
   const [changed] = await env.DB.batch([
     env.DB.prepare(
-      `UPDATE forge_tasks SET status = ?, ${CLEAR_LEASE}, updated_at = ? WHERE id = ? AND status = ? AND lease_agent_id IS ?`
+      `UPDATE forge_tasks SET status = ?, ${action === "complete" ? CLEAR_LEASE : RELEASE_LEASE}, updated_at = ? WHERE id = ? AND status = ? AND lease_agent_id IS ?`
     ).bind(
       action === "complete" ? "done" : "pending",
       now,

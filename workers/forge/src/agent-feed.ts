@@ -131,17 +131,16 @@ async function readEvents(
   scope: Scope,
   after: number,
   limit: number
-): Promise<{ events: AgentFeedEvent[]; more: boolean }> {
+): Promise<{ events: AgentFeedEvent[]; last: number | null; more: boolean }> {
   const rows = await env.DB.prepare(
     "SELECT id AS cursor, event_id, event, payload, created_at FROM forge_agent_events WHERE agent_id = ? AND repository_id = ? AND id > ? ORDER BY id ASC LIMIT ?"
   )
     .bind(scope.agentId, scope.repositoryId, after, limit + 1)
     .all<EventRow>();
-  const events = rows.results
-    .slice(0, limit)
-    .map(presentEvent)
-    .filter((event): event is AgentFeedEvent => event !== null);
-  return { events, more: rows.results.length > limit };
+  const page = rows.results.slice(0, limit);
+  const events = page.map(presentEvent).filter((event): event is AgentFeedEvent => event !== null);
+  // The cursor moves past unreadable rows too, so one bad row cannot stall the feed.
+  return { events, last: page[page.length - 1]?.cursor ?? null, more: rows.results.length > limit };
 }
 
 type Scope = {
@@ -200,16 +199,15 @@ export async function pollFeed(
   const deadline = now() + query.wait * 1000;
   let attempt = 0;
   let page = await readEvents(env, scope, start, query.limit);
-  while (page.events.length === 0 && now() < deadline) {
+  while (page.last === null && now() < deadline) {
     const delay = LONG_POLL_BACKOFF_MS[Math.min(attempt, LONG_POLL_BACKOFF_MS.length - 1)] ?? 0;
     attempt += 1;
     await sleep(Math.min(delay, Math.max(0, deadline - now())));
     page = await readEvents(env, scope, start, query.limit);
   }
-  const last = page.events[page.events.length - 1];
   const result: AgentFeedPage = {
     events: page.events,
-    cursor: last?.cursor ?? start,
+    cursor: page.last ?? start,
     more: page.more,
   };
   await env.DB.prepare(
@@ -249,11 +247,9 @@ export async function streamFeed(
       while (now() - startedAt < (options.streamMs ?? STREAM_MAX_MS)) {
         if (request.signal.aborted) return;
         const page = await readEvents(env, scope, position, 50);
-        for (const event of page.events) {
-          await writer.write(encoder.encode(sseFrame(event)));
-          position = event.cursor;
-        }
-        if (page.events.length > 0) {
+        for (const event of page.events) await writer.write(encoder.encode(sseFrame(event)));
+        if (page.last !== null) {
+          position = page.last;
           lastWrite = now();
           if (page.more) continue;
         } else if (now() - lastWrite >= STREAM_KEEPALIVE_MS) {
@@ -314,8 +310,12 @@ export async function handleAgentFeed(
       "Pull delivery is not enabled for this agent. Choose pull or both in the agent settings."
     );
   const url = new URL(request.url);
+  // EventSource reconnects with the original URL plus Last-Event-ID, so the header wins there.
+  const queryCursor = url.searchParams.get("cursor");
+  const resumeCursor = request.headers.get("Last-Event-ID");
   const parsed = AgentFeedQuerySchema.safeParse({
-    cursor: url.searchParams.get("cursor") ?? request.headers.get("Last-Event-ID") ?? undefined,
+    cursor:
+      (streaming ? (resumeCursor ?? queryCursor) : (queryCursor ?? resumeCursor)) ?? undefined,
     limit: url.searchParams.get("limit") ?? undefined,
     wait: url.searchParams.get("wait") ?? undefined,
   });
@@ -354,13 +354,26 @@ export async function agentFeedStatus(
   return dataResponse(status);
 }
 
-/** Cron sweep: removes events past retention and advances each feed's expiry watermark. */
-export async function purgeAgentFeeds(env: ForgeEnv, now = Date.now()): Promise<void> {
+const PURGE_BATCH = 1_000;
+
+/**
+ * Cron sweep: advances each feed's expiry watermark over all aged events, then deletes a bounded
+ * batch of them. Rows left for the next run are already behind the watermark and never served.
+ */
+export async function purgeAgentFeeds(env: ForgeEnv, now = Date.now()): Promise<number> {
   const cutoff = now - AGENT_FEED_RETENTION_MS;
-  await env.DB.batch([
+  const [, deleted] = await env.DB.batch([
     env.DB.prepare(
       "UPDATE forge_agent_feed_state SET pruned_through = MAX(pruned_through, COALESCE((SELECT MAX(id) FROM forge_agent_events e WHERE e.agent_id = forge_agent_feed_state.agent_id AND e.repository_id = forge_agent_feed_state.repository_id AND e.created_at < ?1), 0))"
     ).bind(cutoff),
-    env.DB.prepare("DELETE FROM forge_agent_events WHERE created_at < ?").bind(cutoff),
+    env.DB.prepare(
+      "DELETE FROM forge_agent_events WHERE id IN (SELECT id FROM forge_agent_events WHERE created_at < ? ORDER BY id LIMIT ?)"
+    ).bind(cutoff, PURGE_BATCH),
   ]);
+  const count = deleted?.meta.changes ?? 0;
+  if (count >= PURGE_BATCH)
+    createLogger(env.LOG_LEVEL, { service: "forge" }).info("agent-feed:purge-truncated", {
+      count,
+    });
+  return count;
 }

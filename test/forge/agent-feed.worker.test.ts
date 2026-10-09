@@ -232,6 +232,26 @@ describe("agent pull feed", () => {
     expect(caught.status).toBe(200);
   });
 
+  it("moves the cursor past rows it cannot present", async () => {
+    await env.DB.prepare("DELETE FROM forge_agent_events").run();
+    await env.DB.prepare("DELETE FROM forge_agent_feed_state").run();
+    await env.DB.prepare(
+      "INSERT INTO forge_agent_events (agent_id, repository_id, event_id, event, payload, created_at) VALUES ('a1','r1','broken','unknown.event','{}',?)"
+    )
+      .bind(Date.now())
+      .run();
+    const broken = await page(
+      await call("/repositories/r1/agent-events", "u2", session("s1", "a1"))
+    );
+    expect(broken.events).toEqual([]);
+    expect(broken.cursor).toBeGreaterThan(0);
+    await emit(1);
+    const next = await page(
+      await call(`/repositories/r1/agent-events?cursor=${broken.cursor}`, "u2", session("s1", "a1"))
+    );
+    expect(next.events).toHaveLength(1);
+  });
+
   it("removes aged events in the scheduled sweep", async () => {
     await env.DB.prepare("UPDATE forge_agent_events SET created_at = 1").run();
     await purgeAgentFeeds(forgeEnv);
@@ -307,6 +327,45 @@ describe("long polling and streaming", () => {
     const resumed = await open(ids[0]);
     expect([...resumed.matchAll(/^id: (\d+)$/gm)].map((match) => Number(match[1]))).toEqual([
       ids[1],
+    ]);
+  });
+});
+
+describe("stream resume", () => {
+  it("prefers Last-Event-ID over the original cursor when an EventSource reconnects", async () => {
+    await env.DB.prepare("DELETE FROM forge_agent_events").run();
+    await env.DB.prepare("DELETE FROM forge_agent_feed_state").run();
+    await emit(2);
+    const all = await page(await call("/repositories/r1/agent-events", "u2", session("s1", "a1")));
+    const [first, second] = all.events;
+    const headers = new Headers({
+      "X-GitEdge-User-Id": "u2",
+      "X-GitEdge-User-Name": "u2",
+      "X-GitEdge-User-Group": "free",
+      "X-GitEdge-Agent-Session": JSON.stringify(session("s1", "a1")),
+      "Last-Event-ID": String(first?.cursor),
+    });
+    const controller = new AbortController();
+    const response = await forge.fetch(
+      new Request("https://forge.test/repositories/r1/agent-events/stream?cursor=0", {
+        headers,
+        signal: controller.signal,
+      }),
+      forgeEnv
+    );
+    expect(response.status).toBe(200);
+    const reader = response.body?.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    while (reader && !/^id: /m.test(text)) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      text += decoder.decode(chunk.value);
+    }
+    controller.abort();
+    await reader?.cancel();
+    expect([...text.matchAll(/^id: (\d+)$/gm)].map((match) => Number(match[1]))).toEqual([
+      second?.cursor,
     ]);
   });
 });

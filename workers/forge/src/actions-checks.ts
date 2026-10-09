@@ -55,6 +55,9 @@ function checkStatement(
     );
 }
 
+/** Each pull request can fan out to 20 agents, so agent events cover only the first few. */
+const MAX_AGENT_EVENT_PULLS = 10;
+
 const CI_SENDER = { id: "gitedge-actions", identifier: "gitedge-actions" } as const;
 
 export async function actionsCheck(
@@ -143,8 +146,13 @@ export async function actionsCheck(
       })
     );
   }
-  if (repository && parsed.data.status === "completed")
-    for (const pull of pulls.results)
+  if (repository && parsed.data.status === "completed") {
+    if (pulls.results.length > MAX_AGENT_EVENT_PULLS)
+      createLogger(env.LOG_LEVEL, { service: "forge", repoId: run.repository_id }).warn(
+        "actions:agent-events-truncated",
+        { runId: run.id, count: pulls.results.length }
+      );
+    for (const pull of pulls.results.slice(0, MAX_AGENT_EVENT_PULLS))
       await pullRequestEvent(
         env,
         repository,
@@ -158,6 +166,7 @@ export async function actionsCheck(
         },
         "check.completed"
       );
+  }
   createLogger(env.LOG_LEVEL, { service: "forge", repoId: run.repository_id }).info(
     "actions:check-published",
     { runId: run.id, count: pulls.results.length, oid: run.commit_oid }
