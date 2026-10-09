@@ -17,6 +17,7 @@ export * from "./lifecycle";
 export * from "./imports";
 export * from "./import-url";
 export * from "./security";
+export * from "./releases";
 
 export const ErrorCodeSchema = z.enum([
   "bad_request",

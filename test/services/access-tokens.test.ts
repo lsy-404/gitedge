@@ -54,6 +54,19 @@ describe("access token scopes", () => {
     expect(requiredAccessTokenScope("actions", "POST", ["repositories", "r1", "runs"])).toBe(
       "repo:write"
     );
+    expect(requiredAccessTokenScope("git", "POST", ["repositories", "r1", "tags"])).toBe(
+      "repo:write"
+    );
+    expect(requiredAccessTokenScope("git", "DELETE", ["repositories", "r1", "tags"])).toBe(
+      "repo:write"
+    );
+    for (const method of ["POST", "PATCH", "PUT", "DELETE"])
+      expect(
+        requiredAccessTokenScope("forge", method, ["repositories", "r1", "releases", "x"])
+      ).toBe("repo:write");
+    expect(requiredAccessTokenScope("forge", "GET", ["repositories", "r1", "releases"])).toBe(
+      "repo:read"
+    );
   });
 
   it("applies the repository allowlist only when present", () => {

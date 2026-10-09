@@ -119,6 +119,40 @@ function isGitRequest(pathname: string): boolean {
   return /^\/[^/]+\/[^/]+\.git(?:\/|$)/.test(pathname);
 }
 
+const DOWNLOAD_ROUTE = /^\/([^/]+)\/([^/]+)\/(raw|archive)\/(.+)$/;
+const ARCHIVE_SUFFIX = /\.(zip|tar\.gz)$/;
+
+function isDownloadPath(pathname: string): boolean {
+  return DOWNLOAD_ROUTE.test(pathname);
+}
+
+/** Maps `/:owner/:repo/raw/...` and `/:owner/:repo/archive/<ref>.<format>` onto the Git API. */
+function downloadRequest(request: Request, repositoryId: string): Request | null {
+  const match = DOWNLOAD_ROUTE.exec(new URL(request.url).pathname);
+  if (!match) return null;
+  let rest: string;
+  try {
+    rest = decodeURIComponent(match[4]);
+  } catch {
+    return null;
+  }
+  const target = new URL(
+    `/api/git/repositories/${encodeURIComponent(repositoryId)}/${match[3]}`,
+    request.url
+  );
+  const source = new URL(request.url);
+  if (match[3] === "raw") {
+    target.searchParams.set("spec", rest);
+    if (source.searchParams.get("download") === "1") target.searchParams.set("download", "1");
+  } else {
+    const suffix = ARCHIVE_SUFFIX.exec(rest);
+    if (!suffix) return null;
+    target.searchParams.set("ref", rest.slice(0, -suffix[0].length));
+    target.searchParams.set("format", suffix[1]);
+  }
+  return new Request(target, { method: request.method, headers: request.headers });
+}
+
 function isApiPath(pathname: string, prefix: string): boolean {
   return pathname === prefix || pathname.startsWith(`${prefix}/`);
 }
@@ -380,7 +414,10 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
   if (/^\/api\/(?:auth|forge|git|deploy|actions)\/_?internal(?:\/|$)/.test(url.pathname))
     return new Response("Not found\n", { status: 404 });
 
-  const rateLimitPath = isApiPath(url.pathname, "/api") || isGitRequest(url.pathname);
+  const rateLimitPath =
+    isApiPath(url.pathname, "/api") ||
+    isGitRequest(url.pathname) ||
+    (isDownloadPath(url.pathname) && (request.method === "GET" || request.method === "HEAD"));
   if (rateLimitPath) {
     const ipLimitResponse = await enforceIpLimit(request, env);
     if (ipLimitResponse) return ipLimitResponse;
@@ -408,7 +445,7 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
       prefix === "/api/git" &&
       request.method !== "GET" &&
       request.method !== "HEAD" &&
-      !/^\/api\/git\/repositories\/[^/]+\/(edit|branches)$/.test(url.pathname)
+      !/^\/api\/git\/repositories\/[^/]+\/(edit|branches|tags)$/.test(url.pathname)
     )
       return Response.json(
         {
@@ -568,6 +605,15 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
     ) {
       const session = await authenticate(request, env.AUTH);
       if (session instanceof Response) return session;
+      if (
+        isDownloadPath(url.pathname) &&
+        !session.authenticated &&
+        request.headers.has("Authorization")
+      )
+        return Response.json(
+          { error: { code: "unauthorized", message: "Invalid or expired access token." } },
+          { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="GitEdge"' } }
+        );
       const resolveUrl = new URL(
         `/api/forge/repositories/by-name/${encodeURIComponent(owner)}/${encodeURIComponent(slug)}`,
         request.url
@@ -589,8 +635,36 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
           payload = JSON.parse(text ?? "null");
         } catch {}
         const parsed = z
-          .object({ data: z.object({ owner: NamespaceSlugSchema, name: RepositorySlugSchema }) })
+          .object({
+            data: z.object({
+              id: z.string().min(1),
+              owner: NamespaceSlugSchema,
+              name: RepositorySlugSchema,
+            }),
+          })
           .safeParse(payload);
+        if (parsed.success && isDownloadPath(url.pathname)) {
+          const download = downloadRequest(request, parsed.data.data.id);
+          if (!download)
+            return Response.json(
+              { error: { code: "not_found", message: "Download was not found." } },
+              { status: 404, headers: { "Cache-Control": "no-store" } }
+            );
+          if (session.authenticated) {
+            const userLimit = await enforceUserLimit(session, env);
+            if (userLimit) return userLimit;
+          }
+          return presentRepositoryResponse(
+            await env.GIT.fetch(
+              forwardAuthenticated(
+                download,
+                "/api/git",
+                session.authenticated ? session : undefined
+              )
+            ),
+            env
+          );
+        }
         if (
           parsed.success &&
           (parsed.data.data.owner !== owner || parsed.data.data.name !== slug)
@@ -604,6 +678,11 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
         }
       } else {
         await resolved.body?.cancel();
+        if (isDownloadPath(url.pathname) && (resolved.status === 403 || resolved.status === 404))
+          return Response.json(
+            { error: { code: "not_found", message: "Repository was not found." } },
+            { status: resolved.status, headers: { "Cache-Control": "no-store" } }
+          );
         if (resolved.status === 403 || resolved.status === 404) {
           const page = await serveSpa(request, env.ASSETS);
           const headers = new Headers(page.headers);

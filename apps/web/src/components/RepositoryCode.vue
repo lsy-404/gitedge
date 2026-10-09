@@ -9,10 +9,11 @@ import type {
   GitGraph,
   GitRef,
   GitTree,
+  Release,
   Repository,
   RepositoryBranch,
 } from "../lib/api";
-import { api, errorMessage } from "../lib/api";
+import { api, archiveUrl, errorMessage, rawFileUrl } from "../lib/api";
 import AppIcon from "./AppIcon.vue";
 import AppLink from "./AppLink.vue";
 import SelectField from "./SelectField.vue";
@@ -41,6 +42,7 @@ import DiffViewer from "./DiffViewer.vue";
 import CommitSignatureStatus from "./CommitSignatureStatus.vue";
 import { preferencesState } from "../lib/preferences";
 import RepositoryBranches from "./RepositoryBranches.vue";
+import RepositoryTags from "./RepositoryTags.vue";
 import RepositoryFileEditor from "./RepositoryFileEditor.vue";
 import RepositoryCommunity from "./RepositoryCommunity.vue";
 
@@ -134,6 +136,21 @@ const canEditCurrentRef = computed(
   () => Boolean(selectedBranchHeadOid.value) || emptyRepository.value
 );
 const tagRefs = computed(() => refs.value.filter((item) => item.name.startsWith("refs/tags/")));
+const canManageTags = computed(
+  () => props.section === "code" && props.repository.canWrite && !props.repository.archived
+);
+const latestRelease = ref<Release | null>(null);
+const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg)$/i;
+const rawUrl = computed(() =>
+  rawFileUrl(props.repository.owner, props.repository.name, refName.value, filePath.value)
+);
+const downloadUrl = computed(() =>
+  rawFileUrl(props.repository.owner, props.repository.name, refName.value, filePath.value, true)
+);
+const imageFile = computed(() => IMAGE_EXTENSIONS.test(filePath.value));
+function sourceArchiveUrl(format: "zip" | "tar.gz"): string {
+  return archiveUrl(props.repository.owner, props.repository.name, refName.value, format);
+}
 const shortRefs = (items: GitRef[]) =>
   items.map((item) => ({ ...item, shortName: item.name.replace(/^refs\/(heads|tags)\//, "") }));
 const graphLayout = computed(() => layoutGitGraph(graph.value?.commits ?? []));
@@ -272,6 +289,7 @@ async function load() {
       return;
     }
     if (props.section === "code" && !filePath.value) {
+      void loadLatestRelease(props.repository.id);
       commits.value = await api.commits(props.repository.id, refName.value, 0, 1);
       if (version !== requestVersion) return;
     }
@@ -295,6 +313,15 @@ async function load() {
     showError(cause);
   } finally {
     if (version === requestVersion) loading.value = false;
+  }
+}
+async function loadLatestRelease(repositoryId: string) {
+  try {
+    const release = await api.latestRelease(repositoryId);
+    if (repositoryId === props.repository.id) latestRelease.value = release;
+  } catch {
+    // The sidebar entry is optional, so a missing or unreadable release only hides it.
+    if (repositoryId === props.repository.id) latestRelease.value = null;
   }
 }
 async function refreshRefs() {
@@ -468,22 +495,6 @@ function sessionPermission(session: NonNullable<typeof graph.value>["sessions"][
 function sessionMarkerLabel(marker: GraphSessionMarker): string {
   return `${marker.session.agentName} / ${marker.session.workspaceName} · ${t(marker.kind === "base" ? "sessionBase" : "sessionForkTip")}`;
 }
-function downloadText() {
-  if (!file.value || file.value.content === null) return;
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(
-    new Blob([file.value.content], { type: "text/plain;charset=utf-8" })
-  );
-  link.download = title.value;
-  link.click();
-  URL.revokeObjectURL(link.href);
-}
-function rawFile() {
-  if (!file.value || file.value.content === null) return;
-  const url = URL.createObjectURL(new Blob([file.value.content], { type: "text/plain" }));
-  window.open(url, "_blank", "noopener");
-  setTimeout(() => URL.revokeObjectURL(url), 60_000);
-}
 function dismissCodeMenu(event: Event) {
   if (event instanceof KeyboardEvent && event.key === "Escape" && showCloneMenu.value) {
     showCloneMenu.value = false;
@@ -538,7 +549,10 @@ watch(
       graphLimit.value = graphPageSize;
       moreError.value = "";
       commits.value = [];
-      if (previousRepositoryId !== props.repository.id) clearToken();
+      if (previousRepositoryId !== props.repository.id) {
+        clearToken();
+        latestRelease.value = null;
+      }
     }
     previousRepositoryId = props.repository.id;
     previousSection = props.section;
@@ -595,6 +609,18 @@ onUnmounted(() => {
           :refresh-key="branchRefreshKey"
           @select="changeRef"
           @branches-loaded="managedBranches = $event"
+          @changed="refreshRefs"
+        />
+        <RepositoryTags
+          v-if="canManageTags && branchRefs.length"
+          :repository="repository"
+          :branches="shortRefs(branchRefs).map((item) => item.shortName)"
+          :selected-branch="
+            branchRefs.some((item) => item.name === 'refs/heads/' + refName)
+              ? refName
+              : repository.defaultBranch
+          "
+          @select="changeRef"
           @changed="refreshRefs"
         />
         <span class="repo-count"
@@ -661,6 +687,14 @@ onUnmounted(() => {
                 </template>
               </dl>
             </details>
+            <div class="clone-downloads">
+              <a class="btn btn-sm" :href="sourceArchiveUrl('zip')"
+                ><AppIcon name="download" />{{ t("downloadSourceZip") }}</a
+              >
+              <a class="btn btn-sm" :href="sourceArchiveUrl('tar.gz')"
+                ><AppIcon name="download" />{{ t("downloadSourceTar") }}</a
+              >
+            </div>
             <template v-if="canCreateCloneToken">
               <FluentButton type="button" :disabled="tokenBusy" @click="issueToken">{{
                 t("patGenerate")
@@ -845,21 +879,17 @@ onUnmounted(() => {
               @click="openExistingFileEditor"
               >{{ t("edit") }}</FluentButton
             >
-            <FluentButton
-              tone="secondary"
-              :disabled="file.binary || file.content === null"
-              @click="rawFile"
-              >{{ t("raw") }}</FluentButton
-            ><FluentButton
-              tone="secondary"
-              :disabled="file.binary || file.content === null"
-              @click="downloadText"
-              ><AppIcon name="download" />{{ t("download") }}</FluentButton
+            <a class="btn" :href="rawUrl" target="_blank" rel="noopener">{{ t("raw") }}</a
+            ><a class="btn" :href="downloadUrl" download
+              ><AppIcon name="download" />{{ t("download") }}</a
             >
           </div>
         </div>
-        <p v-if="file.binary || file.content === null" class="muted box-form">
-          {{ t("binaryPreviewUnavailable") }}
+        <div v-if="imageFile" class="file-image box-form">
+          <img :src="rawUrl" :alt="t('rawImageAlt', { name: title })" />
+        </div>
+        <p v-else-if="file.binary || file.content === null" class="muted box-form">
+          {{ t("binaryPreviewUnavailable") }} {{ t("binaryDownloadHint") }}
         </p>
         <MarkdownContent
           allow-images
@@ -921,6 +951,19 @@ onUnmounted(() => {
           :to="`/${repository.owner}/${repository.name}/commits?ref=${encodeURIComponent(refName)}`"
           ><AppIcon name="clock" />{{ t("commitHistory") }}</RouterLink
         >
+        <div class="about-release">
+          <h3>{{ t("releases") }}</h3>
+          <RouterLink v-if="latestRelease" :to="`/${repository.owner}/${repository.name}/releases`"
+            ><AppIcon name="tag" />{{ latestRelease.title }}</RouterLink
+          >
+          <p v-if="latestRelease" class="muted">
+            {{ latestRelease.tagName }} · {{ t("latestRelease") }}
+          </p>
+          <p v-else class="muted">{{ t("noReleases") }}</p>
+          <RouterLink :to="`/${repository.owner}/${repository.name}/releases`">{{
+            t("viewReleases")
+          }}</RouterLink>
+        </div>
       </aside>
       <RepositoryCommunity
         v-if="!filePath && !loading"

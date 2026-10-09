@@ -42,6 +42,10 @@ The remaining e2e scripts need these inputs. `test/e2e/browser-accounts.mjs` run
 
 `build` builds the Vue interface and bundles every Worker with Wrangler's dry-run mode. Dry-run builds do not check that service binding targets exist. Production deployment is a separate `pnpm run deploy` operation that applies D1 migrations and deploys internal services before the Gateway. The first deploy into an empty account creates placeholder Workers for the cyclic bindings (Git, Forge and Actions) and then replaces them with the real deploys.
 
+## Tags, releases and downloads
+
+Writers manage tags from the Code tab (Manage tags: lightweight or annotated, created from a branch or a commit in its history) and publish releases from the Releases tab: notes in Markdown, draft and pre-release flags, optional tag creation from a branch or commit, and binary assets of up to 100 MiB (50 per release) uploaded as a stream to the `RELEASE_ASSETS` R2 bucket. The repository home shows the latest release, and the Code menu offers Download ZIP and tar.gz for the selected ref. Every ref also has a shareable source archive URL, `/<owner>/<repo>/archive/<ref>.zip` or `.tar.gz`, which is streamed and refuses oversized repositories instead of producing a partial file, and files have a shareable raw URL, `/<owner>/<repo>/raw/<ref>/<path>`, that renders text and images inline, forces other types to download and always sends `nosniff` and a sandbox CSP. Private repositories answer 404 to readers without access on every one of these routes. See [API endpoints](docs/api-endpoints.md) for details. `pnpm run deploy` creates the `gitedge-release-assets` bucket when it is missing.
+
 ## Operations
 
 See [operations](docs/operations.md) for D1 Time Travel restore, scheduled exports, Git mirrors, the pre-migration checklist, deploy order and the incident checklist. `GET /api/health` reports the status of every internal service and D1; Account settings shows repository usage against the group quota.

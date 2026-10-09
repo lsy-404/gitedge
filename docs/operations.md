@@ -4,13 +4,14 @@ Runbook for backup, restore, migration and incident response. Run commands from 
 
 ## What holds state
 
-| Data                                                                      | Where                             | Recovery                            |
-| ------------------------------------------------------------------------- | --------------------------------- | ----------------------------------- |
-| Accounts, sessions, credential hashes, Issues, PRs, reviews, checks, wiki | D1 database `gitedge`             | D1 Time Travel, SQL export          |
-| Git objects and refs                                                      | Cloudflare Artifacts              | Git mirrors you keep (see below)    |
-| Rate-limit windows                                                        | `gitedge-limits` Durable Objects  | Disposable; resets after one minute |
-| Action run state                                                          | `gitedge-actions` Durable Objects | Disposable; rerun the workflow      |
-| Worker secrets                                                            | Cloudflare secrets                | Re-enter from your secret store     |
+| Data                                                                      | Where                              | Recovery                             |
+| ------------------------------------------------------------------------- | ---------------------------------- | ------------------------------------ |
+| Accounts, sessions, credential hashes, Issues, PRs, reviews, checks, wiki | D1 database `gitedge`              | D1 Time Travel, SQL export           |
+| Git objects and refs                                                      | Cloudflare Artifacts               | Git mirrors you keep (see below)     |
+| Release assets                                                            | R2 bucket `gitedge-release-assets` | Not versioned; re-upload from builds |
+| Rate-limit windows                                                        | `gitedge-limits` Durable Objects   | Disposable; resets after one minute  |
+| Action run state                                                          | `gitedge-actions` Durable Objects  | Disposable; rerun the workflow       |
+| Worker secrets                                                            | Cloudflare secrets                 | Re-enter from your secret store      |
 
 D1 and Artifacts are separate systems. A D1 restore does not touch Git data, and the two can drift apart: a repository row can point at an Artifacts repository that was created after the restore point. Record the restore timestamp and compare the `repositories` table with Artifacts afterwards.
 

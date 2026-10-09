@@ -13,6 +13,7 @@ import {
 } from "../../../src/worker/common/repositories";
 import { branchRules, matchingBranchRules } from "../../../src/worker/common/branch-protection";
 import { repositoryControls } from "./controls";
+import { publicReleaseRead, repositoryReleases } from "./releases";
 import {
   deleteOrganization,
   deletedRepositories,
@@ -452,6 +453,10 @@ async function publicRepositoryRead(
     return errorResponse(404, "feature_disabled", `Repository ${disabled} are disabled.`);
   if (repository.archived === 1 && request.method !== "GET")
     return errorResponse(409, "repository_archived", "Archived repositories are read-only.");
+  if (resource === "releases") {
+    const releases = await publicReleaseRead(env, repository, suffix, request);
+    if (releases) return releases;
+  }
   if (resource === "issues" && parts.length === 5) {
     const rows = await env.DB.prepare(
       `SELECT forge_issues.*, users.identifier AS author${assignmentsSelect("forge_issues", "forge_issues")} FROM forge_issues JOIN users ON users.id = forge_issues.author_id WHERE forge_issues.repository_id = ? ORDER BY forge_issues.number DESC LIMIT ?`
@@ -2031,6 +2036,8 @@ export default {
     if (lifecycle) return lifecycle;
     const controls = await repositoryControls(env, request, repository, user, parts);
     if (controls) return controls;
+    const releases = await repositoryReleases(env, request, repository, user, parts);
+    if (releases) return releases;
     const feature = await featureRequest(env, user, repository, parts, request);
     if (feature) return feature;
 

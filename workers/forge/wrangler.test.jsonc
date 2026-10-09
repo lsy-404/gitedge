@@ -4,6 +4,7 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
+  "r2_buckets": [{ "binding": "RELEASE_ASSETS", "bucket_name": "gitedge-release-assets-tests" }],
   "d1_databases": [
     {
       "binding": "DB",

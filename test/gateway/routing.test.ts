@@ -338,7 +338,7 @@ describe("Gateway routing", () => {
       environment({
         forge: service((request) => {
           expect(new URL(request.url).pathname).toBe("/repositories/by-name/owner/old.name");
-          return Response.json({ data: { owner: "owner", name: "new.name" } });
+          return Response.json({ data: { id: "repo-1", owner: "owner", name: "new.name" } });
         }),
       })
     );
@@ -353,5 +353,84 @@ describe("Gateway routing", () => {
       environment({ forge: service(() => new Response("missing", { status: 404 })) })
     );
     expect(response.headers.get("Location")).toBeNull();
+  });
+
+  describe("repository downloads", () => {
+    const resolvedForge = service((request) => {
+      expect(new URL(request.url).pathname).toBe("/repositories/by-name/owner/repo");
+      return Response.json({ data: { id: "repo-1", owner: "owner", name: "repo" } });
+    });
+
+    it("maps raw URLs onto the Git API, keeping slashes inside refs", async () => {
+      let forwarded: URL | null = null;
+      const response = await handleGatewayRequest(
+        new Request(
+          "https://gitedge.example.com/owner/repo/raw/feature/x/docs/a%20b.txt?download=1"
+        ),
+        environment({
+          forge: resolvedForge,
+          git: service((request) => {
+            forwarded = new URL(request.url);
+            expect(request.headers.has("X-GitEdge-User-Id")).toBe(false);
+            return new Response("content", { headers: { "X-Content-Type-Options": "nosniff" } });
+          }),
+        })
+      );
+      expect(response.status).toBe(200);
+      expect(forwarded?.pathname).toBe("/repositories/repo-1/raw");
+      expect(forwarded?.searchParams.get("spec")).toBe("feature/x/docs/a b.txt");
+      expect(forwarded?.searchParams.get("download")).toBe("1");
+      expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    });
+
+    it("maps archive URLs to a ref and format", async () => {
+      const seen: URL[] = [];
+      const git = service((request) => {
+        seen.push(new URL(request.url));
+        return new Response("archive");
+      });
+      for (const suffix of ["zip", "tar.gz"])
+        await handleGatewayRequest(
+          new Request(`https://gitedge.example.com/owner/repo/archive/release/v1.${suffix}`),
+          environment({ forge: resolvedForge, git })
+        );
+      expect(
+        seen.map((url) => [
+          url.pathname,
+          url.searchParams.get("ref"),
+          url.searchParams.get("format"),
+        ])
+      ).toEqual([
+        ["/repositories/repo-1/archive", "release/v1", "zip"],
+        ["/repositories/repo-1/archive", "release/v1", "tar.gz"],
+      ]);
+      const unsupported = await handleGatewayRequest(
+        new Request("https://gitedge.example.com/owner/repo/archive/main.rar"),
+        environment({ forge: resolvedForge })
+      );
+      expect(unsupported.status).toBe(404);
+    });
+
+    it("answers 404 JSON instead of the app shell for private repositories", async () => {
+      const response = await handleGatewayRequest(
+        new Request("https://gitedge.example.com/owner/repo/raw/main/README.md"),
+        environment({
+          forge: service(() => new Response("missing", { status: 404 })),
+          assets: service(() => new Response("<html>app</html>")),
+        })
+      );
+      expect(response.status).toBe(404);
+      expect(response.headers.get("Content-Type")).toContain("application/json");
+    });
+
+    it("rejects invalid access tokens", async () => {
+      const response = await handleGatewayRequest(
+        new Request("https://gitedge.example.com/owner/repo/raw/main/README.md", {
+          headers: { Authorization: "Bearer gep_invalid" },
+        }),
+        environment({ auth: service(() => new Response("no", { status: 401 })) })
+      );
+      expect(response.status).toBe(401);
+    });
   });
 });
