@@ -1,4 +1,5 @@
 import repositorySettingsMessages from "./i18n/repositorySettings";
+import { accessTokenMessages } from "./i18n/accessTokens";
 import { settingsMessages } from "./i18n/settings";
 import { createI18n } from "vue-i18n";
 import github from "./i18n/github";
@@ -196,11 +197,7 @@ const messages = {
     compare: "比较",
     readToken: "只读令牌",
     writeToken: "读写令牌",
-    createCloneToken: "签发克隆令牌",
-    cloneTokenName: "令牌名称",
-    copyCloneCommand: "复制克隆命令",
     tokenShownOnce: "令牌仅显示一次",
-    tokenExpired: "令牌已过期，明文已从页面清除。",
     tokenExpiry: "有效期至 {date}",
     close: "关闭",
     repositoryRoot: "仓库根目录",
@@ -607,11 +604,7 @@ const messages = {
     compare: "Compare",
     readToken: "Read token",
     writeToken: "Read/write token",
-    createCloneToken: "Create clone token",
-    cloneTokenName: "Token name",
-    copyCloneCommand: "Copy clone command",
     tokenShownOnce: "Token shown once",
-    tokenExpired: "Token expired; its plaintext has been cleared from this page.",
     tokenExpiry: "Expires {date}",
     close: "Close",
     repositoryRoot: "Repository root",
@@ -853,6 +846,7 @@ export const i18n = createI18n({
       ...communityMessages["zh-CN"],
       ...actionsMessages["zh-CN"],
       ...browserAccountMessages["zh-CN"],
+      ...accessTokenMessages["zh-CN"],
     },
     en: {
       ...messages.en,
@@ -868,6 +862,7 @@ export const i18n = createI18n({
       ...communityMessages.en,
       ...actionsMessages.en,
       ...browserAccountMessages.en,
+      ...accessTokenMessages.en,
     },
   },
 });

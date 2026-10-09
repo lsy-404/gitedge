@@ -38,6 +38,8 @@ const dynamicKeys: Record<string, readonly string[]> = {
     "merge_method_disabled",
   ],
   "deployWizard.steps.": ["provision", "migrate", "deploy"],
+  patOs_: ["osxkeychain", "manager", "libsecret", "store"],
+  patScope_: ["repo_read", "repo_write", "issues_write", "pulls_write", "org_read", "admin"],
 };
 
 function flatten(value: unknown, prefix = ""): Record<string, string> {

@@ -9,10 +9,15 @@ import {
 } from "../../apps/web/src/lib/gitGraphView";
 import {
   clearAgentSessionSecrets,
-  clearOneTimeToken,
   isCredentialExpired,
 } from "../../apps/web/src/lib/credentialSecurity";
-import { cloneCommand, gatewayCloneUrl } from "../../apps/web/src/lib/gitClone";
+import {
+  cloneCommand,
+  credentialHelperHints,
+  existingRepositoryCommands,
+  gatewayCloneUrl,
+  newRepositoryCommands,
+} from "../../apps/web/src/lib/gitClone";
 
 function session(
   id: string,
@@ -108,17 +113,39 @@ describe("Git graph view projection", () => {
     });
   });
 
-  it("builds the gateway clone URL and keeps its Auth credential in the header command", () => {
+  it("builds the gateway clone URL and a credential-free clone command", () => {
     const remote = gatewayCloneUrl("https://forge.example", "team", "repo name");
-    const command = cloneCommand(remote, "release/next", "ge_token_secret");
-    expect(command).toContain("clone --branch release/next -- ");
-
     expect(remote).toBe("https://forge.example/team/repo%20name.git");
-    expect(command).toContain("http.extraHeader=Authorization: Bearer ge_token_secret");
-    expect(cloneCommand("https://forge.example/team/repo.git", "topic/$(touch-pwned)")).toContain(
-      "--branch 'topic/$(touch-pwned)' --"
+    expect(cloneCommand("https://forge.example/team/repo.git")).toBe(
+      "git clone https://forge.example/team/repo.git"
     );
-    expect(remote).not.toContain("ge_token_secret");
+    expect(cloneCommand(remote)).toBe("git clone https://forge.example/team/repo%20name.git");
+    expect(cloneCommand("https://forge.example/team/$(touch-pwned).git")).toContain(
+      "'https://forge.example/team/$(touch-pwned).git'"
+    );
+  });
+
+  it("offers credential helpers per platform and flags the plain-text store", () => {
+    expect(credentialHelperHints.map((hint) => hint.id)).toEqual([
+      "osxkeychain",
+      "manager",
+      "libsecret",
+      "store",
+    ]);
+    expect(credentialHelperHints.filter((hint) => hint.plaintext).map((hint) => hint.id)).toEqual([
+      "store",
+    ]);
+    for (const hint of credentialHelperHints)
+      expect(hint.command).toBe(`git config --global credential.helper ${hint.id}`);
+  });
+
+  it("builds copy-paste quickstart commands", () => {
+    const remote = "https://forge.example/team/repo.git";
+    const fresh = newRepositoryCommands(remote, "repo", "main").split("\n");
+    expect(fresh).toContain(`git remote add origin ${remote}`);
+    expect(fresh).toContain("git push -u origin main");
+    expect(existingRepositoryCommands(remote)).toContain(`git remote add gitedge ${remote}`);
+    expect(fresh.join("\n")).not.toContain("gep_");
   });
 
   it("clears expired one-time Git and agent credentials and detects expiry at the deadline", () => {
@@ -136,10 +163,6 @@ describe("Git graph view projection", () => {
 
     expect(isCredentialExpired(gitCredential.expiresAt, 9_999)).toBe(false);
     expect(isCredentialExpired(gitCredential.expiresAt, 10_000)).toBe(true);
-    expect(clearOneTimeToken(gitCredential)).toMatchObject({
-      token: "",
-      remote: gitCredential.remote,
-    });
     expect(clearAgentSessionSecrets(agentCredential)).toMatchObject({ token: "", gitToken: "" });
   });
 

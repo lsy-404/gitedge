@@ -231,6 +231,30 @@
 .empty-repository h3 {
   margin-top: var(--space-2);
 }
+.quickstart-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+.credential-helpers summary {
+  cursor: pointer;
+  font-size: var(--font-size-meta);
+}
+.credential-helpers dl {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
+}
+.credential-helpers dt {
+  font-size: var(--font-size-meta);
+  font-weight: var(--font-weight-semibold);
+}
+.credential-helpers dd {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+}
 .command-block {
   box-sizing: border-box;
   width: 100%;
