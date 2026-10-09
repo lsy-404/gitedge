@@ -43,6 +43,7 @@ export default {
           await mergeArtifacts(repo, head, input.data, {
             requireLinearHistory: false,
             requireSignedCommits: false,
+            requireConversationResolution: false,
             verifySignature: async () => false,
             beforePush: async () => {},
           })

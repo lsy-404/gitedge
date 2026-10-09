@@ -12,6 +12,7 @@ import type {
   Comment,
   Discussion,
   Issue,
+  IssueReferences,
   PullRequest,
   Repository,
   Review,
@@ -33,6 +34,9 @@ import TextField from "./TextField.vue";
 import TextAreaField from "./TextAreaField.vue";
 import MarkdownContent from "./MarkdownContent.vue";
 import DiffViewer from "./DiffViewer.vue";
+import ReviewThread from "./ReviewThread.vue";
+import { useReviewThreads } from "../lib/reviewThreads";
+import { reviewActorKey } from "../../../../packages/contracts/src/review-comments";
 import CommunityTemplatePicker from "./CommunityTemplatePicker.vue";
 
 const discussionCategories = [
@@ -71,6 +75,11 @@ const comments = ref<Comment[]>([]);
 const listTruncated = ref(false);
 const reviews = ref<Review[]>([]);
 const checks = ref<CheckRun[]>([]);
+const issueLinks = ref<IssueReferences | null>(null);
+const markdownRepository = computed(() => ({
+  owner: props.repository.owner,
+  slug: props.repository.name,
+}));
 const mergeMethod = ref<"merge" | "squash" | "rebase">("merge");
 const availableMergeMethods = computed(() => [
   ...(props.repository.allowMergeCommit ? (["merge"] as const) : []),
@@ -138,6 +147,11 @@ const checkForm = ref<{
   conclusion: NonNullable<CheckRun["conclusion"]>;
   summary: string;
 }>({ name: "", commitOid: "", status: "completed", conclusion: "success", summary: "" });
+const reviewThreads = useReviewThreads(
+  () => props.repository.id,
+  () => detailNumber.value,
+  () => diff.value?.headOid ?? ""
+);
 const queryText = ref("");
 const stateFilter = ref<"open" | "closed" | "all">("open");
 const categoryFilter = ref<"all" | Discussion["category"]>("all");
@@ -212,6 +226,37 @@ const pullIsOpen = computed(() => {
 });
 const canCreate = computed(() => Boolean(sessionState.user) && !props.repository.archived);
 const showEditActions = computed(() => props.repository.canWrite && !props.repository.archived);
+const reviewContext = computed(() => {
+  const subject = item.value;
+  const pull = subject && "headRef" in subject ? subject : null;
+  return {
+    canComment: canCreate.value && pullIsOpen.value && Boolean(diff.value?.headOid),
+    canModerate: showEditActions.value,
+    isPullAuthor: pull !== null && ownedByViewer(pull.actor),
+    viewerKey: sessionState.user
+      ? reviewActorKey({ kind: "user", id: sessionState.user.id })
+      : null,
+    hasPendingReview: reviewThreads.pendingCount.value > 0,
+    busy: reviewThreads.busy.value,
+  };
+});
+const issueEvents = computed(() => issueLinks.value?.events ?? []);
+/** Closing events that happened after the previous comment and before the one at this index. */
+function issueEventsBefore(index: number) {
+  const upper = comments.value[index]?.createdAt ?? Infinity;
+  const lower = index > 0 ? (comments.value[index - 1]?.createdAt ?? -Infinity) : -Infinity;
+  return issueEvents.value.filter((event) => event.createdAt > lower && event.createdAt <= upper);
+}
+const trailingIssueEvents = computed(() => {
+  const last = comments.value.at(-1)?.createdAt ?? -Infinity;
+  return issueEvents.value.filter((event) => event.createdAt > last);
+});
+function fileReviewContext(path: string) {
+  return {
+    ...reviewContext.value,
+    threads: reviewThreads.threads.value.filter((thread) => thread.root.path === path),
+  };
+}
 function ownedByViewer(actor: Actor): boolean {
   return actor.kind === "user" && actor.id === sessionState.user?.id;
 }
@@ -339,6 +384,17 @@ const mergeStatusRows = computed<MergeStatusRow[]>(() => {
       tone: "success",
       text: t("mergeChecksPassed", { count: current.length }),
     });
+  const open = reviewThreads.unresolved.value.length;
+  rows.push(
+    open
+      ? {
+          key: "threads",
+          icon: "alert",
+          tone: "warning",
+          text: t("mergeThreadsUnresolved", { count: open }),
+        }
+      : { key: "threads", icon: "checkCircle", tone: "success", text: t("mergeThreadsResolved") }
+  );
   return rows;
 });
 let loadVersion = 0;
@@ -398,6 +454,7 @@ const mergePolicyCodes = [
   "checks_incomplete",
   "checks_required",
   "required_checks_missing",
+  "threads_unresolved",
   "protected_branch",
   "repository_readonly",
   "merge_method_disabled",
@@ -441,12 +498,14 @@ async function load() {
   try {
     if (props.section === "issues") {
       if (detailNumber.value) {
-        const [detail, rows] = await Promise.all([
+        const [detail, rows, links] = await Promise.all([
           api.issue(props.repository.id, detailNumber.value),
           api.comments(props.repository.id, "issues", detailNumber.value),
+          api.issueReferences(props.repository.id, detailNumber.value),
         ]);
         if (version !== loadVersion) return;
         item.value = detail;
+        issueLinks.value = links;
         editDraft.value = {
           title: detail.title,
           body: detail.body,
@@ -469,6 +528,7 @@ async function load() {
           api.reviews(props.repository.id, detailNumber.value),
           api.checks(props.repository.id, detailNumber.value),
           api.pullDiff(props.repository.id, detailNumber.value),
+          reviewThreads.load(),
         ]);
         if (version !== loadVersion) return;
         item.value = detail;
@@ -542,10 +602,26 @@ async function load() {
     }
   } catch (cause) {
     if (version !== loadVersion) return;
-    if (cause instanceof ApiError && cause.status === 404 && isDetail.value) notFound.value = true;
-    else loadError.value = userMessage(cause);
+    if (cause instanceof ApiError && cause.status === 404 && isDetail.value) {
+      if (props.section === "issues" && (await pullExists(detailNumber.value))) {
+        await router.replace(
+          `/${props.repository.owner}/${props.repository.name}/pulls/${detailNumber.value}`
+        );
+        return;
+      }
+      notFound.value = true;
+    } else loadError.value = userMessage(cause);
   } finally {
     if (version === loadVersion) loading.value = false;
+  }
+}
+/** Issue and pull request numbers share one sequence, so #n links may point at a pull request. */
+async function pullExists(number: number): Promise<boolean> {
+  try {
+    await api.pull(props.repository.id, number);
+    return true;
+  } catch {
+    return false;
   }
 }
 function resetForm() {
@@ -745,8 +821,25 @@ function addReview() {
       body: reviewForm.value.body,
     });
     reviews.value = await api.reviews(props.repository.id, number);
+    await reviewThreads.load();
     reviewForm.value.body = "";
   });
+}
+async function finishReview() {
+  detailTab.value = "conversation";
+  await nextTick();
+  document.getElementById("review-panel")?.scrollIntoView({ block: "center" });
+  document.querySelector<HTMLElement>("#review-panel select, #review-panel textarea")?.focus();
+}
+async function showThread(rootId: string) {
+  await nextTick();
+  const target = document.getElementById(`review-thread-${rootId}`);
+  if (target) target.scrollIntoView({ block: "center" });
+  else {
+    detailTab.value = "conversation";
+    await nextTick();
+    document.getElementById(`review-thread-${rootId}`)?.scrollIntoView({ block: "center" });
+  }
 }
 function addCheck() {
   if (!detailNumber.value) return Promise.resolve();
@@ -1346,6 +1439,7 @@ watch(
                   class="body-content"
                   :mentions="!('content' in item)"
                   :source="'content' in item ? item.content : item.body"
+                  :repository="markdownRepository"
                 />
                 <div
                   v-if="'headRef' in item && (item.headSessionId || item.mergedOid)"
@@ -1469,11 +1563,66 @@ watch(
                 t("comparisonTruncated")
               }}</NoticeBar>
             </div>
+            <NoticeBar v-if="reviewThreads.error.value" intent="error">{{
+              reviewThreads.error.value
+            }}</NoticeBar>
+            <div v-if="reviewThreads.pendingCount.value" class="box pending-review">
+              <div class="box-row">
+                <AppIcon class="state-icon state-warning" name="alert" />
+                <span class="grow">{{
+                  t("pendingReviewCount", { count: reviewThreads.pendingCount.value })
+                }}</span>
+                <FluentButton type="button" size="small" tone="primary" @click="finishReview">
+                  {{ t("finishReview") }}
+                </FluentButton>
+              </div>
+            </div>
+            <div v-if="reviewThreads.threads.value.length" class="box thread-summary">
+              <header class="box-header">
+                <h3>
+                  {{
+                    reviewThreads.unresolved.value.length
+                      ? t("unresolvedThreads", { count: reviewThreads.unresolved.value.length })
+                      : t("allThreadsResolved")
+                  }}
+                </h3>
+              </header>
+              <ul v-if="reviewThreads.unresolved.value.length" class="thread-summary-list">
+                <li
+                  v-for="thread in reviewThreads.unresolved.value"
+                  :key="thread.root.id"
+                  class="box-row"
+                >
+                  <FluentButton
+                    type="button"
+                    tone="subtle"
+                    size="small"
+                    @click="showThread(thread.root.id)"
+                  >
+                    <code>{{ thread.root.path }}:{{ thread.root.line }}</code>
+                  </FluentButton>
+                  <StatusBadge v-if="thread.root.outdated" tone="warning">{{
+                    t("threadOutdated")
+                  }}</StatusBadge>
+                  <span class="muted thread-excerpt">{{ thread.root.body.slice(0, 120) }}</span>
+                </li>
+              </ul>
+            </div>
             <div v-for="change in diff.files" :key="change.path" class="box changed-file">
               <header class="box-header file-header">
                 <code>{{ change.type }} · {{ change.path }}</code>
               </header>
-              <DiffViewer v-if="change.patch" :patch="change.patch" :path="change.path" />
+              <DiffViewer
+                v-if="change.patch"
+                :patch="change.patch"
+                :path="change.path"
+                :review="fileReviewContext(change.path)"
+                @create="reviewThreads.createThread"
+                @reply="(root, body) => reviewThreads.reply(root, body, false)"
+                @edit="reviewThreads.edit"
+                @remove="reviewThreads.remove"
+                @resolve="reviewThreads.setResolved"
+              />
               <p v-else class="muted file-note">
                 {{ change.binary ? t("binaryPreviewUnavailable") : t("diffTooLarge") }}
               </p>
@@ -1525,6 +1674,42 @@ watch(
 
           <section
             v-if="section === 'pulls' && detailTab === 'conversation'"
+            class="box review-threads-panel"
+          >
+            <header class="box-header">
+              <h3>{{ t("reviewThreads") }}</h3>
+            </header>
+            <NoticeBar v-if="reviewThreads.truncated.value" intent="warning">{{
+              t("reviewThreadsTruncated")
+            }}</NoticeBar>
+            <div
+              v-for="thread in reviewThreads.threads.value"
+              :key="thread.root.id"
+              class="box-row"
+            >
+              <ReviewThread
+                class="grow"
+                :thread="thread"
+                :viewer-key="reviewContext.viewerKey"
+                :can-comment="reviewContext.canComment"
+                :can-moderate="reviewContext.canModerate"
+                :is-pull-author="reviewContext.isPullAuthor"
+                :busy="reviewThreads.busy.value"
+                show-context
+                @reply="(root, body) => reviewThreads.reply(root, body, false)"
+                @edit="reviewThreads.edit"
+                @remove="reviewThreads.remove"
+                @resolve="reviewThreads.setResolved"
+              />
+            </div>
+            <p v-if="!reviewThreads.threads.value.length" class="box-row muted">
+              {{ t("reviewThreadsEmpty") }}
+            </p>
+          </section>
+
+          <section
+            v-if="section === 'pulls' && detailTab === 'conversation'"
+            id="review-panel"
             class="box review-panel"
           >
             <header class="box-header">
@@ -1573,6 +1758,11 @@ watch(
                 :placeholder="t('reviewBody')"
                 rows="2"
                 :label="t('reviewBody')"
+                :hint="
+                  reviewThreads.pendingCount.value
+                    ? t('pendingIncluded', { count: reviewThreads.pendingCount.value })
+                    : undefined
+                "
               />
               <div class="form-actions">
                 <FluentButton type="submit" :disabled="saving">{{
@@ -1694,58 +1884,85 @@ watch(
           >
             <h3 class="visually-hidden">{{ t("comments") }}</h3>
             <div class="timeline">
-              <article
-                v-for="comment in comments"
-                :key="comment.id"
-                class="comment-row timeline-entry"
-              >
-                <span class="avatar" aria-hidden="true">{{ initial(comment.actor.name) }}</span>
-                <div class="box comment-card">
-                  <header class="box-header comment-header">
-                    <strong>{{ actorName(comment) }}</strong
-                    ><StatusBadge v-if="comment.actor.kind === 'agent'" tone="brand">{{
-                      t("agentAuthored")
-                    }}</StatusBadge
-                    ><span class="comment-time">{{ d(comment.createdAt, "long") }}</span>
-                    <span class="comment-actions"
-                      ><FluentButton
-                        v-if="canModifyComment(comment)"
-                        type="button"
-                        tone="subtle"
-                        size="small"
-                        @click="startEditComment(comment)"
+              <template v-for="(comment, commentIndex) in comments" :key="comment.id">
+                <p
+                  v-for="event in issueEventsBefore(commentIndex)"
+                  :key="event.id"
+                  class="timeline-event muted"
+                >
+                  <AppIcon name="gitMerge" :size="14" />
+                  {{
+                    t("closedByPullRequest", {
+                      name: event.actor.name,
+                      number: event.pullRequestNumber,
+                    })
+                  }}
+                  · {{ d(event.createdAt, "long") }}
+                </p>
+                <article class="comment-row timeline-entry">
+                  <span class="avatar" aria-hidden="true">{{ initial(comment.actor.name) }}</span>
+                  <div class="box comment-card">
+                    <header class="box-header comment-header">
+                      <strong>{{ actorName(comment) }}</strong
+                      ><StatusBadge v-if="comment.actor.kind === 'agent'" tone="brand">{{
+                        t("agentAuthored")
+                      }}</StatusBadge
+                      ><span class="comment-time">{{ d(comment.createdAt, "long") }}</span>
+                      <span class="comment-actions"
+                        ><FluentButton
+                          v-if="canModifyComment(comment)"
+                          type="button"
+                          tone="subtle"
+                          size="small"
+                          @click="startEditComment(comment)"
+                        >
+                          {{ t("edit") }}</FluentButton
+                        ><FluentButton
+                          v-if="canModifyComment(comment)"
+                          type="button"
+                          tone="subtle"
+                          size="small"
+                          :disabled="saving"
+                          @click="removeComment(comment)"
+                        >
+                          {{ t("delete") }}</FluentButton
+                        ><FluentButton
+                          v-if="section === 'discussions' && showEditActions"
+                          type="button"
+                          tone="subtle"
+                          size="small"
+                          :disabled="saving"
+                          @click="toggleAnswer(comment)"
+                        >
+                          {{
+                            discussionItem?.answerCommentId === comment.id
+                              ? t("clearAnswer")
+                              : t("markAnswer")
+                          }}
+                        </FluentButton></span
                       >
-                        {{ t("edit") }}</FluentButton
-                      ><FluentButton
-                        v-if="canModifyComment(comment)"
-                        type="button"
-                        tone="subtle"
-                        size="small"
-                        :disabled="saving"
-                        @click="removeComment(comment)"
-                      >
-                        {{ t("delete") }}</FluentButton
-                      ><FluentButton
-                        v-if="section === 'discussions' && showEditActions"
-                        type="button"
-                        tone="subtle"
-                        size="small"
-                        :disabled="saving"
-                        @click="toggleAnswer(comment)"
-                      >
-                        {{
-                          discussionItem?.answerCommentId === comment.id
-                            ? t("clearAnswer")
-                            : t("markAnswer")
-                        }}
-                      </FluentButton></span
-                    >
-                  </header>
-                  <div class="comment-body">
-                    <MarkdownContent class="body-content" mentions :source="comment.body" />
+                    </header>
+                    <div class="comment-body">
+                      <MarkdownContent
+                        class="body-content"
+                        mentions
+                        :source="comment.body"
+                        :repository="markdownRepository"
+                      />
+                    </div>
                   </div>
-                </div>
-              </article>
+                </article>
+              </template>
+              <p v-for="event in trailingIssueEvents" :key="event.id" class="timeline-event muted">
+                <AppIcon name="gitMerge" :size="14" />
+                {{
+                  t("closedByPullRequest", {
+                    name: event.actor.name,
+                    number: event.pullRequestNumber,
+                  })
+                }}
+                · {{ d(event.createdAt, "long") }}
+              </p>
               <form v-if="canCreate" class="timeline-entry composer" @submit.prevent="postComment">
                 <span class="avatar" aria-hidden="true">{{
                   initial(sessionState.user?.identifier ?? "")
@@ -1806,6 +2023,22 @@ watch(
               <StatusBadge v-for="label in item.labels" :key="label">{{ label }}</StatusBadge>
             </div>
             <p v-else class="muted">{{ t("noLabels") }}</p>
+          </section>
+          <section v-if="section === 'issues' && issueLinks" class="sidebar-section">
+            <h3>{{ t("linkedPullRequests") }}</h3>
+            <ul v-if="issueLinks.pullRequests.length" class="linked-pulls">
+              <li v-for="pull in issueLinks.pullRequests" :key="pull.number">
+                <RouterLink :to="`/${repository.owner}/${repository.name}/pulls/${pull.number}`"
+                  >#{{ pull.number }} {{ pull.title }}</RouterLink
+                >
+                <small class="muted"
+                  >{{ t(pull.state) }} ·
+                  {{ pull.closes ? t("linkCloses") : t("linkMentions") }}</small
+                >
+              </li>
+            </ul>
+            <p v-else class="muted">{{ t("linkedPullRequestsEmpty") }}</p>
+            <p v-if="issueLinks.truncated" class="muted">{{ t("linkedPullRequestsTruncated") }}</p>
           </section>
           <AssignmentPanel
             v-if="(section === 'issues' || section === 'pulls') && 'assignees' in item"

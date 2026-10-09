@@ -127,6 +127,29 @@ export interface ListPage<T> {
   truncated: boolean;
 }
 
+export interface IssueLinkedPullRequest {
+  number: number;
+  title: string;
+  state: PullRequest["state"];
+  /** The pull request uses a closing keyword for this issue. */
+  closes: boolean;
+}
+
+export interface IssueEvent {
+  id: string;
+  kind: "closed_by_pull_request";
+  pullRequestNumber: number;
+  actor: Actor;
+  createdAt: number;
+}
+
+export interface IssueReferences {
+  pullRequests: IssueLinkedPullRequest[];
+  events: IssueEvent[];
+  /** More than the returned pull requests or events exist. */
+  truncated: boolean;
+}
+
 export interface Review {
   id: string;
   body: string;

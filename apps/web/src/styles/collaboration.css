@@ -537,3 +537,37 @@
     flex: 1 1 100%;
   }
 }
+
+.timeline-event {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--font-size-meta);
+}
+.linked-pulls,
+.thread-summary-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.linked-pulls {
+  display: grid;
+  gap: var(--space-2);
+}
+.linked-pulls li {
+  display: grid;
+  gap: var(--space-1);
+}
+.thread-summary .box-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.thread-excerpt {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

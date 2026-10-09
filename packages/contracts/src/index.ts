@@ -5,6 +5,8 @@ import { RepositorySlugSchema } from "./repository-controls";
 import { ConfirmationInputSchema } from "./lifecycle";
 export * from "./repository-controls";
 export * from "./forge";
+export * from "./review-comments";
+export * from "./references";
 export * from "./agents";
 export * from "./access-tokens";
 export * from "./tasks";

@@ -3,6 +3,7 @@ import { branchRules, matchingBranchRules } from "../../../src/worker/common/bra
 import { repositoryRole, writableRole } from "../../../src/worker/common/repositories";
 import { parseActor, type ForgeEnv, type RepositoryRow } from "./common";
 import { errorResponse } from "../../../src/worker/common/http";
+import { unresolvedThreadCount } from "./review-comments";
 
 export interface MergePolicyInput {
   method: "merge" | "squash" | "rebase";
@@ -31,6 +32,15 @@ export async function authorizeMerge(
         : repository.allow_rebase_merge !== 0;
   if (!allowed || rules.some((rule) => rule.locked))
     return errorResponse(403, "protected_branch", "The merge method or target branch is locked.");
+  if (
+    rules.some((rule) => rule.requireConversationResolution) &&
+    (await unresolvedThreadCount(env, String(pull.id))) > 0
+  )
+    return errorResponse(
+      409,
+      "threads_unresolved",
+      "All review conversations must be resolved before merging."
+    );
   const reviews = await env.DB.prepare(
     "SELECT state,actor_json,actor_key,author_id,(EXISTS(SELECT 1 FROM namespace_memberships m WHERE m.namespace_id=? AND m.user_id=forge_reviews.author_id) OR EXISTS(SELECT 1 FROM repository_collaborators c WHERE c.repository_id=? AND c.user_id=forge_reviews.author_id AND c.role IN ('write','admin'))) AS member FROM forge_reviews WHERE pull_request_id=? AND commit_oid=? ORDER BY created_at DESC,rowid DESC LIMIT 1001"
   )

@@ -85,6 +85,7 @@ import type {
   GitTree,
   GitTreeEntry,
   Issue,
+  IssueReferences,
   ListPage,
   PullRequest,
   Repository,
@@ -93,6 +94,10 @@ import type {
   WikiPageSummary,
   CreatedAgentSession,
 } from "../../../../packages/contracts/src/forge";
+import type {
+  CreateReviewThreadInput,
+  ReviewComment,
+} from "../../../../packages/contracts/src/review-comments";
 import type {
   CreateRepositoryImportInput,
   RepositoryImport,
@@ -183,6 +188,7 @@ export type {
   GitTree,
   GitTreeEntry,
   Issue,
+  IssueReferences,
   ListPage,
   PullRequest,
   Repository,
@@ -190,7 +196,12 @@ export type {
   WikiPage,
   WikiPageSummary,
   CreatedAgentSession,
+  ReviewComment,
 };
+export type ReviewThreadDraft = Pick<
+  CreateReviewThreadInput,
+  "body" | "path" | "side" | "line" | "startLine" | "diffHunk" | "pending"
+>;
 export type {
   BranchProtectionInput,
   BranchProtectionRule,
@@ -1067,6 +1078,69 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  reviewComments: (repositoryId: string, number: number) =>
+    requestPage<ReviewComment>(
+      repositoryPath(repositoryId, `pull-requests/${number}/review-comments`)
+    ),
+  createReviewThread: (
+    repositoryId: string,
+    number: number,
+    commitOid: string,
+    draft: ReviewThreadDraft
+  ) =>
+    request<ReviewComment>(
+      repositoryPath(repositoryId, `pull-requests/${number}/review-comments`),
+      {
+        method: "POST",
+        body: JSON.stringify({ ...draft, commitOid }),
+      }
+    ),
+  replyReviewThread: (
+    repositoryId: string,
+    number: number,
+    inReplyTo: string,
+    body: string,
+    pending = false
+  ) =>
+    request<ReviewComment>(
+      repositoryPath(repositoryId, `pull-requests/${number}/review-comments`),
+      {
+        method: "POST",
+        body: JSON.stringify({ body, inReplyTo, pending }),
+      }
+    ),
+  updateReviewComment: (repositoryId: string, number: number, commentId: string, body: string) =>
+    request<ReviewComment>(
+      repositoryPath(
+        repositoryId,
+        `pull-requests/${number}/review-comments/${encodeURIComponent(commentId)}`
+      ),
+      { method: "PATCH", body: JSON.stringify({ body }) }
+    ),
+  deleteReviewComment: (repositoryId: string, number: number, commentId: string) =>
+    request(
+      repositoryPath(
+        repositoryId,
+        `pull-requests/${number}/review-comments/${encodeURIComponent(commentId)}`
+      ),
+      { method: "DELETE" },
+      true
+    ),
+  setReviewThreadResolved: (
+    repositoryId: string,
+    number: number,
+    commentId: string,
+    resolved: boolean
+  ) =>
+    request<ReviewComment>(
+      repositoryPath(
+        repositoryId,
+        `pull-requests/${number}/review-comments/${encodeURIComponent(commentId)}/${resolved ? "resolve" : "unresolve"}`
+      ),
+      { method: "POST" }
+    ),
+  issueReferences: (repositoryId: string, number: number) =>
+    request<IssueReferences>(repositoryPath(repositoryId, `issues/${number}/references`)),
   checks: (repositoryId: string, number: number) =>
     request<CheckRun[]>(repositoryPath(repositoryId, `pull-requests/${number}/checks`)),
   createCheck: (
