@@ -11,6 +11,8 @@ const AccountSettingsView = () => import("./pages/AccountSettingsView.vue");
 const AgentSettingsView = () => import("./pages/AgentSettingsView.vue");
 const AgentProfileView = () => import("./pages/AgentProfileView.vue");
 const AgentWebhookSettings = () => import("./pages/AgentWebhookSettings.vue");
+const InviteAcceptView = () => import("./pages/InviteAcceptView.vue");
+const AdminView = () => import("./pages/AdminView.vue");
 const UserProfileView = () => import("./pages/UserProfileView.vue");
 import { refreshSession, sessionState } from "./lib/session";
 
@@ -27,6 +29,8 @@ export const router = createRouter({
     { path: "/forgot-password", component: ForgotPasswordView, meta: { public: true } },
     { path: "/reset-password", component: ResetPasswordView, meta: { public: true } },
     { path: "/verify-email", component: VerifyEmailView, meta: { public: true } },
+    { path: "/invite", component: InviteAcceptView, meta: { allowAnonymous: true } },
+    { path: "/admin", component: AdminView },
     { path: "/dashboard", component: DashboardView },
     { path: "/organizations", component: OrganizationsView },
     { path: "/organizations/:slug", component: OrganizationView },

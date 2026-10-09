@@ -160,8 +160,12 @@ try {
     { expectedBaseOid: main, expectedHeadOid: feature },
     409
   );
-  await api(forge + "/collaborators", "PUT", { identifier: reviewer, role: "write" });
+  const invitation = await api(forge + "/invitations", "POST", {
+    identifier: reviewer,
+    role: "write",
+  });
   cookie = reviewerCookie;
+  await api(`/api/forge/invitations/${invitation.id}/accept`, "POST");
   await api(forge + `/pull-requests/${pr.number}/checks`, "POST", verifyCheck, 201);
   cookie = ownerCookie;
   const merged = await api(forge + `/pull-requests/${pr.number}/merge`, "POST", {

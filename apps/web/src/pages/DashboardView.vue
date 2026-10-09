@@ -12,6 +12,7 @@ import StatusBadge from "../components/StatusBadge.vue";
 import { oneOf } from "../ui/formEvents";
 import TextField from "../components/TextField.vue";
 import DeletedRepositories from "../components/DeletedRepositories.vue";
+import PendingInvitations from "../components/PendingInvitations.vue";
 import RepositoryImportDialog from "../components/RepositoryImportDialog.vue";
 import { FluentCheckbox } from "@platform-kit/fluent/vue";
 import { RepositorySlugSchema } from "../../../../packages/contracts/src/repository-controls";
@@ -219,6 +220,8 @@ onMounted(load);
           </button>
         </div>
       </header>
+
+      <PendingInvitations @accepted="load" />
 
       <div class="dashboard-columns">
         <div class="dashboard-main-column">

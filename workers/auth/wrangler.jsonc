@@ -12,6 +12,7 @@
   "vars": {
     "ALLOW_PUBLIC_SIGNUP": "true",
     "DEFAULT_USER_GROUP": "free",
+    "SITE_ADMINS": "",
     "SSO_PROVIDERS_JSON": "[{\"id\":\"voidcarve\",\"label\":\"Voidcarve Access\",\"protocol\":\"oidc\",\"issuer\":\"https://id.voidcarve.com\",\"clientId\":\"gitedge-production\",\"scopes\":[\"openid\",\"profile\",\"email\"],\"tokenAuthMethod\":\"client_secret_basic\",\"allowSignup\":true}]"
   },
   "d1_databases": [

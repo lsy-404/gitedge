@@ -103,7 +103,7 @@ async function repositoryForOwner(
 
 const activeSessionSelect =
   sessionSelect +
-  " JOIN repositories r ON r.id=s.repository_id LEFT JOIN namespace_memberships m ON m.namespace_id=r.namespace_id AND m.user_id=s.user_id LEFT JOIN repository_collaborators c ON c.repository_id=r.id AND c.user_id=s.user_id WHERE s.status='active' AND s.expires_at>? AND a.disabled_at IS NULL AND r.deleted_at IS NULL AND r.agents_enabled=1 AND (m.user_id IS NOT NULL OR c.role IN ('write','admin') OR (s.permission='read' AND c.role='read'))";
+  " JOIN repositories r ON r.id=s.repository_id LEFT JOIN namespace_memberships m ON m.namespace_id=r.namespace_id AND m.user_id=s.user_id LEFT JOIN repository_collaborators c ON c.repository_id=r.id AND c.user_id=s.user_id WHERE s.status='active' AND s.expires_at>? AND a.disabled_at IS NULL AND u.disabled_at IS NULL AND r.deleted_at IS NULL AND r.agents_enabled=1 AND (m.user_id IS NOT NULL OR c.role IN ('write','admin') OR (s.permission='read' AND c.role='read'))";
 
 export async function authenticateAgentSession(
   env: AgentAuthEnv,
@@ -224,7 +224,7 @@ async function authenticateRepositoryCredential(
   }
   if (!/^ge_token_[0-9a-f]{64}$/.test(token)) return null;
   const row = await env.DB.prepare(
-    "SELECT t.repository_id AS repositoryId,t.permission,u.id,u.identifier,u.group_key AS groupKey FROM auth_git_tokens t JOIN users u ON u.id=t.user_id WHERE t.token_hash=? AND t.revoked_at IS NULL AND t.expires_at>? AND t.repository_id=?"
+    "SELECT t.repository_id AS repositoryId,t.permission,u.id,u.identifier,u.group_key AS groupKey FROM auth_git_tokens t JOIN users u ON u.id=t.user_id WHERE t.token_hash=? AND t.revoked_at IS NULL AND t.expires_at>? AND t.repository_id=? AND u.disabled_at IS NULL"
   )
     .bind(await sha256Hex(token), Date.now(), path.id)
     .first<TrustedUser & { repositoryId: string; permission: "read" | "write" }>();
@@ -315,6 +315,29 @@ async function revokeSessions(
 }
 
 const REVOKE_BATCH_LIMIT = 100;
+
+/**
+ * Revokes every active agent session of one user and, when `personalRepositories` is set, every
+ * session on repositories in that user's personal namespace; false when some remain active.
+ */
+export async function revokeUserAgentSessions(
+  env: AgentAuthEnv,
+  userId: string,
+  personalRepositories: boolean
+): Promise<boolean> {
+  const logger = createLogger(env.LOG_LEVEL, { service: "agent-auth" });
+  for (let round = 0; round < 5; round += 1) {
+    const rows = await env.DB.prepare(
+      sessionSelect +
+        " WHERE s.status = 'active' AND (s.user_id = ?1 OR (?2 = 1 AND s.repository_id IN (SELECT r.id FROM repositories r JOIN namespaces n ON n.id = r.namespace_id WHERE n.kind = 'personal' AND n.created_by = ?1))) LIMIT ?3"
+    )
+      .bind(userId, Number(personalRepositories), REVOKE_BATCH_LIMIT)
+      .all<AgentSessionRow>();
+    if (rows.results.length === 0) return true;
+    if ((await revokeSessions(env, rows.results, logger)) > 0) return false;
+  }
+  return false;
+}
 
 export async function handleAgentSessionRevocation(
   request: Request,

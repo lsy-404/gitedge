@@ -50,6 +50,7 @@ async function signedIn(request: Request, env: SecurityEnv, userId: string): Pro
   const account = await findAccountById(env, userId);
   if (!account) return errorResponse(401, "unauthorized", INVALID_SIGN_IN);
   const token = await issueSession(env, account.id);
+  if (!token) return errorResponse(403, "account_disabled", "This account is disabled.");
   return rememberBrowserLogin(
     request,
     env,

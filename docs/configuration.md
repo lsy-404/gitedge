@@ -24,6 +24,8 @@ pnpm exec wrangler secret put <NAME> --config workers/<worker>/wrangler.jsonc
 | `EMAIL`                  | binding | none                     | Optional `send_email` binding. Enables email verification and emailed password reset; both are hidden when it is absent. |
 | `LOG_LEVEL`              | var     | logger default           | Minimum structured log level.                                                                                            |
 | `SSO_PROVIDERS_JSON`     | var     | none                     | Provider list. See [SSO configuration](sso.md).                                                                          |
+| `SITE_ADMINS`            | var     | empty                    | Comma-separated usernames that are always site administrators. See [Site administration](#site-administration).          |
+| `USER_GROUP_LIMITS_JSON` | var     | built-in groups          | Same value as on the Gateway and Forge; the groups an administrator can assign.                                          |
 
 Generate the webhook key with `openssl rand -base64 32`. Agent webhooks return an error while it is missing.
 
@@ -39,6 +41,10 @@ Email is optional and ships disabled. To enable it, onboard a sending domain (`p
 ```
 
 See the [Email Service Workers binding](https://developers.cloudflare.com/email-service/) documentation. See [account security](account-security.md) for behavior.
+
+### Site administration
+
+`SITE_ADMINS` lists the usernames that can open `/admin` and call `/api/auth/admin/*` (for example `"alice, bob"`). It is the way to appoint the first administrator; administrators can then grant or revoke the stored administrator flag for other users from the Users tab, and administrators named in `SITE_ADMINS` cannot be demoted there. Group assignment accepts the keys of `USER_GROUP_LIMITS_JSON` (the built-in `free`, `team` and `admin` plus your overrides), so set it on Auth to the same value as on the Gateway and Forge when you define custom groups. Administrator mutations require a password or second-factor confirmation from the last 10 minutes. Site administrators cannot be disabled until their administrator access is removed. Disabling a user revokes their browser and agent sessions and makes their tokens and Git credentials fail validation until the account is enabled again.
 
 ### GitHub OAuth
 

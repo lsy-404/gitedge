@@ -117,7 +117,7 @@ describe("branch protection controls", () => {
       .find((button) => button.textContent?.trim() === "Collaborators")
       ?.click();
     await settle();
-    expect(mounted.root.textContent).toContain("Grant users read, write, or admin access");
+    expect(mounted.root.textContent).toContain("Collaborators with read, write, or admin access");
     mounted.unmount();
   });
 
@@ -186,15 +186,15 @@ describe("branch protection controls", () => {
 });
 
 describe("repository collaborator controls", () => {
-  it("adds, changes, and removes direct collaborator permissions", async () => {
+  beforeEach(() => {
+    vi.spyOn(api, "repositoryInvitations").mockResolvedValue([]);
+  });
+
+  it("changes and removes direct collaborator permissions", async () => {
     vi.spyOn(api, "repositoryCollaborators").mockResolvedValue([structuredClone(collaborator)]);
-    const put = vi
-      .spyOn(api, "putRepositoryCollaborator")
-      .mockImplementation(async (_id, payload) => ({
-        ...collaborator,
-        identifier: payload.identifier,
-        role: payload.role,
-      }));
+    const update = vi
+      .spyOn(api, "updateRepositoryCollaborator")
+      .mockImplementation(async (_id, _userId, role) => ({ ...collaborator, role }));
     const remove = vi.spyOn(api, "deleteRepositoryCollaborator").mockResolvedValue({
       deleted: true,
       revocationIncomplete: false,
@@ -210,25 +210,78 @@ describe("repository collaborator controls", () => {
       .find((option) => option.textContent?.trim() === "Write")
       ?.click();
     await settle();
-    expect(put).toHaveBeenCalledWith(repository.id, { identifier: "octocat", role: "write" });
-
-    fill(control(mounted.root, ".collaborator-form input"), "octo-friend");
-    const formRole = control(mounted.root, ".collaborator-form [role='combobox']");
-    formRole.click();
-    await settle();
-    Array.from(document.body.querySelectorAll<HTMLElement>("[role='option']"))
-      .find((option) => option.textContent?.trim() === "Admin")
-      ?.click();
-    await settle();
-    findButton(mounted.root, "Add or update collaborator").click();
-    await settle();
-    expect(put).toHaveBeenLastCalledWith(repository.id, {
-      identifier: "octo-friend",
-      role: "admin",
-    });
+    expect(update).toHaveBeenCalledWith(repository.id, collaborator.id, "write");
 
     await confirmClick(findButton(mounted.root, "Remove"));
     expect(remove).toHaveBeenCalledWith(repository.id, collaborator.id);
+    mounted.unmount();
+  });
+
+  it("invites by username and shows a one-time link for email invitations", async () => {
+    vi.spyOn(api, "repositoryCollaborators").mockResolvedValue([]);
+    const invite = vi
+      .spyOn(api, "inviteRepositoryCollaborator")
+      .mockResolvedValueOnce({
+        id: "inv-1",
+        kind: "repository",
+        role: "read",
+        organization: null,
+        repository: { id: repository.id, owner: "octo", name: "demo" },
+        inviter: "user",
+        invitee: "octo-friend",
+        inviteeEmail: null,
+        status: "pending",
+        createdAt: 1,
+        expiresAt: 2,
+        token: null,
+      })
+      .mockResolvedValueOnce({
+        id: "inv-2",
+        kind: "repository",
+        role: "read",
+        organization: null,
+        repository: { id: repository.id, owner: "octo", name: "demo" },
+        inviter: "user",
+        invitee: null,
+        inviteeEmail: "a@example.test",
+        status: "pending",
+        createdAt: 1,
+        expiresAt: 2,
+        token: "gei_secret-link-token",
+      });
+    const mounted = await mountAt("/_verify/invite", "/_verify/invite", () =>
+      h(RepositoryCollaborators, { repositoryId: repository.id, canManage: true })
+    );
+    fill(control(mounted.root, ".invite-form input"), "octo-friend");
+    await settle();
+    findButton(mounted.root, "Send invitation").click();
+    await settle();
+    expect(invite).toHaveBeenLastCalledWith(repository.id, {
+      identifier: "octo-friend",
+      role: "read",
+    });
+    expect(mounted.root.textContent).toContain("Invitation sent to octo-friend");
+
+    const modeSelect = control(mounted.root, ".invite-form [role='combobox']");
+    modeSelect.click();
+    await settle();
+    Array.from(document.body.querySelectorAll<HTMLElement>("[role='option']"))
+      .find((option) => option.textContent?.includes("Email"))
+      ?.click();
+    await settle();
+    fill(control(mounted.root, ".invite-form input"), "a@example.test");
+    await settle();
+    findButton(mounted.root, "Send invitation").click();
+    await settle();
+    expect(invite).toHaveBeenLastCalledWith(repository.id, {
+      email: "a@example.test",
+      role: "read",
+    });
+    expect(
+      Array.from(mounted.root.querySelectorAll("input")).some((input) =>
+        input.value.endsWith("/invite#gei_secret-link-token")
+      )
+    ).toBe(true);
     mounted.unmount();
   });
 
@@ -242,7 +295,6 @@ describe("repository collaborator controls", () => {
     vi.spyOn(api, "repositoryCollaborators")
       .mockRejectedValueOnce(new Error("offline"))
       .mockResolvedValueOnce([inherited, direct]);
-    const put = vi.spyOn(api, "putRepositoryCollaborator").mockRejectedValue(new Error("denied"));
     const remove = vi
       .spyOn(api, "deleteRepositoryCollaborator")
       .mockRejectedValue(new Error("denied"));
@@ -262,12 +314,6 @@ describe("repository collaborator controls", () => {
     );
     expect(inheritedRow?.querySelector("button")?.hasAttribute("disabled")).toBe(true);
 
-    fill(control(mounted.root, ".collaborator-form input"), "octo-friend");
-    await settle();
-    findButton(mounted.root, "Add or update collaborator").click();
-    await settle();
-    expect(put).toHaveBeenCalled();
-    expect(mounted.root.textContent).toContain("Could not save the collaborator");
     const directRow = Array.from(
       mounted.root.querySelectorAll<HTMLElement>(".collaborator-row")
     ).find((row) => row.textContent?.includes("another-user"));

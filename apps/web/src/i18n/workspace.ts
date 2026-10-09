@@ -40,7 +40,6 @@ export default {
     organizationMembersHint: "有权访问此组织的成员及其角色。",
     organizationEmptyMembers: "此组织还没有成员。",
     yourRole: "你的角色",
-    addMemberHint: "按 GitEdge 用户名或账户邮箱添加成员。",
     orContinueWithPassword: "或使用账户密码",
     passwordHint: "至少 12 个字符。",
     identifierHint: "3 到 63 个字符，只能包含字母、数字和连字符，且以字母或数字开头。",
@@ -94,7 +93,6 @@ export default {
     organizationMembersHint: "People who can access this organization and their roles.",
     organizationEmptyMembers: "This organization has no members yet.",
     yourRole: "Your role",
-    addMemberHint: "Add a member by their GitEdge username or account email.",
     orContinueWithPassword: "Or continue with your password",
     passwordHint: "At least 12 characters.",
     identifierHint:

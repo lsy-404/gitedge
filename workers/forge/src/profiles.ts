@@ -17,7 +17,7 @@ export async function publicProfile(
   const parsed = NamespaceSlugSchema.safeParse(owner);
   if (!parsed.success) return errorResponse(404, "not_found", "Profile was not found.");
   const profile = await env.DB.prepare(
-    "SELECT n.slug AS owner,COALESCE(p.display_name,n.display_name,n.slug) AS displayName,COALESCE(p.bio,n.description,'') AS bio,COALESCE(p.location,'') AS location,COALESCE(p.website,'') AS website FROM namespaces n LEFT JOIN users u ON n.kind='personal' AND u.id=n.created_by LEFT JOIN auth_account_profiles p ON p.user_id=u.id WHERE n.slug=?"
+    "SELECT n.slug AS owner,COALESCE(p.display_name,n.display_name,n.slug) AS displayName,COALESCE(p.bio,n.description,'') AS bio,COALESCE(p.location,'') AS location,COALESCE(p.website,'') AS website FROM namespaces n LEFT JOIN users u ON n.kind='personal' AND u.id=n.created_by LEFT JOIN auth_account_profiles p ON p.user_id=u.id WHERE n.slug=? AND (u.id IS NULL OR u.deleted_at IS NULL)"
   )
     .bind(parsed.data)
     .first<{

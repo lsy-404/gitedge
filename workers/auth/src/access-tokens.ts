@@ -12,6 +12,7 @@ import {
 } from "../../../packages/contracts/src/index";
 import { randomHex } from "../../../src/worker/common/encoding";
 import { dataResponse, errorResponse, requireRecentAuth } from "../../../src/worker/common/http";
+import { auditActor, recordAudit } from "../../../src/worker/common/audit";
 import { createLogger } from "../../../src/worker/common/logger";
 import { readJsonLimited, SMALL_JSON_BYTES } from "../../../src/worker/common/readText";
 import { z } from "zod";
@@ -76,7 +77,7 @@ export async function authenticateAccessToken(
   if (!isAccessToken(token)) return null;
   const now = Date.now();
   const row = await env.DB.prepare(
-    "SELECT t.id, t.last_used_at AS lastUsedAt, t.scopes_json AS scopesJson, t.repository_ids_json AS repositoryIdsJson, u.id AS userId, u.identifier, u.group_key AS groupKey FROM auth_access_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ? AND t.revoked_at IS NULL AND t.expires_at > ?"
+    "SELECT t.id, t.last_used_at AS lastUsedAt, t.scopes_json AS scopesJson, t.repository_ids_json AS repositoryIdsJson, u.id AS userId, u.identifier, u.group_key AS groupKey FROM auth_access_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ? AND t.revoked_at IS NULL AND t.expires_at > ? AND u.disabled_at IS NULL"
   )
     .bind(await sha256Hex(token), now)
     .first<AuthenticatedAccessTokenRow>();
@@ -197,6 +198,18 @@ async function createToken(
     tokenId: id,
     scopes: input.scopes,
   });
+  await recordAudit(env, {
+    action: "access_token.created",
+    actor: auditActor(user),
+    target: { type: "access_token", id, label: input.name },
+    subjectUserId: user.id,
+    metadata: {
+      prefix,
+      scopes: input.scopes,
+      expiresAt,
+      repositoryIds: input.repositoryIds ?? [],
+    },
+  });
   const repositories = repositoryIdsJson
     ? ((await tokenRepositories(env, user.id, id)).get(id) ?? [])
     : null;
@@ -244,6 +257,12 @@ export async function handleAccessTokenManagement(
     createLogger(env.LOG_LEVEL, { service: "auth" }).info("auth:access-token-revoked", {
       userId: user.id,
       tokenId: parts[1],
+    });
+    await recordAudit(env, {
+      action: "access_token.revoked",
+      actor: auditActor(user),
+      target: { type: "access_token", id: parts[1] },
+      subjectUserId: user.id,
     });
     return dataResponse({ revoked: true });
   }

@@ -10,6 +10,8 @@ import SigningKeySettings from "../components/SigningKeySettings.vue";
 import AccountSecuritySettings from "../components/AccountSecuritySettings.vue";
 import BrowserSessions from "../components/BrowserSessions.vue";
 import AccountUsage from "../components/AccountUsage.vue";
+import AccountActivity from "../components/AccountActivity.vue";
+import AccountDataSettings from "../components/AccountDataSettings.vue";
 import "../styles/settings.css";
 const route = useRoute();
 const sections = [
@@ -21,6 +23,8 @@ const sections = [
   "signing",
   "sessions",
   "usage",
+  "activity",
+  "data",
   "connections",
 ] as const;
 const section = computed(() =>
@@ -43,6 +47,8 @@ const section = computed(() =>
       <SigningKeySettings v-else-if="section === 'signing'" />
       <BrowserSessions v-else-if="section === 'sessions'" />
       <AccountUsage v-else-if="section === 'usage'" />
+      <AccountActivity v-else-if="section === 'activity'" />
+      <AccountDataSettings v-else-if="section === 'data'" />
       <AccountConnections v-else />
     </div>
   </section>

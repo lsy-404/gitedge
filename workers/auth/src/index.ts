@@ -38,6 +38,9 @@ import {
   handleAccessTokenManagement,
   isAccessToken,
 } from "./access-tokens";
+import { handleAdmin, isSiteAdmin } from "./admin";
+import { deleteAccount, exportAccount } from "./account-data";
+import { auditPageSize, readAuditPage } from "../../../src/worker/common/audit";
 import { handleAccountSecurity } from "./security/account-routes";
 import type { SecurityEnv } from "./security/env";
 import { beginSecondFactor } from "./security/factors";
@@ -57,6 +60,8 @@ export type AuthEnv = SecurityEnv & {
   readonly GITHUB_CLIENT_SECRET?: string;
   readonly GITHUB_API_BASE?: string;
   readonly GITHUB_OAUTH_BASE?: string;
+  readonly SITE_ADMINS?: string;
+  readonly USER_GROUP_LIMITS_JSON?: string;
 };
 type UserRow = {
   id: string;
@@ -65,6 +70,7 @@ type UserRow = {
   password_salt: string;
   password_hash: string;
   password_auth_enabled: number;
+  disabled_at: number | null;
 };
 type SessionRow = { id: string; identifier: string; group_key: string };
 type SessionWithExternalIdentityRow = SessionRow & {
@@ -73,6 +79,7 @@ type SessionWithExternalIdentityRow = SessionRow & {
   avatar_url: string | null;
   profile_url: string | null;
   recent_auth_at?: number;
+  is_site_admin: number;
 };
 type ExternalIdentitySummary = {
   readonly provider: "github";
@@ -80,7 +87,10 @@ type ExternalIdentitySummary = {
   readonly avatarUrl?: string;
   readonly profileUrl?: string;
 };
-type SessionData = TrustedUser & { readonly externalIdentity?: ExternalIdentitySummary };
+type SessionData = TrustedUser & {
+  readonly externalIdentity?: ExternalIdentitySummary;
+  readonly siteAdmin?: true;
+};
 type GithubOAuthStateRow = {
   code_verifier: string;
   return_to: string;
@@ -128,7 +138,7 @@ function isSafeReturnTo(value: string | null, request: Request): value is string
 
 function githubErrorRedirect(
   returnTo: string,
-  code: "github_oauth_failed" | "github_signup_disabled"
+  code: "github_oauth_failed" | "github_signup_disabled" | "account_disabled"
 ): Response {
   const destination = new URL(returnTo, "https://gitedge.invalid");
   destination.searchParams.set("error", code);
@@ -248,7 +258,14 @@ export async function register(
       error: { code: "internal_error", message: "Registration is temporarily unavailable." },
     };
   }
-  return { ok: true, data: { ...user, sessionToken: await issueSession(env, user.id) } };
+  const sessionToken = await issueSession(env, user.id);
+  if (!sessionToken)
+    return {
+      ok: false,
+      status: 503,
+      error: { code: "internal_error", message: "Registration is temporarily unavailable." },
+    };
+  return { ok: true, data: { ...user, sessionToken } };
 }
 
 export type LoginOutcome =
@@ -265,7 +282,7 @@ export async function login(env: AuthEnv, input: unknown): Promise<ServiceResult
     };
   const identifier = parsed.data.identifier.toLowerCase();
   const user = await env.DB.prepare(
-    "SELECT id, identifier, group_key, password_salt, password_hash, password_auth_enabled FROM users WHERE identifier = ?"
+    "SELECT id, identifier, group_key, password_salt, password_hash, password_auth_enabled, disabled_at FROM users WHERE identifier = ?"
   )
     .bind(identifier)
     .first<UserRow>();
@@ -282,14 +299,27 @@ export async function login(env: AuthEnv, input: unknown): Promise<ServiceResult
       status: 401,
       error: { code: "unauthorized", message: "Invalid identifier or password." },
     };
+  if (user.disabled_at !== null)
+    return {
+      ok: false,
+      status: 403,
+      error: { code: "account_disabled", message: "This account is disabled." },
+    };
   const challenge = await beginSecondFactor(env, user.id);
   if (challenge) return { ok: true, data: { kind: "second_factor", challenge } };
+  const sessionToken = await issueSession(env, user.id);
+  if (!sessionToken)
+    return {
+      ok: false,
+      status: 403,
+      error: { code: "account_disabled", message: "This account is disabled." },
+    };
   return {
     ok: true,
     data: {
       kind: "session",
       user: { id: user.id, identifier: user.identifier, groupKey: user.group_key },
-      sessionToken: await issueSession(env, user.id),
+      sessionToken,
     },
   };
 }
@@ -317,7 +347,7 @@ export async function session(
       error: { code: "unauthorized", message: "Authentication is required." },
     };
   const row = await env.DB.prepare(
-    "SELECT users.id, users.identifier, users.group_key, external_identities.provider, external_identities.provider_login, external_identities.avatar_url, external_identities.profile_url, auth_sessions.recent_auth_at FROM auth_sessions JOIN users ON users.id = auth_sessions.user_id LEFT JOIN external_identities ON external_identities.user_id = users.id AND external_identities.provider = 'github' WHERE auth_sessions.token_hash = ? AND auth_sessions.expires_at > ?"
+    "SELECT users.id, users.identifier, users.group_key, external_identities.provider, external_identities.provider_login, external_identities.avatar_url, external_identities.profile_url, auth_sessions.recent_auth_at, users.is_site_admin FROM auth_sessions JOIN users ON users.id = auth_sessions.user_id LEFT JOIN external_identities ON external_identities.user_id = users.id AND external_identities.provider = 'github' WHERE auth_sessions.token_hash = ? AND auth_sessions.expires_at > ? AND users.disabled_at IS NULL"
   )
     .bind(await hashToken(token), Date.now())
     .first<SessionWithExternalIdentityRow>();
@@ -336,6 +366,7 @@ export async function session(
       groupKey: row.group_key,
       ...(externalIdentity ? { externalIdentity } : {}),
       ...(row.recent_auth_at ? { recentAuthAt: row.recent_auth_at } : {}),
+      ...(isSiteAdmin(env, row.identifier, row.is_site_admin === 1) ? { siteAdmin: true } : {}),
     },
   };
 }
@@ -558,6 +589,10 @@ export async function completeGithubOAuth(request: Request, env: AuthEnv): Promi
   }
   const user = existing ?? (await createGithubUser(env, userPayload));
   const sessionToken = await issueSession(env, user.id);
+  if (!sessionToken) {
+    logger.warn("github-oauth:account-disabled", { userId: user.id });
+    return githubErrorRedirect(oauthState.return_to, "account_disabled");
+  }
   logger.info("github-oauth:completed", { userId: user.id });
   return rememberBrowserLogin(
     request,
@@ -807,6 +842,37 @@ export default {
       if (webSessions) return webSessions;
       const result = await handleAgentManagement(request, env, active.data);
       if (result) return result;
+    }
+    if (
+      path.startsWith("/admin/") ||
+      path === "/audit-log" ||
+      path === "/account/export" ||
+      path === "/account/delete"
+    ) {
+      if (request.headers.has("Authorization"))
+        return errorResponse(403, "forbidden", "Only a signed-in browser session can do this.");
+      const active = await getHumanSession();
+      if (!active.ok) return errorResponse(active.status, active.error.code, active.error.message);
+      if (path.startsWith("/admin/")) return handleAdmin(request, env, active.data);
+      if (request.method === "GET" && path === "/audit-log") {
+        const url = new URL(request.url);
+        const page = await readAuditPage(
+          env.DB,
+          "subject_user_id",
+          active.data.id,
+          url.searchParams.get("cursor"),
+          auditPageSize(url.searchParams.get("limit"))
+        );
+        return page ? dataResponse(page) : errorResponse(400, "bad_request", "Invalid cursor.");
+      }
+      if (request.method === "GET" && path === "/account/export")
+        return exportAccount(env, active.data);
+      if (request.method === "POST" && path === "/account/delete") {
+        if (request.headers.get("Origin") !== new URL(request.url).origin)
+          return errorResponse(403, "forbidden", "Same-origin account management is required.");
+        return deleteAccount(request, env, active.data);
+      }
+      return errorResponse(405, "method_not_allowed", "Method is not allowed.");
     }
     if (path === "/access-tokens" || path.startsWith("/access-tokens/")) {
       const active = await getHumanSession();

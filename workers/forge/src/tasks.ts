@@ -39,6 +39,8 @@ import {
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
 import { actorForUser, trustedHeaders } from "../../../packages/contracts/src/trust";
+import { auditActor, recordAudit } from "../../../src/worker/common/audit";
+import type { AuditAction } from "../../../packages/contracts/src/audit";
 import { createLogger } from "../../../src/worker/common/logger";
 import { assigneeCandidates, resolveAssignable } from "./assignments";
 import { nextNumber, parseActor, parseJson, type ForgeEnv, type RepositoryRow } from "./common";
@@ -1168,6 +1170,29 @@ async function settingsRequest(
     visibility,
     archived: input.archived,
   });
+  const changes: [AuditAction, Record<string, unknown>][] = [];
+  if (visibility && visibility !== repository.visibility)
+    changes.push([
+      "repository.visibility_changed",
+      { from: repository.visibility, to: visibility },
+    ]);
+  if (slug && slug !== repository.slug)
+    changes.push(["repository.renamed", { from: repository.slug, to: slug }]);
+  if (input.archived !== undefined && input.archived !== (repository.archived === 1))
+    changes.push([input.archived ? "repository.archived" : "repository.unarchived", {}]);
+  for (const [action, metadata] of changes)
+    await recordAudit(env, {
+      action,
+      actor: auditActor(viewer.user),
+      target: {
+        type: "repository",
+        id: repository.id,
+        label: `${repository.owner}/${slug ?? repository.slug}`,
+      },
+      repositoryId: repository.id,
+      namespaceId: repository.namespace_id,
+      metadata,
+    });
   return dataResponse({
     ...(await repositorySettings(env, repository.id)),
     canManage: true,

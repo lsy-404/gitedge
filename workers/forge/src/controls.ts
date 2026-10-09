@@ -1,9 +1,20 @@
 import {
   BranchProtectionInputSchema,
-  PutRepositoryCollaboratorSchema,
+  UpdateRepositoryCollaboratorSchema,
 } from "../../../packages/contracts/src/repository-controls";
-import type { CollaboratorRemoval, TrustedUser } from "../../../packages/contracts/src/index";
+import type {
+  AuditAction,
+  CollaboratorRemoval,
+  TrustedUser,
+} from "../../../packages/contracts/src/index";
 import { branchRules } from "../../../src/worker/common/branch-protection";
+import {
+  auditActor,
+  auditPageSize,
+  readAuditPage,
+  recordAudit,
+} from "../../../src/worker/common/audit";
+import { scopedInvitations } from "./invitations";
 import { repositoryRole } from "../../../src/worker/common/repositories";
 import { createLogger } from "../../../src/worker/common/logger";
 import { revokeAgentSessions } from "./agent-events";
@@ -19,13 +30,48 @@ export async function repositoryControls(
 ): Promise<Response | null> {
   const resource = parts[2],
     id = parts[3];
-  if (resource !== "branch-rules" && resource !== "collaborators") return null;
+  if (!["branch-rules", "collaborators", "invitations", "audit-log"].includes(resource ?? ""))
+    return null;
   if (user.agentSession || (await repositoryRole(env.DB, repo.id, user.id)) !== "admin")
     return errorResponse(403, "forbidden", "Repository administrator access is required.");
   const logger = createLogger(env.LOG_LEVEL, {
     service: "repository-controls",
     repoId: repo.id,
   });
+  const audit = (
+    action: AuditAction,
+    target: { type: string; id: string; label?: string | null },
+    metadata: Record<string, unknown> = {}
+  ) =>
+    recordAudit(env, {
+      action,
+      actor: auditActor(user),
+      target,
+      repositoryId: repo.id,
+      namespaceId: repo.namespace_id,
+      metadata,
+    });
+  if (resource === "invitations")
+    return scopedInvitations(
+      env,
+      request,
+      user,
+      { kind: "repository", namespaceId: repo.namespace_id, label: repo.owner, repository: repo },
+      parts.slice(3)
+    );
+  if (resource === "audit-log") {
+    if (request.method !== "GET" || parts.length !== 3)
+      return errorResponse(405, "method_not_allowed", "Method is not allowed.");
+    const url = new URL(request.url);
+    const page = await readAuditPage(
+      env.DB,
+      "repository_id",
+      repo.id,
+      url.searchParams.get("cursor"),
+      auditPageSize(url.searchParams.get("limit"))
+    );
+    return page ? dataResponse(page) : errorResponse(400, "bad_request", "Invalid cursor.");
+  }
   if (resource === "branch-rules") {
     if (request.method === "GET" && !id) return dataResponse(await branchRules(env.DB, repo.id));
     if (request.method === "DELETE" && id) {
@@ -36,6 +82,7 @@ export async function repositoryControls(
         .first();
       if (!removed) return errorResponse(404, "not_found", "Branch rule was not found.");
       logger.info("rules:deleted", { ruleId: id });
+      await audit("branch_rule.deleted", { type: "branch_rule", id });
       return dataResponse({ deleted: true });
     }
     if ((request.method === "POST" && !id) || (request.method === "PATCH" && id)) {
@@ -75,6 +122,23 @@ export async function repositoryControls(
         throw cause;
       }
       logger.info("rules:saved", { ruleId });
+      await audit(
+        id ? "branch_rule.updated" : "branch_rule.created",
+        {
+          type: "branch_rule",
+          id: ruleId,
+          label: input.pattern,
+        },
+        {
+          pattern: input.pattern,
+          enabled: input.enabled,
+          locked: input.locked,
+          requiredApprovals: input.requiredApprovals,
+          requirePassingChecks: input.requirePassingChecks,
+          requireLinearHistory: input.requireLinearHistory,
+          requireSignedCommits: input.requireSignedCommits,
+        }
+      );
       return dataResponse(
         (await branchRules(env.DB, repo.id)).find((rule) => rule.id === ruleId),
         id ? 200 : 201
@@ -97,40 +161,32 @@ export async function repositoryControls(
         return errorResponse(413, "member_limit", "Collaborator list exceeds its limit.");
       return dataResponse(rows.results.map((row) => ({ ...row, inherited: row.inherited === 1 })));
     }
-    if (request.method === "PUT" && !id) {
-      const parsed = PutRepositoryCollaboratorSchema.safeParse(await parseJson(request));
+    if (request.method === "PATCH" && id) {
+      const parsed = UpdateRepositoryCollaboratorSchema.safeParse(await parseJson(request));
       if (!parsed.success) return errorResponse(400, "bad_request", "Invalid collaborator.");
-      const person = await env.DB.prepare("SELECT id FROM users WHERE identifier=?")
-        .bind(parsed.data.identifier)
-        .first<{ id: string }>();
-      if (!person) return errorResponse(404, "not_found", "User was not found.");
-      const inherited = await env.DB.prepare(
-        "SELECT 1 FROM namespace_memberships WHERE namespace_id=? AND user_id=?"
+      const changed = await env.DB.prepare(
+        "UPDATE repository_collaborators SET role = ? WHERE repository_id = ? AND user_id = ? RETURNING role"
       )
-        .bind(repo.namespace_id, person.id)
+        .bind(parsed.data.role, repo.id, id)
         .first();
-      if (inherited)
+      if (!changed)
         return errorResponse(
-          409,
-          "inherited_access",
-          "Manage inherited access in organization settings."
+          404,
+          "not_found",
+          "Collaborator was not found or has inherited access."
         );
-      const count = await env.DB.prepare(
-        "SELECT COUNT(*) AS count FROM repository_collaborators WHERE repository_id=? AND user_id<>?"
-      )
-        .bind(repo.id, person.id)
-        .first<{ count: number }>();
-      if ((count?.count ?? 0) >= 80)
-        return errorResponse(409, "member_limit", "Collaborator limit reached.");
-      await env.DB.prepare(
-        "INSERT INTO repository_collaborators(repository_id,user_id,role,created_at) VALUES (?,?,?,?) ON CONFLICT(repository_id,user_id) DO UPDATE SET role=excluded.role"
-      )
-        .bind(repo.id, person.id, parsed.data.role, Date.now())
-        .run();
-      logger.info("collaborator:saved", { userId: person.id, role: parsed.data.role });
+      const person = await env.DB.prepare("SELECT identifier FROM users WHERE id = ?")
+        .bind(id)
+        .first<{ identifier: string }>();
+      logger.info("collaborator:role-changed", { userId: id, role: parsed.data.role });
+      await audit(
+        "collaborator.role_changed",
+        { type: "user", id, label: person?.identifier ?? null },
+        { role: parsed.data.role }
+      );
       return dataResponse({
-        id: person.id,
-        identifier: parsed.data.identifier,
+        id,
+        identifier: person?.identifier ?? "",
         role: parsed.data.role,
         inherited: false,
       });
@@ -148,6 +204,7 @@ export async function repositoryControls(
           "Collaborator was not found or has inherited access."
         );
       logger.info("collaborator:removed", { userId: id });
+      await audit("collaborator.removed", { type: "user", id });
       const stillHasAccess = (await repositoryRole(env.DB, repo.id, id)) !== null;
       const revoked =
         stillHasAccess || (await revokeAgentSessions(env, { repositoryId: repo.id, userId: id }));

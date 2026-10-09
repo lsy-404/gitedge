@@ -61,7 +61,7 @@ async function savedAccounts(request: Request, env: AccountEnvironment): Promise
   if (!tokens.length) return [];
   const hashes = await Promise.all(tokens.map(hashToken));
   const rows = await env.DB.prepare(
-    `SELECT u.id,u.identifier,COALESCE(p.display_name,u.identifier) AS displayName,s.token_hash AS tokenHash,s.expires_at AS expiresAt FROM auth_sessions s JOIN users u ON u.id=s.user_id LEFT JOIN auth_account_profiles p ON p.user_id=u.id WHERE s.token_hash IN (${hashes.map(() => "?").join(",")}) AND s.expires_at>?`
+    `SELECT u.id,u.identifier,COALESCE(p.display_name,u.identifier) AS displayName,s.token_hash AS tokenHash,s.expires_at AS expiresAt FROM auth_sessions s JOIN users u ON u.id=s.user_id LEFT JOIN auth_account_profiles p ON p.user_id=u.id WHERE s.token_hash IN (${hashes.map(() => "?").join(",")}) AND s.expires_at>? AND u.disabled_at IS NULL`
   )
     .bind(...hashes, Date.now())
     .all<AccountRow>();

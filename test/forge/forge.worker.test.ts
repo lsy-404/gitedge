@@ -585,6 +585,14 @@ describe("Forge collaboration", () => {
       baseRef: "main",
       headRef: "topic",
     });
+    const audit = await env.DB.prepare(
+      "SELECT actor_name AS actor, metadata_json AS metadata FROM audit_events WHERE action = 'pull_request.merged' AND repository_id = 'r1'"
+    ).first<{ actor: string; metadata: string }>();
+    expect(audit?.actor).toBe("alice");
+    expect(JSON.parse(audit?.metadata ?? "{}")).toMatchObject({
+      oid: "c".repeat(40),
+      method: "merge",
+    });
   });
 });
 
@@ -881,10 +889,15 @@ INSERT INTO repositories (id,namespace_id,created_by,slug,do_name,visibility,des
     expect(listed.data).toEqual([expect.objectContaining({ identifier: "alice", role: "owner" })]);
     expect((await members("u3", "eve")).status).toBe(403);
     const add = (user: string, name: string, identifier: string) =>
-      call("/organizations/acme/members", "POST", user, name, { identifier });
-    expect((await add("u1", "alice", "bob")).status).toBe(201);
+      call("/organizations/acme/invitations", "POST", user, name, { identifier });
+    const invited = await add("u1", "alice", "bob");
+    expect(invited.status).toBe(201);
     expect((await add("u1", "alice", "bob")).status).toBe(409);
     expect((await add("u2", "bob", "eve")).status).toBe(403);
+    const invitation = (await invited.json()) as { data: { id: string } };
+    expect(
+      (await call(`/invitations/${invitation.data.id}/accept`, "POST", "u2", "bob")).status
+    ).toBe(200);
     expect((await members("u2", "bob")).status).toBe(200);
     expect((await call("/organizations/acme/members/alice", "DELETE", "u1", "alice")).status).toBe(
       409

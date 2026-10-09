@@ -8,6 +8,7 @@ import { proxyGitTransport } from "../../workers/git/src/transport";
 import { resolveRepositoryPath } from "../../src/worker/common/repositories";
 import { REPOSITORY_RESTORE_WINDOW_MS, trustedHeaders } from "../../packages/contracts/src/index";
 import { runSqlScript } from "../support/database";
+import { grantCollaborator, grantOrganizationMember } from "../support/membership";
 import { FixtureArtifacts } from "../support/artifacts";
 
 const migrations = import.meta.glob<string>("../../migrations/*.sql", {
@@ -162,10 +163,7 @@ describe("repository deletion", () => {
   it("restricts deletion to administrators and a matching confirmation", async () => {
     const privateId = await createRepository("owner", "guarded", "private");
     const publicId = await createRepository("owner", "guarded-public", "public");
-    await call(`/repositories/${publicId}/collaborators`, "PUT", "owner", {
-      identifier: "writer",
-      role: "write",
-    });
+    await grantCollaborator(env.DB, publicId, users.writer.id, "write");
     expect(
       (
         await call(`/repositories/${privateId}`, "DELETE", "outsider", {
@@ -452,10 +450,7 @@ describe("repository transfer", () => {
     const id = await createRepository("owner", "moving", "private");
     const body = { owner: "acme", confirm: "owner/moving" };
     expect((await call(`/repositories/${id}/transfer`, "POST", "outsider", body)).status).toBe(404);
-    await call(`/repositories/${id}/collaborators`, "PUT", "owner", {
-      identifier: "admin",
-      role: "admin",
-    });
+    await grantCollaborator(env.DB, id, users.admin.id, "admin");
     expect((await call(`/repositories/${id}/transfer`, "POST", "admin", body)).status).toBe(403);
     expect(
       (await call(`/repositories/${id}/transfer`, "POST", "owner", { ...body, confirm: "x" }))
@@ -550,10 +545,7 @@ describe("organization deletion", () => {
         })
       ).status
     ).toBe(201);
-    await call("/organizations/disposable/members", "POST", "owner", {
-      identifier: "writer",
-      role: "member",
-    });
+    await grantOrganizationMember(env.DB, "disposable", users.writer.id, "member");
     const id = await createRepository("disposable", "inside", "private");
 
     expect(

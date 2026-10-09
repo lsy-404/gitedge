@@ -29,3 +29,7 @@ Each session stores `recent_auth_at`, set at sign-in and refreshed by `POST /api
 ### Using the claim from other services
 
 Auth's `/session` returns `recentAuthAt` and the Gateway forwards it as the trusted header `X-GitEdge-Recent-Auth` (stripped from inbound requests). Services read it with `readTrustedUser(request).recentAuthAt` and gate sensitive actions with `requireRecentAuth(user)` from `src/worker/common/http.ts`, which answers 403 `reauth_required` outside the window. Agent sessions and personal access tokens never carry the claim, so they cannot perform these actions. The web client shows the confirmation form (`ReauthPrompt`) when an action is refused this way and repeats the action once the user confirms.
+
+## Disabled and deleted accounts
+
+A site administrator can disable an account that is not itself a site administrator. Auth then refuses its sign-ins, ends its browser sessions and revokes its agent sessions (their forks hold direct Artifacts credentials), and rejects its personal access tokens and Git credentials at validation, so those resume if the account is enabled again. Deleting an account (confirmation with the username and a recent re-authentication) is permanent: credentials, second factors, linked identities and profile are removed, and the username stays reserved. Security-relevant changes (tokens, authenticator apps, passkeys, recovery codes, password, export, deletion) appear in the account's security log at `GET /api/auth/audit-log`.

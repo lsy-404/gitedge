@@ -53,6 +53,7 @@ const callbackError = computed(() => {
   if (code === "github_oauth_failed") return t("githubLoginError");
   if (code === "github_signup_disabled") return t("githubSignupDisabled");
   if (code === "account_limit") return t("browserAccountLimit", { limit: BROWSER_ACCOUNT_LIMIT });
+  if (code === "account_disabled" || code === "sso_account_disabled") return t("accountDisabled");
   if (code.startsWith("sso_")) return t("ssoLoginError");
   return t("oauthGenericError");
 });
@@ -132,7 +133,7 @@ async function submit() {
               409: "identifierTaken",
               429: "authRateLimited",
             }
-          : { 401: "invalidCredentials", 429: "authRateLimited" }
+          : { 401: "invalidCredentials", 403: "accountDisabled", 429: "authRateLimited" }
       );
   } finally {
     busy.value = false;
@@ -266,9 +267,13 @@ async function cancelAddingAccount() {
     </p>
     <p v-else-if="!addingAccount" class="auth-page-footer">
       {{ register ? t("hasAccount") : t("needsAccount") }}
-      <AppLink :to="register ? '/login' : '/register'">{{
-        register ? t("signIn") : t("signUp")
-      }}</AppLink>
+      <AppLink
+        :to="{
+          path: register ? '/login' : '/register',
+          query: route.query.redirect ? { redirect: route.query.redirect } : {},
+        }"
+        >{{ register ? t("signIn") : t("signUp") }}</AppLink
+      >
     </p>
   </section>
 </template>

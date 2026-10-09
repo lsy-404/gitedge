@@ -111,7 +111,7 @@ async function finishLogin(
   let linkUser: TrustedUser | null = null;
   if (flow.intent === "link") {
     linkUser = await env.DB.prepare(
-      "SELECT u.id, u.identifier, u.group_key AS groupKey FROM auth_sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.user_id = ? AND s.expires_at > ?"
+      "SELECT u.id, u.identifier, u.group_key AS groupKey FROM auth_sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.user_id = ? AND s.expires_at > ? AND u.disabled_at IS NULL"
     )
       .bind(flow.session_hash, flow.user_id, Date.now())
       .first<TrustedUser>();
@@ -126,6 +126,7 @@ async function finishLogin(
     response.headers.set("Location", `${target.pathname}${target.search}`);
   } else {
     const token = await issueSession(env, resolved.identity.userId);
+    if (!token) return redirect(flow.return_to, "account_disabled");
     await env.DB.prepare(
       "INSERT INTO auth_sso_sessions (token_hash, identity_id, session_index) VALUES (?, ?, ?)"
     )

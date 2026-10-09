@@ -5,6 +5,8 @@ import { useI18n } from "vue-i18n";
 import { api, type Organization, type OrganizationMember, errorMessage } from "../lib/api";
 import { useReauthRetry } from "../lib/reauth";
 import AppIcon from "../components/AppIcon.vue";
+import AuditLogList from "../components/AuditLogList.vue";
+import MemberInvitations from "../components/MemberInvitations.vue";
 import ConfirmButton from "../components/ConfirmButton.vue";
 import NoticeBar from "../components/NoticeBar.vue";
 import ReauthPrompt from "../components/ReauthPrompt.vue";
@@ -13,7 +15,6 @@ import StatusBadge from "../components/StatusBadge.vue";
 import { oneOf } from "../ui/formEvents";
 import StatusState from "../components/StatusState.vue";
 import TypeToConfirm from "../components/TypeToConfirm.vue";
-import TextField from "../components/TextField.vue";
 import RepositoryImportDialog from "../components/RepositoryImportDialog.vue";
 import "../styles/workspace.css";
 const route = useRoute();
@@ -26,9 +27,7 @@ const organization = ref<Organization | null>(null);
 const members = ref<OrganizationMember[]>([]);
 const loading = ref(true);
 const error = ref("");
-const formError = ref("");
 const memberError = ref("");
-const saving = ref(false);
 const deleting = ref(false);
 const deleteError = ref("");
 const removingIdentifier = ref("");
@@ -36,10 +35,10 @@ const memberNotice = ref("");
 const revocationIncomplete = ref(false);
 const showImport = ref(false);
 let loadVersion = 0;
-const form = ref<{ identifier: string; role: "owner" | "member" }>({
-  identifier: "",
-  role: "member",
-});
+const roleOptions = computed(() => [
+  { value: "member", label: t("memberRole") },
+  { value: "owner", label: t("ownerRole") },
+]);
 async function load() {
   const version = ++loadVersion;
   loading.value = true;
@@ -59,18 +58,17 @@ async function load() {
     if (version === loadVersion) loading.value = false;
   }
 }
-async function addMember() {
-  const target = slug.value;
-  saving.value = true;
-  formError.value = "";
+async function changeRole(member: OrganizationMember, value: string) {
+  const role = oneOf(roles, value, member.role);
+  if (role === member.role || removingIdentifier.value) return;
+  memberError.value = "";
+  memberNotice.value = "";
   try {
-    await api.addOrganizationMember(target, form.value);
-    form.value = { identifier: "", role: "member" };
+    await api.updateOrganizationMember(slug.value, member.identifier, role);
+    memberNotice.value = t("organizationMemberRoleChanged");
     await load();
   } catch (cause) {
-    formError.value = errorMessage(cause, t);
-  } finally {
-    saving.value = false;
+    memberError.value = errorMessage(cause, t, {}, "organizationMemberRoleError");
   }
 }
 async function removeMember(member: OrganizationMember) {
@@ -111,11 +109,9 @@ watch(
   slug,
   () => {
     deleteError.value = "";
-    formError.value = "";
     memberError.value = "";
     memberNotice.value = "";
     revocationIncomplete.value = false;
-    form.value = { identifier: "", role: "member" };
     void load();
   },
   { immediate: true }
@@ -212,7 +208,15 @@ watch(
           >
             <span class="organization-member-avatar"><AppIcon name="person" /></span
             ><span class="organization-member-name">{{ member.identifier }}</span
-            ><StatusBadge :tone="member.role === 'owner' ? 'brand' : 'neutral'">{{
+            ><SelectField
+              v-if="organization?.role === 'owner'"
+              :model-value="member.role"
+              :label="t('role')"
+              @update:model-value="changeRole(member, $event)"
+            >
+              <option value="member">{{ t("memberRole") }}</option>
+              <option value="owner">{{ t("ownerRole") }}</option> </SelectField
+            ><StatusBadge v-else :tone="member.role === 'owner' ? 'brand' : 'neutral'">{{
               member.role === "owner" ? t("ownerRole") : t("memberRole")
             }}</StatusBadge>
             <ConfirmButton
@@ -235,30 +239,24 @@ watch(
             {{ t("organizationEmptyMembers") }}
           </div>
         </section>
+        <MemberInvitations
+          v-if="organization?.role === 'owner'"
+          :scope="{ kind: 'organization', slug }"
+          :roles="roleOptions"
+          default-role="member"
+          :can-manage="true"
+        />
         <section v-if="organization?.role === 'owner'" class="box">
           <div class="box-header workspace-panel-heading">
             <div>
-              <h2>{{ t("addMember") }}</h2>
-              <p class="muted">{{ t("addMemberHint") }}</p>
+              <h2>{{ t("auditLogTitle") }}</h2>
+              <p class="muted">{{ t("auditOrganizationHint") }}</p>
             </div>
           </div>
-          <form class="form-stack organization-member-form" @submit.prevent="addMember">
-            <TextField v-model="form.identifier" required>{{ t("memberIdentifier") }}</TextField>
-            <SelectField
-              :model-value="form.role"
-              :label="t('role')"
-              @update:model-value="form.role = oneOf(roles, $event, 'member')"
-            >
-              <option value="member">{{ t("memberRole") }}</option>
-              <option value="owner">{{ t("ownerRole") }}</option>
-            </SelectField>
-            <NoticeBar v-if="formError" intent="error">{{ formError }}</NoticeBar>
-            <div class="form-actions">
-              <button class="btn btn-primary" type="submit" :disabled="saving">
-                {{ saving ? t("loading") : t("addMember") }}
-              </button>
-            </div>
-          </form>
+          <AuditLogList
+            :load="(cursor) => api.organizationAuditLog(slug, cursor)"
+            :reload-key="slug"
+          />
         </section>
         <section v-if="organization?.role === 'owner'" class="box box-danger">
           <div class="box-header workspace-panel-heading">

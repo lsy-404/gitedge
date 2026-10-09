@@ -23,7 +23,7 @@ import {
   accessTokenAllowsRepository,
   accessTokenPermits,
   requiredAccessTokenScope,
-  AddOrganizationMemberInputSchema,
+  UpdateOrganizationMemberSchema,
   CreateOrganizationInputSchema,
   CreateIssueInputSchema,
   CreatePullRequestInputSchema,
@@ -48,6 +48,13 @@ import {
   type WikiPageSummary,
 } from "../../../packages/contracts/src/index";
 import { createLogger, type Logger } from "../../../src/worker/common/logger";
+import {
+  auditActor,
+  auditPageSize,
+  readAuditPage,
+  recordAudit,
+} from "../../../src/worker/common/audit";
+import { myInvitations, scopedInvitations } from "./invitations";
 import { activeImportPath, handleRepositoryImports } from "./imports";
 import { assignmentsColumn, parseAssignments, replaceAssignments } from "./assignments";
 import {
@@ -1384,6 +1391,20 @@ async function featureRequest(
           state: "merged",
           oid,
         });
+        await recordAudit(env, {
+          action: "pull_request.merged",
+          actor: auditActor(user),
+          target: { type: "pull_request", id: String(current.id), label: `#${number}` },
+          repositoryId: repository.id,
+          namespaceId: repository.namespace_id,
+          metadata: {
+            number,
+            oid,
+            method: parsed.data.method,
+            baseRef: String(current.base_ref),
+            headRef: String(current.head_ref),
+          },
+        });
         if (
           repository.delete_branch_on_merge === 1 &&
           !headSessionId &&
@@ -1747,30 +1768,36 @@ export default {
         }
         if (!organizationOwner(organization))
           return errorResponse(403, "forbidden", "Organization owner access is required.");
-        if (request.method === "POST" && parts.length === 3) {
-          const parsed = AddOrganizationMemberInputSchema.safeParse(await parseJson(request));
+        const memberIdentifier = parts[3];
+        if (request.method === "PATCH" && memberIdentifier && parts.length === 4) {
+          const parsed = UpdateOrganizationMemberSchema.safeParse(await parseJson(request));
           if (!parsed.success)
             return errorResponse(400, "bad_request", "Invalid organization member payload.");
-          const result = await env.DB.prepare(
-            "INSERT OR IGNORE INTO namespace_memberships (namespace_id, user_id, created_at, role) SELECT ?, users.id, ?, ? FROM users WHERE users.identifier = ?"
+          const changed = await env.DB.prepare(
+            "UPDATE namespace_memberships SET role = ?1 WHERE namespace_id = ?2 AND user_id = (SELECT id FROM users WHERE identifier = ?3) AND role <> ?1 AND NOT (role = 'owner' AND ?1 = 'member' AND (SELECT COUNT(*) FROM namespace_memberships WHERE namespace_id = ?2 AND role = 'owner') <= 1) RETURNING user_id"
           )
-            .bind(organization.id, Date.now(), parsed.data.role, parsed.data.identifier)
-            .run();
-          if (result.meta.changes !== 1)
+            .bind(parsed.data.role, organization.id, memberIdentifier)
+            .first<{ user_id: string }>();
+          if (!changed)
             return errorResponse(
               409,
               "conflict",
-              "User was not found or is already an organization member."
+              "Member was not found, already has this role or is the last organization owner."
             );
-          logger.info("forge:organization-member-added", {
+          logger.info("forge:organization-member-role-changed", {
             organizationId: organization.id,
-            identifier: parsed.data.identifier,
             role: parsed.data.role,
             userId: user.id,
           });
-          return dataResponse({ identifier: parsed.data.identifier, role: parsed.data.role }, 201);
+          await recordAudit(env, {
+            action: "member.role_changed",
+            actor: auditActor(user),
+            target: { type: "user", id: changed.user_id, label: memberIdentifier },
+            namespaceId: organization.id,
+            metadata: { role: parsed.data.role },
+          });
+          return dataResponse({ identifier: memberIdentifier, role: parsed.data.role });
         }
-        const memberIdentifier = parts[3];
         if (request.method === "DELETE" && memberIdentifier && parts.length === 4) {
           const result = await env.DB.prepare(
             "DELETE FROM namespace_memberships WHERE namespace_id = ? AND user_id = (SELECT id FROM users WHERE identifier = ?) AND NOT (role = 'owner' AND (SELECT COUNT(*) FROM namespace_memberships WHERE namespace_id = ? AND role = 'owner') <= 1) RETURNING user_id"
@@ -1792,9 +1819,38 @@ export default {
             identifier: memberIdentifier,
             userId: user.id,
           });
+          await recordAudit(env, {
+            action: "member.removed",
+            actor: auditActor(user),
+            target: { type: "user", id: result.user_id, label: memberIdentifier },
+            namespaceId: organization.id,
+          });
           if (!revoked) return dataResponse({ removed: true, revocationIncomplete: true }, 202);
           return new Response(null, { status: 204 });
         }
+      }
+      if (parts[2] === "invitations") {
+        if (!organizationOwner(organization))
+          return errorResponse(403, "forbidden", "Organization owner access is required.");
+        return scopedInvitations(
+          env,
+          request,
+          user,
+          { kind: "organization", namespaceId: organization.id, label: organization.slug },
+          parts.slice(3)
+        );
+      }
+      if (parts[2] === "audit-log" && parts.length === 3 && request.method === "GET") {
+        if (!organizationOwner(organization))
+          return errorResponse(403, "forbidden", "Organization owner access is required.");
+        const page = await readAuditPage(
+          env.DB,
+          "namespace_id",
+          organization.id,
+          url.searchParams.get("cursor"),
+          auditPageSize(url.searchParams.get("limit"))
+        );
+        return page ? dataResponse(page) : errorResponse(400, "bad_request", "Invalid cursor.");
       }
       if (request.method === "DELETE" && parts.length === 2) {
         if (!organizationOwner(organization))
@@ -1803,6 +1859,7 @@ export default {
       }
       return errorResponse(405, "method_not_allowed", "Method is not allowed for this endpoint.");
     }
+    if (parts[0] === "invitations") return myInvitations(env, request, user, parts);
     if (parts[0] === "deleted-repositories") return deletedRepositories(env, request, user, parts);
 
     if (request.method === "GET" && url.pathname === "/usage") {

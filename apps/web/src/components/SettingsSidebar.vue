@@ -14,6 +14,8 @@ const items = [
   { key: "signing", label: "settingsSigning", icon: "checkCircle" },
   { key: "sessions", label: "settingsSessions", icon: "clock" },
   { key: "usage", label: "settingsUsage", icon: "activity" },
+  { key: "activity", label: "settingsActivity", icon: "clock" },
+  { key: "data", label: "settingsData", icon: "download" },
   { key: "connections", label: "settingsConnections", icon: "link" },
 ] as const;
 </script>
