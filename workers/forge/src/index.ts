@@ -1749,12 +1749,16 @@ export default {
       const limits = parseUserGroupLimits(env.USER_GROUP_LIMITS_JSON);
       const groupLimits = limits[user.groupKey] ?? limits.free;
       const repositoryCount = await env.DB.prepare(
-        "SELECT COUNT(*) AS count FROM repositories WHERE created_by = ? AND deleted_at IS NULL"
+        "SELECT COUNT(*) AS count FROM repositories WHERE created_by = ?"
       )
         .bind(user.id)
         .first<{ count: number }>();
       if ((repositoryCount?.count ?? 0) >= groupLimits.maxRepositories)
-        return errorResponse(403, "forbidden", "Repository limit reached for this user group.");
+        return errorResponse(
+          403,
+          "forbidden",
+          "Repository limit reached for this user group. Deleted repositories count until they are purged."
+        );
       const namespace = await namespaceForUser(env, user.id, parsed.data.owner);
       if (!namespace) return errorResponse(404, "not_found", "Repository owner was not found.");
       if (!canCreateRepository(namespace, user.id))

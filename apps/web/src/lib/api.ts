@@ -496,7 +496,7 @@ export const api = {
       true
     ),
   deleteRepository: (repositoryId: string, confirm: string) =>
-    request<{ deletedAt: number; purgeAfter: number }>(
+    request<{ deletedAt: number; purgeAfter: number } & RevocationOutcome>(
       `/api/forge/repositories/${encodeURIComponent(repositoryId)}`,
       { method: "DELETE", body: JSON.stringify({ confirm }) }
     ),

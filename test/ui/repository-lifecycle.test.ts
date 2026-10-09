@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { h } from "vue";
 import DeletedRepositories from "../../apps/web/src/components/DeletedRepositories.vue";
+import OrganizationView from "../../apps/web/src/pages/OrganizationView.vue";
 import RepositoryDangerActions from "../../apps/web/src/components/RepositoryDangerActions.vue";
 import { i18n } from "../../apps/web/src/i18n";
 import { ApiError, api, type DeletedRepository } from "../../apps/web/src/lib/api";
@@ -165,6 +166,65 @@ describe("DeletedRepositories", () => {
     findButton(mounted.root, "Delete permanently now").click();
     await settle();
     expect(purge).toHaveBeenCalledWith("repo-9", "acme/legacy");
+    mounted.unmount();
+  });
+});
+
+describe("DeletedRepositories purge state", () => {
+  it("blocks restore once the purge has started", async () => {
+    vi.spyOn(api, "deletedRepositories").mockResolvedValue({
+      items: [{ ...deleted, purging: true }],
+      truncated: false,
+    });
+    const mounted = await mountAt("/dashboard", "/dashboard", () => h(DeletedRepositories));
+    expect(isDisabled(findButton(mounted.root, "Restore"))).toBe(true);
+    expect(mounted.root.textContent).toContain("can no longer be restored");
+    mounted.unmount();
+  });
+});
+
+describe("OrganizationView danger zone", () => {
+  function mockOrganization(role: "owner" | "member") {
+    vi.spyOn(api, "organization").mockResolvedValue({
+      id: "org-1",
+      slug: "acme",
+      displayName: "Acme",
+      description: "",
+      role,
+    });
+    vi.spyOn(api, "organizationMembers").mockResolvedValue([{ identifier: "alice", role }]);
+  }
+
+  it("is hidden from members", async () => {
+    mockOrganization("member");
+    const mounted = await mountAt("/organizations/:slug", "/organizations/acme", () =>
+      h(OrganizationView)
+    );
+    expect(mounted.root.querySelector(".type-to-confirm")).toBeNull();
+    mounted.unmount();
+  });
+
+  it("deletes after the slug is typed and explains a non-empty organization", async () => {
+    mockOrganization("owner");
+    const remove = vi
+      .spyOn(api, "deleteOrganization")
+      .mockRejectedValueOnce(new ApiError(409, "organization_not_empty"))
+      .mockResolvedValueOnce(undefined);
+    const replace = vi.spyOn(router, "replace");
+    const mounted = await mountAt("/organizations/:slug", "/organizations/acme", () =>
+      h(OrganizationView)
+    );
+    const confirm = control(mounted.root, ".type-to-confirm");
+    expect(isDisabled(findButton(confirm, "Delete this organization"))).toBe(true);
+    fill(control(confirm, "input"), "acme");
+    await settle();
+    findButton(confirm, "Delete this organization").click();
+    await settle();
+    expect(remove).toHaveBeenCalledWith("acme", "acme");
+    expect(mounted.root.textContent).toContain("still has repositories");
+    findButton(confirm, "Delete this organization").click();
+    await settle();
+    expect(replace).toHaveBeenCalledWith("/organizations");
     mounted.unmount();
   });
 });

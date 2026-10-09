@@ -1,19 +1,25 @@
-import { z } from "zod";
+import {
+  RepositoryPurgeRequestSchema,
+  type RepositoryPurgeResult,
+} from "../../../packages/contracts/src/lifecycle";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 import { createLogger } from "../../../src/worker/common/logger";
+import { readJsonLimited, SMALL_JSON_BYTES } from "../../../src/worker/common/readText";
 import type { GitEnv } from "./access";
 
 const FORKS_PER_CALL = 25;
-const PurgeRequestSchema = z.object({ repositoryId: z.string().min(1) });
 
 /**
- * Deletes the Artifacts repository and agent session forks of a soft-deleted repository.
- * Each call is bounded and idempotent; `complete` turns true once nothing is left to delete.
+ * Deletes the agent session forks and then the Artifacts repository of a repository in purge.
+ * Each call deletes at most FORKS_PER_CALL forks after the caller's cursor; Artifacts `delete`
+ * returns false for missing repositories, so repeating a call is safe.
  */
 export async function purgeRepositoryArtifacts(request: Request, env: GitEnv): Promise<Response> {
-  const parsed = PurgeRequestSchema.safeParse(await request.json().catch(() => null));
+  const parsed = RepositoryPurgeRequestSchema.safeParse(
+    await readJsonLimited(request, SMALL_JSON_BYTES)
+  );
   if (!parsed.success) return errorResponse(400, "bad_request", "Invalid purge request.");
-  const repositoryId = parsed.data.repositoryId;
+  const { repositoryId, after } = parsed.data;
   const logger = createLogger(env.LOG_LEVEL, { service: "artifacts-git", repoId: repositoryId });
   const repository = await env.DB.prepare(
     "SELECT artifact_name AS artifactName FROM repositories WHERE id = ? AND deleted_at IS NOT NULL AND purge_state = 'revoked'"
@@ -22,19 +28,18 @@ export async function purgeRepositoryArtifacts(request: Request, env: GitEnv): P
     .first<{ artifactName: string | null }>();
   if (!repository) return errorResponse(404, "not_found", "Repository is not awaiting purge.");
   const forks = await env.DB.prepare(
-    "SELECT id, workspace_name AS workspaceName FROM auth_agent_sessions WHERE repository_id = ? ORDER BY id LIMIT ?"
+    "SELECT id, workspace_name AS workspaceName FROM auth_agent_sessions WHERE repository_id = ? AND (? IS NULL OR id > ?) ORDER BY id LIMIT ?"
   )
-    .bind(repositoryId, FORKS_PER_CALL + 1)
+    .bind(repositoryId, after, after, FORKS_PER_CALL + 1)
     .all<{ id: string; workspaceName: string }>();
-  for (const fork of forks.results.slice(0, FORKS_PER_CALL)) {
-    await env.ARTIFACTS.delete(fork.workspaceName);
-    await env.DB.prepare("DELETE FROM auth_agent_sessions WHERE id = ?").bind(fork.id).run();
-  }
-  if (forks.results.length > FORKS_PER_CALL) {
-    logger.info("artifacts:purge-partial", { deleted: FORKS_PER_CALL });
-    return dataResponse({ complete: false });
+  const batch = forks.results.slice(0, FORKS_PER_CALL);
+  for (const fork of batch) await env.ARTIFACTS.delete(fork.workspaceName);
+  const last = batch.at(-1);
+  if (forks.results.length > FORKS_PER_CALL && last) {
+    logger.info("artifacts:purge-partial", { deleted: batch.length });
+    return dataResponse({ complete: false, next: last.id } satisfies RepositoryPurgeResult);
   }
   if (repository.artifactName) await env.ARTIFACTS.delete(repository.artifactName);
-  logger.info("artifacts:purged", { forks: forks.results.length });
-  return dataResponse({ complete: true });
+  logger.info("artifacts:purged", { forks: batch.length });
+  return dataResponse({ complete: true, next: null } satisfies RepositoryPurgeResult);
 }

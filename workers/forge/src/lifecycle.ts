@@ -2,7 +2,10 @@ import { z } from "zod";
 import {
   ConfirmationInputSchema,
   REPOSITORY_RESTORE_WINDOW_MS,
+  RepositoryPurgeResultSchema,
   TransferRepositoryInputSchema,
+  type RepositoryPurgeRequest,
+  type RepositoryPurgeResult,
   type DeletedRepository,
   type Repository,
   type TrustedUser,
@@ -16,7 +19,8 @@ import { parseJson, repoResponse, type ForgeEnv, type RepositoryRow } from "./co
 const MAX_DELETED_LISTING = 100;
 const PURGE_BATCH = 5;
 const GIT_PURGE_CALLS = 4;
-const GitPurgeResultSchema = z.object({ data: z.object({ complete: z.boolean() }) });
+const PURGE_RETRY_DELAY_MS = 60 * 60 * 1000;
+const GitPurgeResponseSchema = z.object({ data: RepositoryPurgeResultSchema });
 
 type NamespaceTarget = { id: string; slug: string; kind: "personal" | "organization" };
 type DeletedRow = {
@@ -35,7 +39,7 @@ function fullName(repository: Pick<RepositoryRow, "owner" | "slug">): string {
 }
 
 async function confirmed(request: Request, expected: string): Promise<boolean> {
-  const parsed = ConfirmationInputSchema.safeParse(await parseJson(request).catch(() => null));
+  const parsed = ConfirmationInputSchema.safeParse(await parseJson(request));
   return parsed.success && parsed.data.confirm === expected;
 }
 
@@ -105,13 +109,17 @@ export async function repositoryLifecycle(
     ]);
     if (marked.results.length !== 1)
       return errorResponse(404, "not_found", "Repository was not found.");
-    logger.info("lifecycle:repository-deleted", { userId: user.id, purgeAfter });
-    return dataResponse({ deletedAt: now, purgeAfter });
+    // Session forks hold direct Artifacts credentials, so they must not outlive the deletion.
+    const revoked = await revokeAgentSessions(env, { repositoryId: repository.id });
+    logger.info("lifecycle:repository-deleted", { userId: user.id, purgeAfter, revoked });
+    return dataResponse({
+      deletedAt: now,
+      purgeAfter,
+      ...(revoked ? {} : { revocationIncomplete: true }),
+    });
   }
 
-  const parsed = TransferRepositoryInputSchema.safeParse(
-    await parseJson(request).catch(() => null)
-  );
+  const parsed = TransferRepositoryInputSchema.safeParse(await parseJson(request));
   if (!parsed.success) return errorResponse(400, "bad_request", "Invalid transfer payload.");
   if (parsed.data.confirm !== fullName(repository)) return confirmationMismatch();
   if (!(await namespaceOwner(env, repository.namespace_id, user.id)))
@@ -215,7 +223,7 @@ export async function deletedRepositories(
     try {
       const [restored] = await env.DB.batch([
         env.DB.prepare(
-          "UPDATE repositories SET slug = deleted_slug, deleted_at = NULL, deleted_by = NULL, deleted_slug = NULL, purge_after = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL AND purge_state IS NULL AND purge_after > ? RETURNING id"
+          "UPDATE repositories SET slug = deleted_slug, deleted_at = NULL, deleted_by = NULL, deleted_slug = NULL, purge_after = NULL, purge_cursor = NULL, purge_retry_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL AND purge_state IS NULL AND purge_after > ? RETURNING id"
         ).bind(now, id, now),
         env.DB.prepare(
           "DELETE FROM repository_paths WHERE repository_id = ? AND slug = 'deleted~' || ?"
@@ -239,13 +247,16 @@ export async function deletedRepositories(
 
   if (request.method === "DELETE" && parts.length === 2) {
     if (!(await confirmed(request, `${row.owner}/${row.name}`))) return confirmationMismatch();
-    await env.DB.prepare(
-      "UPDATE repositories SET purge_after = ? WHERE id = ? AND deleted_at IS NOT NULL"
+    const now = Date.now();
+    const expedited = await env.DB.prepare(
+      "UPDATE repositories SET purge_after = MIN(purge_after, ?) WHERE id = ? AND deleted_at IS NOT NULL"
     )
-      .bind(Date.now(), id)
+      .bind(now, id)
       .run();
-    const purged = await purgeRepository(env, id);
+    if (expedited.meta.changes !== 1)
+      return errorResponse(404, "not_found", "Deleted repository was not found.");
     logger.info("lifecycle:repository-purge-requested", { repositoryId: id, userId: user.id });
+    const purged = await attemptPurge(env, id, now);
     return dataResponse({ purged }, purged ? 200 : 202);
   }
   return errorResponse(405, "method_not_allowed", "Method is not allowed for this endpoint.");
@@ -280,18 +291,39 @@ export async function deleteOrganization(
   return new Response(null, { status: 204 });
 }
 
+async function requestArtifactsPurge(
+  env: ForgeEnv,
+  repositoryId: string,
+  after: string | null
+): Promise<RepositoryPurgeResult | null> {
+  const response = await env.GIT.fetch(
+    new Request("https://git.internal/internal/purge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ repositoryId, after } satisfies RepositoryPurgeRequest),
+    })
+  );
+  if (!response.ok) {
+    await response.body?.cancel();
+    return null;
+  }
+  const parsed = GitPurgeResponseSchema.safeParse(await response.json().catch(() => null));
+  return parsed.success ? parsed.data.data : null;
+}
+
 /**
  * Advances one soft-deleted repository through revoke, Artifacts deletion and row removal.
- * Progress is persisted in purge_state so interrupted runs resume without repeating work.
+ * Progress is persisted in purge_state and purge_cursor so interrupted runs resume without
+ * repeating work.
  */
 export async function purgeRepository(env: ForgeEnv, repositoryId: string): Promise<boolean> {
   const logger = createLogger(env.LOG_LEVEL, { service: "repository-purge", repoId: repositoryId });
   const read = () =>
     env.DB.prepare(
-      "SELECT purge_state AS state FROM repositories WHERE id = ? AND deleted_at IS NOT NULL"
+      "SELECT purge_state AS state, purge_cursor AS cursor FROM repositories WHERE id = ? AND deleted_at IS NOT NULL"
     )
       .bind(repositoryId)
-      .first<{ state: string | null }>();
+      .first<{ state: string | null; cursor: string | null }>();
   let row = await read();
   if (!row) return true;
   if (row.state === null) {
@@ -300,33 +332,36 @@ export async function purgeRepository(env: ForgeEnv, repositoryId: string): Prom
       return false;
     }
     await env.DB.prepare(
-      "UPDATE repositories SET purge_state = 'revoked' WHERE id = ? AND deleted_at IS NOT NULL AND purge_state IS NULL"
+      "UPDATE repositories SET purge_state = 'revoked', purge_cursor = NULL WHERE id = ? AND deleted_at IS NOT NULL AND purge_state IS NULL"
     )
       .bind(repositoryId)
       .run();
     row = await read();
   }
   if (row?.state === "revoked") {
+    let cursor = row.cursor;
     let complete = false;
     for (let call = 0; call < GIT_PURGE_CALLS && !complete; call += 1) {
-      const response = await env.GIT.fetch(
-        new Request("https://git.internal/internal/purge", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ repositoryId }),
-        })
-      );
-      if (!response.ok) {
-        await response.body?.cancel();
-        logger.warn("purge:artifacts-pending", { status: response.status });
+      const result = await requestArtifactsPurge(env, repositoryId, cursor);
+      if (!result) {
+        logger.warn("purge:artifacts-pending", { call });
         return false;
       }
-      const result = GitPurgeResultSchema.safeParse(await response.json().catch(() => null));
-      complete = result.success && result.data.data.complete;
+      complete = result.complete;
+      cursor = result.next;
+      if (!complete)
+        await env.DB.prepare(
+          "UPDATE repositories SET purge_cursor = ? WHERE id = ? AND purge_state = 'revoked'"
+        )
+          .bind(cursor, repositoryId)
+          .run();
     }
-    if (!complete) return false;
+    if (!complete) {
+      logger.info("purge:artifacts-partial", { calls: GIT_PURGE_CALLS });
+      return false;
+    }
     await env.DB.prepare(
-      "UPDATE repositories SET purge_state = 'artifacts_deleted' WHERE id = ? AND purge_state = 'revoked'"
+      "UPDATE repositories SET purge_state = 'artifacts_deleted', purge_cursor = NULL WHERE id = ? AND purge_state = 'revoked'"
     )
       .bind(repositoryId)
       .run();
@@ -344,25 +379,39 @@ export async function purgeRepository(env: ForgeEnv, repositoryId: string): Prom
   return false;
 }
 
-/** Scheduled entry point: purges a bounded number of repositories whose grace period ended. */
+/** Runs one purge step and schedules a delayed retry when it cannot finish. */
+async function attemptPurge(env: ForgeEnv, repositoryId: string, now: number): Promise<boolean> {
+  let done = false;
+  try {
+    done = await purgeRepository(env, repositoryId);
+  } catch (cause) {
+    createLogger(env.LOG_LEVEL, { service: "repository-purge", repoId: repositoryId }).error(
+      "purge:repository-failed",
+      { error: cause instanceof Error ? cause.message : "unknown" }
+    );
+  }
+  if (!done)
+    await env.DB.prepare(
+      "UPDATE repositories SET purge_retry_at = ? WHERE id = ? AND deleted_at IS NOT NULL"
+    )
+      .bind(now + PURGE_RETRY_DELAY_MS, repositoryId)
+      .run();
+  return done;
+}
+
+/**
+ * Scheduled entry point: purges a bounded number of repositories whose grace period ended.
+ * Repositories that failed recently wait for their retry time so they cannot starve the queue.
+ */
 export async function purgeDueRepositories(env: ForgeEnv, now = Date.now()): Promise<number> {
   const logger = createLogger(env.LOG_LEVEL, { service: "repository-purge" });
   const due = await env.DB.prepare(
-    "SELECT id FROM repositories WHERE deleted_at IS NOT NULL AND purge_after <= ? ORDER BY purge_after LIMIT ?"
+    "SELECT id FROM repositories WHERE deleted_at IS NOT NULL AND purge_after <= ? AND (purge_retry_at IS NULL OR purge_retry_at <= ?) ORDER BY COALESCE(purge_retry_at, purge_after) LIMIT ?"
   )
-    .bind(now, PURGE_BATCH)
+    .bind(now, now, PURGE_BATCH)
     .all<{ id: string }>();
   let purged = 0;
-  for (const { id } of due.results) {
-    try {
-      if (await purgeRepository(env, id)) purged += 1;
-    } catch (cause) {
-      logger.error("purge:repository-failed", {
-        repositoryId: id,
-        error: cause instanceof Error ? cause.message : "unknown",
-      });
-    }
-  }
+  for (const { id } of due.results) if (await attemptPurge(env, id, now)) purged += 1;
   logger.info("purge:run-finished", { due: due.results.length, purged });
   return purged;
 }

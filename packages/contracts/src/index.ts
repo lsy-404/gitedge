@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { GitBranchSchema, type AgentSessionIdentity } from "./forge";
 import { RepositorySlugSchema } from "./repository-controls";
+import { ConfirmationInputSchema } from "./lifecycle";
 export * from "./repository-controls";
 export * from "./forge";
 export * from "./agents";
@@ -180,6 +181,11 @@ export const CreateRepositoryInputSchema = z.object({
   visibility: z.enum(["public", "private"]),
   description: z.string().trim().max(500).default(""),
 });
+
+export const TransferRepositoryInputSchema = ConfirmationInputSchema.extend({
+  owner: NamespaceSlugSchema,
+});
+export type TransferRepositoryInput = z.infer<typeof TransferRepositoryInputSchema>;
 
 export const CreateIssueInputSchema = z.object({
   title: z.string().trim().min(1).max(200),

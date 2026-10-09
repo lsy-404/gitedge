@@ -6,10 +6,17 @@ export const REPOSITORY_RESTORE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 export const ConfirmationInputSchema = z.object({ confirm: z.string().min(1).max(200) });
 export type ConfirmationInput = z.infer<typeof ConfirmationInputSchema>;
 
-export const TransferRepositoryInputSchema = ConfirmationInputSchema.extend({
-  owner: z.string().trim().toLowerCase().min(1).max(63),
+/** Internal Forge to Git purge step: deletes session forks after `after`, then the repository. */
+export const RepositoryPurgeRequestSchema = z.object({
+  repositoryId: z.string().min(1),
+  after: z.string().min(1).nullable(),
 });
-export type TransferRepositoryInput = z.infer<typeof TransferRepositoryInputSchema>;
+export type RepositoryPurgeRequest = z.infer<typeof RepositoryPurgeRequestSchema>;
+export const RepositoryPurgeResultSchema = z.object({
+  complete: z.boolean(),
+  next: z.string().min(1).nullable(),
+});
+export type RepositoryPurgeResult = z.infer<typeof RepositoryPurgeResultSchema>;
 
 export interface DeletedRepository {
   id: string;

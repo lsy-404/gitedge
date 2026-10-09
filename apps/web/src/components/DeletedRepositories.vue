@@ -16,6 +16,10 @@ const busyId = ref("");
 const purgingId = ref("");
 const error = ref("");
 
+function restorable(item: DeletedRepository): boolean {
+  return !item.purging && item.purgeAfter > Date.now();
+}
+
 async function load() {
   try {
     items.value = (await api.deletedRepositories()).items;
@@ -68,7 +72,9 @@ onMounted(load);
       <div class="deleted-repository-copy">
         <span class="repository-name">{{ item.owner }} / {{ item.name }}</span>
         <span class="muted">{{
-          t("lifecycleDeletedUntil", { date: d(item.purgeAfter, "short") })
+          restorable(item)
+            ? t("lifecycleDeletedUntil", { date: d(item.purgeAfter, "short") })
+            : t("lifecycleDeletedPurging")
         }}</span>
       </div>
       <ConfirmButton
@@ -78,7 +84,7 @@ onMounted(load);
         :accessible-name="`${t('lifecycleRestore')} · ${item.owner}/${item.name}`"
         :prompt="t('lifecycleRestorePrompt')"
         :confirm-label="t('lifecycleRestore')"
-        :disabled="item.purging || Boolean(busyId)"
+        :disabled="!restorable(item) || Boolean(busyId)"
         @confirm="restore(item)"
       />
       <TypeToConfirm

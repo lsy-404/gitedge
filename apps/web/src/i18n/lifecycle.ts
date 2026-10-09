@@ -17,6 +17,7 @@ export default {
     lifecycleDeletedTitle: "最近删除",
     lifecycleDeletedHint: "宽限期内可恢复已删除的仓库，到期后将被永久清除。",
     lifecycleDeletedUntil: "可恢复至 {date}",
+    lifecycleDeletedPurging: "正在永久清除，已无法恢复",
     lifecycleRestore: "恢复",
     lifecycleRestorePrompt: "确定恢复此仓库？",
     lifecyclePurgeNow: "立即永久删除",
@@ -48,6 +49,7 @@ export default {
     lifecycleDeletedHint:
       "Restore a deleted repository during its grace period; afterwards it is permanently purged.",
     lifecycleDeletedUntil: "Restorable until {date}",
+    lifecycleDeletedPurging: "Being permanently purged; it can no longer be restored",
     lifecycleRestore: "Restore",
     lifecycleRestorePrompt: "Restore this repository?",
     lifecyclePurgeNow: "Delete permanently now",
