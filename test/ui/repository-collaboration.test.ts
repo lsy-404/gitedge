@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp, defineComponent, h, nextTick } from "vue";
 import { i18n } from "../../apps/web/src/i18n";
 import collaborationMessages from "../../apps/web/src/i18n/collaboration";
-import { ApiError, api } from "../../apps/web/src/lib/api";
+import { ApiError, api, type ReviewComment } from "../../apps/web/src/lib/api";
 import { clearSession, setSession } from "../../apps/web/src/lib/session";
 import { fluentUi } from "../../apps/web/src/ui/fluent";
 import { router } from "../../apps/web/src/router";
@@ -175,6 +175,8 @@ function submit(form: HTMLFormElement): void {
 }
 
 beforeEach(() => {
+  vi.spyOn(api, "issueReferences").mockResolvedValue({ pullRequests: [], events: [] });
+  vi.spyOn(api, "reviewComments").mockResolvedValue({ items: [], truncated: false });
   vi.spyOn(api, "repositoryCommunity").mockResolvedValue({
     files: [],
     issueTemplates: [],
@@ -1074,6 +1076,224 @@ describe("RepositoryCollaboration action errors, ownership and review aids", () 
     const selects = form.querySelectorAll<HTMLSelectElement>("select");
     expect(selects[0]?.value).toBe("feature");
     expect(selects[1]?.value).toBe("main");
+    mounted.unmount();
+  });
+});
+
+function reviewComment(overrides: Partial<ReviewComment> = {}): ReviewComment {
+  return {
+    id: "rc-1",
+    inReplyTo: null,
+    reviewId: null,
+    commitOid: "head-current-oid",
+    path: "src/a.ts",
+    side: "RIGHT",
+    line: 2,
+    startLine: null,
+    diffHunk: "@@ -1,2 +1,3 @@\n keep\n+new",
+    body: "Rename this",
+    actor: human,
+    pending: false,
+    outdated: false,
+    resolvedAt: null,
+    resolvedBy: null,
+    createdAt: 20,
+    updatedAt: 20,
+    ...overrides,
+  };
+}
+
+describe("RepositoryCollaboration review threads", () => {
+  const comparison: GitComparison = {
+    baseOid: "base-current-oid",
+    headOid: "head-current-oid",
+    mergeBaseOid: "merge-base-oid",
+    commits: [],
+    files: [
+      {
+        path: "src/a.ts",
+        type: "modified",
+        oldOid: "1",
+        newOid: "2",
+        binary: false,
+        patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,2 +1,3 @@\n keep\n-old\n+new\n+added\n",
+      },
+    ],
+    truncated: false,
+  };
+
+  function mockPull(threads: ReviewComment[]) {
+    vi.spyOn(api, "pull").mockResolvedValue(pull());
+    vi.spyOn(api, "comments").mockResolvedValue({ items: [], truncated: false });
+    vi.spyOn(api, "reviews").mockResolvedValue([]);
+    vi.spyOn(api, "checks").mockResolvedValue([]);
+    vi.spyOn(api, "pullDiff").mockResolvedValue(comparison);
+    return vi.spyOn(api, "reviewComments").mockResolvedValue({ items: threads, truncated: false });
+  }
+
+  async function openFiles(mounted: Awaited<ReturnType<typeof mountSection>>) {
+    mounted.root.querySelectorAll<HTMLElement>(".pull-tabs button")[1]?.click();
+    await settle();
+  }
+
+  it("starts a pending review from a line gutter and keeps the thread keyboard reachable", async () => {
+    mockPull([]);
+    const createSpy = vi.spyOn(api, "createReviewThread").mockResolvedValue(reviewComment());
+    const mounted = await mountSection("/_verify/pulls/12", "pulls");
+    await openFiles(mounted);
+
+    const gutter = mounted.root.querySelectorAll<HTMLButtonElement>(".diff-comment-button");
+    expect([...gutter].map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Add a comment on line 1",
+      "Add a comment on line 2",
+      "Add a comment on line 2",
+      "Add a comment on line 3",
+    ]);
+    expect(gutter[0]?.localName).toBe("button");
+    gutter[3]?.click();
+    await settle();
+    const composer = mounted.root.querySelector<HTMLFormElement>(".review-composer");
+    if (!composer) throw new Error("Composer did not open.");
+    fill(control(composer, "textarea"), "Please document this");
+    await settle();
+    findButton(composer, "Start a review").click();
+    await settle();
+    expect(createSpy).toHaveBeenCalledWith(
+      "repo-1",
+      12,
+      "head-current-oid",
+      expect.objectContaining({
+        body: "Please document this",
+        path: "src/a.ts",
+        side: "RIGHT",
+        line: 3,
+        pending: true,
+      })
+    );
+    expect(mounted.root.querySelector(".review-composer")).toBeNull();
+    mounted.unmount();
+  });
+
+  it("selects a line range with shift and posts a single comment immediately", async () => {
+    mockPull([]);
+    const createSpy = vi.spyOn(api, "createReviewThread").mockResolvedValue(reviewComment());
+    const mounted = await mountSection("/_verify/pulls/12", "pulls");
+    await openFiles(mounted);
+
+    const gutter = mounted.root.querySelectorAll<HTMLButtonElement>(".diff-comment-button");
+    gutter[2]?.click();
+    await settle();
+    gutter[3]?.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
+    await settle();
+    const composer = mounted.root.querySelector<HTMLFormElement>(".review-composer");
+    if (!composer) throw new Error("Composer did not open.");
+    expect(composer.textContent).toContain("Comment on lines 2-3");
+    fill(control(composer, "textarea"), "Both lines");
+    submit(composer);
+    await settle();
+    expect(createSpy).toHaveBeenCalledWith(
+      "repo-1",
+      12,
+      "head-current-oid",
+      expect.objectContaining({ startLine: 2, line: 3, pending: false })
+    );
+    mounted.unmount();
+  });
+
+  it("renders threads inline, lists unresolved ones, and marks outdated threads away from the diff", async () => {
+    const reloaded = mockPull([
+      reviewComment(),
+      reviewComment({ id: "rc-2", inReplyTo: "rc-1", body: "Done in a follow-up", createdAt: 21 }),
+      reviewComment({ id: "rc-3", line: 1, outdated: true, body: "Old context", createdAt: 22 }),
+      reviewComment({
+        id: "rc-4",
+        line: 3,
+        body: "Settled",
+        resolvedAt: 30,
+        resolvedBy: human,
+        createdAt: 23,
+      }),
+    ]);
+    const resolveSpy = vi
+      .spyOn(api, "setReviewThreadResolved")
+      .mockResolvedValue(reviewComment({ resolvedAt: 40, resolvedBy: human }));
+    const mounted = await mountSection("/_verify/pulls/12", "pulls");
+    await openFiles(mounted);
+
+    const summary = mounted.root.querySelector(".thread-summary");
+    expect(summary?.textContent).toContain("2 unresolved conversations");
+    expect(mounted.root.querySelector(".merge-status")?.textContent).toContain(
+      "2 review conversations are unresolved"
+    );
+    expect(summary?.textContent).toContain("Outdated");
+    const inline = mounted.root.querySelectorAll(".diff-thread .review-thread");
+    expect(inline).toHaveLength(2);
+    expect(inline[0]?.textContent).toContain("Rename this");
+    expect(inline[0]?.textContent).toContain("Done in a follow-up");
+    expect(mounted.root.querySelector(".diff-thread")?.textContent).not.toContain("Old context");
+    const settled = inline[1];
+    expect(settled?.textContent).toContain("Resolved");
+    expect(settled?.textContent).not.toContain("Settled");
+
+    findButton(inline[0] as HTMLElement, "Resolve conversation").click();
+    await settle();
+    expect(resolveSpy).toHaveBeenCalledWith("repo-1", 12, "rc-1", true);
+    expect(reloaded.mock.calls.length).toBeGreaterThan(1);
+
+    mounted.root.querySelectorAll<HTMLElement>(".pull-tabs button")[0]?.click();
+    await settle();
+    const conversation = mounted.root.querySelector(".review-threads-panel");
+    expect(conversation?.textContent).toContain("Old context");
+    expect(conversation?.textContent).toContain("Outdated");
+    expect(conversation?.textContent).toContain("@@ -1,2 +1,3 @@");
+    mounted.unmount();
+  });
+
+  it("offers to finish a pending review and reports unresolved threads next to the merge controls", async () => {
+    mockPull([reviewComment({ pending: true })]);
+    const mounted = await mountSection("/_verify/pulls/12", "pulls");
+    await openFiles(mounted);
+
+    expect(mounted.root.querySelector(".pending-review")?.textContent).toContain(
+      "You have 1 pending comments"
+    );
+    expect(mounted.root.querySelector(".merge-status")?.textContent).toContain(
+      "All review conversations are resolved"
+    );
+    findButton(mounted.root, "Finish your review").click();
+    await settle();
+    expect(mounted.root.querySelector(".review-panel")?.textContent).toContain(
+      "1 pending comments are published with this review."
+    );
+    mounted.unmount();
+  });
+
+  it("lists linked pull requests and the closing event on an issue", async () => {
+    vi.spyOn(api, "issue").mockResolvedValue(issue({ state: "closed" }));
+    vi.spyOn(api, "comments").mockResolvedValue({
+      items: [comment({ id: "late", body: "Thanks for the fix", createdAt: 500 })],
+      truncated: false,
+    });
+    vi.spyOn(api, "issueReferences").mockResolvedValue({
+      pullRequests: [{ number: 12, title: "Update parser", state: "merged", closes: true }],
+      events: [
+        {
+          id: "event-1",
+          kind: "closed_by_pull_request",
+          pullRequestNumber: 12,
+          actor: human,
+          createdAt: 100,
+        },
+      ],
+    });
+    const mounted = await mountSection("/_verify/issues/7", "issues");
+    const sidebar = mounted.root.querySelector(".detail-sidebar");
+    expect(sidebar?.textContent).toContain("Linked pull requests");
+    expect(sidebar?.textContent).toContain("#12 Update parser");
+    expect(sidebar?.textContent).toContain("Closes this issue");
+    const text = mounted.root.querySelector(".timeline")?.textContent ?? "";
+    expect(text).toContain("closed this issue through pull request #12");
+    expect(text.indexOf("closed this issue")).toBeLessThan(text.indexOf("Thanks for the fix"));
     mounted.unmount();
   });
 });

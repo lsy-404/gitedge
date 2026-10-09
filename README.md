@@ -54,6 +54,8 @@ Account agent sessions return their API and Git tokens once. Use the API token a
 
 The commit graph includes all commit parents and session fork refs. Pull request merging verifies both expected OIDs and uses Git's atomic non-force ref update. Text conflicts require resolution in the session repository before retrying. Reviews and checks for previous head commits remain in history and do not satisfy the current head.
 
+Pull request diffs support line and range comments with replies, resolvable threads, pending reviews published together with the Approve, Request changes or Comment verdict, and `suggestion` blocks rendered as a preview. A comment on a commit that is no longer the head is marked outdated and keeps its original context. `closes`, `fixes` and `resolves` followed by `#n` in a pull request title, body or commit messages close those issues when it merges into the default branch, and `#n` references render as links. The branch rule "Require conversation resolution" blocks merging while threads are unresolved.
+
 CI runners submit check results through the authenticated Pull Request checks API. Agent reviews are explicitly marked separately from human reviews; the marker identifies the authenticated author, while the result and summary describe the runner's work.
 
 ## Account recovery and two-step verification

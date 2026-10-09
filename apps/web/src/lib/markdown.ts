@@ -59,7 +59,51 @@ export function highlightedCode(source: string, filename: string = ""): string {
     ? hljs.highlight(source, { language, ignoreIllegals: true }).value
     : escapeHtml(source);
 }
-export function renderMarkdown(source: string, baseUrl?: string, allowImages = false): string {
+export interface MarkdownRepository {
+  owner: string;
+  slug: string;
+}
+const ISSUE_REFERENCE =
+  /(?<![\w/&.-])(?:(?<owner>[A-Za-z0-9][A-Za-z0-9-]*)\/(?<slug>[A-Za-z0-9_.-]+))?#(?<number>[1-9]\d{0,8})(?![\w-])/g;
+
+/** Turns #n and same-repository owner/repo#n into links outside links and code. */
+function linkIssueReferences(fragment: DocumentFragment, repository: MarkdownRepository): void {
+  const walker = document.createTreeWalker(fragment, NodeFilter.SHOW_TEXT);
+  const targets: Text[] = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode())
+    if (node instanceof Text && !node.parentElement?.closest("a, pre, code")) targets.push(node);
+  for (const text of targets) {
+    const value = text.data;
+    const pieces: Array<string | HTMLAnchorElement> = [];
+    let cursor = 0;
+    for (const match of value.matchAll(ISSUE_REFERENCE)) {
+      const { owner, slug, number } = match.groups ?? {};
+      if (
+        owner &&
+        slug &&
+        (owner.toLowerCase() !== repository.owner.toLowerCase() ||
+          slug.toLowerCase() !== repository.slug.toLowerCase())
+      )
+        continue;
+      const anchor = document.createElement("a");
+      anchor.href = `/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.slug)}/issues/${number}`;
+      anchor.textContent = match[0];
+      anchor.setAttribute("rel", "noreferrer noopener");
+      pieces.push(value.slice(cursor, match.index), anchor);
+      cursor = match.index + match[0].length;
+    }
+    if (!pieces.length) continue;
+    pieces.push(value.slice(cursor));
+    text.replaceWith(...pieces);
+  }
+}
+
+export function renderMarkdown(
+  source: string,
+  baseUrl?: string,
+  allowImages = false,
+  repository?: MarkdownRepository
+): string {
   const renderer = new Renderer();
   if (!allowImages) {
     renderer.html = ({ text }) => escapeHtml(text);
@@ -132,6 +176,7 @@ export function renderMarkdown(source: string, baseUrl?: string, allowImages = f
       element.setAttribute("referrerpolicy", "no-referrer");
     }
   }
+  if (repository) linkIssueReferences(fragment, repository);
   for (const block of fragment.querySelectorAll("pre code")) {
     const language = block.className.match(/language-([\w-]+)/)?.[1] ?? "";
     block.innerHTML = highlightedCode(block.textContent ?? "", language);

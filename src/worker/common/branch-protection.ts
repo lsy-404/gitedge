@@ -11,6 +11,7 @@ interface RuleRow {
   requiredStatusChecks: string;
   requireLinearHistory: number;
   requireSignedCommits: number;
+  requireConversationResolution: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -20,7 +21,7 @@ export async function branchRules(
 ): Promise<BranchProtectionRule[]> {
   const rows = await db
     .prepare(
-      "SELECT id,pattern,enabled,locked,required_approvals AS requiredApprovals,require_passing_checks AS requirePassingChecks,required_status_checks AS requiredStatusChecks,require_linear_history AS requireLinearHistory,require_signed_commits AS requireSignedCommits,created_at AS createdAt,updated_at AS updatedAt FROM repository_branch_rules WHERE repository_id = ? ORDER BY created_at,id LIMIT 101"
+      "SELECT id,pattern,enabled,locked,required_approvals AS requiredApprovals,require_passing_checks AS requirePassingChecks,required_status_checks AS requiredStatusChecks,require_linear_history AS requireLinearHistory,require_signed_commits AS requireSignedCommits,require_conversation_resolution AS requireConversationResolution,created_at AS createdAt,updated_at AS updatedAt FROM repository_branch_rules WHERE repository_id = ? ORDER BY created_at,id LIMIT 101"
     )
     .bind(repositoryId)
     .all<RuleRow>();
@@ -32,6 +33,7 @@ export async function branchRules(
     requirePassingChecks: row.requirePassingChecks === 1,
     requireLinearHistory: row.requireLinearHistory === 1,
     requireSignedCommits: row.requireSignedCommits === 1,
+    requireConversationResolution: row.requireConversationResolution === 1,
     requiredStatusChecks: z.array(z.string()).parse(JSON.parse(row.requiredStatusChecks)),
   }));
 }

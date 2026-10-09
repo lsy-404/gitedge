@@ -4,6 +4,17 @@ import {
 } from "../../../src/worker/common/repository-response";
 import { actionsCheck, attachActionChecks } from "./actions-checks";
 import { authorizeMerge } from "./merge-policy";
+import {
+  comparisonMessages,
+  issueReferences,
+  mergeClosingStatements,
+  syncLinkStatements,
+} from "./issue-links";
+import {
+  listReviewComments,
+  publishPendingStatements,
+  reviewCommentRequest,
+} from "./review-comments";
 import { mentionAgents, pullRequestEvent, revokeAgentSessions } from "./agent-events";
 import { publicProfile } from "./profiles";
 import {
@@ -275,6 +286,31 @@ async function pullRequestHeadOid(
   return headOid;
 }
 
+/** Head used to decide whether review comments are outdated; null when it cannot be resolved. */
+async function reviewCommentHead(
+  env: ForgeEnv,
+  requestUrl: string,
+  repository: RepositoryRow,
+  pull: Record<string, unknown>,
+  user: TrustedUser | null
+): Promise<string | null> {
+  if (pull.state === "merged")
+    return typeof pull.merge_head_oid === "string" ? pull.merge_head_oid : null;
+  if (pull.state === "closed" && pull.head_session_id) return null;
+  const gitUrl = new URL(`/repositories/${repository.id}/pull-head`, requestUrl);
+  gitUrl.searchParams.set("head", String(pull.head_ref));
+  if (pull.head_session_id) gitUrl.searchParams.set("headSessionId", String(pull.head_session_id));
+  const response = await env.GIT.fetch(
+    new Request(gitUrl, { headers: trustedHeaders(user ?? undefined) })
+  );
+  const body: unknown = response.ok ? await response.json().catch(() => null) : null;
+  const data = body && typeof body === "object" && "data" in body ? body.data : null;
+  if (data && typeof data === "object" && "oid" in data && typeof data.oid === "string")
+    return data.oid;
+  if (!response.ok) await response.body?.cancel();
+  return null;
+}
+
 function mergeResultOid(value: unknown): string | null {
   if (!value || typeof value !== "object" || !("data" in value)) return null;
   const data = value.data;
@@ -501,6 +537,40 @@ async function publicRepositoryRead(
     return page
       ? dataResponse(page)
       : errorResponse(404, "not_found", "Wiki revision was not found.");
+  }
+  if (
+    resource === "issues" &&
+    parts.length === 7 &&
+    parts[6] === "references" &&
+    Number.isSafeInteger(Number(parts[5]))
+  ) {
+    const issue = await env.DB.prepare(
+      "SELECT id FROM forge_issues WHERE repository_id = ? AND number = ?"
+    )
+      .bind(repository.id, Number(parts[5]))
+      .first<{ id: string }>();
+    return issue
+      ? issueReferences(env, issue.id)
+      : errorResponse(404, "not_found", "Resource was not found.");
+  }
+  if (resource === "pull-requests" && parts.length === 7 && parts[6] === "review-comments") {
+    const pull = await env.DB.prepare(
+      "SELECT * FROM forge_pull_requests WHERE repository_id = ? AND number = ?"
+    )
+      .bind(repository.id, Number(parts[5]))
+      .first<Record<string, unknown>>();
+    if (!pull) return errorResponse(404, "not_found", "Pull request was not found.");
+    return listReviewComments({
+      env,
+      repository,
+      pull,
+      user: null,
+      actor: null,
+      member: false,
+      writeAllowed: false,
+      mergeLeased: false,
+      resolveHead: () => reviewCommentHead(env, request.url, repository, pull, null),
+    });
   }
   if (
     resource === "pull-requests" &&
@@ -735,10 +805,10 @@ async function featureRequest(
       const number = await nextNumber(env, targetTable, repository.id),
         id = crypto.randomUUID(),
         now = Date.now();
-      await env.DB.prepare(
-        "INSERT INTO forge_pull_requests (id, repository_id, number, author_id, actor_json, title, body, base_ref, head_ref, head_session_id, draft, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)"
-      )
-        .bind(
+      await env.DB.batch([
+        env.DB.prepare(
+          "INSERT INTO forge_pull_requests (id, repository_id, number, author_id, actor_json, title, body, base_ref, head_ref, head_session_id, draft, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)"
+        ).bind(
           id,
           repository.id,
           number,
@@ -752,8 +822,9 @@ async function featureRequest(
           parsed.data.draft ? 1 : 0,
           now,
           now
-        )
-        .run();
+        ),
+        ...syncLinkStatements(env, repository, id, parsed.data.title, parsed.data.body, now),
+      ]);
       if (repository.actions_enabled === 1 && !parsed.data.headSessionId)
         await attachActionChecks(env, repository.id, id, parsed.data.headRef);
       await mentionAgents(env, repository, user, parsed.data.body, {
@@ -1023,6 +1094,16 @@ async function featureRequest(
             current.id,
             staleMergeCutoff
           ),
+          ...((p.title !== undefined || p.body !== undefined) && current.state !== "merged"
+            ? syncLinkStatements(
+                env,
+                repository,
+                String(current.id),
+                p.title ?? String(current.title),
+                p.body ?? String(current.body),
+                now
+              )
+            : []),
           ...(stateChanged
             ? targetStateProgressStatements(
                 env,
@@ -1109,6 +1190,25 @@ async function featureRequest(
         .first<Record<string, unknown>>();
       return dataResponse(updated ? presentForgeRow(resource, updated) : null);
     }
+    if (targetTable === "forge_pull_requests" && action === "review-comments")
+      return reviewCommentRequest(
+        {
+          env,
+          repository,
+          pull: current,
+          user,
+          actor,
+          member,
+          writeAllowed,
+          mergeLeased: hasActiveMergeLease(current),
+          resolveHead: () => reviewCommentHead(env, request.url, repository, current, user),
+        },
+        request.method,
+        request,
+        parts.slice(4)
+      );
+    if (targetTable === "forge_issues" && action === "references" && request.method === "GET")
+      return issueReferences(env, String(current.id));
     if (targetTable === "forge_pull_requests" && action === "reviews" && request.method === "GET") {
       const rows = await env.DB.prepare(
         "SELECT * FROM forge_reviews WHERE pull_request_id = ? ORDER BY created_at DESC"
@@ -1140,10 +1240,10 @@ async function featureRequest(
         return errorResponse(409, "stale_commit", "The commit is no longer the pull request head.");
       const id = crypto.randomUUID(),
         now = Date.now();
-      await env.DB.prepare(
-        "INSERT INTO forge_reviews (id, repository_id, pull_request_id, actor_json, author_id, actor_key, state, body, commit_oid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-      )
-        .bind(
+      await env.DB.batch([
+        env.DB.prepare(
+          "INSERT INTO forge_reviews (id, repository_id, pull_request_id, actor_json, author_id, actor_key, state, body, commit_oid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        ).bind(
           id,
           repository.id,
           String(current.id),
@@ -1154,8 +1254,9 @@ async function featureRequest(
           parsed.data.body,
           parsed.data.commitOid,
           now
-        )
-        .run();
+        ),
+        ...publishPendingStatements(env, String(current.id), id, actor),
+      ]);
       logger.info("forge:review-submitted", {
         repositoryId: repository.id,
         pullRequestNumber: number,
@@ -1310,6 +1411,20 @@ async function featureRequest(
         await releaseLease();
         return rejected;
       }
+      const comparison = await env.GIT.fetch(
+        compareRequest(request.url, repository, current, user)
+      );
+      const commitMessages = comparison.ok
+        ? comparisonMessages(await comparison.json().catch(() => null))
+        : [];
+      if (!comparison.ok) {
+        await comparison.body?.cancel();
+        logger.warn("forge:merge-commit-messages-unavailable", {
+          repositoryId: repository.id,
+          pullRequestNumber: number,
+          status: comparison.status,
+        });
+      }
       const gitUrl = new URL(`/repositories/${repository.id}/merge`, request.url);
       const headSessionId =
         current.head_session_id == null ? null : String(current.head_session_id);
@@ -1372,6 +1487,20 @@ async function featureRequest(
           actor,
           now,
         }),
+        ...mergeClosingStatements(
+          env,
+          repository,
+          {
+            id: String(current.id),
+            baseRef: String(current.base_ref),
+            title: String(current.title),
+            body: String(current.body),
+            mergedOid: oid,
+          },
+          commitMessages,
+          actor,
+          now
+        ),
       ]);
       const merged = await env.DB.prepare(
         `SELECT pull.*, users.identifier AS author${assignmentsSelect("forge_pull_requests", "pull")} FROM forge_pull_requests AS pull JOIN users ON users.id = pull.author_id WHERE pull.id = ?`

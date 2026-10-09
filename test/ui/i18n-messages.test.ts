@@ -34,6 +34,7 @@ const dynamicKeys: Record<string, readonly string[]> = {
     "checks_incomplete",
     "checks_required",
     "required_checks_missing",
+    "threads_unresolved",
     "protected_branch",
     "repository_readonly",
     "merge_method_disabled",

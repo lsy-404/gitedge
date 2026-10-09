@@ -16,6 +16,7 @@ function rule(
     requiredStatusChecks: [],
     requireLinearHistory: false,
     requireSignedCommits: false,
+    requireConversationResolution: false,
     createdAt: 1,
     updatedAt: 1,
     ...overrides,

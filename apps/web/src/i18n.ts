@@ -7,6 +7,7 @@ import github from "./i18n/github";
 import workspace from "./i18n/workspace";
 import codeMessages from "./i18n/code";
 import collaborationMessages from "./i18n/collaboration";
+import reviewThreadMessages from "./i18n/reviewThreads";
 import avatarMessages from "./i18n/avatar";
 import agentsMessages from "./i18n/agents";
 import repositoryControlsMessages from "./i18n/repositoryControls";
@@ -849,6 +850,7 @@ export const i18n = createI18n({
       ...workspace["zh-CN"],
       ...codeMessages["zh-CN"],
       ...collaborationMessages["zh-CN"],
+      ...reviewThreadMessages["zh-CN"],
       ...settingsMessages["zh-CN"],
       ...repositorySettingsMessages["zh-CN"],
       ...lifecycleMessages["zh-CN"],
@@ -868,6 +870,7 @@ export const i18n = createI18n({
       ...workspace.en,
       ...codeMessages.en,
       ...collaborationMessages.en,
+      ...reviewThreadMessages.en,
       ...settingsMessages.en,
       ...repositorySettingsMessages.en,
       ...lifecycleMessages.en,
