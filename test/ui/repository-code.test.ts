@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp, defineComponent, h, nextTick } from "vue";
 import RepositoryCode from "../../apps/web/src/components/RepositoryCode.vue";
 import { i18n } from "../../apps/web/src/i18n";
+import { api } from "../../apps/web/src/lib/api";
 import { router } from "../../apps/web/src/router";
 import { clearSession, setSession } from "../../apps/web/src/lib/session";
 import { fluentUi } from "../../apps/web/src/ui/fluent";
@@ -256,6 +257,49 @@ describe("repository Code view", () => {
       mounted.unmount();
     }
   );
+
+  it("offers a write-scoped quickstart token on an empty repository", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse([]))
+    );
+    i18n.global.locale.value = "en";
+    const create = vi.spyOn(api, "createAccessToken").mockResolvedValue({
+      id: "pat-2",
+      name: "example/sample",
+      prefix: "gep_12345678",
+      scopes: ["repo:write"],
+      repositories: null,
+      createdAt: 1,
+      expiresAt: Date.now() + 30 * 86_400_000,
+      lastUsedAt: null,
+      revokedAt: null,
+      token: `gep_${"d".repeat(64)}`,
+    });
+    const mounted = await mountCode("/example/sample", "code", {
+      viewerRole: "write",
+      canWrite: true,
+    });
+    const empty = mounted.root.querySelector(".empty-repository");
+    expect(empty?.textContent).toContain(
+      "git remote add origin http://localhost:3000/example/sample.git"
+    );
+    expect(empty?.textContent).toContain(
+      "git remote add gitedge http://localhost:3000/example/sample.git"
+    );
+    Array.from(empty?.querySelectorAll<HTMLElement>("button, fluent-button") ?? [])
+      .find((item) => item.textContent?.includes("Generate token"))
+      ?.click();
+    await settle();
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ scopes: ["repo:write"], expiresInDays: 30 })
+    );
+    expect(mounted.root.querySelector(".token-once code")?.textContent).toBe(
+      `gep_${"d".repeat(64)}`
+    );
+    mounted.unmount();
+  });
 
   it("keeps invalid ref failures visible when refs exist", async () => {
     const requests: string[] = [];
@@ -797,9 +841,21 @@ describe("repository Code view interactions", () => {
     target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
   }
 
-  it("offers read collaborators a read-only clone token", async () => {
+  it("generates a thirty-day repository-scoped token and shows it once", async () => {
     i18n.global.locale.value = "en";
     mockCodeApi();
+    const create = vi.spyOn(api, "createAccessToken").mockResolvedValue({
+      id: "pat-1",
+      name: "example/sample",
+      prefix: "gep_12345678",
+      scopes: ["repo:read"],
+      repositories: null,
+      createdAt: 1,
+      expiresAt: Date.now() + 30 * 86_400_000,
+      lastUsedAt: null,
+      revokedAt: null,
+      token: `gep_${"c".repeat(64)}`,
+    });
     const mounted = await mountCode("/example/sample", "code", {
       visibility: "private",
       viewerRole: "read",
@@ -809,13 +865,33 @@ describe("repository Code view interactions", () => {
     await settle();
 
     expect(mounted.root.querySelector("#clone-menu")).not.toBeNull();
-    expect(mounted.root.textContent).toContain("Token name");
-    const write = mounted.root.querySelector<HTMLOptionElement>('option[value="write"]');
-    expect(write?.disabled).toBe(true);
+    expect(mounted.root.textContent).toContain(
+      "git clone http://localhost:3000/example/sample.git"
+    );
+    expect(mounted.root.textContent).not.toContain("http.extraHeader");
+    expect(mounted.root.textContent).toContain("credential.helper osxkeychain");
+    expect(mounted.root.textContent).toContain("credential.helper manager");
+    expect(mounted.root.textContent).toContain("credential.helper libsecret");
+    button(mounted.root, "Generate token")?.click();
+    await settle();
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scopes: ["repo:read"],
+        expiresInDays: 30,
+        repositoryIds: [expect.any(String)],
+      })
+    );
+    expect(mounted.root.querySelector(".token-once code")?.textContent).toBe(
+      `gep_${"c".repeat(64)}`
+    );
+    button(mounted.root, "Close")?.click();
+    await settle();
+    expect(mounted.root.querySelector(".token-once")).toBeNull();
     mounted.unmount();
   });
 
-  it("hides clone token creation from viewers without a role", async () => {
+  it("hides token generation from viewers without a role", async () => {
     i18n.global.locale.value = "en";
     mockCodeApi();
     const mounted = await mountCode("/example/sample", "code");
@@ -823,7 +899,7 @@ describe("repository Code view interactions", () => {
     await settle();
 
     expect(mounted.root.querySelector("#clone-menu")).not.toBeNull();
-    expect(mounted.root.querySelector('option[value="write"]')).toBeNull();
+    expect(button(mounted.root, "Generate token")).toBeUndefined();
     mounted.unmount();
   });
 

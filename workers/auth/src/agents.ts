@@ -9,6 +9,8 @@ import {
   CreateAgentInputSchema,
   CreateAgentSessionInputSchema,
   RevokeAgentSessionsInputSchema,
+  accessTokenAllows,
+  accessTokenAllowsRepository,
   sha256Hex,
   type Agent,
   UpdateAgentInputSchema,
@@ -18,6 +20,7 @@ import {
 } from "../../../packages/contracts/src/index";
 import { createLogger, type Logger } from "../../../src/worker/common/logger";
 import { handleAgentWebhookManagement } from "./agent-webhooks";
+import { authenticateAccessToken, isAccessToken } from "./access-tokens";
 import { randomHex } from "../../../src/worker/common/encoding";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 
@@ -130,28 +133,84 @@ function trustedAgentSession(row: AgentSessionRow | null): TrustedUser | null {
   };
 }
 
+export interface GitCredentials {
+  username: string | null;
+  token: string;
+}
+
+/** Reads Bearer or HTTP Basic credentials; Basic permits an empty username because Git helpers vary. */
+export function parseGitAuthorization(header: string | null): GitCredentials | null {
+  const auth = header ?? "";
+  if (auth.startsWith("Bearer ")) return { username: null, token: auth.slice(7) };
+  if (!auth.startsWith("Basic ")) return null;
+  try {
+    const value = new TextDecoder().decode(
+      Uint8Array.from(atob(auth.slice(6)), (character) => character.charCodeAt(0))
+    );
+    const separator = value.indexOf(":");
+    if (separator < 0) return null;
+    return { username: value.slice(0, separator), token: value.slice(separator + 1) };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A valid credential that cannot reach a repository must not answer 401, because Git then erases
+ * the stored credential from its helper. Missing and inaccessible private repositories stay alike.
+ */
+export type GitAuthenticationResult =
+  | { outcome: "granted"; grant: GitAuthentication }
+  | { outcome: "invalid" }
+  | { outcome: "not_found"; privateRepository: boolean }
+  | { outcome: "insufficient_scope" };
+
+const INVALID_GIT_CREDENTIAL: GitAuthenticationResult = { outcome: "invalid" };
+
+async function authenticateAccessTokenForRepository(
+  env: AgentAuthEnv,
+  token: string,
+  owner: string,
+  slug: string
+): Promise<GitAuthenticationResult> {
+  const user = await authenticateAccessToken(env, token);
+  const identity = user?.token;
+  if (!user || !identity) return INVALID_GIT_CREDENTIAL;
+  const path = await resolveRepositoryPath(env.DB, owner, slug);
+  if (!path) return { outcome: "not_found", privateRepository: false };
+  const role = await repositoryRole(env.DB, path.id, user.id);
+  if (role === null && path.visibility !== "public")
+    return { outcome: "not_found", privateRepository: true };
+  if (!accessTokenAllows(identity, "repo:read") || !accessTokenAllowsRepository(identity, path.id))
+    return { outcome: "insufficient_scope" };
+  const write = accessTokenAllows(identity, "repo:write") && writableRole(role);
+  return {
+    outcome: "granted",
+    grant: { user, repositoryId: path.id, permission: write ? "write" : "read" },
+  };
+}
+
 export async function authenticateGitToken(
   request: Request,
   env: AgentAuthEnv
-): Promise<GitAuthentication | null> {
-  const auth = request.headers.get("Authorization") ?? "";
-  let token: string;
-  let username: string | null = null;
-  if (auth.startsWith("Bearer ")) token = auth.slice(7);
-  else if (auth.startsWith("Basic ")) {
-    try {
-      const value = atob(auth.slice(6));
-      const separator = value.indexOf(":");
-      if (separator < 1) return null;
-      username = value.slice(0, separator);
-      token = value.slice(separator + 1);
-    } catch {
-      return null;
-    }
-  } else return null;
+): Promise<GitAuthenticationResult> {
+  const credentials = parseGitAuthorization(request.headers.get("Authorization"));
+  if (!credentials) return INVALID_GIT_CREDENTIAL;
   const owner = new URL(request.url).searchParams.get("owner");
   const slug = new URL(request.url).searchParams.get("repo");
-  if (!owner || !slug) return null;
+  if (!owner || !slug) return INVALID_GIT_CREDENTIAL;
+  if (isAccessToken(credentials.token))
+    return authenticateAccessTokenForRepository(env, credentials.token, owner, slug);
+  const grant = await authenticateRepositoryCredential(env, credentials, owner, slug);
+  return grant ? { outcome: "granted", grant } : INVALID_GIT_CREDENTIAL;
+}
+
+async function authenticateRepositoryCredential(
+  env: AgentAuthEnv,
+  { username, token }: GitCredentials,
+  owner: string,
+  slug: string
+): Promise<GitAuthentication | null> {
   const path = await resolveRepositoryPath(env.DB, owner, slug);
   if (!path) return null;
   const agent = await authenticateAgentSession(env, token);

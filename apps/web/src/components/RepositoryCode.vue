@@ -19,9 +19,13 @@ import SelectField from "./SelectField.vue";
 import NoticeBar from "./NoticeBar.vue";
 import StatusBadge from "./StatusBadge.vue";
 import StatusState from "./StatusState.vue";
-import { oneOf } from "../ui/formEvents";
-import { clearOneTimeToken, isCredentialExpired } from "../lib/credentialSecurity";
-import { cloneCommand as gitCloneCommand, gatewayCloneUrl } from "../lib/gitClone";
+import {
+  cloneCommand as gitCloneCommand,
+  credentialHelperHints,
+  existingRepositoryCommands,
+  gatewayCloneUrl,
+  newRepositoryCommands,
+} from "../lib/gitClone";
 import { sessionState } from "../lib/session";
 import {
   agentSessionDisplayStatus,
@@ -31,7 +35,6 @@ import {
   repositoryCodeLocation,
   type GraphSessionMarker,
 } from "../lib/gitGraphView";
-import TextField from "./TextField.vue";
 import { highlightedCode } from "../lib/markdown";
 import MarkdownContent from "./MarkdownContent.vue";
 import DiffViewer from "./DiffViewer.vue";
@@ -79,22 +82,19 @@ const graphMaxLimit = 250;
 const graphLimit = ref(graphPageSize);
 const loadingMore = ref(false);
 const moreError = ref("");
-const token = ref<{ id: string; token: string; expiresAt: number } | null>(null);
-const tokenName = ref("");
+const token = ref<{ token: string; expiresAt: number } | null>(null);
 const cloneUrl = computed(() =>
   gatewayCloneUrl(window.location.origin, props.repository.owner, props.repository.name)
 );
-const cloneCommand = computed(() =>
-  gitCloneCommand(cloneUrl.value, props.repository.defaultBranch, token.value?.token)
+const cloneCommand = computed(() => gitCloneCommand(cloneUrl.value));
+const newRepositoryScript = computed(() =>
+  newRepositoryCommands(cloneUrl.value, props.repository.name, props.repository.defaultBranch)
 );
+const existingRepositoryScript = computed(() => existingRepositoryCommands(cloneUrl.value));
 const canCreateCloneToken = computed(
   () => sessionState.user !== null && props.repository.viewerRole !== null
 );
-const tokenScopes = ["read", "write"] as const;
-const tokenScope = ref<(typeof tokenScopes)[number]>("read");
 const tokenBusy = ref(false);
-const tokenExpired = ref(false);
-let tokenExpiryTimer: number | undefined;
 let tokenRequestVersion = 0;
 let clockTimer: number | undefined;
 const refName = computed(() => String(route.query.ref || props.repository.defaultBranch));
@@ -419,8 +419,8 @@ async function copyText(text: string) {
 function copyCloneUrl() {
   return copyText(cloneUrl.value);
 }
-function copyCloneCommand() {
-  return copyText(cloneCommand.value);
+function copyToken() {
+  return token.value ? copyText(token.value.token) : Promise.resolve();
 }
 function openFileSearch() {
   showFileSearch.value = true;
@@ -435,28 +435,16 @@ async function issueToken() {
   error.value = "";
   const repositoryId = props.repository.id;
   const requestVersion = ++tokenRequestVersion;
+  const writable = props.repository.canWrite && !props.repository.archived;
   try {
-    const issuedToken = await api.createCloneToken({
-      repositoryId,
-      name: tokenName.value.trim(),
-      permission: tokenScope.value,
-      ttlSeconds: 3600,
+    const created = await api.createAccessToken({
+      name: `${props.repository.owner}/${props.repository.name}`.slice(0, 80),
+      scopes: [writable ? "repo:write" : "repo:read"],
+      repositoryIds: [repositoryId],
+      expiresInDays: 30,
     });
     if (requestVersion !== tokenRequestVersion || repositoryId !== props.repository.id) return;
-    token.value = issuedToken;
-    tokenExpired.value = isCredentialExpired(issuedToken.expiresAt, Date.now());
-    if (tokenExpired.value) token.value = clearOneTimeToken(issuedToken);
-    clearTimeout(tokenExpiryTimer);
-    if (!tokenExpired.value) {
-      tokenExpiryTimer = window.setTimeout(
-        () => {
-          if (requestVersion !== tokenRequestVersion || !token.value) return;
-          token.value = clearOneTimeToken(token.value);
-          tokenExpired.value = true;
-        },
-        Math.max(0, issuedToken.expiresAt - Date.now())
-      );
-    }
+    token.value = { token: created.token, expiresAt: created.expiresAt };
   } catch (cause) {
     if (requestVersion === tokenRequestVersion) showError(cause);
   } finally {
@@ -467,9 +455,6 @@ function clearToken() {
   tokenRequestVersion += 1;
   tokenBusy.value = false;
   token.value = null;
-  tokenExpired.value = false;
-  clearTimeout(tokenExpiryTimer);
-  tokenExpiryTimer = undefined;
 }
 function sessionForkRefs(sessionId: string) {
   return graph.value?.refs.filter((item) => item.name.startsWith(`session/${sessionId}/`)) ?? [];
@@ -573,7 +558,6 @@ onUnmounted(() => {
   document.removeEventListener("keydown", dismissCodeMenu);
   document.removeEventListener("pointerdown", dismissCodeMenu);
   clearInterval(clockTimer);
-  clearTimeout(tokenExpiryTimer);
   clearTimeout(copiedTimer);
   tokenRequestVersion += 1;
 });
@@ -661,28 +645,29 @@ onUnmounted(() => {
                 ><AppIcon :name="copied ? 'check' : 'copy'"
               /></FluentButton>
             </div>
-            <code>{{ gitCloneCommand(cloneUrl, repository.defaultBranch) }}</code>
+            <code>{{ cloneCommand }}</code>
             <p class="muted">{{ t("cloneHelp") }}</p>
+            <details class="credential-helpers">
+              <summary>{{ t("patHelperTitle") }}</summary>
+              <dl>
+                <template v-for="hint in credentialHelperHints" :key="hint.id">
+                  <dt>{{ t(`patOs_${hint.id}`) }}</dt>
+                  <dd>
+                    <code>{{ hint.command }}</code>
+                    <span v-if="hint.plaintext" class="muted">{{
+                      t("patHelperStoreWarning")
+                    }}</span>
+                  </dd>
+                </template>
+              </dl>
+            </details>
             <template v-if="canCreateCloneToken">
-              <TextField v-model="tokenName" maxlength="80" required>{{
-                t("cloneTokenName")
-              }}</TextField>
-              <SelectField
-                :model-value="tokenScope"
-                :label="t('permission')"
-                @update:model-value="tokenScope = oneOf(tokenScopes, $event, 'read')"
-              >
-                <option value="read">{{ t("readToken") }}</option>
-                <option value="write" :disabled="!repository.canWrite || repository.archived">
-                  {{ t("writeToken") }}
-                </option>
-              </SelectField>
-              <FluentButton
-                type="button"
-                :disabled="tokenBusy || !tokenName.trim()"
-                @click="issueToken"
-                >{{ t("createCloneToken") }}</FluentButton
-              >
+              <FluentButton type="button" :disabled="tokenBusy" @click="issueToken">{{
+                t("patGenerate")
+              }}</FluentButton>
+              <RouterLink class="muted" to="/settings/account?section=tokens">{{
+                t("patManage")
+              }}</RouterLink>
             </template>
           </div>
         </div>
@@ -692,17 +677,16 @@ onUnmounted(() => {
       copied ? t("copied") : ""
     }}</span>
     <p v-if="copyFailed" class="muted" role="alert">{{ t("copyFailed") }}</p>
-    <div v-if="token" class="token-once box box-form">
+    <div v-if="token" class="token-once box box-form" role="status">
       <div>
-        <strong>{{ t(tokenExpired ? "tokenExpired" : "tokenShownOnce") }}</strong>
+        <strong>{{ t("tokenShownOnce") }}</strong>
         <p>{{ t("tokenExpiry", { date: d(token.expiresAt, "long") }) }}</p>
       </div>
-      <code v-if="!tokenExpired">{{ token.token }}</code>
-      <code>{{ cloneUrl }}</code>
-      <code v-if="!tokenExpired">{{ cloneCommand }}</code>
+      <code>{{ token.token }}</code>
+      <p>{{ t("patPasteHint") }}</p>
       <div class="form-actions">
-        <FluentButton v-if="!tokenExpired" type="button" @click="copyCloneCommand">
-          {{ t("copyCloneCommand") }}
+        <FluentButton type="button" @click="copyToken">
+          {{ copied ? t("copied") : t("patCopyToken") }}
         </FluentButton>
         <FluentButton type="button" @click="clearToken">{{ t("close") }}</FluentButton>
       </div>
@@ -713,20 +697,26 @@ onUnmounted(() => {
     <div v-else-if="emptyRepository" class="empty-repository box">
       <h2>{{ t("emptyRepositoryTitle") }}</h2>
       <p>{{ t("emptyRepositoryText") }}</p>
-      <pre
-        class="command-block"
-        tabindex="0"
-      ><code>mkdir {{ repository.name }} &amp;&amp; cd {{ repository.name }}
-git init
-echo "# {{ repository.name }}" &gt; README.md
-git add README.md &amp;&amp; git commit -m "first commit"
-git branch -M {{ repository.defaultBranch }}
-git remote add origin {{ cloneUrl }}
-git push -u origin {{ repository.defaultBranch }}</code></pre>
+      <div class="quickstart-actions">
+        <FluentButton
+          v-if="canCreateCloneToken && repository.canWrite && !repository.archived"
+          type="button"
+          tone="primary"
+          :disabled="tokenBusy"
+          @click="issueToken"
+          >{{ t("patGenerate") }}</FluentButton
+        >
+        <span class="muted">{{ t("patQuickstartHint") }}</span>
+      </div>
+      <pre class="command-block" tabindex="0"><code>{{ newRepositoryScript }}</code></pre>
+      <FluentButton type="button" tone="subtle" @click="copyText(newRepositoryScript)"
+        ><AppIcon name="copy" />{{ t("copy") }}</FluentButton
+      >
       <h3>{{ t("pushExistingRepository") }}</h3>
-      <pre class="command-block" tabindex="0"><code>git remote add gitedge {{ cloneUrl }}
-git push gitedge --all
-git push gitedge --tags</code></pre>
+      <pre class="command-block" tabindex="0"><code>{{ existingRepositoryScript }}</code></pre>
+      <FluentButton type="button" tone="subtle" @click="copyText(existingRepositoryScript)"
+        ><AppIcon name="copy" />{{ t("copy") }}</FluentButton
+      >
       <FluentButton v-if="canManageCode" type="button" tone="primary" @click="openNewFile"
         ><AppIcon name="plus" />{{ t("codeNewFile") }}</FluentButton
       >

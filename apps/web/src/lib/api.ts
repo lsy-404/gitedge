@@ -2,6 +2,11 @@ import type {
   AccountProfile,
   AccountPreferences,
 } from "../../../../packages/contracts/src/account";
+import type {
+  AccessToken,
+  CreateAccessTokenInput,
+  CreatedAccessToken,
+} from "../../../../packages/contracts/src/access-tokens";
 import type { GitCredential, BrowserSession } from "../../../../packages/contracts/src/credentials";
 import type {
   SigningKey,
@@ -465,6 +470,16 @@ export const api = {
     request<AccountProfile>("/api/auth/profile", {
       method: "PATCH",
       body: JSON.stringify(payload),
+    }),
+  accessTokens: () => request<AccessToken[]>("/api/auth/access-tokens"),
+  createAccessToken: (payload: CreateAccessTokenInput) =>
+    request<CreatedAccessToken>("/api/auth/access-tokens", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  revokeAccessToken: (id: string) =>
+    request<{ revoked: boolean }>(`/api/auth/access-tokens/${encodeURIComponent(id)}`, {
+      method: "DELETE",
     }),
   gitCredentials: () => request<GitCredential[]>("/api/auth/tokens"),
   revokeGitCredential: (id: string) =>

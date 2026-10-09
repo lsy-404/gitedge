@@ -50,6 +50,8 @@ const dynamicKeys: Record<string, readonly string[]> = {
     "timed_out",
     "import_failed",
   ],
+  patOs_: ["osxkeychain", "manager", "libsecret", "store"],
+  patScope_: ["repo_read", "repo_write", "issues_write", "pulls_write", "org_read", "admin"],
 };
 
 function flatten(value: unknown, prefix = ""): Record<string, string> {

@@ -6,6 +6,7 @@ import {
 } from "../../../packages/contracts/src/index";
 import { readTextLimited } from "../../../src/worker/common/readText";
 import {
+  AccessTokenIdentitySchema,
   AgentSessionIdentitySchema,
   TRUSTED_USER_HEADERS,
   REPOSITORY_ACCESS_DENIED_HEADER,
@@ -72,7 +73,8 @@ function isSessionPayload(value: unknown): value is AuthSessionPayload {
       typeof value.data.groupKey === "string" &&
       value.data.groupKey.length > 0 &&
       (!("agentSession" in value.data) ||
-        AgentSessionIdentitySchema.safeParse(value.data.agentSession).success))
+        AgentSessionIdentitySchema.safeParse(value.data.agentSession).success) &&
+      (!("token" in value.data) || AccessTokenIdentitySchema.safeParse(value.data.token).success))
   );
 }
 
@@ -103,6 +105,13 @@ export function withSecurityHeaders(response: Response, pathname: string): Respo
     status: response.status,
     statusText: response.statusText,
     headers,
+  });
+}
+
+function gitAuthChallenge(message = "Authentication required.\n"): Response {
+  return new Response(message, {
+    status: 401,
+    headers: { "WWW-Authenticate": 'Basic realm="GitEdge"', "Cache-Control": "no-store" },
   });
 }
 
@@ -172,6 +181,7 @@ async function readSession(response: Response): Promise<SessionResult | Response
     identifier: payload.data.identifier,
     groupKey: payload.data.groupKey,
     agentSession: payload.data.agentSession,
+    token: payload.data.token,
   };
 }
 
@@ -439,6 +449,11 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
       );
     }
     if (!session.authenticated) {
+      if (request.headers.has("Authorization"))
+        return Response.json(
+          { error: { code: "unauthorized", message: "Invalid or expired access token." } },
+          { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="GitEdge"' } }
+        );
       if ((request.method === "GET" || request.method === "HEAD") && prefix !== "/api/deploy") {
         return presentRepositoryResponse(
           await service.fetch(forwardAuthenticated(request, prefix)),
@@ -487,11 +502,17 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
       const authHeaders = new Headers();
       authHeaders.set("Authorization", request.headers.get("Authorization") ?? "");
       const response = await env.AUTH.fetch(new Request(authUrl, { headers: authHeaders }));
-      if (!response.ok)
-        return new Response("Git authentication failed.\n", {
-          status: 401,
-          headers: { "WWW-Authenticate": 'Basic realm="GitEdge"', "Cache-Control": "no-store" },
-        });
+      if (response.status === 401) {
+        await response.body?.cancel();
+        return gitAuthChallenge("Git authentication failed.\n");
+      }
+      // A valid credential without access must not be challenged, or Git erases it from its helper.
+      if (response.status === 403 || response.status === 404)
+        return presentRepositoryResponse(response, env);
+      if (!response.ok) {
+        await response.body?.cancel();
+        return Response.json({ error: "Authentication service unavailable" }, { status: 502 });
+      }
       const payload: unknown = await response.json();
       if (
         !payload ||
@@ -521,8 +542,15 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
       const userLimit = await enforceUserLimit({ authenticated: true, ...userPayload.data }, env);
       if (userLimit) return userLimit;
     }
+    const anonymous = !request.headers.has("Authorization");
     headers.delete("Authorization");
-    return presentRepositoryResponse(await env.GIT.fetch(new Request(request, { headers })), env);
+    const gitResponse = await env.GIT.fetch(new Request(request, { headers }));
+    // Git only prompts for credentials on 401, so anonymous misses challenge uniformly and hide private repositories.
+    if (anonymous && (gitResponse.status === 404 || gitResponse.status === 401)) {
+      await gitResponse.body?.cancel();
+      return gitAuthChallenge();
+    }
+    return presentRepositoryResponse(gitResponse, env);
   }
 
   if (request.method === "GET" || request.method === "HEAD") {

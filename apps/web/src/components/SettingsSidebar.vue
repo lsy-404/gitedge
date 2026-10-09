@@ -8,6 +8,7 @@ const { t } = useI18n();
 const items = [
   { key: "profile", label: "settingsProfile", icon: "person" },
   { key: "preferences", label: "settingsPreferences", icon: "gear" },
+  { key: "tokens", label: "patSettings", icon: "lock" },
   { key: "credentials", label: "settingsCredentials", icon: "lock" },
   { key: "signing", label: "settingsSigning", icon: "checkCircle" },
   { key: "sessions", label: "settingsSessions", icon: "clock" },

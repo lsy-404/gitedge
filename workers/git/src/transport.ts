@@ -5,6 +5,7 @@ import { resolveRepositoryPath } from "../../../src/worker/common/repositories";
 import { branchRules, matchingBranchRules } from "../../../src/worker/common/branch-protection";
 import { readReceiveCommands, InvalidReceiveCommands } from "./receive-commands";
 import { z } from "zod";
+import { accessTokenAllows } from "../../../packages/contracts/src/access-tokens";
 import { resolveGitAccess, type GitEnv } from "./access";
 import { errorResponse } from "../../../src/worker/common/http";
 import { createLogger } from "../../../src/worker/common/logger";
@@ -55,12 +56,19 @@ export async function proxyGitTransport(
       !grant?.success ||
       grant.data.repositoryId !== repository.id ||
       grant.data.permission !== "write" ||
-      access.user?.agentSession?.permission === "read")
+      access.user?.agentSession?.permission === "read" ||
+      (access.user?.token && !accessTokenAllows(access.user.token, "repo:write")))
   )
-    return new Response("Git push requires a repository write credential.\n", {
-      status: 401,
-      headers: { "WWW-Authenticate": 'Basic realm="GitEdge"', "Cache-Control": "no-store" },
-    });
+    // Authenticated callers get 403 so Git keeps their read credential in its helper.
+    return access.user
+      ? new Response("Git push requires a repository write credential.\n", {
+          status: 403,
+          headers: { "Cache-Control": "no-store" },
+        })
+      : new Response("Git push requires a repository write credential.\n", {
+          status: 401,
+          headers: { "WWW-Authenticate": 'Basic realm="GitEdge"', "Cache-Control": "no-store" },
+        });
   let upstreamBody = request.body;
   let updates: RefUpdate[] = [];
   if (match[3] === "git-receive-pack") {

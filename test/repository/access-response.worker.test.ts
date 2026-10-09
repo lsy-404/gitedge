@@ -91,6 +91,13 @@ const missingPaths = [
   "/owner/missing.git/info/refs?service=git-upload-pack",
 ];
 
+function expectGitChallenge(response: Response): void {
+  expect(response.status).toBe(401);
+  expect(response.headers.get("WWW-Authenticate")).toBe('Basic realm="GitEdge"');
+  expect(response.headers.has(REPOSITORY_ACCESS_DENIED_HEADER)).toBe(false);
+  expect(response.headers.get("Cache-Control")).toBe("no-store");
+}
+
 describe("Server repository denial policy", () => {
   for (const viewer of ["anonymous", "guest", "outsider"] satisfies Viewer[]) {
     it.each([undefined, "not_found", "invalid", "forbidden"])(
@@ -102,6 +109,10 @@ describe("Server repository denial policy", () => {
             new Request("https://forge.test" + path),
             bindings
           );
+          if (path.includes(".git/")) {
+            expectGitChallenge(response);
+            continue;
+          }
           expect(response.status, path).toBe(policy === "forbidden" ? 403 : 404);
           expect(response.headers.has(REPOSITORY_ACCESS_DENIED_HEADER)).toBe(false);
           expect(response.headers.get("Location")).toBeNull();
@@ -118,6 +129,10 @@ describe("Server repository denial policy", () => {
             new Request("https://forge.test" + path),
             bindings
           );
+          if (path.includes(".git/")) {
+            expectGitChallenge(response);
+            continue;
+          }
           expect(response.status).toBe(404);
           expect(response.headers.has(REPOSITORY_ACCESS_DENIED_HEADER)).toBe(false);
           expect(response.headers.get("Cache-Control")).toBe("no-store");

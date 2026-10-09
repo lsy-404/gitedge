@@ -10,7 +10,7 @@ export const codeMessages = {
     compareNoDifferences: "两个分支内容相同，没有可比较的差异。",
     codeMenu: "代码",
     cloneWithHttps: "使用 HTTPS 克隆",
-    cloneHelp: "复制地址以克隆此仓库。需要身份验证时，请签发短期令牌。",
+    cloneHelp: "Git 询问用户名与密码时，用户名任意填写，密码填写个人访问令牌。",
     emptyRepositoryTitle: "此仓库还没有文件",
     emptyRepositoryText: "从命令行创建第一个提交并推送到此仓库。",
     about: "关于",
@@ -75,7 +75,7 @@ export const codeMessages = {
     codeMenu: "Code",
     cloneWithHttps: "Clone with HTTPS",
     cloneHelp:
-      "Copy this URL to clone the repository. Issue a short-lived token when authentication is required.",
+      "When Git asks for a username and password, use any username and a personal access token.",
     emptyRepositoryTitle: "This repository has no files yet",
     emptyRepositoryText: "Create your first commit from the command line and push it here.",
     about: "About",

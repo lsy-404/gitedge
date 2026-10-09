@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { h } from "vue";
 import AccountProfilePanel from "../../apps/web/src/components/AccountProfilePanel.vue";
+import AccessTokenSettings from "../../apps/web/src/components/AccessTokenSettings.vue";
 import CredentialSettings from "../../apps/web/src/components/CredentialSettings.vue";
 import BrowserSessions from "../../apps/web/src/components/BrowserSessions.vue";
 import { api } from "../../apps/web/src/lib/api";
@@ -122,6 +123,78 @@ describe("Account settings using Platform Kit", () => {
     findButton(mounted.root, "Saved, hide token").click();
     await settle();
     expect(mounted.root.querySelector("input[readonly]")).toBeNull();
+  });
+  it("creates a personal access token, shows it once and lists revocable tokens", async () => {
+    const existing = {
+      id: "pat-old",
+      name: "Laptop",
+      prefix: "gep_deadbeef",
+      scopes: ["repo:write" as const],
+      repositories: [{ id: "repo-1", owner: "workspace", slug: "app" }],
+      createdAt: 1,
+      expiresAt: Date.now() + 86_400_000,
+      lastUsedAt: null,
+      revokedAt: null,
+    };
+    vi.spyOn(api, "repositories").mockResolvedValue([repository]);
+    const list = vi.spyOn(api, "accessTokens").mockResolvedValue([existing]);
+    const create = vi.spyOn(api, "createAccessToken").mockResolvedValue({
+      ...existing,
+      id: "pat-new",
+      name: "CI",
+      scopes: ["repo:read"],
+      repositories: null,
+      token: `gep_${"e".repeat(64)}`,
+    });
+    const revoke = vi.spyOn(api, "revokeAccessToken").mockResolvedValue({ revoked: true });
+    const mounted = await mountAt("/_verify/account/tokens", "/_verify/account/tokens", () =>
+      h(AccessTokenSettings)
+    );
+    expect(mounted.root.textContent).toContain("Laptop");
+    expect(mounted.root.textContent).toContain("gep_deadbeef");
+    expect(mounted.root.textContent).toContain("workspace/app");
+    expect(mounted.root.textContent).toContain("Never used");
+
+    fill(control(mounted.root, "input"), "CI");
+    await settle();
+    submit(control(mounted.root, "form"));
+    await settle();
+    expect(create).toHaveBeenCalledWith({
+      name: "CI",
+      scopes: ["repo:read"],
+      expiresInDays: 30,
+    });
+    expect(mounted.root.querySelector<HTMLInputElement>("input[readonly]")?.value).toBe(
+      `gep_${"e".repeat(64)}`
+    );
+    findButton(mounted.root, "Saved, hide token").click();
+    await settle();
+    expect(mounted.root.querySelector("input[readonly]")).toBeNull();
+
+    await confirmClick(findButton(mounted.root, "Revoke"));
+    expect(revoke).toHaveBeenCalledWith("pat-old");
+    expect(list.mock.calls.length).toBeGreaterThan(1);
+  });
+  it("still lists access tokens when the repository picker cannot load", async () => {
+    vi.spyOn(api, "repositories").mockRejectedValue(new Error("Repository listing failed"));
+    vi.spyOn(api, "accessTokens").mockResolvedValue([
+      {
+        id: "pat-kept",
+        name: "Deploy key",
+        prefix: "gep_cafebabe",
+        scopes: ["repo:read"],
+        repositories: null,
+        createdAt: 1,
+        expiresAt: Date.now() + 86_400_000,
+        lastUsedAt: null,
+        revokedAt: null,
+      },
+    ]);
+    const mounted = await mountAt("/_verify/account/tokens", "/_verify/account/tokens", () =>
+      h(AccessTokenSettings)
+    );
+    expect(mounted.root.textContent).toContain("Request failed");
+    expect(mounted.root.textContent).toContain("Deploy key");
   });
   it("revokes the current browser session and clears local identity", async () => {
     vi.spyOn(api, "browserSessions").mockResolvedValue([

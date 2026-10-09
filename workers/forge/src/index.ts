@@ -20,6 +20,9 @@ import {
   repositoryLifecycle,
 } from "./lifecycle";
 import {
+  accessTokenAllowsRepository,
+  accessTokenPermits,
+  requiredAccessTokenScope,
   AddOrganizationMemberInputSchema,
   CreateOrganizationInputSchema,
   CreateIssueInputSchema,
@@ -189,6 +192,8 @@ async function authorizeRepository(
 ): Promise<Response | null> {
   if (user.agentSession && user.agentSession.repositoryId !== repository.id)
     return errorResponse(403, "forbidden", "Agent session is limited to another repository.");
+  if (user.token && !accessTokenAllowsRepository(user.token, repository.id))
+    return errorResponse(403, "forbidden", "Access token is limited to other repositories.");
   if (options.write && !canWriteSession(user, repository.id))
     return errorResponse(403, "forbidden", "Read-only agent session cannot write.");
   const member = await isMember(env, repository.id, user.id);
@@ -1619,6 +1624,21 @@ export default {
     }
     const sessionError = await activeAgentSession(env, user);
     if (sessionError) return sessionError;
+    if (user.token) {
+      if (!accessTokenPermits(user.token, "forge", request.method, parts))
+        return errorResponse(
+          403,
+          "insufficient_scope",
+          `Access token requires the ${requiredAccessTokenScope("forge", request.method, parts)} scope.`
+        );
+      if (
+        user.token.repositoryIds &&
+        (parts[0] !== "repositories" ||
+          !parts[1] ||
+          (parts[1] !== "by-name" && !user.token.repositoryIds.includes(parts[1])))
+      )
+        return errorResponse(403, "forbidden", "Access token is limited to its repositories.");
+    }
     if (
       user.agentSession &&
       (parts[0] !== "repositories" ||
@@ -1953,6 +1973,8 @@ export default {
       const named = path ? await repositoryById(env, path.id) : null;
       if (!named) return repositoryNotFound();
       if (user.agentSession && named.id !== user.agentSession.repositoryId)
+        return repositoryNotFound();
+      if (user.token && !accessTokenAllowsRepository(user.token, named.id))
         return repositoryNotFound();
       const role = await repositoryRole(env.DB, named.id, user.id);
       if (named.visibility === "private" && role === null) return repositoryAccessDenied();

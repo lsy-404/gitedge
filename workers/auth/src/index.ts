@@ -28,9 +28,18 @@ import {
   handleAgentProfile,
 } from "./agents";
 import { dataResponse, errorResponse, jsonResponse } from "../../../src/worker/common/http";
+import {
+  repositoryAccessDenied,
+  repositoryNotFound,
+} from "../../../src/worker/common/repository-response";
 import { base64ToBytes, bytesToBase64 } from "../../../src/worker/common/encoding";
 import { readJsonLimited, SMALL_JSON_BYTES } from "../../../src/worker/common/readText";
 import { handleAccountProfile, handleWebSessions } from "./profile";
+import {
+  authenticateAccessToken,
+  handleAccessTokenManagement,
+  isAccessToken,
+} from "./access-tokens";
 import { drainAgentEventOutbox, handleAgentEvent } from "./agent-webhooks";
 
 export type AuthEnv = {
@@ -666,10 +675,17 @@ export default {
       return handleSigningKeys(request, env, active.data);
     }
     if (request.method === "GET" && path === "/git-session") {
-      const authenticated = await authenticateGitToken(request, env);
-      return authenticated
-        ? dataResponse(authenticated)
-        : errorResponse(401, "unauthorized", "Invalid Git credential.");
+      const result = await authenticateGitToken(request, env);
+      if (result.outcome === "granted") return dataResponse(result.grant);
+      if (result.outcome === "not_found")
+        return result.privateRepository ? repositoryAccessDenied() : repositoryNotFound();
+      if (result.outcome === "insufficient_scope")
+        return errorResponse(
+          403,
+          "insufficient_scope",
+          "Access token does not grant access to this repository."
+        );
+      return errorResponse(401, "unauthorized", "Invalid Git credential.");
     }
     if (request.method === "GET" && path === "/github/start") return startGithubOAuth(request, env);
     if (request.method === "GET" && path === "/github/callback")
@@ -768,12 +784,16 @@ export default {
       if (browserView) return jsonResponse({ data: null, view: "guest" });
       const authorization = request.headers.get("Authorization");
       if (authorization) {
-        const user = authorization.startsWith("Bearer ")
-          ? await authenticateAgentSession(env, authorization.slice(7))
-          : null;
+        const bearer = authorization.startsWith("Bearer ") ? authorization.slice(7) : null;
+        const user =
+          bearer === null
+            ? null
+            : isAccessToken(bearer)
+              ? await authenticateAccessToken(env, bearer)
+              : await authenticateAgentSession(env, bearer);
         return user
           ? dataResponse(user)
-          : errorResponse(401, "unauthorized", "Invalid agent session.");
+          : errorResponse(401, "unauthorized", "Invalid access token or agent session.");
       }
       const result = await getHumanSession();
       if (!result.ok) return errorResponse(result.status, result.error.code, result.error.message);
@@ -803,6 +823,11 @@ export default {
       if (webSessions) return webSessions;
       const result = await handleAgentManagement(request, env, active.data);
       if (result) return result;
+    }
+    if (path === "/access-tokens" || path.startsWith("/access-tokens/")) {
+      const active = await getHumanSession();
+      if (!active.ok) return errorResponse(active.status, active.error.code, active.error.message);
+      return handleAccessTokenManagement(request, env, active.data);
     }
     if (path === "/profile") {
       const authorization = request.headers.get("Authorization");

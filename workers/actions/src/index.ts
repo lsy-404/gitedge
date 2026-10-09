@@ -1,6 +1,8 @@
 import { readJsonLimited } from "../../../src/worker/common/readText";
 import {
   GitOidSchema,
+  accessTokenAllows,
+  accessTokenAllowsRepository,
   trustedHeaders,
   readTrustedUser,
   type TrustedUser,
@@ -99,6 +101,12 @@ async function canReadRepository(
   repo: RepositoryRow,
   user: TrustedUser | null
 ): Promise<boolean> {
+  if (
+    user?.token &&
+    (!accessTokenAllowsRepository(user.token, repo.id) ||
+      !accessTokenAllows(user.token, "repo:read"))
+  )
+    return false;
   if (repo.visibility === "public") {
     if (!user?.agentSession) return true;
   }
@@ -113,6 +121,12 @@ async function canWriteRepository(
   repo: RepositoryRow,
   user: TrustedUser
 ): Promise<boolean> {
+  if (
+    user.token &&
+    (!accessTokenAllowsRepository(user.token, repo.id) ||
+      !accessTokenAllows(user.token, "repo:write"))
+  )
+    return false;
   if (!(await activeSession(env, user, repo.id))) return false;
   const role = await repositoryRole(env.DB, repo.id, user.id);
   if (user.agentSession) return user.agentSession.permission === "write" && writableRole(role);
