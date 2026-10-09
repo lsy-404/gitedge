@@ -23,6 +23,7 @@ const loading = ref(true);
 const loadingMore = ref(false);
 const error = ref("");
 const actionError = ref("");
+const notice = ref("");
 const busyId = ref("");
 let version = 0;
 
@@ -69,6 +70,7 @@ async function mutate(user: AdminUser, work: () => Promise<unknown>): Promise<vo
   if (busyId.value) return;
   busyId.value = user.id;
   actionError.value = "";
+  notice.value = "";
   try {
     await work();
     const page = await api.adminUsers({ q: user.identifier });
@@ -83,7 +85,11 @@ async function mutate(user: AdminUser, work: () => Promise<unknown>): Promise<vo
 }
 
 const setDisabled = (user: AdminUser, disabled: boolean) =>
-  mutate(user, () => api.setAdminUserDisabled(user.id, disabled));
+  mutate(user, async () => {
+    const result = await api.setAdminUserDisabled(user.id, disabled);
+    if (result.revocationIncomplete) notice.value = t("adminRevocationIncomplete");
+  });
+const administrator = (user: AdminUser) => user.siteAdmin || user.configuredAdmin;
 const setGroup = (user: AdminUser, groupKey: string) =>
   groupKey !== user.groupKey && mutate(user, () => api.updateAdminUser(user.id, { groupKey }));
 const setSiteAdmin = (user: AdminUser, siteAdmin: boolean) =>
@@ -107,6 +113,9 @@ onMounted(load);
     <div v-if="actionError" class="box-form">
       <NoticeBar intent="error">{{ actionError }}</NoticeBar>
     </div>
+    <div v-if="notice" class="box-form">
+      <NoticeBar intent="warning">{{ notice }}</NoticeBar>
+    </div>
     <StatusState v-if="loading || error" :loading="loading" :error="error" @retry="load" />
     <template v-else>
       <p v-if="!users.length" class="settings-empty">{{ t("adminNoUsers") }}</p>
@@ -121,7 +130,7 @@ onMounted(load);
               <StatusBadge v-else-if="user.disabledAt" tone="danger">{{
                 t("adminDisabled")
               }}</StatusBadge>
-              <StatusBadge v-if="user.siteAdmin || user.configuredAdmin" tone="brand">{{
+              <StatusBadge v-if="administrator(user)" tone="brand">{{
                 t("adminSiteAdmin")
               }}</StatusBadge>
             </div>
@@ -151,7 +160,7 @@ onMounted(load);
               @confirm="setSiteAdmin(user, !user.siteAdmin)"
             />
             <ConfirmButton
-              v-if="user.id !== self"
+              v-if="user.id !== self && (user.disabledAt || !administrator(user))"
               size="small"
               :tone="user.disabledAt ? 'secondary' : 'danger'"
               :label="user.disabledAt ? t('adminEnable') : t('adminDisable')"

@@ -11,6 +11,7 @@ import {
   type CreatedAccessToken,
 } from "../../packages/contracts/src/index";
 import {
+  artifacts,
   authCall,
   createPerson,
   createRepository,
@@ -161,6 +162,20 @@ describe("site administrator access", () => {
     expect((await authCall(root, `/admin/users/${target.id}/disable`, "POST")).status).toBe(404);
     expect((await authCall(root, `/admin/users/${target.id}/enable`, "POST")).status).toBe(200);
   });
+
+  it("refuses to disable site administrators until their administrator access is removed", async () => {
+    const otherRoot = await createPerson("other-root");
+    expect((await authCall(root, `/admin/users/${otherRoot.id}/disable`, "POST")).status).toBe(409);
+    expect((await authCall(root, `/admin/users/${flagged.id}/disable`, "POST")).status).toBe(409);
+    expect((await authCall(flagged, `/admin/users/${root.id}/disable`, "POST")).status).toBe(409);
+    expect((await authCall(flagged, "/admin/stats")).status).toBe(200);
+    expect(
+      (await authCall(root, `/admin/users/${flagged.id}`, "PATCH", { siteAdmin: false })).status
+    ).toBe(200);
+    expect((await authCall(root, `/admin/users/${flagged.id}/disable`, "POST")).status).toBe(200);
+    expect((await authCall(flagged, "/admin/stats")).status).toBe(401);
+    expect((await authCall(root, `/admin/users/${flagged.id}/enable`, "POST")).status).toBe(200);
+  });
 });
 
 describe("disabled accounts", () => {
@@ -176,13 +191,21 @@ describe("disabled accounts", () => {
     );
     const agentToken = `ge_session_${"1".repeat(64)}`;
     const gitToken = `ge_token_${"2".repeat(64)}`;
+    await artifacts.create("fork-victim");
+    const forkCredential = await (await artifacts.get("fork-victim")).createToken("write", 3600);
     await env.DB.batch([
       env.DB.prepare(
         "INSERT INTO auth_agents(id,user_id,name,description,created_at) VALUES('victim-agent',?,'bot','',1)"
       ).bind(victim.id),
       env.DB.prepare(
-        "INSERT INTO auth_agent_sessions(id,agent_id,user_id,repository_id,token_hash,git_token_id,workspace_name,remote,base_ref,permission,status,created_at,expires_at) VALUES('victim-session','victim-agent',?,?,?,'t','fork-victim','https://r.test','main','write','active',1,?)"
-      ).bind(victim.id, repositoryId, await sha256Hex(agentToken), Date.now() + 600_000),
+        "INSERT INTO auth_agent_sessions(id,agent_id,user_id,repository_id,token_hash,git_token_id,workspace_name,remote,base_ref,permission,status,created_at,expires_at) VALUES('victim-session','victim-agent',?,?,?,?,'fork-victim','https://r.test','main','write','active',1,?)"
+      ).bind(
+        victim.id,
+        repositoryId,
+        await sha256Hex(agentToken),
+        forkCredential.id,
+        Date.now() + 600_000
+      ),
       env.DB.prepare(
         "INSERT INTO auth_git_tokens(id,user_id,repository_id,name,token_hash,permission,expires_at,created_at) VALUES('victim-git',?,?,'laptop',?,'write',?,1)"
       ).bind(victim.id, repositoryId, await sha256Hex(gitToken), Date.now() + 600_000),
@@ -199,7 +222,14 @@ describe("disabled accounts", () => {
     expect((await gitSession(pat.token)).status).toBe(200);
     expect((await gitSession(agentToken)).status).toBe(200);
 
-    expect((await authCall(root, `/admin/users/${victim.id}/disable`, "POST")).status).toBe(200);
+    const disabled = await authCall(root, `/admin/users/${victim.id}/disable`, "POST");
+    expect(disabled.status).toBe(200);
+    expect(await data(disabled)).toMatchObject({ disabled: true, revocationIncomplete: false });
+    // Agent session forks hold direct Artifacts credentials, so disabling revokes them.
+    expect(
+      artifacts.snapshot("fork-victim").tokens.find((token) => token.id === forkCredential.id)
+        ?.state
+    ).toBe("revoked");
 
     expect((await authCall(victim, "/session")).status).toBe(401);
     expect((await authCall(victim, "/browser-session")).status).toBe(200);
@@ -228,7 +258,7 @@ describe("disabled accounts", () => {
     const again = await authCall(null, "/login", "POST", { identifier: "victim", password });
     expect(again.status).toBe(200);
     expect((await bearer("/session", pat.token)).status).toBe(200);
-    expect((await bearer("/session", agentToken)).status).toBe(200);
+    expect((await bearer("/session", agentToken)).status).toBe(401);
     expect((await gitSession(gitToken)).status).toBe(200);
 
     const cookie = again.headers.get("Set-Cookie")?.match(/gitedge_session=[^;]+/)?.[0] ?? "";

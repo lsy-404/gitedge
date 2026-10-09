@@ -6,6 +6,7 @@ import {
   type CreatedAccessToken,
 } from "../../packages/contracts/src/index";
 import {
+  artifacts,
   authCall,
   createPerson,
   createRepository,
@@ -274,5 +275,54 @@ describe("account deletion", () => {
       .bind(leaving.id)
       .first();
     expect(event).not.toBeNull();
+  });
+
+  it("revokes other people's agent sessions on its repositories and closes what it alone owns", async () => {
+    const owner = await createPerson("delete-owner");
+    const helper = await createPerson("delete-helper");
+    const live = await createRepository(owner, "live", "public");
+    const pending = await createRepository(owner, "pending", "public");
+    await env.DB.prepare(
+      "UPDATE repositories SET deleted_at = ?1, deleted_by = ?2, deleted_slug = slug, slug = 'deleted~' || id, purge_after = ?3 WHERE id = ?4"
+    )
+      .bind(Date.now(), owner.id, Date.now() + 86_400_000, pending)
+      .run();
+    await forgeCall(owner, "/organizations", "POST", { slug: "delete-empty", displayName: "E" });
+    await artifacts.create("fork-delete-helper");
+    const credential = await (await artifacts.get("fork-delete-helper")).createToken("write", 3600);
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO auth_agents(id,user_id,name,description,created_at) VALUES('helper-agent',?,'bot','',1)"
+      ).bind(helper.id),
+      env.DB.prepare(
+        "INSERT INTO auth_agent_sessions(id,agent_id,user_id,repository_id,token_hash,git_token_id,workspace_name,remote,base_ref,permission,status,created_at,expires_at) VALUES('helper-session','helper-agent',?,?,?,?,'fork-delete-helper','https://r.test','main','read','active',1,?)"
+      ).bind(
+        helper.id,
+        live,
+        await sha256Hex("helper-agent-token"),
+        credential.id,
+        Date.now() + 600_000
+      ),
+    ]);
+
+    expect(
+      (await authCall(owner, "/account/delete", "POST", { confirm: "delete-owner" })).status
+    ).toBe(204);
+    expect(
+      artifacts.snapshot("fork-delete-helper").tokens.find((token) => token.id === credential.id)
+        ?.state
+    ).toBe("revoked");
+    const session = await env.DB.prepare(
+      "SELECT status FROM auth_agent_sessions WHERE id = 'helper-session'"
+    ).first<{ status: string }>();
+    expect(session?.status).toBe("revoked");
+    const purge = await env.DB.prepare("SELECT purge_after FROM repositories WHERE id = ?")
+      .bind(pending)
+      .first<{ purge_after: number }>();
+    expect(purge?.purge_after).toBeLessThanOrEqual(Date.now());
+    const organization = await env.DB.prepare(
+      "SELECT 1 FROM namespaces WHERE slug = 'delete-empty'"
+    ).first();
+    expect(organization).toBeNull();
   });
 });

@@ -53,6 +53,7 @@ beforeEach(() => {
 afterEach(async () => {
   await unmountAll();
   vi.restoreAllMocks();
+  sessionStorage.clear();
   document.body.innerHTML = "";
 });
 
@@ -105,6 +106,29 @@ describe("invitation link page", () => {
     expect(lookup).toHaveBeenLastCalledWith(token, "accept");
     expect(push).toHaveBeenCalledWith("/acme/project");
     mounted.unmount();
+  });
+
+  it("moves the token out of the address and resumes from tab storage after sign-in", async () => {
+    const lookup = vi.spyOn(api, "invitationByToken").mockResolvedValue(invitation);
+    const token = "gei_" + "c".repeat(64);
+    const first = await mountAt("/_verify/invite-resume", `/_verify/invite-resume#${token}`, () =>
+      h(InviteAcceptView)
+    );
+    expect(router.currentRoute.value.hash).toBe("");
+    expect(router.currentRoute.value.fullPath).not.toContain(token);
+    expect(sessionStorage.getItem("gitedge:invitation-token")).toBe(token);
+    first.unmount();
+
+    const second = await mountAt("/_verify/invite-resume", "/_verify/invite-resume", () =>
+      h(InviteAcceptView)
+    );
+    expect(lookup).toHaveBeenLastCalledWith(token, "lookup");
+    vi.spyOn(router, "replace").mockResolvedValue(undefined);
+    findButton(second.root, "Accept").click();
+    await settle();
+    expect(lookup).toHaveBeenLastCalledWith(token, "accept");
+    expect(sessionStorage.getItem("gitedge:invitation-token")).toBeNull();
+    second.unmount();
   });
 
   it("explains an unknown invitation", async () => {
@@ -197,7 +221,7 @@ describe("site administration users", () => {
     const disable = vi
       .spyOn(api, "setAdminUserDisabled")
       .mockRejectedValueOnce(new ApiError(403, "reauth", "reauth_required"))
-      .mockResolvedValue({ id: user.id, disabled: true });
+      .mockResolvedValue({ id: user.id, disabled: true, revocationIncomplete: false });
     vi.spyOn(api, "security").mockRejectedValue(new Error("not needed"));
     const mounted = await mountAt("/_verify/admin-users", "/_verify/admin-users", () =>
       h(AdminUsers)
@@ -211,6 +235,27 @@ describe("site administration users", () => {
     expect(disable).toHaveBeenCalledWith("u-2", true);
     expect(list).toHaveBeenCalled();
     expect(mounted.root.querySelector(".state-error, [role='alert']")).not.toBeNull();
+    mounted.unmount();
+  });
+
+  it("offers no disable action for administrators and warns about unrevoked agent sessions", async () => {
+    vi.spyOn(api, "adminGroups").mockResolvedValue([]);
+    const admin: AdminUser = { ...user, id: "u-3", identifier: "boss", configuredAdmin: true };
+    vi.spyOn(api, "adminUsers").mockResolvedValue({ items: [admin, user], nextCursor: null });
+    vi.spyOn(api, "setAdminUserDisabled").mockResolvedValue({
+      id: user.id,
+      disabled: true,
+      revocationIncomplete: true,
+    });
+    const mounted = await mountAt("/_verify/admin-guard", "/_verify/admin-guard", () =>
+      h(AdminUsers)
+    );
+    const disableButtons = Array.from(
+      mounted.root.querySelectorAll<HTMLButtonElement>("button")
+    ).filter((button) => button.textContent?.trim() === "Disable");
+    expect(disableButtons).toHaveLength(1);
+    await confirmClick(disableButtons[0]);
+    expect(mounted.root.textContent).toContain("some agent sessions are not revoked yet");
     mounted.unmount();
   });
 

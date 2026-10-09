@@ -13,10 +13,9 @@ import { auditActor, recordAudit } from "../../../src/worker/common/audit";
 import { dataResponse, errorResponse, requireRecentAuth } from "../../../src/worker/common/http";
 import { createLogger } from "../../../src/worker/common/logger";
 import { readJsonLimited, SMALL_JSON_BYTES } from "../../../src/worker/common/readText";
+import { revokeUserAgentSessions, type AgentAuthEnv } from "./agents";
 
-export interface AdminEnv {
-  DB: D1Database;
-  LOG_LEVEL?: string;
+export interface AdminEnv extends AgentAuthEnv {
   SITE_ADMINS?: string;
   USER_GROUP_LIMITS_JSON?: string;
 }
@@ -157,10 +156,23 @@ async function setDisabled(
 ): Promise<Response> {
   if (disable && target === admin.id)
     return errorResponse(409, "conflict", "You cannot disable your own account.");
+  if (disable) {
+    const subject = await env.DB.prepare(
+      "SELECT identifier, is_site_admin AS flagged FROM users WHERE id = ?"
+    )
+      .bind(target)
+      .first<{ identifier: string; flagged: number }>();
+    if (subject && isSiteAdmin(env, subject.identifier, subject.flagged === 1))
+      return errorResponse(
+        409,
+        "conflict",
+        "Remove administrator access before disabling this account."
+      );
+  }
   const now = Date.now();
   const row = disable
     ? await env.DB.prepare(
-        "UPDATE users SET disabled_at = ? WHERE id = ? AND disabled_at IS NULL AND deleted_at IS NULL RETURNING identifier"
+        "UPDATE users SET disabled_at = ? WHERE id = ? AND disabled_at IS NULL AND deleted_at IS NULL AND is_site_admin = 0 RETURNING identifier"
       )
         .bind(now, target)
         .first<{ identifier: string }>()
@@ -170,21 +182,27 @@ async function setDisabled(
         .bind(target)
         .first<{ identifier: string }>();
   if (!row) return errorResponse(404, "not_found", "No matching user was found.");
-  // Disabling ends interactive sign-ins; other credentials are rejected at validation.
-  if (disable)
+  // Sessions end now; tokens and Git credentials are rejected at validation, while agent
+  // session forks hold direct Artifacts credentials and must be revoked explicitly.
+  let revoked = true;
+  if (disable) {
     await env.DB.prepare("DELETE FROM auth_sessions WHERE user_id = ?").bind(target).run();
-  createLogger(env.LOG_LEVEL, { service: "admin" }).info("admin:user-disabled-changed", {
+    revoked = await revokeUserAgentSessions(env, target, false);
+  }
+  const logger = createLogger(env.LOG_LEVEL, { service: "admin" });
+  logger.info("admin:user-disabled-changed", {
     adminId: admin.id,
     userId: target,
     disabled: disable,
   });
+  if (!revoked) logger.warn("admin:agent-revocation-incomplete", { userId: target });
   await recordAudit(env, {
     action: disable ? "admin.user_disabled" : "admin.user_enabled",
     actor: auditActor(admin),
     target: { type: "user", id: target, label: row.identifier },
     subjectUserId: target,
   });
-  return dataResponse({ id: target, disabled: disable });
+  return dataResponse({ id: target, disabled: disable, revocationIncomplete: !revoked });
 }
 
 async function updateUser(

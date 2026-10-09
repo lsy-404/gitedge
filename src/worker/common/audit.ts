@@ -35,7 +35,7 @@ const MAX_METADATA_BYTES = 2000;
 const SECRET_KEY =
   /secret|password|passphrase|hash|credential|cookie|authorization|plaintext|private/i;
 const SECRET_KEY_EXACT = new Set(["token", "accesstoken", "code", "recoverycodes", "otp"]);
-const SECRET_VALUE = /^(?:gep_|ge_token_|ge_session_|ge_webhook_)[0-9a-f]{16,}/;
+const SECRET_VALUE = /(?:gep_|gei_|ge_token_|ge_session_|ge_webhook_)[0-9a-f]{16,}/;
 
 function scalar(value: unknown): string | number | boolean | null | undefined {
   if (value === null || typeof value === "boolean") return value;

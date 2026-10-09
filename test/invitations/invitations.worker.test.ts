@@ -1,6 +1,10 @@
 import { env } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
-import type { CreatedInvitation, Invitation } from "../../packages/contracts/src/index";
+import {
+  MAX_REPOSITORY_COLLABORATORS,
+  type CreatedInvitation,
+  type Invitation,
+} from "../../packages/contracts/src/index";
 import {
   createPerson,
   createRepository,
@@ -237,6 +241,38 @@ describe("repository invitations", () => {
       ).status
     ).toBe(200);
     expect((await forgeCall(dave, `/invitations/${created.id}/accept`, "POST")).status).toBe(404);
+  });
+});
+
+describe("repository collaborator limit", () => {
+  it("refuses invitations and acceptance once the repository is full", async () => {
+    const repositoryId = await createRepository(dave, "crowded", "private");
+    const route = `/repositories/${repositoryId}/invitations`;
+    const created = await invite(dave, route, { identifier: "inv-bob", role: "read" });
+    const fillers = Array.from({ length: MAX_REPOSITORY_COLLABORATORS }, (_, index) => ({
+      id: crypto.randomUUID(),
+      identifier: `inv-filler-${index}`,
+    }));
+    await env.DB.batch(
+      fillers.flatMap((filler) => [
+        env.DB.prepare(
+          "INSERT INTO users (id, identifier, group_key, password_salt, password_hash, password_auth_enabled, created_at) VALUES (?, ?, 'free', '', '', 0, 1)"
+        ).bind(filler.id, filler.identifier),
+        env.DB.prepare(
+          "INSERT INTO repository_collaborators (repository_id, user_id, role, created_at) VALUES (?, ?, 'read', 1)"
+        ).bind(repositoryId, filler.id),
+      ])
+    );
+    const refused = await forgeCall(dave, route, "POST", { identifier: "inv-carol" });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ error: { code: "member_limit" } });
+    const accepted = await forgeCall(bob, `/invitations/${created.id}/accept`, "POST");
+    expect(accepted.status).toBe(409);
+    expect(await accepted.json()).toMatchObject({ error: { code: "member_limit" } });
+    const row = await env.DB.prepare("SELECT status FROM invitations WHERE id = ?")
+      .bind(created.id)
+      .first<{ status: string }>();
+    expect(row?.status).toBe("pending");
   });
 });
 

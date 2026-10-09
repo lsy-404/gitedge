@@ -120,6 +120,7 @@ export default {
     adminDisable: "停用",
     adminEnablePrompt: "启用此账户？",
     adminDisablePrompt: "停用此账户？其会话将被撤销，令牌、智能体与 Git 凭证立即失效。",
+    adminRevocationIncomplete: "账户已停用，但部分智能体会话尚未撤销。请稍后重试停用操作。",
     adminRepositories: "仓库",
     adminSearchRepositories: "搜索 所有者/仓库",
     adminNoRepositories: "没有匹配的仓库。",
@@ -266,6 +267,8 @@ export default {
     adminEnablePrompt: "Enable this account?",
     adminDisablePrompt:
       "Disable this account? Its sessions are revoked and its tokens, agents and Git credentials stop working.",
+    adminRevocationIncomplete:
+      "The account is disabled, but some agent sessions are not revoked yet. Try again later.",
     adminRepositories: "Repositories",
     adminSearchRepositories: "Search owner/repository",
     adminNoRepositories: "No matching repositories.",

@@ -7,7 +7,7 @@ import { auditActor, auditStatement, recordAudit } from "../../../src/worker/com
 import { errorResponse, jsonResponse, requireRecentAuth } from "../../../src/worker/common/http";
 import { createLogger } from "../../../src/worker/common/logger";
 import { readJsonLimited, SMALL_JSON_BYTES } from "../../../src/worker/common/readText";
-import { revokeAllAgentSessions, type AgentAuthEnv } from "./agents";
+import { revokeUserAgentSessions, type AgentAuthEnv } from "./agents";
 
 const EXPORT_PAGE = 100;
 
@@ -250,7 +250,7 @@ export async function deleteAccount(
       409
     );
   }
-  if (!(await revokeAllAgentSessions(env, user.id))) {
+  if (!(await revokeUserAgentSessions(env, user.id, true))) {
     logger.warn("account:delete-revocation-incomplete", { userId: user.id });
     return errorResponse(503, "service_unavailable", "Agent sessions could not be revoked yet.");
   }
@@ -262,6 +262,10 @@ export async function deleteAccount(
     ).bind(now, id),
     env.DB.prepare(
       "DELETE FROM repository_paths WHERE repository_id IN (SELECT id FROM repositories WHERE deleted_at = ?1 AND deleted_by = ?2) AND slug != 'deleted~' || repository_id"
+    ).bind(now, id),
+    // Repositories already awaiting purge must not stay restorable under a deleted owner.
+    env.DB.prepare(
+      "UPDATE repositories SET purge_after = MIN(purge_after, ?1) WHERE deleted_at IS NOT NULL AND namespace_id IN (SELECT id FROM namespaces WHERE kind = 'personal' AND created_by = ?2)"
     ).bind(now, id),
     env.DB.prepare(
       "DELETE FROM namespaces WHERE kind = 'organization' AND id IN (SELECT namespace_id FROM namespace_memberships WHERE user_id = ?1 AND role = 'owner') AND NOT EXISTS (SELECT 1 FROM namespace_memberships x WHERE x.namespace_id = namespaces.id AND x.user_id <> ?1) AND NOT EXISTS (SELECT 1 FROM repositories r WHERE r.namespace_id = namespaces.id)"

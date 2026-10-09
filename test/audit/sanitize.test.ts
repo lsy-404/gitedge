@@ -11,6 +11,7 @@ describe("audit metadata sanitization", () => {
       recoveryCodes: ["aaaaa-bbbbb"],
       secret: "s",
       note: "ge_session_" + "b".repeat(64),
+      link: "https://stack.test/invite#gei_" + "c".repeat(64),
       prefix: "gep_aaaaaaaa",
       nested: { deep: true },
       scopes: ["repo:read", "admin"],
@@ -18,6 +19,7 @@ describe("audit metadata sanitization", () => {
     expect(clean).toEqual({
       role: "write",
       note: "[redacted]",
+      link: "[redacted]",
       prefix: "gep_aaaaaaaa",
       scopes: ["repo:read", "admin"],
     });

@@ -3,6 +3,8 @@ import { RepositoryRoleSchema } from "./repository-controls";
 
 export const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const MAX_PENDING_INVITATIONS = 50;
+/** Direct collaborators per repository; the collaborator list stays within one bounded page. */
+export const MAX_REPOSITORY_COLLABORATORS = 80;
 
 export const OrganizationRoleSchema = z.enum(["owner", "member"]);
 export type OrganizationRole = z.infer<typeof OrganizationRoleSchema>;

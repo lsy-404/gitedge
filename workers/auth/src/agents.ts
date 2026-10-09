@@ -316,14 +316,22 @@ async function revokeSessions(
 
 const REVOKE_BATCH_LIMIT = 100;
 
-/** Revokes every active agent session of one user; false when some could not be revoked. */
-export async function revokeAllAgentSessions(env: AgentAuthEnv, userId: string): Promise<boolean> {
+/**
+ * Revokes every active agent session of one user and, when `personalRepositories` is set, every
+ * session on repositories in that user's personal namespace; false when some remain active.
+ */
+export async function revokeUserAgentSessions(
+  env: AgentAuthEnv,
+  userId: string,
+  personalRepositories: boolean
+): Promise<boolean> {
   const logger = createLogger(env.LOG_LEVEL, { service: "agent-auth" });
   for (let round = 0; round < 5; round += 1) {
     const rows = await env.DB.prepare(
-      sessionSelect + " WHERE s.status = 'active' AND s.user_id = ? LIMIT ?"
+      sessionSelect +
+        " WHERE s.status = 'active' AND (s.user_id = ?1 OR (?2 = 1 AND s.repository_id IN (SELECT r.id FROM repositories r JOIN namespaces n ON n.id = r.namespace_id WHERE n.kind = 'personal' AND n.created_by = ?1))) LIMIT ?3"
     )
-      .bind(userId, REVOKE_BATCH_LIMIT)
+      .bind(userId, Number(personalRepositories), REVOKE_BATCH_LIMIT)
       .all<AgentSessionRow>();
     if (rows.results.length === 0) return true;
     if ((await revokeSessions(env, rows.results, logger)) > 0) return false;

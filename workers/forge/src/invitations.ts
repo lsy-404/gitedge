@@ -4,6 +4,7 @@ import {
   INVITATION_TTL_MS,
   InvitationTokenInputSchema,
   MAX_PENDING_INVITATIONS,
+  MAX_REPOSITORY_COLLABORATORS,
   sha256Hex,
   type CreatedInvitation,
   type Invitation,
@@ -40,7 +41,7 @@ interface InvitationRow {
 }
 
 const SELECT =
-  "SELECT i.id, i.kind, i.role, i.namespace_id AS namespaceId, i.repository_id AS repositoryId, CASE WHEN i.kind = 'organization' THEN n.slug END AS organization, rn.slug AS repositoryOwner, r.slug AS repositoryName, inviter.identifier AS inviter, invitee.identifier AS invitee, i.invitee_user_id AS inviteeUserId, i.invitee_email AS inviteeEmail, i.status, i.created_at AS createdAt, i.expires_at AS expiresAt FROM invitations i JOIN namespaces n ON n.id = i.namespace_id JOIN users inviter ON inviter.id = i.inviter_id LEFT JOIN users invitee ON invitee.id = i.invitee_user_id LEFT JOIN repositories r ON r.id = i.repository_id AND r.deleted_at IS NULL LEFT JOIN namespaces rn ON rn.id = r.namespace_id";
+  "SELECT i.id, i.kind, i.role, COALESCE(r.namespace_id, i.namespace_id) AS namespaceId, i.repository_id AS repositoryId, CASE WHEN i.kind = 'organization' THEN n.slug END AS organization, rn.slug AS repositoryOwner, r.slug AS repositoryName, inviter.identifier AS inviter, invitee.identifier AS invitee, i.invitee_user_id AS inviteeUserId, i.invitee_email AS inviteeEmail, i.status, i.created_at AS createdAt, i.expires_at AS expiresAt FROM invitations i JOIN namespaces n ON n.id = i.namespace_id JOIN users inviter ON inviter.id = i.inviter_id LEFT JOIN users invitee ON invitee.id = i.invitee_user_id LEFT JOIN repositories r ON r.id = i.repository_id AND r.deleted_at IS NULL LEFT JOIN namespaces rn ON rn.id = r.namespace_id";
 const LIVE = "(i.repository_id IS NULL OR r.id IS NOT NULL)";
 
 function present(row: InvitationRow, now: number): Invitation {
@@ -68,6 +69,15 @@ export interface InvitationScope {
   /** Organization slug, or the repository's owner for repository invitations. */
   label: string;
   repository?: RepositoryRow;
+}
+
+async function collaboratorLimitReached(env: ForgeEnv, repositoryId: string): Promise<boolean> {
+  const row = await env.DB.prepare(
+    "SELECT COUNT(*) AS count FROM repository_collaborators WHERE repository_id = ?"
+  )
+    .bind(repositoryId)
+    .first<{ count: number }>();
+  return (row?.count ?? 0) >= MAX_REPOSITORY_COLLABORATORS;
 }
 
 function scopeFilter(scope: InvitationScope): { sql: string; value: string } {
@@ -103,6 +113,8 @@ async function createInvitation(
     .first<{ count: number }>();
   if ((pending?.count ?? 0) >= MAX_PENDING_INVITATIONS)
     return errorResponse(409, "member_limit", "Too many pending invitations. Cancel some first.");
+  if (scope.repository && (await collaboratorLimitReached(env, scope.repository.id)))
+    return errorResponse(409, "member_limit", "Collaborator limit reached.");
 
   let inviteeId: string | null = null;
   if (input.identifier !== undefined) {
@@ -316,12 +328,15 @@ async function resolveInvitation(
         );
   const [claimed] = await env.DB.batch([
     env.DB.prepare(
-      "UPDATE invitations SET status = 'accepted', resolved_at = ?, resolved_by = ? WHERE id = ? AND status = 'pending' AND expires_at > ?"
-    ).bind(now, user.id, row.id, now),
+      "UPDATE invitations SET status = 'accepted', resolved_at = ?1, resolved_by = ?2 WHERE id = ?3 AND status = 'pending' AND expires_at > ?1 AND (kind = 'organization' OR (SELECT COUNT(*) FROM repository_collaborators c WHERE c.repository_id = invitations.repository_id) < ?4)"
+    ).bind(now, user.id, row.id, MAX_REPOSITORY_COLLABORATORS),
     grant.bind(user.id, now, row.id),
   ]);
-  if (claimed.meta.changes !== 1)
+  if (claimed.meta.changes !== 1) {
+    if (row.repositoryId && (await collaboratorLimitReached(env, row.repositoryId)))
+      return errorResponse(409, "member_limit", "Collaborator limit reached.");
     return errorResponse(409, "invitation_closed", "This invitation is no longer pending.");
+  }
   createLogger(env.LOG_LEVEL, { service: "invitations" }).info("forge:invitation-accepted", {
     invitationId: row.id,
     kind: row.kind,

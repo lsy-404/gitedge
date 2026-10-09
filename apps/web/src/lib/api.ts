@@ -790,7 +790,7 @@ export const api = {
   adminGroups: () => request<AdminGroup[]>("/api/auth/admin/groups"),
   adminStats: () => request<AdminStats>("/api/auth/admin/stats"),
   setAdminUserDisabled: (id: string, disabled: boolean) =>
-    request<{ id: string; disabled: boolean }>(
+    request<{ id: string; disabled: boolean; revocationIncomplete: boolean }>(
       `/api/auth/admin/users/${encodeURIComponent(id)}/${disabled ? "disable" : "enable"}`,
       { method: "POST" }
     ),

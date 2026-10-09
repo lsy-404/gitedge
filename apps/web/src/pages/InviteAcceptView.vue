@@ -18,9 +18,39 @@ const invitation = ref<Invitation | null>(null);
 const loading = ref(true);
 const error = ref("");
 const busy = ref(false);
-const token = computed(() => route.hash.replace(/^#/, ""));
+const token = ref("");
 const signedIn = computed(() => sessionState.user !== null);
 const redirect = computed(() => route.fullPath);
+const TOKEN_KEY = "gitedge:invitation-token";
+
+function storeToken(value: string | null): boolean {
+  try {
+    if (value === null) sessionStorage.removeItem(TOKEN_KEY);
+    else sessionStorage.setItem(TOKEN_KEY, value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function storedToken(): string {
+  try {
+    return sessionStorage.getItem(TOKEN_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/** Moves the token from the address into tab storage so sign-in return addresses never carry it. */
+async function captureToken(): Promise<void> {
+  const fromHash = route.hash.replace(/^#/, "");
+  if (!fromHash) {
+    token.value = storedToken();
+    return;
+  }
+  token.value = fromHash;
+  if (storeToken(fromHash)) await router.replace({ path: route.path, query: route.query });
+}
 
 const target = computed(() => {
   const item = invitation.value;
@@ -61,6 +91,7 @@ async function resolve(action: "accept" | "decline"): Promise<void> {
   const joined = invitation.value;
   try {
     await api.invitationByToken(token.value, action);
+    storeToken(null);
     if (action === "decline") {
       await router.replace("/dashboard");
       return;
@@ -77,7 +108,10 @@ async function resolve(action: "accept" | "decline"): Promise<void> {
   }
 }
 
-onMounted(load);
+onMounted(async () => {
+  await captureToken();
+  await load();
+});
 </script>
 
 <template>
