@@ -1,6 +1,6 @@
 import { repositoryNotFound } from "../../../src/worker/common/repository-response";
 import { recordGitWrite, reportPushEvent } from "./events";
-import type { RefUpdate } from "./receive-commands";
+import { ReceiveReport, type RefUpdate } from "./receive-commands";
 import { resolveRepositoryPath } from "../../../src/worker/common/repositories";
 import { branchRules, matchingBranchRules } from "../../../src/worker/common/branch-protection";
 import { readReceiveCommands, InvalidReceiveCommands } from "./receive-commands";
@@ -157,15 +157,23 @@ export async function proxyGitTransport(
     const responseHeaders = new Headers(response.headers);
     responseHeaders.set("Cache-Control", "no-store");
     const writer = access.user;
+    const report = new ReceiveReport();
     const body =
       response.ok && writer && !writer.agentSession && updates.length && response.body
         ? response.body.pipeThrough(
             new TransformStream<Uint8Array, Uint8Array>({
               transform(chunk, controller) {
+                report.feed(chunk);
                 controller.enqueue(chunk);
               },
               async flush() {
-                const changed = updates.filter(
+                const accepted = report.accepted();
+                if (!accepted)
+                  logger.warn("git:receive-report-unparsed", { count: updates.length });
+                const applied = accepted
+                  ? updates.filter((update) => accepted.has(update.ref))
+                  : updates;
+                const changed = applied.filter(
                   (update) =>
                     update.ref.startsWith("refs/heads/") && update.newOid !== "0".repeat(40)
                 );
@@ -174,7 +182,7 @@ export async function proxyGitTransport(
                     env,
                     repository.id,
                     writer,
-                    updates.map((update) => ({
+                    applied.map((update) => ({
                       ref: update.ref,
                       before: update.oldOid,
                       after: update.newOid,
