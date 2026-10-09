@@ -47,7 +47,7 @@ export async function listArtifactRefs(repo: ArtifactsRepo, level?: string): Pro
   }
 }
 export async function resolveCommit(
-  repo: ArtifactsRepo,
+  repo: Pick<ArtifactsRepo, "log">,
   ref: string
 ): Promise<ArtifactsCommitMetadata | null> {
   const commits = await repo.log({ ref, limit: 1 });
@@ -78,7 +78,7 @@ export async function refContainsCommit(
   return false;
 }
 export async function readArtifactTree(
-  repo: ArtifactsRepo,
+  repo: Pick<ArtifactsRepo, "info" | "log" | "readTree">,
   ref: string,
   path: string
 ): Promise<GitTree | null> {

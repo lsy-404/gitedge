@@ -6,6 +6,7 @@ import { api } from "../../apps/web/src/lib/api";
 import { router } from "../../apps/web/src/router";
 import { clearSession, setSession } from "../../apps/web/src/lib/session";
 import { fluentUi } from "../../apps/web/src/ui/fluent";
+import { confirmClick } from "./task-support";
 import type { Repository } from "../../packages/contracts/src/forge";
 import type {
   RepositoryBranch,
@@ -135,9 +136,12 @@ function mockCodeApi(
     onPullCreate?: (body: Record<string, unknown>) => Response | void;
     onBranchCreate?: (body: Record<string, unknown>) => void;
     onBranchDelete?: (body: Record<string, unknown>) => void;
+    onTag?: (method: string, body: Record<string, unknown>) => void;
+    latestRelease?: { title: string; tagName: string } | null;
   } = {}
 ) {
   let branches = options.branches ?? [branch("main", commitOid)];
+  let tags: Array<{ name: string; oid: string; commitOid: string; annotated: boolean }> = [];
   const requests: Array<{ path: string; method: string; body: string; ref: string | null }> = [];
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), "https://gitedge.test");
@@ -167,6 +171,33 @@ function mockCodeApi(
       options.onBranchDelete?.(JSON.parse(body) as Record<string, unknown>);
       branches = branches.filter((item) => item.name !== parsed.name);
       return jsonResponse({ deleted: true });
+    }
+    if (url.pathname.endsWith("/tags")) {
+      if (method === "GET")
+        return new Response(
+          JSON.stringify({
+            data: tags.map((tag) => ({ ...tag, subject: "s", timestamp: 1 })),
+            truncated: false,
+          })
+        );
+      const parsed = JSON.parse(body) as { name: string; target?: string };
+      options.onTag?.(method, parsed);
+      if (method === "POST") {
+        tags = [
+          ...tags,
+          { name: parsed.name, oid: createdCommitOid, commitOid: commitOid, annotated: false },
+        ];
+        return jsonResponse({ name: parsed.name }, 201);
+      }
+      tags = tags.filter((tag) => tag.name !== parsed.name);
+      return jsonResponse({ deleted: true });
+    }
+    if (url.pathname.endsWith("/releases/latest")) {
+      return options.latestRelease
+        ? jsonResponse({ ...options.latestRelease, id: "release-1" })
+        : new Response(JSON.stringify({ error: { code: "not_found", message: "none" } }), {
+            status: 404,
+          });
     }
     if (url.pathname.endsWith("/commits")) return jsonResponse([]);
     if (url.pathname.endsWith("/tree"))
@@ -325,7 +356,7 @@ describe("repository Code view", () => {
     mounted.unmount();
   });
 
-  it("keeps empty text files readable and enables Raw and Download", async () => {
+  it("keeps empty text files readable and links to the raw and download URLs", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
@@ -352,29 +383,110 @@ describe("repository Code view", () => {
         throw new Error(`Unexpected request: ${url}`);
       })
     );
-    const createObjectURL = vi.fn(() => "blob:test");
-    const revokeObjectURL = vi.fn();
-    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectURL });
-    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectURL });
-    const open = vi.spyOn(window, "open").mockImplementation(() => null);
-    const click = vi
-      .spyOn(HTMLAnchorElement.prototype, "click")
-      .mockImplementation(() => undefined);
     const mounted = await mountCode("/example/sample/blob/empty.txt?ref=main", "code");
-    const buttons = Array.from(
-      mounted.root.querySelectorAll<HTMLButtonElement>(".file-actions .fluent-button")
-    );
-
-    buttons[0]?.click();
-    buttons[1]?.click();
+    const rawLinks = Array.from(
+      mounted.root.querySelectorAll<HTMLAnchorElement>(".file-actions a.btn")
+    ).filter((link) => link.getAttribute("href")?.includes("/raw/"));
 
     expect(mounted.root.querySelector(".code-lines")).not.toBeNull();
     expect(mounted.root.querySelectorAll(".code-line")).toHaveLength(0);
-    expect(open).toHaveBeenCalledWith("blob:test", "_blank", "noopener");
-    expect(click).toHaveBeenCalledOnce();
-    expect(createObjectURL).toHaveBeenCalledTimes(2);
+    expect(rawLinks.map((link) => link.getAttribute("href"))).toEqual([
+      "/example/sample/raw/main/empty.txt",
+      "/example/sample/raw/main/empty.txt?download=1",
+    ]);
+    expect(rawLinks[0]?.target).toBe("_blank");
+    expect(rawLinks[1]?.hasAttribute("download")).toBe(true);
 
     mounted.unmount();
+  });
+
+  it("creates and deletes tags against the branch tip and the loaded tag id", async () => {
+    i18n.global.locale.value = "en";
+    const calls: Array<[string, Record<string, unknown>]> = [];
+    mockCodeApi({ onTag: (method, body) => calls.push([method, body]) });
+    const mounted = await mountCode("/example/sample", "code", { canWrite: true });
+    const manager = Array.from(mounted.root.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.includes("Manage tags")
+    );
+    manager?.click();
+    await settle();
+    const form = mounted.root.querySelector<HTMLFormElement>(".tag-create");
+    const inputs = form?.querySelectorAll<HTMLInputElement>("input");
+    if (!form || !inputs?.length) throw new Error("Tag manager did not load.");
+    fill(inputs[0], "v1.0.0");
+    fill(inputs[1], "Release one");
+    await settle();
+    submit(form);
+    await settle();
+
+    expect(calls[0]).toEqual(["POST", { name: "v1.0.0", target: "main", message: "Release one" }]);
+    expect(mounted.root.querySelector(".tag-row")?.textContent).toContain("v1.0.0");
+    await confirmClick(
+      mounted.root.querySelector<HTMLButtonElement>('button[aria-label="Delete tag v1.0.0"]')
+    );
+
+    expect(calls[1]).toEqual(["DELETE", { name: "v1.0.0", expectedOid: createdCommitOid }]);
+    expect(mounted.root.querySelector(".tag-row")).toBeNull();
+    mounted.unmount();
+  });
+
+  it("hides tag management from viewers without write access", async () => {
+    i18n.global.locale.value = "en";
+    mockCodeApi();
+    const mounted = await mountCode("/example/sample", "code");
+    expect(mounted.root.textContent).not.toContain("Manage tags");
+    mounted.unmount();
+  });
+
+  it("shows the latest release in the sidebar", async () => {
+    i18n.global.locale.value = "en";
+    mockCodeApi({ latestRelease: { title: "Version one", tagName: "v1.0.0" } });
+    const mounted = await mountCode("/example/sample", "code");
+    const sidebar = mounted.root.querySelector(".about-release");
+    expect(sidebar?.textContent).toContain("Version one");
+    expect(sidebar?.textContent).toContain("v1.0.0");
+    expect(sidebar?.querySelector("a")?.getAttribute("href")).toBe("/example/sample/releases");
+    mounted.unmount();
+  });
+
+  it("offers source archives for the selected ref in the clone menu", async () => {
+    i18n.global.locale.value = "en";
+    mockCodeApi();
+    const mounted = await mountCode("/example/sample?ref=release%2Fone", "code");
+    const links = Array.from(
+      mounted.root.querySelectorAll<HTMLAnchorElement>(".clone-downloads a")
+    ).map((link) => link.getAttribute("href"));
+    mounted.root.querySelector<HTMLButtonElement>(".clone-menu-wrap > button")?.click();
+    await settle();
+    const opened = Array.from(
+      mounted.root.querySelectorAll<HTMLAnchorElement>(".clone-downloads a")
+    ).map((link) => link.getAttribute("href"));
+    expect(links).toEqual([]);
+    expect(opened).toEqual([
+      "/example/sample/archive/release/one.zip",
+      "/example/sample/archive/release/one.tar.gz",
+    ]);
+    mounted.unmount();
+  });
+
+  it("previews images through the raw URL and sends binaries to download", async () => {
+    i18n.global.locale.value = "en";
+    mockCodeApi({ file: { binary: true, content: null, size: 4 } });
+    const image = await mountCode("/example/sample/blob/docs/logo.png?ref=main", "code");
+    expect(image.root.querySelector(".file-image img")?.getAttribute("src")).toBe(
+      "/example/sample/raw/main/docs/logo.png"
+    );
+    expect(image.root.querySelector(".file-image img")?.getAttribute("alt")).toContain("logo.png");
+    image.unmount();
+    const binary = await mountCode("/example/sample/blob/tool.bin?ref=main", "code");
+    expect(binary.root.querySelector(".file-image")).toBeNull();
+    expect(binary.root.textContent).toContain("Download it to open it");
+    expect(
+      binary.root
+        .querySelector<HTMLAnchorElement>(".file-actions a[download]")
+        ?.getAttribute("href")
+    ).toBe("/example/sample/raw/main/tool.bin?download=1");
+    binary.unmount();
   });
 
   it("saves a file against the commit SHA loaded with its contents", async () => {

@@ -70,6 +70,7 @@ Create a GitHub OAuth application and register the callback URL `https://<gatewa
 | Name                     | Kind   | Default                        | Purpose                                                                     |
 | ------------------------ | ------ | ------------------------------ | --------------------------------------------------------------------------- |
 | `USER_GROUP_LIMITS_JSON` | var    | built-in `free`/`team`/`admin` | Same value as on the Gateway; see the Gateway table.                        |
+| `RELEASE_ASSETS`         | R2 binding | bucket `gitedge-release-assets` | Stores release assets under `<repositoryId>/<assetId>`. `pnpm run deploy` creates the bucket when it is missing; create it manually before a manual `wrangler deploy`. Local `wrangler dev` simulates it. |
 | `WEBHOOK_ENCRYPTION_KEY` | secret | none                           | Same key as on Auth; encrypts repository webhook secrets. Webhooks need it. |
 | `LOG_LEVEL`              | var    | logger default                 | Minimum structured log level.                                               |
 

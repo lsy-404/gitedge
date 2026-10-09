@@ -8,6 +8,11 @@ import {
   DeleteBranchInputSchema,
 } from "../../../packages/contracts/src/repository-controls";
 import {
+  CreateTagInputSchema,
+  DeleteTagInputSchema,
+  GitTagNameSchema,
+} from "../../../packages/contracts/src/releases";
+import {
   branchRules,
   matchingBranchRules,
   protectedBranch,
@@ -22,6 +27,16 @@ import {
   ZERO_OID,
 } from "./write";
 import { repositorySnapshot } from "./snapshot";
+import { GitTagExists, createRepositoryTag, deleteRepositoryTag, listRepositoryTags } from "./tags";
+import { serveRaw, splitRawSpec } from "./raw";
+import {
+  ArchiveError,
+  archiveContentType,
+  archiveStream,
+  planArchive,
+  type ArchiveFormat,
+} from "./archive";
+import { contentDisposition } from "../../../src/worker/common/content-disposition";
 import { createLogger } from "../../../src/worker/common/logger";
 import {
   GitMergeInputSchema,
@@ -47,13 +62,47 @@ import { blameFile } from "./blame";
 import { commitDetail } from "./commit-diff";
 import { listFiles, pathHistory } from "./navigation";
 import { mergeArtifacts } from "./merge";
-import { dataResponse, errorResponse } from "../../../src/worker/common/http";
+import { dataResponse, errorResponse, jsonResponse } from "../../../src/worker/common/http";
 
 function pageNumber(value: string | null, fallback: number, maximum: number): number {
   const parsed = Number(value);
   return value !== null && Number.isSafeInteger(parsed) && parsed >= 0
     ? Math.min(parsed, maximum)
     : fallback;
+}
+/** Streams from a handle and disposes it once the consumer finishes, fails or cancels. */
+function releaseWhenSettled(
+  handle: ArtifactsRepo,
+  open: (handle: ArtifactsRepo) => ReadableStream<Uint8Array>
+): ReadableStream<Uint8Array> {
+  const reader = open(handle).getReader();
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    handle[Symbol.dispose]();
+  };
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const next = await reader.read();
+        if (next.done) {
+          release();
+          controller.close();
+        } else controller.enqueue(next.value);
+      } catch (cause) {
+        release();
+        throw cause;
+      }
+    },
+    async cancel(reason) {
+      try {
+        await reader.cancel(reason);
+      } finally {
+        release();
+      }
+    },
+  });
 }
 function validPath(path: string): boolean {
   return (
@@ -119,7 +168,9 @@ export async function handleGitApi(
     resource === "commit" ||
     resource === "commit-diff" ||
     resource === "signature" ||
-    resource === "snapshot";
+    resource === "snapshot" ||
+    resource === "tags" ||
+    resource === "archive";
   using repo = await env.ARTIFACTS.get(
     repositoryScoped
       ? access.repository.artifactName
@@ -133,6 +184,52 @@ export async function handleGitApi(
   logger.debug("artifacts:request", { resource, sessionId: session?.id });
   if (resource === "graph" && access.repository.graphEnabled === 0)
     return errorResponse(404, "feature_disabled", "Commit graph is disabled.");
+  if (resource === "tags" && request.method !== "GET" && request.method !== "HEAD") {
+    if (request.method !== "POST" && request.method !== "DELETE")
+      return errorResponse(405, "method_not_allowed", "Method is not allowed.");
+    if (!access.user || !access.repository.canWrite || userSession)
+      return errorResponse(403, "forbidden", "Repository write access is required.");
+    if (access.repository.archived)
+      return errorResponse(409, "repository_archived", "Archived repositories are read-only.");
+    const value = await readJsonLimited(request, 20_000);
+    const beforeWrite = async () => {
+      const latest = await resolveGitAccess(request, env, repositoryId);
+      if (latest instanceof Response || !latest?.repository.canWrite || latest.repository.archived)
+        throw new GitWriteConflict("Repository permissions changed. Reload before retrying.");
+    };
+    try {
+      if (request.method === "POST") {
+        const input = CreateTagInputSchema.safeParse(value);
+        if (!input.success) return errorResponse(400, "bad_request", "Invalid tag.");
+        const tag = await createRepositoryTag(
+          repo,
+          input.data,
+          access.repository.defaultBranch,
+          access.user,
+          beforeWrite,
+          env.LOG_LEVEL
+        );
+        return dataResponse(tag, 201);
+      }
+      const input = DeleteTagInputSchema.safeParse(value);
+      if (!input.success) return errorResponse(400, "bad_request", "Invalid tag.");
+      await deleteRepositoryTag(
+        repo,
+        input.data.name,
+        input.data.expectedOid,
+        beforeWrite,
+        env.LOG_LEVEL
+      );
+      return dataResponse({ deleted: true });
+    } catch (cause) {
+      if (cause instanceof GitTagExists) return errorResponse(409, "tag_exists", cause.message);
+      if (cause instanceof GitWriteConflict)
+        return errorResponse(409, "refs_changed", cause.message);
+      if (cause instanceof GitWriteInputError)
+        return errorResponse(400, "bad_request", cause.message);
+      throw cause;
+    }
+  }
   if ((resource === "edit" || resource === "branches") && request.method !== "GET") {
     if (!access.user || !access.repository.canWrite || userSession?.permission === "read")
       return errorResponse(403, "forbidden", "Repository write access is required.");
@@ -505,19 +602,105 @@ export async function handleGitApi(
     const file = path ? await readArtifactFile(repo, ref, path) : null;
     return file ? dataResponse(file) : errorResponse(404, "not_found", "File was not found.");
   }
+  if (resource === "tags") {
+    const name = url.searchParams.get("name");
+    if (name !== null && !GitTagNameSchema.safeParse(name).success)
+      return errorResponse(400, "bad_request", "Invalid tag name.");
+    const { tags, truncated } = await listRepositoryTags(repo, env.LOG_LEVEL, name);
+    return jsonResponse({ data: tags, truncated });
+  }
+  if (resource === "archive") {
+    const format: ArchiveFormat | null =
+      url.searchParams.get("format") === "tar.gz"
+        ? "tar.gz"
+        : url.searchParams.get("format") === "zip"
+          ? "zip"
+          : null;
+    if (!format) return errorResponse(400, "bad_request", "Archive format must be zip or tar.gz.");
+    const commit = await resolveCommit(repo, ref);
+    if (!commit) return errorResponse(404, "not_found", "The selected ref was not found.");
+    const label = GitOidSchema.safeParse(ref).success ? ref.slice(0, 7) : ref;
+    const name = `${access.repository.slug}-${label.replace(/[^A-Za-z0-9._-]+/g, "-")}`;
+    const etag = `"${commit.hash}-${format}"`;
+    const publicRepository = access.repository.visibility === "public";
+    const headers = {
+      ETag: etag,
+      "Cache-Control": publicRepository
+        ? GitOidSchema.safeParse(ref).success
+          ? "public, max-age=300"
+          : "public, max-age=0, must-revalidate"
+        : "private, no-store",
+      "X-Content-Type-Options": "nosniff",
+    };
+    if (
+      request.headers
+        .get("If-None-Match")
+        ?.split(",")
+        .some((value) => value.trim() === etag)
+    )
+      return new Response(null, { status: 304, headers });
+    try {
+      const plan = await planArchive(repo, commit.treeHash);
+      logger.info("git:archive-started", {
+        format,
+        files: plan.files.length,
+        directories: plan.directories.length,
+      });
+      // HEAD must not start the producer, and the stream outlives this function's `repo`
+      // handle, so it reads through its own handle that is released when the stream settles.
+      const body =
+        request.method === "HEAD"
+          ? null
+          : releaseWhenSettled(await env.ARTIFACTS.get(access.repository.artifactName), (handle) =>
+              archiveStream(handle, plan, format, {
+                root: name,
+                mtime: new Date(commit.committedAt * 1000),
+                onError: (cause) =>
+                  logger.warn("git:archive-aborted", {
+                    format,
+                    code: cause instanceof ArchiveError ? cause.code : "stream_failed",
+                    error: cause instanceof Error ? cause.message : "unknown",
+                  }),
+              })
+            );
+      return new Response(body, {
+        headers: {
+          ...headers,
+          "Content-Type": archiveContentType(format),
+          "Content-Disposition": contentDisposition("attachment", `${name}.${format}`),
+          "Content-Security-Policy": "default-src 'none'; sandbox",
+        },
+      });
+    } catch (cause) {
+      if (!(cause instanceof ArchiveError)) throw cause;
+      logger.warn("git:archive-refused", { format, code: cause.code });
+      return errorResponse(
+        cause.code === "archive_too_large" ? 413 : 422,
+        cause.code,
+        cause.message
+      );
+    }
+  }
   if (resource === "raw") {
-    const blob = path ? await repo.readFile({ ref, path }) : null;
-    return blob
-      ? new Response(request.method === "HEAD" ? null : blob.stream(), {
-          headers: {
-            "Content-Type": blob.type || "application/octet-stream",
-            "Content-Length": String(blob.size),
-            "X-Content-Type-Options": "nosniff",
-            "Cache-Control": "no-store",
-            "Content-Disposition": "attachment",
-          },
+    const spec = url.searchParams.get("spec");
+    const target = spec
+      ? await splitRawSpec(spec, access.repository.defaultBranch, async () => {
+          const names = new Set<string>();
+          for (const item of await listArtifactRefs(repo, env.LOG_LEVEL))
+            names.add(item.name.replace(/^refs\/(?:heads|tags)\//, ""));
+          return names;
         })
-      : errorResponse(404, "not_found", "File was not found.");
+      : { ref, path };
+    if (!target?.path || !validPath(target.path) || target.ref.length > 255)
+      return errorResponse(404, "not_found", "File was not found.");
+    const served = await serveRaw(repo, target, {
+      publicRepository: access.repository.visibility === "public" && !session,
+      forceDownload: url.searchParams.get("download") === "1",
+      head: request.method === "HEAD",
+      ifNoneMatch: request.headers.get("If-None-Match"),
+    });
+    if (served.status === 413) logger.warn("git:raw-refused", { reason: "file_too_large" });
+    return served;
   }
   if (resource === "graph") {
     const refs = await listArtifactRefs(repo, env.LOG_LEVEL);

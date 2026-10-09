@@ -112,6 +112,7 @@ export function requiredAccessTokenScope(
   if (parts.length === 1) return "repo:write";
   if (parts.length === 2) return "admin";
   const resource = parts[2] ?? "";
+  if (resource === "releases") return "repo:write";
   if (ISSUE_RESOURCES.has(resource)) return "issues:write";
   if (resource === "pull-requests") return "pulls:write";
   return "admin";

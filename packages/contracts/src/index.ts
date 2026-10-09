@@ -26,6 +26,7 @@ export * from "./mentions";
 export * from "./notifications";
 export * from "./webhooks";
 export * from "./text-lines";
+export * from "./releases";
 
 export const ErrorCodeSchema = z.enum([
   "bad_request",

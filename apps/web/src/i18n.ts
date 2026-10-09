@@ -16,6 +16,7 @@ import communityMessages from "./i18n/community";
 import actionsMessages from "./i18n/actions";
 import browserAccountMessages from "./i18n/browserAccounts";
 import importMessages from "./i18n/imports";
+import releasesMessages from "./i18n/releases";
 import { securityMessages } from "./i18n/security";
 import membershipMessages from "./i18n/membership";
 import { notificationMessages } from "./i18n/notifications";
@@ -862,6 +863,7 @@ export const i18n = createI18n({
       ...actionsMessages["zh-CN"],
       ...browserAccountMessages["zh-CN"],
       ...importMessages["zh-CN"],
+      ...releasesMessages["zh-CN"],
       ...accessTokenMessages["zh-CN"],
       ...securityMessages["zh-CN"],
       ...membershipMessages["zh-CN"],
@@ -886,6 +888,7 @@ export const i18n = createI18n({
       ...actionsMessages.en,
       ...browserAccountMessages.en,
       ...importMessages.en,
+      ...releasesMessages.en,
       ...accessTokenMessages.en,
       ...securityMessages.en,
       ...membershipMessages.en,

@@ -13,6 +13,7 @@ import RepositoryBlame from "../components/RepositoryBlame.vue";
 import RepositoryCode from "../components/RepositoryCode.vue";
 import RepositoryCommit from "../components/RepositoryCommit.vue";
 import RepositoryHistory from "../components/RepositoryHistory.vue";
+import RepositoryReleases from "../components/RepositoryReleases.vue";
 import RepositoryCollaboration from "../components/RepositoryCollaboration.vue";
 import RepositorySettingsPanel from "../components/RepositorySettings.vue";
 import RepositoryTasks from "../components/RepositoryTasks.vue";
@@ -35,6 +36,7 @@ const tabs: { key: string; label: string; icon: IconName; write?: boolean }[] = 
   { key: "code", label: "code", icon: "code" },
   { key: "commits", label: "commitGraph", icon: "clock" },
   { key: "compare", label: "compare", icon: "diff" },
+  { key: "releases", label: "releases", icon: "tag" },
   { key: "issues", label: "issues", icon: "issue" },
   { key: "pulls", label: "pulls", icon: "pr" },
   { key: "tasks", label: "tasks", icon: "task" },
@@ -296,6 +298,7 @@ watch(
           :graph-enabled="repository.graphEnabled"
           @changed="refreshCounts"
         />
+        <RepositoryReleases v-else-if="section === 'releases'" :repository="repository" />
         <template v-else-if="section === 'deploy' && repository.canWrite && !repository.archived"
           ><div class="repository-panel-head">
             <h2>{{ t("ghDeployTab") }}</h2>

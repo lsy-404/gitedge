@@ -20,6 +20,7 @@ import { auditActor, recordAudit } from "../../../src/worker/common/audit";
 import { createLogger } from "../../../src/worker/common/logger";
 import { repositoryRole } from "../../../src/worker/common/repositories";
 import { revokeAgentSessions } from "./agent-events";
+import { purgeReleaseAssets } from "./releases";
 import { parseJson, repoResponse, type ForgeEnv, type RepositoryRow } from "./common";
 
 const MAX_DELETED_LISTING = 100;
@@ -419,6 +420,10 @@ export async function purgeRepository(env: ForgeEnv, repositoryId: string): Prom
     row = await read();
   }
   if (row?.state === "artifacts_deleted") {
+    if (!(await purgeReleaseAssets(env, repositoryId))) {
+      logger.info("purge:release-assets-partial", {});
+      return false;
+    }
     await env.DB.prepare(
       "DELETE FROM repositories WHERE id = ? AND deleted_at IS NOT NULL AND purge_state = 'artifacts_deleted'"
     )

@@ -22,7 +22,7 @@ export function editablePath(path: string): boolean {
     path.split("/").length <= 32
   );
 }
-function author(name: string, id: string): git.CommitObject["author"] {
+export function author(name: string, id: string): git.CommitObject["author"] {
   return {
     name,
     email: `${id}@users.gitedge.invalid`,
@@ -30,14 +30,14 @@ function author(name: string, id: string): git.CommitObject["author"] {
     timezoneOffset: 0,
   };
 }
-async function revokeWriteToken(repo: ArtifactsRepo, tokenId: string, logger: Logger) {
+export async function revokeWriteToken(repo: ArtifactsRepo, tokenId: string, logger: Logger) {
   try {
     await repo.revokeToken(tokenId);
   } catch {
     logger.warn("artifacts:write-token-revoke-failed", {});
   }
 }
-async function checkout(
+export async function checkout(
   repo: ArtifactsRepo,
   branch: string,
   expectedOid: string | null,

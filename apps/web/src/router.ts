@@ -74,7 +74,7 @@ export const router = createRouter({
       meta: { allowAnonymous: true },
     },
     {
-      path: "/:owner/:repo/:section(code|issues|pulls|discussions|wiki|tasks|commits|compare|settings|agents|deploy|actions)?",
+      path: "/:owner/:repo/:section(code|issues|pulls|discussions|wiki|tasks|commits|compare|releases|settings|agents|deploy|actions)?",
       component: RepositoryView,
       meta: { allowAnonymous: true },
     },

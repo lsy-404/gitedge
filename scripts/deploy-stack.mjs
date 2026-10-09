@@ -127,6 +127,22 @@ function bootstrapCyclicWorkers() {
   return true;
 }
 
+// Wrangler does not create R2 buckets on deploy, so the release asset bucket is ensured first.
+function ensureReleaseAssetBucket() {
+  const config = JSON.parse(readFileSync("workers/forge/wrangler.jsonc", "utf8"));
+  const bucket = config.r2_buckets?.find((entry) => entry.binding === "RELEASE_ASSETS");
+  if (!bucket) throw new Error("workers/forge/wrangler.jsonc must bind RELEASE_ASSETS.");
+  const info = spawnSync("pnpm", ["exec", "wrangler", "r2", "bucket", "info", bucket.bucket_name], {
+    encoding: "utf8",
+    env: cloudflareEnvironment(),
+  });
+  if (info.status === 0) return true;
+  console.log(`Creating R2 bucket ${bucket.bucket_name}`);
+  return run("pnpm", ["exec", "wrangler", "r2", "bucket", "create", bucket.bucket_name], {
+    cloudflare: true,
+  });
+}
+
 export function deployStack({ dryRun = false } = {}) {
   if (!assertProductionResourceIds()) return false;
   if (!run("pnpm", ["--dir", "apps/web", "run", "build"])) return false;
@@ -153,6 +169,7 @@ export function deployStack({ dryRun = false } = {}) {
     }
   }
 
+  if (!dryRun && !ensureReleaseAssetBucket()) return false;
   if (!dryRun && !bootstrapCyclicWorkers()) return false;
 
   for (const service of ["limits", "auth", "forge", "git", "actions", "deploy", "gateway"]) {

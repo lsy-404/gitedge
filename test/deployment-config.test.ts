@@ -53,7 +53,7 @@ describe("deployment isolation", () => {
       if (service !== "gateway") expect(config.routes ?? []).toEqual([]);
       if (["auth", "forge", "git"].includes(service))
         expect(config.artifacts).toEqual([{ binding: "ARTIFACTS", namespace: "gitedge" }]);
-      if (service === "git") expect(config.r2_buckets).toBeUndefined();
+      if (service !== "forge") expect(config.r2_buckets).toBeUndefined();
       if (service === "gateway") {
         expect(config.routes).toHaveLength(1);
         expect(config.assets?.html_handling).toBe("none");

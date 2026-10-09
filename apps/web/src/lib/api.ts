@@ -110,6 +110,14 @@ import type {
   EditRepositoryFileInput,
   RepositoryBranch,
 } from "../../../../packages/contracts/src/repository-controls";
+import type {
+  CreateReleaseInput,
+  CreateTagInput,
+  Release,
+  ReleaseAsset,
+  RepositoryTag,
+  UpdateReleaseInput,
+} from "../../../../packages/contracts/src/releases";
 import type { SsoIdentity, SsoProviderSummary } from "../../../../packages/contracts/src/sso";
 import type {
   BrowserAccounts,
@@ -176,6 +184,14 @@ export type {
   EditRepositoryFileInput,
   RepositoryBranch,
 } from "../../../../packages/contracts/src/repository-controls";
+export type {
+  CreateReleaseInput,
+  CreateTagInput,
+  Release,
+  ReleaseAsset,
+  RepositoryTag,
+  UpdateReleaseInput,
+} from "../../../../packages/contracts/src/releases";
 export type {
   Actor,
   Agent,
@@ -527,6 +543,37 @@ function repositoryPath(repositoryId: string, resource: string): string {
 
 function gitPath(repositoryId: string, resource: string): string {
   return `/api/git/repositories/${encodeURIComponent(repositoryId)}/${resource}`;
+}
+
+export function releaseAssetUrl(repositoryId: string, releaseId: string, assetId: string): string {
+  return repositoryPath(
+    repositoryId,
+    `releases/${encodeURIComponent(releaseId)}/assets/${encodeURIComponent(assetId)}`
+  );
+}
+
+function encodePath(path: string): string {
+  return path.split("/").map(encodeURIComponent).join("/");
+}
+
+export function rawFileUrl(
+  owner: string,
+  name: string,
+  ref: string,
+  path: string,
+  download = false
+): string {
+  const base = `/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/raw/${encodePath(ref)}/${encodePath(path)}`;
+  return download ? `${base}?download=1` : base;
+}
+
+export function archiveUrl(
+  owner: string,
+  name: string,
+  ref: string,
+  format: "zip" | "tar.gz"
+): string {
+  return `/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/archive/${encodePath(ref)}.${format}`;
 }
 
 function actionsRepositoryPath(repositoryId: string, resource: string): string {
@@ -888,6 +935,57 @@ export const api = {
       method: "DELETE",
       body: JSON.stringify(payload),
     }),
+  repositoryTags: (repositoryId: string) =>
+    requestPage<RepositoryTag>(gitPath(repositoryId, "tags")),
+  createRepositoryTag: (repositoryId: string, payload: CreateTagInput) =>
+    request<RepositoryTag>(gitPath(repositoryId, "tags"), {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  deleteRepositoryTag: (repositoryId: string, payload: { name: string; expectedOid: string }) =>
+    request<{ deleted: boolean }>(gitPath(repositoryId, "tags"), {
+      method: "DELETE",
+      body: JSON.stringify(payload),
+    }),
+  releases: (repositoryId: string) =>
+    requestPage<Release>(repositoryPath(repositoryId, "releases")),
+  latestRelease: (repositoryId: string) =>
+    request<Release>(repositoryPath(repositoryId, "releases/latest")),
+  createRelease: (repositoryId: string, payload: CreateReleaseInput) =>
+    request<Release>(repositoryPath(repositoryId, "releases"), {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateRelease: (repositoryId: string, releaseId: string, payload: UpdateReleaseInput) =>
+    request<Release>(repositoryPath(repositoryId, `releases/${encodeURIComponent(releaseId)}`), {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  deleteRelease: (repositoryId: string, releaseId: string) =>
+    request<{ deleted: boolean }>(
+      repositoryPath(repositoryId, `releases/${encodeURIComponent(releaseId)}`),
+      { method: "DELETE" }
+    ),
+  uploadReleaseAsset: (repositoryId: string, releaseId: string, file: File) =>
+    request<ReleaseAsset>(
+      repositoryPath(
+        repositoryId,
+        `releases/${encodeURIComponent(releaseId)}/assets${query({ name: file.name })}`
+      ),
+      {
+        method: "PUT",
+        body: file,
+        headers: { "Content-Type": file.type || "application/octet-stream" },
+      }
+    ),
+  deleteReleaseAsset: (repositoryId: string, releaseId: string, assetId: string) =>
+    request<{ deleted: boolean }>(
+      repositoryPath(
+        repositoryId,
+        `releases/${encodeURIComponent(releaseId)}/assets/${encodeURIComponent(assetId)}`
+      ),
+      { method: "DELETE" }
+    ),
   editRepositoryFile: (repositoryId: string, payload: EditRepositoryFileInput) =>
     request<{ oid: string; branch: string; path: string }>(gitPath(repositoryId, "edit"), {
       method: "POST",

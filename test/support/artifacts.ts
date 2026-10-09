@@ -18,6 +18,25 @@ interface FixtureRepository {
   readonly commits: ArtifactsCommitMetadata[];
   /** Per-ref history for log(); refs without an entry see every commit. */
   readonly branchCommits: Map<string, ArtifactsCommitMetadata[]>;
+  readonly trees: Map<string, ArtifactsTreeEntry[]>;
+  readonly blobs: Map<string, Uint8Array>;
+}
+
+type FixtureFile =
+  string | Uint8Array | { content: string | Uint8Array; mode: "100755" | "120000" };
+
+async function gitObjectId(kind: "blob" | "tree", body: Uint8Array): Promise<string> {
+  const header = new TextEncoder().encode(`${kind} ${body.byteLength}\0`);
+  const bytes = new Uint8Array(header.byteLength + body.byteLength);
+  bytes.set(header);
+  bytes.set(body, header.byteLength);
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-1", bytes));
+  return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+interface FixtureDirectory {
+  files: Map<string, { oid: string; mode: string }>;
+  directories: Map<string, FixtureDirectory>;
 }
 
 const baseCommit: ArtifactsCommitMetadata = {
@@ -84,6 +103,8 @@ function createRepository(
     tokens: new Map(),
     commits: [commit],
     branchCommits: new Map(),
+    trees: new Map(),
+    blobs: new Map(),
   };
   const initialToken = createToken(repository, "write", 86_400);
   return {
@@ -153,6 +174,52 @@ export class FixtureArtifacts implements Artifacts {
     return this.repositories.delete(name);
   }
 
+  /** Replaces the repository's single commit with one whose tree holds the given files. */
+  async seedFiles(name: string, files: Record<string, FixtureFile>): Promise<string> {
+    const repository = this.repositories.get(name);
+    if (!repository) throw new Error(`Artifact repo not found: ${name}`);
+    const root: FixtureDirectory = { files: new Map(), directories: new Map() };
+    const encoder = new TextEncoder();
+    for (const [path, value] of Object.entries(files)) {
+      const detail = typeof value === "object" && "mode" in value ? value : null;
+      const raw = detail ? detail.content : (value as string | Uint8Array);
+      const bytes = typeof raw === "string" ? encoder.encode(raw) : raw;
+      const oid = await gitObjectId("blob", bytes);
+      repository.blobs.set(oid, bytes);
+      const segments = path.split("/");
+      const leaf = segments.pop() ?? path;
+      let directory = root;
+      for (const segment of segments) {
+        const next = directory.directories.get(segment) ?? {
+          files: new Map(),
+          directories: new Map(),
+        };
+        directory.directories.set(segment, next);
+        directory = next;
+      }
+      directory.files.set(leaf, { oid, mode: detail?.mode ?? "100644" });
+    }
+    const write = async (directory: FixtureDirectory): Promise<string> => {
+      const entries: ArtifactsTreeEntry[] = [];
+      for (const [entryName, child] of directory.directories)
+        entries.push({ name: entryName, mode: "40000", hash: await write(child), type: "tree" });
+      for (const [entryName, file] of directory.files)
+        entries.push({
+          name: entryName,
+          mode: file.mode,
+          hash: file.oid,
+          type: file.mode === "120000" ? "symlink" : file.mode === "100755" ? "exec" : "blob",
+        });
+      const hash = await gitObjectId("tree", encoder.encode(JSON.stringify(entries)));
+      repository.trees.set(hash, entries);
+      return hash;
+    };
+    const treeHash = await write(root);
+    const commit = { ...repository.commits[0], hash: `${treeHash.slice(0, 39)}c`, treeHash };
+    repository.commits.splice(0, repository.commits.length, commit);
+    return commit.hash;
+  }
+
   snapshot(name: string): ArtifactsFixtureSnapshot {
     const repository = this.repositories.get(name);
     if (!repository) throw new Error(`Artifact repo not found: ${name}`);
@@ -164,8 +231,15 @@ export class FixtureArtifacts implements Artifacts {
 
   private handle(repository: FixtureRepository): ArtifactsRepo {
     const fixture = this;
+    let disposed = false;
+    // Mirrors RPC stubs, which refuse calls once their handle is disposed.
+    const live = () => {
+      if (disposed) throw new Error("Attempted to use an Artifacts handle after disposal.");
+    };
     return {
-      [Symbol.dispose]() {},
+      [Symbol.dispose]() {
+        disposed = true;
+      },
       async createToken(scope = "write", ttlSeconds = 86_400) {
         if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds < 60 || ttlSeconds > 31_536_000)
           throw new Error("Invalid fixture token TTL.");
@@ -186,19 +260,24 @@ export class FixtureArtifacts implements Artifacts {
       async info() {
         return { ...repository.info };
       },
-      async readBlob() {
-        return null;
+      async readBlob(hash) {
+        live();
+        const bytes = repository.blobs.get(hash);
+        return bytes ? new Blob([bytes as BlobPart]) : null;
       },
-      async readTree() {
-        return [];
+      async readTree(hash) {
+        live();
+        return repository.trees.get(hash) ?? (hash === baseCommit.treeHash ? [] : null);
       },
       async readCommit(oid) {
+        live();
         return repository.commits.find((commit) => commit.hash === oid) ?? null;
       },
       async readFile() {
         return null;
       },
       async log(options) {
+        live();
         return [...(repository.branchCommits.get(options?.ref ?? "") ?? repository.commits)];
       },
       async fork(name, options = {}) {
