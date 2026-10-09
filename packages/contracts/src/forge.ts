@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { RepositoryRole } from "./repository-controls";
+import type { RepositoryForkOrigin } from "./social";
 
 export const ActorSchema = z.object({
   kind: z.enum(["user", "agent", "ci"]),
@@ -54,7 +55,7 @@ export interface Repository {
   starCount: number;
   forkCount: number;
   /** The parent repository when the viewer can read it. */
-  forkOf: { id: string; owner: string; name: string } | null;
+  forkOf: RepositoryForkOrigin | null;
   /** The viewer's effective role, null when unknown or anonymous. */
   viewerRole: RepositoryRole | null;
   canWrite: boolean;

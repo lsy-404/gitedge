@@ -103,6 +103,8 @@ function settingsUpdated(settings: RepositorySettings): void {
   };
   void loadCounts(repository.value, loadVersion);
 }
+// Remounts the code view after a fork sync moved a branch.
+const codeVersion = ref(0);
 function topicsSaved(topics: string[]): void {
   if (repository.value) repository.value = { ...repository.value, topics };
 }
@@ -270,7 +272,7 @@ watch(
             >
           </div>
         </div>
-        <RepositoryForkOrigin :repository="repository" />
+        <RepositoryForkOrigin :repository="repository" @synced="codeVersion += 1" />
         <TopicChips class="repository-topics" :topics="repository.topics" />
         <nav class="repository-nav" :aria-label="t('repositoryNav')">
           <RouterLink
@@ -303,6 +305,7 @@ watch(
         />
         <RepositoryCode
           v-else-if="['code', 'commits', 'compare'].includes(section)"
+          :key="codeVersion"
           :repository="repository"
           :section="section"
           :graph-enabled="repository.graphEnabled"

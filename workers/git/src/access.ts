@@ -138,11 +138,14 @@ export async function resolveProposalHead(
     .bind(head.repositoryId, access.repository.id)
     .first<{ id: string; artifactName: string; visibility: "public" | "private" }>();
   if (!fork) return null;
-  if (
-    fork.visibility === "public" ||
-    (access.user && (await repositoryRole(env.DB, fork.id, access.user.id)) !== null)
-  )
-    return fork.artifactName;
+  const user = access.user;
+  // Membership reaches a private fork only for credentials not scoped to another repository.
+  const member =
+    user !== null &&
+    !user.agentSession &&
+    (!user.token || accessTokenAllowsRepository(user.token, fork.id)) &&
+    (await repositoryRole(env.DB, fork.id, user.id)) !== null;
+  if (fork.visibility === "public" || member) return fork.artifactName;
   const published = await env.DB.prepare(
     "SELECT id FROM forge_pull_requests WHERE repository_id = ? AND head_repository_id = ? AND ((state = 'open' AND head_ref = ?) OR (state = 'merged' AND merge_head_oid = ?))"
   )

@@ -27,9 +27,16 @@ const createError = ref("");
 const owner = ref(sessionState.user?.identifier ?? "");
 const name = ref(props.repository.slug);
 const signedIn = computed(() => sessionState.user !== null);
+// A private repository may only be forked into the caller's account or its own organization.
 const owners = computed(() => [
   ...(sessionState.user ? [sessionState.user.identifier] : []),
-  ...organizations.value.filter((item) => item.role === "owner").map((item) => item.slug),
+  ...organizations.value
+    .filter(
+      (item) =>
+        item.role === "owner" &&
+        (props.repository.visibility === "public" || item.slug === props.repository.owner)
+    )
+    .map((item) => item.slug),
 ]);
 const loginTarget = computed(() => ({ path: "/login", query: { redirect: route.fullPath } }));
 
@@ -37,6 +44,7 @@ const errorKeys: Readonly<Record<string, string>> = {
   conflict: "forkErrorNameTaken",
   quota_exceeded: "forkErrorQuota",
   forbidden: "forkErrorOwner",
+  fork_owner_not_allowed: "forkErrorPrivateOwner",
 };
 const path = (item: Pick<Repository, "owner" | "name">) =>
   `/${encodeURIComponent(item.owner)}/${encodeURIComponent(item.name)}`;

@@ -8,6 +8,7 @@ import ExploreRepositoryList from "../components/ExploreRepositoryList.vue";
 import NoticeBar from "../components/NoticeBar.vue";
 import StatusState from "../components/StatusState.vue";
 import TextField from "../components/TextField.vue";
+import "../styles/workspace.css";
 import "../styles/social.css";
 
 const SEARCH_DELAY_MS = 300;
@@ -98,7 +99,7 @@ onBeforeUnmount(() => clearTimeout(timer));
 </script>
 
 <template>
-  <section class="explore-page">
+  <section class="workspace-page explore-page">
     <header class="workspace-page-heading">
       <div>
         <h1>{{ t("exploreTitle") }}</h1>

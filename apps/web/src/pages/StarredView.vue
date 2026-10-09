@@ -6,6 +6,7 @@ import { api } from "../lib/api";
 import ExploreRepositoryList from "../components/ExploreRepositoryList.vue";
 import NoticeBar from "../components/NoticeBar.vue";
 import StatusState from "../components/StatusState.vue";
+import "../styles/workspace.css";
 import "../styles/social.css";
 
 const { t } = useI18n();
@@ -45,7 +46,7 @@ onMounted(load);
 </script>
 
 <template>
-  <section class="explore-page">
+  <section class="workspace-page explore-page">
     <header class="workspace-page-heading">
       <div>
         <h1>{{ t("starredTitle") }}</h1>

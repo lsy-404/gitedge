@@ -197,6 +197,31 @@ describe("forks", () => {
     expect(create).toHaveBeenCalledWith(repository.id, { owner: "guild", name: "project" });
   });
 
+  it("offers only the caller's account and the parent's organization for a private repository", async () => {
+    vi.spyOn(api, "forks").mockResolvedValue({ items: [], truncated: false });
+    vi.spyOn(api, "organizations").mockResolvedValue([
+      { slug: "guild", displayName: "Guild", role: "owner" },
+      { slug: repository.owner, displayName: "Parent", role: "owner" },
+    ]);
+    vi.spyOn(api, "forkRepository").mockRejectedValue(
+      new ApiError(403, "not allowed", "fork_owner_not_allowed")
+    );
+    const mounted = await mountAt("/_verify/forks-private", "/_verify/forks-private", () =>
+      h(RepositoryForks, { repository: { ...repository, visibility: "private" } })
+    );
+    const options = Array.from(mounted.root.querySelectorAll("select option")).map(
+      (option) => option.textContent
+    );
+    expect(options).toEqual(["user@example.test", repository.owner]);
+    const form = mounted.root.querySelector<HTMLElement>("form.fork-form");
+    if (!form) throw new Error("Missing fork form");
+    submit(form);
+    await settle();
+    expect(mounted.root.textContent).toContain(
+      "A private repository can only be forked into your own account"
+    );
+  });
+
   it("explains a taken name", async () => {
     vi.spyOn(api, "forks").mockResolvedValue({ items: [], truncated: false });
     vi.spyOn(api, "organizations").mockResolvedValue([]);

@@ -908,12 +908,21 @@ async function featureRequest(
         )
           .bind(parsed.data.headRepositoryId, repository.id)
           .first<{ id: string; visibility: "public" | "private" }>();
+        const forkRole = fork ? await repositoryRole(env.DB, fork.id, user.id) : null;
         if (
           !fork ||
           (fork.visibility === "private" &&
-            (await repositoryRole(env.DB, fork.id, user.id)) === null)
+            (forkRole === null ||
+              (user.token && !accessTokenAllowsRepository(user.token, fork.id))))
         )
           return errorResponse(404, "not_found", "Pull request head repository was not found.");
+        // Opening the pull request discloses a private fork's head to every base reader.
+        if (fork.visibility === "private" && !writableRole(forkRole))
+          return errorResponse(
+            403,
+            "forbidden",
+            "Publishing a private fork branch requires write access to the fork."
+          );
       }
       const number = await nextNumber(env, targetTable, repository.id),
         id = crypto.randomUUID(),

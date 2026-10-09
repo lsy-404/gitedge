@@ -16,6 +16,7 @@ import { auditActor, recordAudit } from "../../../src/worker/common/audit";
 import { randomHex } from "../../../src/worker/common/encoding";
 import { dataResponse, errorResponse, jsonResponse } from "../../../src/worker/common/http";
 import { createLogger } from "../../../src/worker/common/logger";
+import { forkAdmitsCollaborator } from "./forks";
 import { invitationNotificationStatement } from "./notifications";
 import { parseJson, type ForgeEnv, type RepositoryRow } from "./common";
 
@@ -154,6 +155,12 @@ async function createInvitation(
     }
     inviteeId = person.id;
   }
+  if (scope.repository && !(await forkAdmitsCollaborator(env, scope.repository.id, inviteeId)))
+    return errorResponse(
+      409,
+      "fork_collaborator_not_allowed",
+      "Collaborators of a fork of a private repository must already be able to read the parent."
+    );
 
   const id = crypto.randomUUID();
   const token = inviteeId === null ? `${TOKEN_PREFIX}${randomHex(32)}` : null;
@@ -329,6 +336,12 @@ async function resolveInvitation(
           .first();
   if (alreadyIn)
     return errorResponse(409, "already_member", "You already have access to this resource.");
+  if (row.repositoryId && !(await forkAdmitsCollaborator(env, row.repositoryId, user.id)))
+    return errorResponse(
+      409,
+      "fork_collaborator_not_allowed",
+      "Collaborators of a fork of a private repository must already be able to read the parent."
+    );
 
   const grant =
     row.kind === "organization"

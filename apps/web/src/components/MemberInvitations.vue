@@ -3,7 +3,7 @@ import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { FluentButton, FluentField, FluentSelect } from "@platform-kit/fluent/vue";
 import type { CreatedInvitation, Invitation, InviteePayload } from "../lib/api";
-import { api, errorMessage } from "../lib/api";
+import { ApiError, api, errorMessage } from "../lib/api";
 import ConfirmButton from "./ConfirmButton.vue";
 import NoticeBar from "./NoticeBar.vue";
 import StatusBadge from "./StatusBadge.vue";
@@ -81,12 +81,15 @@ async function invite(): Promise<void> {
     await load();
     emit("changed");
   } catch (cause) {
-    formError.value = errorMessage(
-      cause,
-      t,
-      { 404: "inviteUserNotFound", 409: "inviteConflict" },
-      "inviteError"
-    );
+    formError.value =
+      cause instanceof ApiError && cause.code === "fork_collaborator_not_allowed"
+        ? t("inviteForkParentRequired")
+        : errorMessage(
+            cause,
+            t,
+            { 404: "inviteUserNotFound", 409: "inviteConflict" },
+            "inviteError"
+          );
   } finally {
     saving.value = false;
   }

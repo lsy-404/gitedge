@@ -9,7 +9,7 @@ import { checkout, GitWriteConflict, revokeWriteToken } from "./write";
 const MAX_AHEAD_COMMITS = 250;
 
 export type ForkSyncOutcome =
-  | { kind: "synced"; result: ForkSyncResult }
+  | { kind: "synced"; result: ForkSyncResult; before: string }
   | { kind: "not_fast_forward" }
   | { kind: "missing_upstream" };
 
@@ -45,7 +45,11 @@ export async function syncForkBranch(
   const upstreamTip = await resolveCommit(upstream, branch);
   if (!upstreamTip) return { kind: "missing_upstream" };
   if (forkTip.hash === upstreamTip.hash)
-    return { kind: "synced", result: { status: "up_to_date", branch, oid: forkTip.hash } };
+    return {
+      kind: "synced",
+      result: { status: "up_to_date", branch, oid: forkTip.hash },
+      before: forkTip.hash,
+    };
   if (!(await reaches(upstream, upstreamTip.hash, forkTip.hash)))
     return { kind: "not_fast_forward" };
 
@@ -91,7 +95,11 @@ export async function syncForkBranch(
     createLogger(level, { service: "git-fork-sync", repoId: info.name }).info("git:fork-synced", {
       branch,
     });
-    return { kind: "synced", result: { status: "fast_forwarded", branch, oid: upstreamTip.hash } };
+    return {
+      kind: "synced",
+      result: { status: "fast_forwarded", branch, oid: upstreamTip.hash },
+      before: forkTip.hash,
+    };
   } catch (error) {
     if (
       error instanceof git.Errors.PushRejectedError ||

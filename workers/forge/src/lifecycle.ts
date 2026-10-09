@@ -20,7 +20,7 @@ import { auditActor, recordAudit } from "../../../src/worker/common/audit";
 import { createLogger } from "../../../src/worker/common/logger";
 import { repositoryRole } from "../../../src/worker/common/repositories";
 import { revokeAgentSessions } from "./agent-events";
-import { detachForks } from "./forks";
+import { closeForkPullRequests, detachForks, namespaceMayHoldFork } from "./forks";
 import { purgeReleaseAssets } from "./releases";
 import { parseJson, repoResponse, type ForgeEnv, type RepositoryRow } from "./common";
 
@@ -120,6 +120,7 @@ export async function repositoryLifecycle(
     if (marked.results.length !== 1)
       return errorResponse(404, "not_found", "Repository was not found.");
     await detachForks(env, { parentId: repository.id, level: env.LOG_LEVEL });
+    await closeForkPullRequests(env, [repository.id]);
     // Session forks hold direct Artifacts credentials, so they must not outlive the deletion.
     const revoked = await revokeAgentSessions(env, { repositoryId: repository.id });
     logger.info("lifecycle:repository-deleted", { userId: user.id, purgeAfter, revoked });
@@ -154,6 +155,19 @@ export async function repositoryLifecycle(
     );
   if (target.id === repository.namespace_id)
     return errorResponse(400, "bad_request", "The repository already belongs to this owner.");
+  const parent = repository.fork_of
+    ? await env.DB.prepare(
+        "SELECT id, namespace_id, visibility FROM repositories WHERE id = ? AND deleted_at IS NULL"
+      )
+        .bind(repository.fork_of)
+        .first<Pick<RepositoryRow, "id" | "namespace_id" | "visibility">>()
+    : null;
+  if (parent && !(await namespaceMayHoldFork(env, parent, target.id)))
+    return errorResponse(
+      409,
+      "fork_owner_not_allowed",
+      "A fork of a private repository can only move to your own account or the parent's owner."
+    );
   const taken = await env.DB.prepare(
     "SELECT 1 AS found FROM repository_paths WHERE namespace_id = ? AND slug = ? AND repository_id != ?"
   )
@@ -174,6 +188,8 @@ export async function repositoryLifecycle(
     logger.warn("lifecycle:transfer-conflict", { targetId: target.id });
     return errorResponse(409, "conflict", "The target already has a repository with this name.");
   }
+  // Forks kept in the previous owner's namespace may now have readers outside the parent.
+  await detachForks(env, { parentId: repository.id, level: env.LOG_LEVEL });
   // Sessions were scoped to the previous owner's membership, so they end with the transfer.
   const revoked = await revokeAgentSessions(env, { repositoryId: repository.id });
   logger.info("lifecycle:repository-transferred", {

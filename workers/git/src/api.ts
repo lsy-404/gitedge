@@ -48,6 +48,7 @@ import {
   GitMergeInputSchema,
   GitOidSchema,
   accessTokenAllows,
+  accessTokenAllowsRepository,
   requiredAccessTokenScope,
   sha256Hex,
 } from "../../../packages/contracts/src/index";
@@ -416,6 +417,7 @@ export async function handleGitApi(
       parent &&
       (parent.visibility === "public" ||
         (access.repository.visibility === "private" &&
+          (!access.user.token || accessTokenAllowsRepository(access.user.token, parent.id)) &&
           (await repositoryRole(env.DB, parent.id, access.user.id)) !== null));
     if (!parent || !mayDrawFromParent)
       return errorResponse(404, "upstream_unavailable", "The upstream repository is unavailable.");
@@ -432,12 +434,36 @@ export async function handleGitApi(
           if (
             latest instanceof Response ||
             !latest?.repository.canWrite ||
-            latest.repository.archived
+            latest.repository.archived ||
+            (await protectedBranch(env.DB, repositoryId, input.data.branch))
           )
-            throw new GitWriteConflict("Repository permissions changed. Reload before retrying.");
+            throw new GitWriteConflict(
+              "Repository permissions or protection changed. Reload before retrying."
+            );
         },
         env.LOG_LEVEL
       );
+      if (outcome.kind === "synced" && outcome.result.status === "fast_forwarded") {
+        const operation = Promise.all([
+          recordGitWrite(
+            env,
+            repositoryId,
+            access.repository.artifactName,
+            access.user,
+            input.data.branch,
+            outcome.result.oid
+          ),
+          reportPushEvent(env, repositoryId, access.user, [
+            {
+              ref: `refs/heads/${input.data.branch}`,
+              before: outcome.before,
+              after: outcome.result.oid,
+            },
+          ]),
+        ]);
+        if (ctx) ctx.waitUntil(operation);
+        else await operation;
+      }
       if (outcome.kind === "missing_upstream")
         return errorResponse(404, "branch_not_found", "The upstream has no branch of that name.");
       if (outcome.kind === "not_fast_forward")

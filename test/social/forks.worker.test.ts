@@ -19,6 +19,7 @@ import {
 } from "../support/stack";
 
 const HEAD = "2".repeat(40);
+const gitEnv = { DB: env.DB, ARTIFACTS: artifacts };
 const BASE = "1".repeat(40);
 const MERGE = "c".repeat(40);
 const gitRequests: { method: string; url: URL; body: unknown }[] = [];
@@ -225,7 +226,7 @@ describe("forking", () => {
       .bind(child.id)
       .first<{ state: string }>();
     expect(state?.state).toBe("closed");
-    expect(await detachForks(env as never)).toBe(0);
+    expect(await detachForks(platform)).toBe(0);
   });
 });
 
@@ -380,19 +381,19 @@ describe("Git head resolution", () => {
       .bind(forkId)
       .first<{ name: string }>();
     expect(
-      await resolveProposalHead(env as never, access(publicId, null), {
+      await resolveProposalHead(gitEnv, access(publicId, null), {
         repositoryId: forkId,
         ref: "topic",
       })
     ).toBe(row?.name);
     expect(
-      await resolveProposalHead(env as never, access(publicId, null), {
+      await resolveProposalHead(gitEnv, access(publicId, null), {
         repositoryId: privateId,
         ref: "topic",
       })
     ).toBeNull();
     expect(
-      await resolveProposalHead(env as never, access(publicId, null), {
+      await resolveProposalHead(gitEnv, access(publicId, null), {
         repositoryId: forkId,
         sessionId: "s",
         ref: "topic",
@@ -411,7 +412,7 @@ describe("Git head resolution", () => {
     reader.repository.visibility = "private";
     const resolve = (ref: string) =>
       resolveProposalHead(
-        env as never,
+        gitEnv,
         { ...reader, user: { id: "x", identifier: "x", groupKey: "free" } },
         {
           repositoryId: child.id,
@@ -468,5 +469,189 @@ describe("Git head resolution", () => {
       message: "m",
     });
     expect(unrelated.status).toBe(404);
+  });
+});
+
+describe("private fork boundaries", () => {
+  let keeper: Person;
+  let reader: Person;
+  let outsider: Person;
+  let vaultId: string;
+  let vaultForkId: string;
+  const invite = (person: Person, repositoryId: string, invitee: object) =>
+    call(person, `/repositories/${repositoryId}/invitations`, "POST", { ...invitee, role: "read" });
+
+  beforeAll(async () => {
+    [keeper, reader, outsider] = await Promise.all(
+      ["keeper", "reader", "outsider"].map(createPerson)
+    );
+    vaultId = await createRepository(keeper, "vault", "private");
+    await grantCollaborator(env.DB, vaultId, reader.id, "read");
+    const organization = await call(reader, "/organizations", "POST", {
+      slug: "reader-org",
+      displayName: "Reader org",
+    });
+    expect(organization.status).toBe(201);
+  });
+
+  it("forks a private repository only into the caller's account or the parent's owner", async () => {
+    const elsewhere = await fork(reader, vaultId, { owner: "reader-org" });
+    expect(elsewhere.status).toBe(403);
+    expect(await elsewhere.json()).toMatchObject({ error: { code: "fork_owner_not_allowed" } });
+    const own = await fork(reader, vaultId);
+    expect(own.status).toBe(201);
+    vaultForkId = (await data<Repository>(own)).id;
+    const shared = await createRepository(owner, "shared-lib", "public");
+    expect((await fork(reader, shared, { owner: "reader-org" })).status).toBe(201);
+  });
+
+  it("refuses forks through repository-limited tokens", async () => {
+    const headers = trustedHeaders({
+      id: reader.id,
+      identifier: reader.identifier,
+      groupKey: reader.groupKey,
+      token: { id: "limited", scopes: ["repo:write"], repositoryIds: [vaultId] },
+    });
+    headers.set("Content-Type", "application/json");
+    const response = await forge.fetch(
+      new Request(`${origin}/repositories/${vaultId}/forks`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ name: "vault-token" }),
+      }),
+      platform
+    );
+    expect(response.status).toBe(403);
+  });
+
+  it("invites only collaborators who can already read the parent", async () => {
+    const stranger = await invite(reader, vaultForkId, { identifier: outsider.identifier });
+    expect(stranger.status).toBe(409);
+    expect(await stranger.json()).toMatchObject({
+      error: { code: "fork_collaborator_not_allowed" },
+    });
+    expect((await invite(reader, vaultForkId, { email: "someone@example.com" })).status).toBe(409);
+    expect((await invite(reader, vaultForkId, { identifier: keeper.identifier })).status).toBe(201);
+  });
+
+  it("refuses moving a private fork into another organization", async () => {
+    const moved = await call(reader, `/repositories/${vaultForkId}/transfer`, "POST", {
+      owner: "reader-org",
+      confirm: "reader/vault",
+    });
+    expect(moved.status).toBe(409);
+    expect(await moved.json()).toMatchObject({ error: { code: "fork_owner_not_allowed" } });
+  });
+
+  it("requires write access to a private fork to publish its branch", async () => {
+    await grantCollaborator(env.DB, vaultForkId, keeper.id, "read");
+    const request = {
+      title: "From a read-only fork member",
+      baseRef: "main",
+      headRef: "topic",
+      headRepositoryId: vaultForkId,
+    };
+    const readOnly = await call(keeper, `/repositories/${vaultId}/pull-requests`, "POST", request);
+    expect(readOnly.status).toBe(403);
+    const published = await call(reader, `/repositories/${vaultId}/pull-requests`, "POST", request);
+    expect(published.status).toBe(201);
+  });
+
+  it("does not open private fork heads to agents or tokens limited to the base", async () => {
+    const forkRow = await env.DB.prepare(
+      "SELECT artifact_name AS name FROM repositories WHERE id = ?"
+    )
+      .bind(vaultForkId)
+      .first<{ name: string }>();
+    const base: GitRepositoryAccess["repository"] = {
+      id: vaultId,
+      namespaceId: "",
+      artifactName: "base",
+      remote: null,
+      defaultBranch: "main",
+      visibility: "private",
+      owner: "keeper",
+      slug: "vault",
+      canWrite: 0,
+      archived: 0,
+      agentsEnabled: 1,
+      graphEnabled: 1,
+      onlineEditingEnabled: 1,
+    };
+    const head = { repositoryId: vaultForkId, ref: "unpublished" };
+    const member = { id: reader.id, identifier: reader.identifier, groupKey: "free" };
+    expect(await resolveProposalHead(gitEnv, { repository: base, user: member }, head)).toBe(
+      forkRow?.name
+    );
+    expect(
+      await resolveProposalHead(
+        gitEnv,
+        {
+          repository: base,
+          user: { ...member, token: { id: "t", scopes: ["repo:read"], repositoryIds: [vaultId] } },
+        },
+        head
+      )
+    ).toBeNull();
+  });
+
+  it("detaches a fork once one of its readers cannot read the parent", async () => {
+    await grantCollaborator(env.DB, vaultForkId, outsider.id, "read");
+    expect(await detachForks(platform)).toBeGreaterThanOrEqual(1);
+    expect(await forkOf(vaultForkId)).toBeNull();
+    const pulls = await env.DB.prepare(
+      "SELECT state FROM forge_pull_requests WHERE head_repository_id = ?"
+    )
+      .bind(vaultForkId)
+      .all<{ state: string }>();
+    expect(pulls.results.map((row) => row.state)).toEqual(["closed"]);
+  });
+
+  it("refuses an invitation accepted after the parent became private", async () => {
+    const parentId = await createRepository(keeper, "opening", "public");
+    await grantCollaborator(env.DB, parentId, reader.id, "read");
+    const child = await data<Repository>(await fork(reader, parentId));
+    expect(
+      (
+        await call(reader, `/repositories/${child.id}/settings`, "PATCH", {
+          visibility: "private",
+        })
+      ).status
+    ).toBe(200);
+    const pending = await data<{ id: string }>(
+      await invite(reader, child.id, { identifier: outsider.identifier })
+    );
+    const closed = await call(keeper, `/repositories/${parentId}/settings`, "PATCH", {
+      visibility: "private",
+    });
+    expect(closed.status).toBe(200);
+    expect(await forkOf(child.id)).toBe(parentId);
+    const accepted = await call(outsider, `/invitations/${pending.id}/accept`, "POST");
+    expect(accepted.status).toBe(409);
+    expect(await accepted.json()).toMatchObject({
+      error: { code: "fork_collaborator_not_allowed" },
+    });
+  });
+
+  it("closes pull requests whose fork is deleted", async () => {
+    const parentId = await createRepository(keeper, "upstream-x", "public");
+    const child = await data<Repository>(await fork(outsider, parentId));
+    const pull = await call(outsider, `/repositories/${parentId}/pull-requests`, "POST", {
+      title: "Soon orphaned",
+      baseRef: "main",
+      headRef: "topic",
+      headRepositoryId: child.id,
+    });
+    expect(pull.status).toBe(201);
+    const deleted = await call(outsider, `/repositories/${child.id}`, "DELETE", {
+      confirm: "outsider/upstream-x",
+    });
+    expect(deleted.status).toBe(200);
+    const state = await env.DB.prepare(
+      "SELECT state FROM forge_pull_requests WHERE head_repository_id = ?"
+    )
+      .bind(child.id)
+      .first<{ state: string }>();
+    expect(state?.state).toBe("closed");
   });
 });

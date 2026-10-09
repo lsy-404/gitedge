@@ -50,7 +50,10 @@ export const socialMessages = {
     forkErrorQuota: "已达到你所在用户组的仓库数量上限。",
     forkErrorOwner: "只有组织所有者可以派生到该组织。",
     forkError: "无法创建派生。",
-    forkPrivateNote: "私有仓库的派生保持私有；失去上游访问权限后，派生会与上游分离。",
+    forkErrorPrivateOwner: "私有仓库只能派生到你自己的账户或其所属的组织。",
+    inviteForkParentRequired: "该仓库是私有仓库的派生，只能邀请已能访问上游仓库的用户。",
+    forkPrivateNote:
+      "私有仓库的派生保持私有，只能创建在你自己的账户或上游所属的组织中，并且只能邀请能访问上游的协作者；当派生的读者失去上游访问权限时，派生会与上游分离。",
     forkContribute: "发起 Pull Request",
     forkSync: "同步派生",
     forkSyncing: "正在同步…",
@@ -124,8 +127,12 @@ export const socialMessages = {
     forkErrorQuota: "You reached the repository limit of your user group.",
     forkErrorOwner: "Only organization owners can fork into the organization.",
     forkError: "The fork could not be created.",
+    forkErrorPrivateOwner:
+      "A private repository can only be forked into your own account or the organization that owns it.",
+    inviteForkParentRequired:
+      "This repository is a fork of a private repository; only users who can already read the upstream can be invited.",
     forkPrivateNote:
-      "Forks of private repositories stay private and detach from the upstream when you lose access to it.",
+      "Forks of private repositories stay private, live in your own account or the upstream's organization and only admit collaborators who can read the upstream. A fork detaches from the upstream when one of its readers loses access to it.",
     forkContribute: "Open pull request",
     forkSync: "Sync fork",
     forkSyncing: "Syncing…",
