@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { createLogger } from "../../../src/worker/common/logger";
 import { parseJson, type ForgeEnv, type RepositoryRow } from "./common";
+import { pullRequestEvent } from "./agent-events";
 import { outcomeNotificationStatement } from "./notifications";
 import { checkRunWebhook, queueWebhookEvent } from "./webhook-events";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
@@ -20,6 +21,7 @@ type RunRow = {
   path: string;
   source_ref: string;
   created_at: number;
+  created_by: string;
   check_status: "queued" | "in_progress" | "completed" | null;
   check_conclusion: "success" | "failure" | "cancelled" | null;
 };
@@ -52,6 +54,9 @@ function checkStatement(
       now
     );
 }
+
+/** Each pull request can fan out to 20 agents, so agent events cover only the first few. */
+const MAX_AGENT_EVENT_PULLS = 10;
 
 const CI_SENDER = { id: "gitedge-actions", identifier: "gitedge-actions" } as const;
 
@@ -140,6 +145,27 @@ export async function actionsCheck(
         ];
       })
     );
+  }
+  if (repository && parsed.data.status === "completed") {
+    if (pulls.results.length > MAX_AGENT_EVENT_PULLS)
+      createLogger(env.LOG_LEVEL, { service: "forge", repoId: run.repository_id }).warn(
+        "actions:agent-events-truncated",
+        { runId: run.id, count: pulls.results.length }
+      );
+    for (const pull of pulls.results.slice(0, MAX_AGENT_EVENT_PULLS))
+      await pullRequestEvent(
+        env,
+        repository,
+        { id: run.created_by },
+        pull.id,
+        {
+          number: pull.number,
+          name: run.path,
+          conclusion: parsed.data.conclusion,
+          commitOid: run.commit_oid,
+        },
+        "check.completed"
+      );
   }
   createLogger(env.LOG_LEVEL, { service: "forge", repoId: run.repository_id }).info(
     "actions:check-published",

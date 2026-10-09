@@ -69,6 +69,7 @@ import type {
   AgentWebhookDelivery,
   AgentWebhookSettings,
 } from "../../../../packages/contracts/src/agents";
+import type { AgentFeedStatus } from "../../../../packages/contracts/src/agent-events";
 import type {
   Actor,
   Agent,
@@ -97,6 +98,7 @@ import type {
   WikiPage,
   WikiPageSummary,
   CreatedAgentSession,
+  RenewedAgentSession,
 } from "../../../../packages/contracts/src/forge";
 import type {
   CreateReviewThreadInput,
@@ -249,6 +251,7 @@ export type {
   WikiPage,
   WikiPageSummary,
   CreatedAgentSession,
+  RenewedAgentSession,
   ReviewComment,
 };
 export type ReviewThreadDraft = Pick<
@@ -1655,12 +1658,16 @@ export const api = {
   agent: (id: string) => request<Agent>(`/api/auth/agents/${encodeURIComponent(id)}`),
   updateAgent: (
     id: string,
-    payload: Partial<Pick<Agent, "handle" | "name" | "description" | "profilePublic">>
+    payload: Partial<
+      Pick<Agent, "handle" | "name" | "description" | "profilePublic" | "deliveryMode">
+    >
   ) =>
     request<Agent>(`/api/auth/agents/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+  agentFeedStatus: (id: string) =>
+    request<AgentFeedStatus>(`/api/forge/agents/${encodeURIComponent(id)}/event-feed`),
   agentProfile: (owner: string, handle: string) =>
     request<AgentProfile>(
       `/api/auth/agent-profiles/${encodeURIComponent(owner)}/${encodeURIComponent(handle)}`
@@ -1712,6 +1719,11 @@ export const api = {
       `/api/auth/agents/${encodeURIComponent(id)}/sessions/${encodeURIComponent(sessionId)}`,
       { method: "DELETE" },
       true
+    ),
+  renewAgentSession: (id: string, sessionId: string, ttlSeconds: number) =>
+    request<RenewedAgentSession>(
+      `/api/auth/agents/${encodeURIComponent(id)}/sessions/${encodeURIComponent(sessionId)}/renew`,
+      { method: "POST", body: JSON.stringify({ ttlSeconds }) }
     ),
   repositorySessions: (repositoryId: string) =>
     request<AgentSession[]>(`/api/auth/sessions${query({ repositoryId })}`),

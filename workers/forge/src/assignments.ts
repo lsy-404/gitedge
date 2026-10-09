@@ -227,11 +227,14 @@ export async function replaceAssignments(
     ]);
   }
   for (const ref of added.filter((ref) => ref.kind === "agent"))
-    await agentEvent(env, repository, user, ref.id, "agent.assigned", {
-      targetKind: target.kind,
-      targetId: target.id,
-      role: input.role,
-    });
+    await agentEvent(
+      env,
+      repository,
+      user,
+      ref.id,
+      input.role === "reviewer" ? "review.requested" : "agent.assigned",
+      { targetKind: target.kind, targetId: target.id, role: input.role }
+    );
   logger.info("forge:assignments-replaced", {
     repositoryId: repository.id,
     targetKind: target.kind,

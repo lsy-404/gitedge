@@ -15,12 +15,15 @@ import {
   PutTaskDocumentInputSchema,
   RevisionActorSchema,
   SYSTEM_ACTOR,
+  TASK_LEASE_MAX_TOTAL_MS,
   TASK_STATUS_LABELS,
+  TaskLeaseInputSchema,
   TaskDocumentKindSchema,
   TaskLinkKindSchema,
   TaskStatusSchema,
   UpdateRepositorySettingsInputSchema,
   UpdateTaskInputSchema,
+  parseTaskReference,
   type Actor,
   type Assignee,
   type MemoryIndex,
@@ -32,6 +35,7 @@ import {
   type TaskDetail,
   type TaskDocument,
   type TaskDocumentKind,
+  type TaskLease,
   type TaskLink,
   type TaskLinkKind,
   type TaskReference,
@@ -67,6 +71,10 @@ type TaskRow = {
   assignee_kind: "user" | "agent" | null;
   assignee_id: string | null;
   assignee_name: string | null;
+  lease_agent_id: string | null;
+  lease_agent_name: string | null;
+  lease_claimed_at: number | null;
+  lease_expires_at: number | null;
   actor_json: string;
   created_by: string;
   created_at: number;
@@ -122,7 +130,7 @@ const LINK_TABLES: Record<TaskLinkKind, "forge_issues" | "forge_pull_requests"> 
   pull_request: "forge_pull_requests",
 };
 
-const TASK_SELECT = `SELECT t.id, t.number, t.type, t.title, t.motivation, t.description, t.status, t.assignee_kind, t.assignee_id, COALESCE(u.identifier, g.name, t.assignee_id) AS assignee_name, t.actor_json, t.created_by, t.created_at, t.updated_at,
+const TASK_SELECT = `SELECT t.id, t.number, t.type, t.title, t.motivation, t.description, t.status, t.assignee_kind, t.assignee_id, COALESCE(u.identifier, g.name, t.assignee_id) AS assignee_name, t.lease_agent_id, (SELECT name FROM auth_agents WHERE id = t.lease_agent_id) AS lease_agent_name, t.lease_claimed_at, t.lease_expires_at, t.actor_json, t.created_by, t.created_at, t.updated_at,
   (SELECT COUNT(*) FROM forge_task_links l WHERE l.task_id = t.id) AS link_total,
   (SELECT COUNT(*) FROM forge_task_links l LEFT JOIN forge_issues i ON l.target_kind = 'issue' AND i.id = l.target_id LEFT JOIN forge_pull_requests p ON l.target_kind = 'pull_request' AND p.id = l.target_id WHERE l.task_id = t.id AND (i.state = 'closed' OR p.state IN ('closed', 'merged'))) AS link_done,
   (SELECT COUNT(*) FROM forge_task_commits c WHERE c.task_id = t.id) AS commit_count
@@ -143,6 +151,16 @@ function parseRevisionActor(value: string): RevisionActor {
   return SYSTEM_ACTOR;
 }
 
+function presentLease(row: TaskRow): TaskLease | null {
+  if (!row.lease_agent_id || row.lease_claimed_at === null || row.lease_expires_at === null)
+    return null;
+  return {
+    agent: { id: row.lease_agent_id, name: row.lease_agent_name ?? row.lease_agent_id },
+    claimedAt: row.lease_claimed_at,
+    expiresAt: row.lease_expires_at,
+  };
+}
+
 function presentTask(row: TaskRow): Task {
   const assignee: Assignee | null =
     row.assignee_kind && row.assignee_id
@@ -157,6 +175,7 @@ function presentTask(row: TaskRow): Task {
     description: row.description,
     status: row.status,
     assignee,
+    lease: presentLease(row),
     actor: parseActor(row.actor_json, row.created_by),
     progress: {
       total: row.link_total,
@@ -362,6 +381,86 @@ export function mergeBindingStatements(
       merge.oid
     ),
   ];
+}
+
+/** Lease columns cleared while the assignee stays, for explicit status or assignment changes. */
+const CLEAR_LEASE =
+  "lease_agent_id = NULL, lease_claimed_at = NULL, lease_expires_at = NULL, lease_assigned = 0";
+/** Ends a claim and drops the assignment the claim itself created, so others can claim again. */
+const RELEASE_LEASE = `assignee_kind = CASE WHEN lease_assigned = 1 THEN NULL ELSE assignee_kind END, assignee_id = CASE WHEN lease_assigned = 1 THEN NULL ELSE assignee_id END, ${CLEAR_LEASE}`;
+const LEASE_SWEEP_BATCH = 500;
+
+/**
+ * Completes the task a pull request is linked to once it merged into the default branch. The
+ * progress entry is guarded by the task update, so a task that was already done is untouched.
+ */
+export function mergeCompletionStatements(
+  env: ForgeEnv,
+  merge: MergedPullRequest,
+  defaultBranch: string
+): D1PreparedStatement[] {
+  if (merge.baseRef !== defaultBranch) return [];
+  return [
+    env.DB.prepare(
+      `UPDATE forge_tasks SET status = 'done', ${CLEAR_LEASE}, updated_at = ? WHERE status IN ('pending', 'in_progress') AND id = (SELECT task_id FROM forge_task_links WHERE target_kind = 'pull_request' AND target_id = ?) AND EXISTS (SELECT 1 FROM forge_pull_requests WHERE id = ? AND state = 'merged' AND merged_oid = ?)`
+    ).bind(merge.now, merge.pullRequestId, merge.pullRequestId, merge.oid),
+    ...systemProgressStatements(
+      env,
+      { targetKind: "pull_request", targetId: merge.pullRequestId },
+      `Task completed by the merge of pull request #${merge.number}`,
+      merge.now,
+      true
+    ),
+  ];
+}
+
+/**
+ * Links a pull request to the task named as "task #n" in its title or body, unless it is linked
+ * or merged. Only writers may link, matching the explicit link endpoint, so outside authors of
+ * public pull requests cannot complete tasks through a merge.
+ */
+export function taskReferenceStatements(
+  env: ForgeEnv,
+  repository: RepositoryRow,
+  pullRequestId: string,
+  text: { title: string; body: string },
+  actor: Actor,
+  canWrite: boolean,
+  now: number
+): D1PreparedStatement[] {
+  if (!canWrite || repository.tasks_enabled === 0) return [];
+  const number = parseTaskReference(`${text.title}\n${text.body}`);
+  if (number === null) return [];
+  return [
+    env.DB.prepare(
+      "INSERT OR IGNORE INTO forge_task_links (id, repository_id, task_id, target_kind, target_id, actor_json, created_at) SELECT ?, repository_id, id, 'pull_request', ?, ?, ? FROM forge_tasks WHERE repository_id = ? AND number = ? AND NOT EXISTS (SELECT 1 FROM forge_pull_requests WHERE id = ? AND state = 'merged')"
+    ).bind(
+      crypto.randomUUID(),
+      pullRequestId,
+      JSON.stringify(actor),
+      now,
+      repository.id,
+      number,
+      pullRequestId
+    ),
+  ];
+}
+
+/** Returns tasks whose claim lapsed to pending; scoped to one repository when given. */
+export async function releaseExpiredTaskLeases(
+  env: ForgeEnv,
+  repositoryId: string | null = null,
+  now = Date.now()
+): Promise<void> {
+  const released = await env.DB.prepare(
+    `UPDATE forge_tasks SET status = CASE WHEN status = 'in_progress' THEN 'pending' ELSE status END, ${RELEASE_LEASE} WHERE id IN (SELECT id FROM forge_tasks WHERE lease_expires_at IS NOT NULL AND lease_expires_at <= ? AND (? IS NULL OR repository_id = ?) LIMIT ?)`
+  )
+    .bind(now, repositoryId, repositoryId, LEASE_SWEEP_BATCH)
+    .run();
+  if (released.meta.changes > 0)
+    createLogger(env.LOG_LEVEL, { service: "forge" }).info("forge:task-leases-released", {
+      count: released.meta.changes,
+    });
 }
 
 function markdownCell(value: string): string {
@@ -624,13 +723,14 @@ async function updateTask(
   const statusChanged = p.status !== undefined && p.status !== task.status;
   await env.DB.batch([
     env.DB.prepare(
-      "UPDATE forge_tasks SET type = COALESCE(?, type), title = COALESCE(?, title), motivation = COALESCE(?, motivation), description = COALESCE(?, description), status = COALESCE(?, status), updated_at = ? WHERE id = ?"
+      "UPDATE forge_tasks SET type = COALESCE(?, type), title = COALESCE(?, title), motivation = COALESCE(?, motivation), description = COALESCE(?, description), status = COALESCE(?, status), lease_agent_id = CASE WHEN ?6 THEN NULL ELSE lease_agent_id END, lease_claimed_at = CASE WHEN ?6 THEN NULL ELSE lease_claimed_at END, lease_expires_at = CASE WHEN ?6 THEN NULL ELSE lease_expires_at END, lease_assigned = CASE WHEN ?6 THEN 0 ELSE lease_assigned END, updated_at = ?7 WHERE id = ?8"
     ).bind(
       p.type ?? null,
       p.title ?? null,
       p.motivation ?? null,
       p.description ?? null,
       p.status ?? null,
+      Number(statusChanged),
       now,
       task.id
     ),
@@ -670,9 +770,9 @@ async function assignTask(
     id = resolved.assignee.id;
   }
   await env.DB.prepare(
-    "UPDATE forge_tasks SET assignee_kind = ?, assignee_id = ?, updated_at = ? WHERE id = ?"
+    "UPDATE forge_tasks SET assignee_kind = ?1, assignee_id = ?2, lease_claimed_at = CASE WHEN lease_agent_id IS ?3 THEN lease_claimed_at END, lease_expires_at = CASE WHEN lease_agent_id IS ?3 THEN lease_expires_at END, lease_agent_id = CASE WHEN lease_agent_id IS ?3 THEN lease_agent_id END, lease_assigned = 0, updated_at = ?4 WHERE id = ?5"
   )
-    .bind(kind, id, Date.now(), task.id)
+    .bind(kind, id, kind === "agent" ? id : null, Date.now(), task.id)
     .run();
   if (kind === "agent" && id)
     await agentEvent(env, repository, user, id, "agent.assigned", {
@@ -684,6 +784,167 @@ async function assignTask(
     repositoryId: repository.id,
     taskNumber: task.number,
     assigneeKind: kind,
+  });
+  return dataResponse(await taskDetail(env, task.id));
+}
+
+type LeaseState = {
+  status: TaskStatus;
+  assignee_kind: "user" | "agent" | null;
+  assignee_id: string | null;
+  lease_agent_id: string | null;
+  lease_claimed_at: number | null;
+  lease_expires_at: number | null;
+};
+
+async function leaseState(env: ForgeEnv, taskId: string): Promise<LeaseState | null> {
+  return env.DB.prepare(
+    "SELECT status, assignee_kind, assignee_id, lease_agent_id, lease_claimed_at, lease_expires_at FROM forge_tasks WHERE id = ?"
+  )
+    .bind(taskId)
+    .first<LeaseState>();
+}
+
+function extendLease(
+  env: ForgeEnv,
+  repository: RepositoryRow,
+  task: { id: string; number: number },
+  agentId: string,
+  claimedAt: number,
+  expiresAt: number,
+  ttlMs: number,
+  now: number
+): Promise<Response> {
+  const next = Math.max(expiresAt, Math.min(now + ttlMs, claimedAt + TASK_LEASE_MAX_TOTAL_MS));
+  if (claimedAt + TASK_LEASE_MAX_TOTAL_MS <= now)
+    return Promise.resolve(
+      errorResponse(
+        409,
+        "lease_limit",
+        "The claim reached its maximum age. Release the task and claim it again."
+      )
+    );
+  return env.DB.prepare(
+    "UPDATE forge_tasks SET lease_expires_at = ?, updated_at = ? WHERE id = ? AND lease_agent_id = ? AND lease_expires_at > ?"
+  )
+    .bind(next, now, task.id, agentId, now)
+    .run()
+    .then(async (result) => {
+      if (result.meta.changes !== 1)
+        return errorResponse(409, "lease_expired", "The claim expired. Claim the task again.");
+      createLogger(env.LOG_LEVEL, { service: "forge", repoId: repository.id }).debug(
+        "forge:task-lease-extended",
+        { taskNumber: task.number, agentId }
+      );
+      return dataResponse(await taskDetail(env, task.id));
+    });
+}
+
+/**
+ * Claim, heartbeat, complete and release. Only the claiming agent may extend or finish its
+ * lease; humans with write access may complete or release any claim. Expired claims were
+ * already returned to pending by the caller.
+ */
+async function leaseRequest(
+  env: ForgeEnv,
+  request: Request,
+  repository: RepositoryRow,
+  user: TrustedUser,
+  task: { id: string; number: number },
+  action: "claim" | "heartbeat" | "complete" | "release"
+): Promise<Response> {
+  const parsed = TaskLeaseInputSchema.safeParse((await parseJson(request)) ?? {});
+  if (!parsed.success) return errorResponse(400, "bad_request", "Invalid task lease payload.");
+  const logger = createLogger(env.LOG_LEVEL, { service: "forge", repoId: repository.id });
+  const agentId = user.agentSession?.agentId ?? null;
+  const ttlMs = parsed.data.ttlSeconds * 1000;
+  const now = Date.now();
+  const state = await leaseState(env, task.id);
+  if (!state) return errorResponse(404, "not_found", "Task was not found.");
+  const leased = state.lease_agent_id !== null && (state.lease_expires_at ?? 0) > now;
+  if (action === "claim") {
+    if (!agentId) return errorResponse(403, "forbidden", "Only agent sessions can claim tasks.");
+    if (state.lease_agent_id === agentId && leased)
+      return extendLease(
+        env,
+        repository,
+        task,
+        agentId,
+        state.lease_claimed_at ?? now,
+        state.lease_expires_at ?? now,
+        ttlMs,
+        now
+      );
+    const claimed = await env.DB.prepare(
+      "UPDATE forge_tasks SET status = 'in_progress', lease_assigned = CASE WHEN assignee_id IS NULL THEN 1 ELSE 0 END, assignee_kind = 'agent', assignee_id = ?1, lease_agent_id = ?1, lease_claimed_at = ?2, lease_expires_at = ?3, updated_at = ?2 WHERE id = ?4 AND status = 'pending' AND (lease_expires_at IS NULL OR lease_expires_at <= ?2) AND (assignee_id IS NULL OR (assignee_kind = 'agent' AND assignee_id = ?1))"
+    )
+      .bind(agentId, now, now + ttlMs, task.id)
+      .run();
+    if (claimed.meta.changes !== 1) {
+      logger.info("forge:task-claim-rejected", { taskNumber: task.number, agentId });
+      return state.lease_agent_id
+        ? errorResponse(409, "task_claimed", "Another agent holds a claim on this task.")
+        : errorResponse(
+            409,
+            "task_not_claimable",
+            "Only pending tasks that are unassigned or assigned to this agent can be claimed."
+          );
+    }
+    logger.info("forge:task-claimed", { taskNumber: task.number, agentId });
+    return dataResponse(await taskDetail(env, task.id));
+  }
+  if (action === "heartbeat") {
+    if (!agentId)
+      return errorResponse(403, "forbidden", "Only the claiming agent can extend its claim.");
+    if (!leased)
+      return errorResponse(409, "lease_expired", "The claim expired. Claim the task again.");
+    if (state.lease_agent_id !== agentId)
+      return errorResponse(403, "forbidden", "Only the claiming agent can extend its claim.");
+    return extendLease(
+      env,
+      repository,
+      task,
+      agentId,
+      state.lease_claimed_at ?? now,
+      state.lease_expires_at ?? now,
+      ttlMs,
+      now
+    );
+  }
+  if (agentId !== null && state.lease_agent_id === null)
+    return errorResponse(409, "not_claimed", "The task has no active claim. Claim it first.");
+  if (agentId !== null && state.lease_agent_id !== agentId)
+    return errorResponse(403, "forbidden", "Only the claiming agent or a human can do this.");
+  if (action === "release" && !leased)
+    return errorResponse(409, "not_claimed", "The task has no active claim.");
+  if (action === "complete" && state.status !== "pending" && state.status !== "in_progress")
+    return errorResponse(409, "conflict", "Only open tasks can be completed.");
+  const actorName = actorForUser(user).name;
+  const [changed] = await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE forge_tasks SET status = ?, ${action === "complete" ? CLEAR_LEASE : RELEASE_LEASE}, updated_at = ? WHERE id = ? AND status = ? AND lease_agent_id IS ?`
+    ).bind(
+      action === "complete" ? "done" : "pending",
+      now,
+      task.id,
+      state.status,
+      state.lease_agent_id
+    ),
+    ...systemProgressStatements(
+      env,
+      { taskId: task.id },
+      action === "complete"
+        ? `Task completed by ${actorName}`
+        : `Task claim released by ${actorName}`,
+      now,
+      true
+    ),
+  ]);
+  if (changed.meta.changes !== 1)
+    return errorResponse(409, "conflict", "Task changed while it was being updated.");
+  logger.info(action === "complete" ? "forge:task-completed" : "forge:task-released", {
+    taskNumber: task.number,
+    actorKind: agentId ? "agent" : "user",
   });
   return dataResponse(await taskDetail(env, task.id));
 }
@@ -1023,6 +1284,7 @@ async function taskRequest(
 ): Promise<Response | null> {
   const [, item, action] = rest;
   const reading = request.method === "GET";
+  await releaseExpiredTaskLeases(env, repository.id);
   if (!item) {
     if (reading) return listTasks(env, repository, request);
     if (request.method === "POST" && viewer.user)
@@ -1043,6 +1305,12 @@ async function taskRequest(
   if (reading && !action) return dataResponse(await taskDetail(env, task.id));
   if (request.method === "PATCH" && !action && viewer.user)
     return updateTask(env, request, repository, viewer.user, task);
+  if (
+    request.method === "POST" &&
+    viewer.user &&
+    (action === "claim" || action === "heartbeat" || action === "complete" || action === "release")
+  )
+    return leaseRequest(env, request, repository, viewer.user, task, action);
   if (request.method === "PUT" && action === "assignee" && viewer.user)
     return assignTask(env, request, repository, viewer.user, task);
   if (action === "documents")

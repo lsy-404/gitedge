@@ -13,7 +13,7 @@ import { comparisonMessages, mergeClosingStatements } from "./issue-links";
 import { authorizeMerge, type MergeBlocker } from "./merge-policy";
 import { outcomeNotificationStatement } from "./notifications";
 import { compareRequest, gitFailureCode, gitFailureMessage, mergeResultOid } from "./pull-git";
-import { mergeBindingStatements } from "./tasks";
+import { mergeBindingStatements, mergeCompletionStatements, type MergedPullRequest } from "./tasks";
 import { pullRequestWebhook, queueWebhookEvent } from "./webhook-events";
 
 const MERGE_LEASE_MS = 300_000;
@@ -186,22 +186,24 @@ export async function executeMerge(
     sql: "EXISTS (SELECT 1 FROM forge_pull_requests WHERE id = ? AND state = 'merged' AND merged_oid = ? AND updated_at = ?)",
     binds: [current.id, oid, now],
   };
-  // Task binding and the progress entry share the batch with the merge record; statements after the merge update depend on its change count.
+  const mergedPull: MergedPullRequest = {
+    repositoryId: repository.id,
+    pullRequestId: String(current.id),
+    number,
+    oid,
+    baseRef: String(current.base_ref),
+    summary: String(current.title),
+    author: user.identifier,
+    actor,
+    now,
+  };
+  // Task binding, task completion and the progress entries share the batch with the merge record; statements after the merge update depend on its change count.
   await env.DB.batch([
     env.DB.prepare(
       "UPDATE forge_pull_requests SET state = 'merged', merged_oid = ?, updated_at = ?, merge_started_at = NULL WHERE id = ? AND state = 'open' AND merge_started_at = ? AND merge_base_oid = ? AND merge_head_oid = ?"
     ).bind(oid, now, current.id, leaseAt, input.expectedBaseOid, input.expectedHeadOid),
-    ...mergeBindingStatements(env, {
-      repositoryId: repository.id,
-      pullRequestId: String(current.id),
-      number,
-      oid,
-      baseRef: String(current.base_ref),
-      summary: String(current.title),
-      author: user.identifier,
-      actor,
-      now,
-    }),
+    ...mergeBindingStatements(env, mergedPull),
+    ...mergeCompletionStatements(env, mergedPull, repository.default_branch ?? "main"),
     outcomeNotificationStatement(
       env.DB,
       repository,

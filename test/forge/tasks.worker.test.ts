@@ -11,7 +11,11 @@ const migrations = import.meta.glob<string>("../../migrations/*.sql", {
   eager: true,
 });
 
-const MIGRATIONS_UNDER_TEST = ["0010_agent_tasks.sql", "0012_repository_settings.sql"];
+const MIGRATIONS_UNDER_TEST = [
+  "0010_agent_tasks.sql",
+  "0012_repository_settings.sql",
+  "0030_agent_collaboration_loop.sql",
+];
 const MERGE_OID = "c".repeat(40);
 const BASE_OID = "a".repeat(40);
 
@@ -631,8 +635,9 @@ describe("Task links, progress and commits", () => {
     const history = await data(
       await call(`/repositories/r1/tasks/${task.number}/documents/progress/history`, "GET", alice)
     );
-    expect(history).toHaveLength(1);
+    expect(history).toHaveLength(2);
     expect(history[0].actor).toMatchObject({ kind: "system" });
+    expect(detail.status).toBe("done");
 
     // A second merge of an unlinked pull request leaves task data alone.
     const before = await env.DB.prepare("SELECT COUNT(*) AS count FROM forge_task_commits").first<{
@@ -725,7 +730,7 @@ describe("Commit verification, merge entries and link moves", () => {
     expect(detail.documents.progress.content).toContain(
       `Pull request #${pull} merged as ccccccc into main`
     );
-    expect(detail.documents.progress.revision).toBe(1);
+    expect(detail.documents.progress.revision).toBe(2);
   });
 
   it("keeps non-member authors out of members-only task progress", async () => {
@@ -1219,5 +1224,216 @@ describe("Merge policy enforcement", () => {
     } finally {
       await removeRule(ruleId);
     }
+  });
+});
+
+describe("Task leases and merge completion", () => {
+  const aliceAgent = sessionFor("s4", "a2", "alice-agent", "write");
+
+  beforeAll(async () => {
+    await env.DB.prepare(
+      "INSERT INTO auth_agent_sessions (id,agent_id,user_id,repository_id,token_hash,git_token_id,workspace_name,remote,base_ref,base_oid,permission,status,created_at,expires_at) VALUES ('s4','a2','u1','r1','sh4','gt4','workspace-s4','artifact://repo-r1','main',NULL,'write','active',1,9999999999999)"
+    ).run();
+  });
+
+  const lease = (number: number, action: string, who: [string, string], session?: unknown) =>
+    call(`/repositories/r1/tasks/${number}/${action}`, "POST", who, {}, session);
+
+  it("lets one agent claim a pending task and rejects everyone else", async () => {
+    const task = await createTask("Leased work");
+    expect((await lease(task.number, "claim", alice)).status).toBe(403);
+    expect((await lease(task.number, "claim", bob, readSession)).status).toBe(403);
+    const claimed = await lease(task.number, "claim", bob, writeSession);
+    expect(claimed.status).toBe(200);
+    const detail = await data(claimed);
+    expect(detail.status).toBe("in_progress");
+    expect(detail.assignee).toMatchObject({ kind: "agent", id: "a1" });
+    expect(detail.lease).toMatchObject({ agent: { id: "a1", name: "bob-agent" } });
+    const secondClaim = await lease(task.number, "claim", alice, aliceAgent);
+    expect(secondClaim.status).toBe(409);
+    expect(((await secondClaim.json()) as { error: { code: string } }).error.code).toBe(
+      "task_claimed"
+    );
+    expect((await lease(task.number, "heartbeat", alice, aliceAgent)).status).toBe(403);
+    expect((await lease(task.number, "complete", alice, aliceAgent)).status).toBe(403);
+    expect((await lease(task.number, "release", alice, aliceAgent)).status).toBe(403);
+  });
+
+  it("extends the lease with heartbeats up to the maximum claim age", async () => {
+    const task = await createTask("Heartbeat work");
+    const first = await data(await lease(task.number, "claim", bob, writeSession));
+    const extended = await data(await lease(task.number, "heartbeat", bob, writeSession));
+    expect(extended.lease.expiresAt).toBeGreaterThanOrEqual(first.lease.expiresAt);
+    await env.DB.prepare("UPDATE forge_tasks SET lease_claimed_at = ? WHERE id = ?")
+      .bind(Date.now() - 9 * 3_600_000, task.id)
+      .run();
+    const limited = await lease(task.number, "heartbeat", bob, writeSession);
+    expect(limited.status).toBe(409);
+    expect(((await limited.json()) as { error: { code: string } }).error.code).toBe("lease_limit");
+  });
+
+  it("releases an expired lease automatically so another agent can claim", async () => {
+    const task = await createTask("Abandoned work");
+    await lease(task.number, "claim", bob, writeSession);
+    await env.DB.prepare("UPDATE forge_tasks SET lease_expires_at = ? WHERE id = ?")
+      .bind(Date.now() - 1_000, task.id)
+      .run();
+    const expired = await lease(task.number, "heartbeat", bob, writeSession);
+    expect(expired.status).toBe(409);
+    expect(((await expired.json()) as { error: { code: string } }).error.code).toBe(
+      "lease_expired"
+    );
+    const detail = await data(await call(`/repositories/r1/tasks/${task.number}`, "GET", alice));
+    expect(detail).toMatchObject({ status: "pending", lease: null, assignee: null });
+    const late = await lease(task.number, "complete", bob, writeSession);
+    expect(late.status).toBe(409);
+    expect(((await late.json()) as { error: { code: string } }).error.code).toBe("not_claimed");
+    expect((await lease(task.number, "claim", alice, aliceAgent)).status).toBe(200);
+  });
+
+  it("keeps an explicit assignment when the claim lapses or is released", async () => {
+    const task = await createTask("Assigned work");
+    expect(
+      (
+        await call(`/repositories/r1/tasks/${task.number}/assignee`, "PUT", bob, {
+          assignee: { kind: "agent", id: "a1" },
+        })
+      ).status
+    ).toBe(200);
+    await lease(task.number, "claim", bob, writeSession);
+    await env.DB.prepare("UPDATE forge_tasks SET lease_expires_at = ? WHERE id = ?")
+      .bind(Date.now() - 1_000, task.id)
+      .run();
+    const lapsed = await data(await call(`/repositories/r1/tasks/${task.number}`, "GET", alice));
+    expect(lapsed).toMatchObject({ status: "pending", lease: null });
+    expect(lapsed.assignee).toMatchObject({ kind: "agent", id: "a1" });
+    expect((await lease(task.number, "claim", alice, aliceAgent)).status).toBe(409);
+    await lease(task.number, "claim", bob, writeSession);
+    const released = await data(await lease(task.number, "release", alice));
+    expect(released.assignee).toMatchObject({ kind: "agent", id: "a1" });
+
+    const open = await createTask("Released claim");
+    await lease(open.number, "claim", bob, writeSession);
+    expect(
+      (await data(await lease(open.number, "release", bob, writeSession))).assignee
+    ).toBeNull();
+  });
+
+  it("lets the claimant release and complete, and a human complete or release any claim", async () => {
+    const mine = await createTask("Claimant finishes");
+    await lease(mine.number, "claim", bob, writeSession);
+    const released = await data(await lease(mine.number, "release", bob, writeSession));
+    expect(released).toMatchObject({ status: "pending", lease: null });
+    await lease(mine.number, "claim", bob, writeSession);
+    expect((await data(await lease(mine.number, "complete", bob, writeSession))).status).toBe(
+      "done"
+    );
+    const other = await createTask("Human finishes");
+    await lease(other.number, "claim", bob, writeSession);
+    expect((await data(await lease(other.number, "release", alice))).lease).toBeNull();
+    await lease(other.number, "claim", bob, writeSession);
+    expect((await data(await lease(other.number, "complete", alice))).status).toBe("done");
+    expect((await lease(other.number, "release", alice)).status).toBe(409);
+  });
+
+  it("completes the linked task in the merge batch, by explicit link or task reference", async () => {
+    const linked = await createTask("Linked completion");
+    await lease(linked.number, "claim", bob, writeSession);
+    const pull = await createPull("Linked pull");
+    await call(`/repositories/r1/tasks/${linked.number}/links`, "POST", alice, {
+      kind: "pull_request",
+      number: pull,
+    });
+    const mergeBody = { expectedBaseOid: "1".repeat(40), expectedHeadOid: "2".repeat(40) };
+    expect(
+      (await call(`/repositories/r1/pull-requests/${pull}/merge`, "POST", alice, mergeBody)).status
+    ).toBe(200);
+    const done = await data(await call(`/repositories/r1/tasks/${linked.number}`, "GET", alice));
+    expect(done).toMatchObject({ status: "done", lease: null });
+    expect(done.documents.progress.content).toContain(
+      `Task completed by the merge of pull request #${pull}`
+    );
+
+    const referenced = await createTask("Referenced completion");
+    const created = await call("/repositories/r1/pull-requests", "POST", alice, {
+      title: "Reference",
+      body: `Implements Task #${referenced.number}`,
+      baseRef: "main",
+      headRef: "topic",
+    });
+    const referencedPull = (await data(created)).number;
+    const attached = await data(
+      await call(`/repositories/r1/tasks/${referenced.number}`, "GET", alice)
+    );
+    expect(attached.links).toEqual([expect.objectContaining({ kind: "pull_request" })]);
+    await call(`/repositories/r1/pull-requests/${referencedPull}/merge`, "POST", alice, mergeBody);
+    expect(
+      (await data(await call(`/repositories/r1/tasks/${referenced.number}`, "GET", alice))).status
+    ).toBe("done");
+  });
+
+  it("ignores task references in pull requests opened by non-members", async () => {
+    const task = await createTask("Outside reference");
+    const created = await call("/repositories/r1/pull-requests", "POST", eve, {
+      title: `Implements task #${task.number}`,
+      baseRef: "main",
+      headRef: "outside",
+    });
+    expect(created.status).toBe(201);
+    const detail = await data(await call(`/repositories/r1/tasks/${task.number}`, "GET", alice));
+    expect(detail.links).toEqual([]);
+  });
+});
+
+describe("Agent feed event sources", () => {
+  const feedSession = sessionFor("s1", "a1", "bob-agent", "write");
+
+  async function feed(cursor = 0): Promise<{ events: Json[]; cursor: number }> {
+    return data(
+      await call(
+        `/repositories/r1/agent-events?cursor=${cursor}`,
+        "GET",
+        bob,
+        undefined,
+        feedSession
+      )
+    ) as Promise<{ events: Json[]; cursor: number }>;
+  }
+
+  it("publishes assignment, review, check and comment events to the assigned agent", async () => {
+    await env.DB.prepare("UPDATE auth_agents SET delivery_mode = 'pull' WHERE id = 'a1'").run();
+    const before = (await feed()).cursor;
+    const pull = await createPull("Feed sources");
+    const head = "7".repeat(40);
+    compareHead = head;
+    const base = `/repositories/r1/pull-requests/${pull}`;
+    expect(
+      (
+        await call(`${base}/assignees`, "PUT", bob, {
+          role: "reviewer",
+          assignees: [{ kind: "agent", id: "a1" }],
+        })
+      ).status
+    ).toBe(200);
+    await call(`${base}/comments`, "POST", alice, { body: "Please look" });
+    await call(`${base}/reviews`, "POST", alice, { state: "commented", commitOid: head });
+    await call(`${base}/checks`, "POST", alice, {
+      name: "lint",
+      commitOid: head,
+      status: "completed",
+      conclusion: "success",
+    });
+    // The agent's own actions are not echoed back to it.
+    await call(`${base}/comments`, "POST", bob, { body: "On it" }, feedSession);
+    const { events } = await feed(before);
+    expect(events.map((event) => event.event)).toEqual([
+      "review.requested",
+      "comment.created",
+      "review.submitted",
+      "check.completed",
+    ]);
+    expect(events[2]?.data).toMatchObject({ number: pull, state: "commented", commitOid: head });
+    expect(events[3]?.data).toMatchObject({ name: "lint", conclusion: "success" });
+    await env.DB.prepare("UPDATE auth_agents SET delivery_mode = 'webhook' WHERE id = 'a1'").run();
   });
 });

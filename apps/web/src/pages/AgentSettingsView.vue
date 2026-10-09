@@ -8,6 +8,7 @@ import {
   type Agent,
   type AgentSession,
   type CreatedAgentSession,
+  type RenewedAgentSession,
   type Repository,
 } from "../lib/api";
 import ConfirmButton from "../components/ConfirmButton.vue";
@@ -57,6 +58,14 @@ const credentialDialogOpen = computed({
   get: () => createdSession.value !== null,
   set: (open: boolean) => {
     if (!open) clearCredentials();
+  },
+});
+const renewedSession = ref<RenewedAgentSession | null>(null);
+const renewingId = ref("");
+const renewedDialogOpen = computed({
+  get: () => renewedSession.value !== null,
+  set: (open: boolean) => {
+    if (!open) renewedSession.value = null;
   },
 });
 const agentForm = ref({ handle: "", name: "", description: "" });
@@ -252,10 +261,40 @@ async function revoke(session: AgentSession) {
     saving.value = false;
   }
 }
+function canRenew(session: AgentSession): boolean {
+  return (
+    session.status === "active" &&
+    !sessionExpired(session) &&
+    session.expiresAt < session.maxExpiresAt
+  );
+}
+async function renew(session: AgentSession) {
+  if (!selectedAgent.value) return;
+  actionError.value = "";
+  renewingId.value = session.id;
+  const agentId = selectedAgent.value;
+  try {
+    const renewed = await api.renewAgentSession(agentId, session.id, 3600);
+    if (agentId !== selectedAgent.value) return;
+    const { gitToken: _gitToken, ...summary } = renewed;
+    sessions.value = sessions.value.map((row) => (row.id === session.id ? summary : row));
+    renewedSession.value = renewed;
+  } catch (cause) {
+    actionError.value =
+      cause instanceof ApiError && cause.code === "session_lifetime_exceeded"
+        ? t("sessionRenewLimit")
+        : cause instanceof ApiError && cause.code === "session_expired"
+          ? t("sessionExpiredHint")
+          : errorMessage(cause, t);
+  } finally {
+    renewingId.value = "";
+  }
+}
 function clearCredentials() {
   clearTimeout(credentialExpiryTimer);
   credentialExpiryTimer = undefined;
   createdSession.value = null;
+  renewedSession.value = null;
   credentialsExpired.value = false;
 }
 function openAgentForm() {
@@ -376,7 +415,7 @@ sessionClockTimer = window.setInterval(() => {
                 <RouterLink
                   class="btn btn-sm box-header-end"
                   :to="`/settings/agents/${currentAgent.id}/webhook`"
-                  >{{ t("agentWebhook") }}</RouterLink
+                  >{{ t("agentDelivery") }}</RouterLink
                 >
               </header>
               <div class="box-row">
@@ -464,11 +503,26 @@ sessionClockTimer = window.setInterval(() => {
                         {{ t(session.permission === "read" ? "readOnly" : "writeAccess") }}</span
                       >
                       <span>{{ t("expiresAt") }} {{ d(session.expiresAt, "long") }}</span>
+                      <span v-if="session.status === 'active' && !sessionExpired(session)"
+                        >{{ t("sessionMaxLifetime") }} {{ d(session.maxExpiresAt, "long") }}</span
+                      >
                     </div>
+                    <p v-if="sessionExpired(session)" class="field-hint">
+                      {{ t("sessionExpiredHint") }}
+                    </p>
                   </div>
                   <StatusBadge :tone="sessionExpired(session) ? 'warning' : 'neutral'">{{
                     sessionStatus(session)
                   }}</StatusBadge>
+                  <button
+                    v-if="canRenew(session)"
+                    class="btn btn-sm"
+                    type="button"
+                    :disabled="saving || renewingId !== ''"
+                    @click="renew(session)"
+                  >
+                    {{ renewingId === session.id ? t("loading") : t("renewSession") }}
+                  </button>
                   <button
                     v-if="session.status === 'active' && !sessionExpired(session)"
                     class="btn btn-sm"
@@ -547,6 +601,28 @@ sessionClockTimer = window.setInterval(() => {
           </template>
         </FluentDialog>
         <FluentDialog
+          v-model:open="renewedDialogOpen"
+          :label="t('renewedCredentials')"
+          close-on-outside
+        >
+          <template #title>
+            <span>{{ t("renewedCredentials") }}</span>
+          </template>
+          <div v-if="renewedSession" class="credential-card">
+            <p class="eyebrow">{{ t("sessionRenewed") }}</p>
+            <div class="credential-field">
+              <span class="field-label">{{ t("gitToken") }}</span>
+              <code>{{ renewedSession.gitToken }}</code>
+            </div>
+            <p class="muted">{{ t("renewedCredentialsHint") }}</p>
+          </div>
+          <template #footer>
+            <FluentButton type="button" tone="primary" @click="renewedSession = null">
+              {{ t("close") }}
+            </FluentButton>
+          </template>
+        </FluentDialog>
+        <FluentDialog
           :open="showAgentForm"
           :label="t('createAgent')"
           close-on-outside
@@ -612,7 +688,6 @@ sessionClockTimer = window.setInterval(() => {
             >
               <option value="3600">1 {{ t("hour") }}</option>
               <option value="86400">1 {{ t("day") }}</option>
-              <option value="604800">7 {{ t("days") }}</option>
             </SelectField>
             <NoticeBar v-if="sessionFormError" intent="error">{{ sessionFormError }}</NoticeBar>
             <div class="form-actions">

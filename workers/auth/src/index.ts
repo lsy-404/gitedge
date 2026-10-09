@@ -23,6 +23,7 @@ import {
   authenticateAgentSession,
   authenticateGitToken,
   handleAgentManagement,
+  handleAgentSessionRenewal,
   handleAgentSessionRevocation,
   handleAgentProfile,
 } from "./agents";
@@ -794,6 +795,8 @@ export default {
         return errorResponse(404, "bad_request", "Endpoint was not found.");
       return handleAgentSessionRevocation(request, env);
     }
+    if (request.method === "POST" && path === "/agent-session/renew")
+      return handleAgentSessionRenewal(request, env);
     if (request.method === "GET" && path === "/browser-session") {
       if (browserView) return dataResponse({ user: null, view: { kind: "guest" } });
       const result = await getHumanSession();

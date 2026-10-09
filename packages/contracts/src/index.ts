@@ -8,6 +8,7 @@ export * from "./forge";
 export * from "./review-comments";
 export * from "./references";
 export * from "./agents";
+export * from "./agent-events";
 export * from "./access-tokens";
 export * from "./tasks";
 export * from "./trust";
