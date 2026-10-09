@@ -16,7 +16,7 @@ import {
   type SecuritySummary,
   type TrustedUser,
 } from "../../../../packages/contracts/src/index";
-import { dataResponse, errorResponse } from "../../../../src/worker/common/http";
+import { dataResponse, errorResponse, requireRecentAuth } from "../../../../src/worker/common/http";
 import { createLogger } from "../../../../src/worker/common/logger";
 import { readJsonLimited, SMALL_JSON_BYTES } from "../../../../src/worker/common/readText";
 import { verifyPassword } from "../password";
@@ -56,8 +56,7 @@ async function readBody<T>(request: Request, schema: z.ZodType<T>): Promise<T | 
 
 /** Sensitive actions require a confirmation within the sudo window. */
 function reauthRequired(session: HumanSession): Response | null {
-  if (hasRecentAuth(session.user.recentAuthAt)) return null;
-  return errorResponse(403, "reauth_required", "Confirm your identity to continue.");
+  return requireRecentAuth(session.user);
 }
 
 async function summary(env: SecurityEnv, session: HumanSession): Promise<SecuritySummary> {

@@ -14,7 +14,7 @@ import actions from "../../workers/actions/src/index";
 import auth from "../../workers/auth/src/index";
 import { parseGitAuthorization } from "../../workers/auth/src/agents";
 import { handleAccessTokenManagement } from "../../workers/auth/src/access-tokens";
-import { issueSession } from "../../workers/auth/src/session";
+import { hashToken, issueSession } from "../../workers/auth/src/session";
 import forge from "../../workers/forge/src/index";
 import git from "../../workers/git/src/index";
 import { FixtureArtifacts } from "../support/artifacts";
@@ -291,6 +291,21 @@ describe("personal access token lifecycle", () => {
     });
     expect(denied.status).toBe(403);
     expect((await account("/access-tokens", "POST", "gitedge_session=none", {})).status).toBe(401);
+  });
+
+  it("requires a recent identity confirmation to create a token", async () => {
+    const cookie = await cookieFor("alice-id");
+    await env.DB.prepare("UPDATE auth_sessions SET recent_auth_at = ? WHERE token_hash = ?")
+      .bind(Date.now() - 11 * 60 * 1000, await hashToken(cookie.slice("gitedge_session=".length)))
+      .run();
+    const stale = await account("/access-tokens", "POST", cookie, {
+      name: "stale",
+      scopes: ["repo:read"],
+      expiresInDays: 7,
+    });
+    expect(stale.status).toBe(403);
+    expect(await stale.json()).toMatchObject({ error: { code: "reauth_required" } });
+    expect((await account("/access-tokens", "GET", cookie)).status).toBe(200);
   });
 
   it("caps active tokens per user", async () => {

@@ -102,6 +102,7 @@ export function requiredAccessTokenScope(
   if (reading) return "repo:read";
   if (service === "git") return parts[2] === "merge" ? "pulls:write" : "repo:write";
   if (service === "actions") return "repo:write";
+  if (parts[0] === "repository-imports") return "repo:write";
   if (parts[0] !== "repositories") return "admin";
   if (parts.length === 1) return "repo:write";
   if (parts.length === 2) return "admin";

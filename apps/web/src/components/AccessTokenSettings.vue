@@ -17,8 +17,10 @@ import {
 } from "../../../../packages/contracts/src/access-tokens";
 import type { Repository } from "../lib/api";
 import { api, errorMessage } from "../lib/api";
+import { useReauthRetry } from "../lib/reauth";
 import ConfirmButton from "./ConfirmButton.vue";
 import NoticeBar from "./NoticeBar.vue";
+import ReauthPrompt from "./ReauthPrompt.vue";
 import StatusBadge from "./StatusBadge.vue";
 import StatusState from "./StatusState.vue";
 
@@ -33,6 +35,7 @@ const selectedRepositories = ref<string[]>([]);
 const loading = ref(true);
 const loadingError = ref("");
 const actionError = ref("");
+const reauth = useReauthRetry();
 const creating = ref(false);
 const revokingId = ref("");
 const oneTime = ref<{ token: string; expiresAt: number } | null>(null);
@@ -125,6 +128,7 @@ async function createToken(): Promise<void> {
     name.value = "";
     await load();
   } catch (cause) {
+    if (reauth.intercept(cause, createToken)) return;
     actionError.value = errorMessage(cause, t);
   } finally {
     creating.value = false;
@@ -182,6 +186,7 @@ onUnmounted(dispose);
       </FluentButton>
     </header>
     <NoticeBar v-if="loadingError" intent="error">{{ loadingError }}</NoticeBar>
+    <ReauthPrompt v-if="reauth.pending.value" @confirmed="reauth.confirmed" />
     <NoticeBar v-if="actionError" intent="error">{{ actionError }}</NoticeBar>
 
     <div v-if="oneTime" class="box box-form form-stack" aria-live="polite">

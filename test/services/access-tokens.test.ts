@@ -22,6 +22,14 @@ describe("access token scopes", () => {
     expect(requiredAccessTokenScope("forge", "POST", ["organizations"])).toBe("admin");
     expect(requiredAccessTokenScope("forge", "POST", ["repositories"])).toBe("repo:write");
     expect(requiredAccessTokenScope("forge", "DELETE", ["repositories", "r1"])).toBe("admin");
+    expect(requiredAccessTokenScope("forge", "GET", ["usage"])).toBe("repo:read");
+    expect(requiredAccessTokenScope("forge", "POST", ["repository-imports"])).toBe("repo:write");
+    expect(
+      requiredAccessTokenScope("forge", "POST", ["repository-imports", "job-1", "retry"])
+    ).toBe("repo:write");
+    expect(requiredAccessTokenScope("forge", "POST", ["repositories", "r1", "transfer"])).toBe(
+      "admin"
+    );
     expect(requiredAccessTokenScope("forge", "POST", ["repositories", "r1", "issues"])).toBe(
       "issues:write"
     );

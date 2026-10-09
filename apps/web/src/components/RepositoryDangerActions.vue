@@ -5,8 +5,10 @@ import { useRouter } from "vue-router";
 import { FluentButton } from "@platform-kit/fluent/vue";
 import type { Repository } from "../lib/api";
 import { api, errorMessage } from "../lib/api";
+import { useReauthRetry } from "../lib/reauth";
 import { sessionState } from "../lib/session";
 import NoticeBar from "./NoticeBar.vue";
+import ReauthPrompt from "./ReauthPrompt.vue";
 import SelectField from "./SelectField.vue";
 import TypeToConfirm from "./TypeToConfirm.vue";
 
@@ -20,6 +22,7 @@ const deleting = ref(false);
 const transferOpen = ref(false);
 const error = ref("");
 const warning = ref("");
+const reauth = useReauthRetry();
 const fullName = computed(() => `${props.repository.owner}/${props.repository.name}`);
 
 async function loadTargets() {
@@ -51,6 +54,7 @@ async function transfer() {
       `/${encodeURIComponent(moved.owner)}/${encodeURIComponent(moved.name)}/settings`
     );
   } catch (cause) {
+    if (reauth.intercept(cause, transfer)) return;
     error.value = errorMessage(cause, t, {
       403: "lifecycleTransferForbidden",
       409: "lifecycleTransferConflict",
@@ -68,6 +72,7 @@ async function remove() {
     await api.deleteRepository(props.repository.id, fullName.value);
     await router.replace("/dashboard");
   } catch (cause) {
+    if (reauth.intercept(cause, remove)) return;
     error.value = errorMessage(cause, t);
   } finally {
     deleting.value = false;
@@ -126,6 +131,9 @@ onMounted(loadTargets);
         :disabled="!canManage"
         @confirm="remove"
       />
+    </div>
+    <div v-if="reauth.pending.value" class="box-form">
+      <ReauthPrompt @confirmed="reauth.confirmed" />
     </div>
     <div v-if="error || warning" class="box-form">
       <NoticeBar v-if="error" intent="error">{{ error }}</NoticeBar>

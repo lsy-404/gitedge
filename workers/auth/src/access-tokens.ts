@@ -11,7 +11,7 @@ import {
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
 import { randomHex } from "../../../src/worker/common/encoding";
-import { dataResponse, errorResponse } from "../../../src/worker/common/http";
+import { dataResponse, errorResponse, requireRecentAuth } from "../../../src/worker/common/http";
 import { createLogger } from "../../../src/worker/common/logger";
 import { readJsonLimited, SMALL_JSON_BYTES } from "../../../src/worker/common/readText";
 import { z } from "zod";
@@ -232,7 +232,8 @@ export async function handleAccessTokenManagement(
     return dataResponse(await listTokens(env, user.id));
   if (request.method !== "GET" && request.headers.get("Origin") !== new URL(request.url).origin)
     return errorResponse(403, "forbidden", "Same-origin account management is required.");
-  if (parts.length === 1 && request.method === "POST") return createToken(request, env, user);
+  if (parts.length === 1 && request.method === "POST")
+    return requireRecentAuth(user) ?? createToken(request, env, user);
   if (parts.length === 2 && request.method === "DELETE") {
     const result = await env.DB.prepare(
       "UPDATE auth_access_tokens SET revoked_at = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL"

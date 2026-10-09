@@ -24,8 +24,8 @@ GitHub and SSO sign-ins are not challenged by GitEdge; their identity provider e
 
 ## Re-authentication
 
-Each session stores `recent_auth_at`, set at sign-in and refreshed by `POST /api/auth/reauth` with a password, authenticator code, recovery code or passkey. For 10 minutes (`RECENT_AUTH_WINDOW_MS`) the session may change the password, email, authenticator app, passkeys and recovery codes. Otherwise those routes answer 403 `reauth_required`. Changing the password keeps only the current session.
+Each session stores `recent_auth_at`, set at sign-in and refreshed by `POST /api/auth/reauth` with a password, authenticator code, recovery code or passkey. For 10 minutes (`RECENT_AUTH_WINDOW_MS`) the session may change the password, email, authenticator app, passkeys and recovery codes, create personal access tokens, delete, purge or transfer repositories, and delete organizations. Otherwise those routes answer 403 `reauth_required`. Changing the password keeps only the current session.
 
 ### Using the claim from other services
 
-Auth's `/session` returns `recentAuthAt` and the Gateway forwards it as the trusted header `X-GitEdge-Recent-Auth` (stripped from inbound requests). Services read it with `readTrustedUser(request).recentAuthAt` and gate sensitive actions with `hasRecentAuth(user.recentAuthAt)` from `packages/contracts`; agent sessions never carry it. To let a user satisfy a failed check, respond 403 with code `reauth_required`; the web client then offers the confirmation form.
+Auth's `/session` returns `recentAuthAt` and the Gateway forwards it as the trusted header `X-GitEdge-Recent-Auth` (stripped from inbound requests). Services read it with `readTrustedUser(request).recentAuthAt` and gate sensitive actions with `requireRecentAuth(user)` from `src/worker/common/http.ts`, which answers 403 `reauth_required` outside the window. Agent sessions and personal access tokens never carry the claim, so they cannot perform these actions. The web client shows the confirmation form (`ReauthPrompt`) when an action is refused this way and repeats the action once the user confirms.

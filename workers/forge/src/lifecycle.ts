@@ -10,7 +10,12 @@ import {
   type Repository,
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
-import { dataResponse, errorResponse, jsonResponse } from "../../../src/worker/common/http";
+import {
+  dataResponse,
+  errorResponse,
+  jsonResponse,
+  requireRecentAuth,
+} from "../../../src/worker/common/http";
 import { createLogger } from "../../../src/worker/common/logger";
 import { repositoryRole } from "../../../src/worker/common/repositories";
 import { revokeAgentSessions } from "./agent-events";
@@ -96,6 +101,8 @@ export async function repositoryLifecycle(
   });
 
   if (isDelete) {
+    const reauth = requireRecentAuth(user);
+    if (reauth) return reauth;
     if (!(await confirmed(request, fullName(repository)))) return confirmationMismatch();
     const now = Date.now();
     const purgeAfter = now + REPOSITORY_RESTORE_WINDOW_MS;
@@ -124,6 +131,8 @@ export async function repositoryLifecycle(
   if (parsed.data.confirm !== fullName(repository)) return confirmationMismatch();
   if (!(await namespaceOwner(env, repository.namespace_id, user.id)))
     return errorResponse(403, "forbidden", "Only the current owner can transfer a repository.");
+  const reauth = requireRecentAuth(user);
+  if (reauth) return reauth;
   const target = await transferTarget(env, parsed.data.owner, user);
   if (!target)
     return errorResponse(
@@ -246,6 +255,8 @@ export async function deletedRepositories(
   }
 
   if (request.method === "DELETE" && parts.length === 2) {
+    const reauth = requireRecentAuth(user);
+    if (reauth) return reauth;
     if (!(await confirmed(request, `${row.owner}/${row.name}`))) return confirmationMismatch();
     const now = Date.now();
     const expedited = await env.DB.prepare(
@@ -269,6 +280,8 @@ export async function deleteOrganization(
   organization: { id: string; slug: string },
   user: TrustedUser
 ): Promise<Response> {
+  const reauth = requireRecentAuth(user);
+  if (reauth) return reauth;
   if (!(await confirmed(request, organization.slug))) return confirmationMismatch();
   const logger = createLogger(env.LOG_LEVEL, { service: "repository-lifecycle" });
   const removed = await env.DB.prepare(

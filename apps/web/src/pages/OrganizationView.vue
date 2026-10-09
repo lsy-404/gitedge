@@ -3,9 +3,11 @@ import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { api, type Organization, type OrganizationMember, errorMessage } from "../lib/api";
+import { useReauthRetry } from "../lib/reauth";
 import AppIcon from "../components/AppIcon.vue";
 import ConfirmButton from "../components/ConfirmButton.vue";
 import NoticeBar from "../components/NoticeBar.vue";
+import ReauthPrompt from "../components/ReauthPrompt.vue";
 import SelectField from "../components/SelectField.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import { oneOf } from "../ui/formEvents";
@@ -89,6 +91,7 @@ async function removeMember(member: OrganizationMember) {
     removingIdentifier.value = "";
   }
 }
+const reauth = useReauthRetry();
 async function deleteOrganization() {
   if (deleting.value) return;
   const target = slug.value;
@@ -98,6 +101,7 @@ async function deleteOrganization() {
     await api.deleteOrganization(target, target);
     await router.replace("/organizations");
   } catch (cause) {
+    if (reauth.intercept(cause, deleteOrganization)) return;
     deleteError.value = errorMessage(cause, t, { 409: "organizationDeleteBlocked" });
   } finally {
     deleting.value = false;
@@ -270,6 +274,7 @@ watch(
               :busy="deleting"
               @confirm="deleteOrganization"
             />
+            <ReauthPrompt v-if="reauth.pending.value" @confirmed="reauth.confirmed" />
             <NoticeBar v-if="deleteError" intent="error">{{ deleteError }}</NoticeBar>
           </div>
         </section>

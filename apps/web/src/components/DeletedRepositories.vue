@@ -4,7 +4,9 @@ import { useI18n } from "vue-i18n";
 import { FluentButton } from "@platform-kit/fluent/vue";
 import type { DeletedRepository } from "../lib/api";
 import { api, errorMessage } from "../lib/api";
+import { useReauthRetry } from "../lib/reauth";
 import NoticeBar from "./NoticeBar.vue";
+import ReauthPrompt from "./ReauthPrompt.vue";
 import ConfirmButton from "./ConfirmButton.vue";
 import TypeToConfirm from "./TypeToConfirm.vue";
 import "../styles/workspace.css";
@@ -15,6 +17,7 @@ const items = ref<DeletedRepository[]>([]);
 const busyId = ref("");
 const purgingId = ref("");
 const error = ref("");
+const reauth = useReauthRetry();
 
 function restorable(item: DeletedRepository): boolean {
   return !item.purging && item.purgeAfter > Date.now();
@@ -51,6 +54,7 @@ async function purge(item: DeletedRepository) {
     purgingId.value = "";
     await load();
   } catch (cause) {
+    if (reauth.intercept(cause, () => purge(item))) return;
     error.value = errorMessage(cause, t);
   } finally {
     busyId.value = "";
@@ -105,6 +109,7 @@ onMounted(load);
         {{ t("lifecyclePurgeNow") }}
       </FluentButton>
     </div>
+    <ReauthPrompt v-if="reauth.pending.value" @confirmed="reauth.confirmed" />
     <NoticeBar v-if="error" intent="error">{{ error }}</NoticeBar>
   </section>
 </template>

@@ -54,8 +54,16 @@ const forgeEnv = {
   },
 };
 
-async function call(path: string, method = "GET", user: UserKey | null = "owner", body?: unknown) {
-  const headers = trustedHeaders(user ? users[user] : undefined);
+async function call(
+  path: string,
+  method = "GET",
+  user: UserKey | null = "owner",
+  body?: unknown,
+  recentAuthAt: number | null = Date.now()
+) {
+  const headers = trustedHeaders(
+    user ? { ...users[user], ...(recentAuthAt === null ? {} : { recentAuthAt }) } : undefined
+  );
   headers.set("Content-Type", "application/json");
   return forge.fetch(
     new Request("https://forge.test" + path, {
@@ -254,6 +262,50 @@ describe("repository deletion", () => {
     await call(`/repositories/${late}`, "DELETE", "owner", { confirm: "owner/too-late" });
     await expireGrace(late);
     expect((await call(`/deleted-repositories/${late}/restore`, "POST", "owner")).status).toBe(409);
+  });
+});
+
+describe("recent authentication", () => {
+  it("is required to delete, purge or transfer repositories and to delete organizations", async () => {
+    const id = await createRepository("owner", "sudo-guarded", "private");
+    const stale = Date.now() - 11 * 60 * 1000;
+    const expectReauth = async (response: Response) => {
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ error: { code: "reauth_required" } });
+    };
+    await expectReauth(
+      await call(`/repositories/${id}`, "DELETE", "owner", { confirm: "owner/sudo-guarded" }, stale)
+    );
+    await expectReauth(
+      await call(
+        `/repositories/${id}/transfer`,
+        "POST",
+        "owner",
+        { owner: "acme", confirm: "owner/sudo-guarded" },
+        null
+      )
+    );
+    await expectReauth(
+      await call("/organizations/other-org", "DELETE", "owner", { confirm: "other-org" }, stale)
+    );
+    expect((await call(`/repositories/${id}`)).status).toBe(200);
+
+    expect(
+      (await call(`/repositories/${id}`, "DELETE", "owner", { confirm: "owner/sudo-guarded" }))
+        .status
+    ).toBe(200);
+    await expectReauth(
+      await call(
+        `/deleted-repositories/${id}`,
+        "DELETE",
+        "owner",
+        { confirm: "owner/sudo-guarded" },
+        stale
+      )
+    );
+    expect(
+      (await call(`/deleted-repositories/${id}/restore`, "POST", "owner", undefined, stale)).status
+    ).toBe(200);
   });
 });
 

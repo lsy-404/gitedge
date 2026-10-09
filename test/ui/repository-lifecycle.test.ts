@@ -6,6 +6,8 @@ import RepositoryDangerActions from "../../apps/web/src/components/RepositoryDan
 import { i18n } from "../../apps/web/src/i18n";
 import { ApiError, api, type DeletedRepository } from "../../apps/web/src/lib/api";
 import { clearSession } from "../../apps/web/src/lib/session";
+// Lazily loaded routes import preferences, which resets the locale when first evaluated.
+import "../../apps/web/src/lib/preferences";
 import { router } from "../../apps/web/src/router";
 import {
   confirmClick,
@@ -16,6 +18,7 @@ import {
   mountAt,
   repository,
   settle,
+  submit,
   unmountAll,
 } from "./task-support";
 
@@ -66,6 +69,43 @@ describe("RepositoryDangerActions", () => {
     await settle();
     expect(remove).toHaveBeenCalledWith(repository.id, `${repository.owner}/${repository.name}`);
     expect(replace).toHaveBeenCalledWith("/dashboard");
+    mounted.unmount();
+  });
+
+  it("asks for a fresh identity confirmation and then retries the deletion", async () => {
+    vi.spyOn(api, "organizations").mockResolvedValue([]);
+    vi.spyOn(api, "security").mockResolvedValue({
+      passwordEnabled: true,
+      email: null,
+      emailAvailable: false,
+      totp: { enabled: false, available: true },
+      passkeys: [],
+      recoveryCodesRemaining: 0,
+      secondFactorEnabled: false,
+      recentAuth: { valid: false, expiresAt: null, methods: ["password"] },
+    });
+    const reauthenticate = vi
+      .spyOn(api, "reauthenticate")
+      .mockResolvedValue({ recentAuthAt: 1, expiresAt: 2 });
+    const remove = vi
+      .spyOn(api, "deleteRepository")
+      .mockRejectedValueOnce(new ApiError(403, "Confirm your identity.", "reauth_required"))
+      .mockResolvedValueOnce({ deletedAt: 1, purgeAfter: 2 });
+    const replace = vi.spyOn(router, "replace");
+    const mounted = await mountDanger();
+    fill(control(mounted.root, "input"), `${repository.owner}/${repository.name}`);
+    await settle();
+    findButton(mounted.root, "Delete this repository").click();
+    const form = await vi.waitFor(() =>
+      control(mounted.root, "#reauth-title").closest("section")!.querySelector("form")!
+    );
+    expect(replace).not.toHaveBeenCalled();
+    fill(form.querySelector("input")!, "secret-value");
+    await settle();
+    submit(form);
+    await vi.waitFor(() => expect(replace).toHaveBeenCalledWith("/dashboard"));
+    expect(reauthenticate).toHaveBeenCalledWith({ method: "password", password: "secret-value" });
+    expect(remove).toHaveBeenCalledTimes(2);
     mounted.unmount();
   });
 
@@ -177,6 +217,7 @@ describe("DeletedRepositories purge state", () => {
       truncated: false,
     });
     const mounted = await mountAt("/dashboard", "/dashboard", () => h(DeletedRepositories));
+    await vi.waitFor(() => findButton(mounted.root, "Restore"));
     expect(isDisabled(findButton(mounted.root, "Restore"))).toBe(true);
     expect(mounted.root.textContent).toContain("can no longer be restored");
     mounted.unmount();
@@ -200,6 +241,7 @@ describe("OrganizationView danger zone", () => {
     const mounted = await mountAt("/organizations/:slug", "/organizations/acme", () =>
       h(OrganizationView)
     );
+    await vi.waitFor(() => expect(mounted.root.textContent).toContain("alice"));
     expect(mounted.root.querySelector(".type-to-confirm")).toBeNull();
     mounted.unmount();
   });
@@ -214,17 +256,20 @@ describe("OrganizationView danger zone", () => {
     const mounted = await mountAt("/organizations/:slug", "/organizations/acme", () =>
       h(OrganizationView)
     );
-    const confirm = control(mounted.root, ".type-to-confirm");
+    const confirm = await vi.waitFor(() => control(mounted.root, ".type-to-confirm"));
     expect(isDisabled(findButton(confirm, "Delete this organization"))).toBe(true);
     fill(control(confirm, "input"), "acme");
     await settle();
     findButton(confirm, "Delete this organization").click();
-    await settle();
+    await vi.waitFor(() => expect(mounted.root.textContent).toContain("still has repositories"));
     expect(remove).toHaveBeenCalledWith("acme", "acme");
-    expect(mounted.root.textContent).toContain("still has repositories");
-    findButton(confirm, "Delete this organization").click();
-    await settle();
-    expect(replace).toHaveBeenCalledWith("/organizations");
+    const retry = await vi.waitFor(() => {
+      const button = findButton(mounted.root, "Delete this organization");
+      expect(isDisabled(button)).toBe(false);
+      return button;
+    });
+    retry.click();
+    await vi.waitFor(() => expect(replace).toHaveBeenCalledWith("/organizations"));
     mounted.unmount();
   });
 });
