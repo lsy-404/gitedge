@@ -20,6 +20,7 @@ import type {
   WikiPageSummary,
 } from "../lib/api";
 import { ApiError, api, errorMessage } from "../lib/api";
+import { mergePolicyCode } from "../lib/mergePolicy";
 import { sessionState } from "../lib/session";
 import { oneOf } from "../ui/formEvents";
 import AppIcon, { type IconName } from "./AppIcon.vue";
@@ -27,6 +28,7 @@ import AppLink from "./AppLink.vue";
 import AssignmentPanel from "./AssignmentPanel.vue";
 import FormActions from "./FormActions.vue";
 import NoticeBar from "./NoticeBar.vue";
+import PullMergeAutomation from "./PullMergeAutomation.vue";
 import SelectField from "./SelectField.vue";
 import StatusBadge from "./StatusBadge.vue";
 import StatusState from "./StatusState.vue";
@@ -100,6 +102,7 @@ const wikiEditing = ref(false);
 const wikiDraft = ref({ title: "", content: "" });
 const diff = ref<GitComparison | null>(null);
 const mergeError = ref("");
+const mergeQueueRequired = ref(false);
 const loading = ref(false);
 const loadError = ref("");
 const actionError = ref("");
@@ -454,17 +457,6 @@ function itemStatus(value: Issue | PullRequest | Discussion | WikiPageSummary): 
 function itemCreatedAt(value: Issue | PullRequest | Discussion | WikiPageSummary): number {
   return "createdAt" in value ? value.createdAt : value.updatedAt;
 }
-const mergePolicyCodes = [
-  "changes_requested",
-  "approvals_required",
-  "checks_incomplete",
-  "checks_required",
-  "required_checks_missing",
-  "threads_unresolved",
-  "protected_branch",
-  "repository_readonly",
-  "merge_method_disabled",
-] as const;
 function userMessage(cause: unknown): string {
   return errorMessage(cause, t);
 }
@@ -472,7 +464,7 @@ function mergeFailureMessage(cause: unknown, reloaded: boolean): string {
   if (cause instanceof ApiError) {
     if (reloaded && (cause.code === "merge_changed" || cause.code === "conflict"))
       return t("mergeStateChanged");
-    const policyCode = mergePolicyCodes.find((code) => code === cause.code);
+    const policyCode = mergePolicyCode(cause.code);
     if (policyCode) return t(`mergeError_${policyCode}`);
   }
   return errorMessage(cause, t);
@@ -1684,6 +1676,7 @@ watch(
                   tone="primary"
                   :disabled="
                     saving ||
+                    mergeQueueRequired ||
                     !diff.headOid ||
                     (!repository.allowMergeCommit &&
                       !repository.allowSquashMerge &&
@@ -1699,6 +1692,16 @@ watch(
                 </div>
                 <NoticeBar v-if="mergeError" intent="error">{{ mergeError }}</NoticeBar>
               </div>
+              <PullMergeAutomation
+                v-if="detailNumber && diff.headOid"
+                :repository-id="repository.id"
+                :number="detailNumber"
+                :head-oid="diff.headOid"
+                :method="mergeMethod"
+                :draft="'draft' in item && item.draft === true"
+                @queue-required="mergeQueueRequired = $event"
+                @changed="load"
+              />
             </div>
           </section>
 

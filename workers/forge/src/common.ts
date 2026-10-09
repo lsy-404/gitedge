@@ -1,4 +1,5 @@
 import { repositoryRole, writableRole } from "../../../src/worker/common/repositories";
+import type { MergeQueueDurableObject } from "./merge-queue";
 import { readJsonLimited } from "../../../src/worker/common/readText";
 import {
   ActorSchema,
@@ -14,6 +15,7 @@ export type ForgeEnv = {
   readonly AUTH?: { fetch(request: Request): Promise<Response> };
   readonly GIT: { fetch(request: Request): Promise<Response> };
   readonly RELEASE_ASSETS?: R2Bucket;
+  readonly MERGE_QUEUE: DurableObjectNamespace<MergeQueueDurableObject>;
   readonly LOG_LEVEL?: string;
   readonly WEBHOOK_ENCRYPTION_KEY?: string;
   readonly USER_GROUP_LIMITS_JSON?: string;
@@ -66,6 +68,17 @@ export async function isMember(
   userId: string
 ): Promise<boolean> {
   return writableRole(await repositoryRole(env.DB, repositoryId, userId));
+}
+
+export async function repositoryById(
+  env: ForgeEnv,
+  repositoryId: string
+): Promise<RepositoryRow | null> {
+  return env.DB.prepare(
+    "SELECT repositories.*, namespaces.slug AS owner FROM repositories JOIN namespaces ON namespaces.id = repositories.namespace_id WHERE repositories.id = ? AND repositories.deleted_at IS NULL"
+  )
+    .bind(repositoryId)
+    .first<RepositoryRow>();
 }
 
 export function canWriteSession(user: TrustedUser, repositoryId: string): boolean {

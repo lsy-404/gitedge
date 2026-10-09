@@ -3,13 +3,12 @@ import {
   repositoryNotFound,
 } from "../../../src/worker/common/repository-response";
 import { actionsCheck, attachActionChecks } from "./actions-checks";
-import { authorizeMerge } from "./merge-policy";
-import {
-  comparisonMessages,
-  issueReferences,
-  mergeClosingStatements,
-  syncLinkStatements,
-} from "./issue-links";
+import { authorizeMerge, blockerResponse } from "./merge-policy";
+import { reconcileRepository, sweepMergeAutomation } from "./merge-automation";
+import { mergeAutomationRoutes } from "./merge-routes";
+import { executeMerge, hasActiveMergeLease } from "./merge-execution";
+import { compareRequest, pullHead, pullRequestHeadOid, setHeadParams } from "./pull-git";
+import { issueReferences, syncLinkStatements } from "./issue-links";
 import {
   announcePublishedComments,
   listReviewComments,
@@ -52,7 +51,6 @@ import {
   resolveRepositoryPath,
   writableRole,
 } from "../../../src/worker/common/repositories";
-import { branchRules, matchingBranchRules } from "../../../src/worker/common/branch-protection";
 import { repositoryControls } from "./controls";
 import { publicReleaseRead, repositoryReleases } from "./releases";
 import {
@@ -106,15 +104,11 @@ import {
   nextNumber,
   parseActor,
   parseJson,
+  repositoryById,
   type ForgeEnv,
   type RepositoryRow,
 } from "./common";
-import {
-  mergeBindingStatements,
-  memoryTaskRequest,
-  targetStateProgressStatements,
-  type Viewer,
-} from "./tasks";
+import { memoryTaskRequest, targetStateProgressStatements, type Viewer } from "./tasks";
 import {
   actorForUser,
   readTrustedUser,
@@ -172,21 +166,6 @@ function actorFor(user: TrustedUser): Actor {
 
 function actorKey(actor: Actor): string {
   return `${actor.kind}:${actor.id}:${actor.sessionId ?? ""}`;
-}
-
-async function repositoryById(env: ForgeEnv, repositoryId: string): Promise<RepositoryRow | null> {
-  return env.DB.prepare(
-    "SELECT repositories.*, namespaces.slug AS owner FROM repositories JOIN namespaces ON namespaces.id = repositories.namespace_id WHERE repositories.id = ? AND repositories.deleted_at IS NULL"
-  )
-    .bind(repositoryId)
-    .first<RepositoryRow>();
-}
-
-function hasActiveMergeLease(resource: Record<string, unknown>): boolean {
-  return (
-    typeof resource.merge_started_at === "number" &&
-    resource.merge_started_at >= Date.now() - 300_000
-  );
 }
 
 type AgentSessionRow = {
@@ -281,64 +260,6 @@ function boundedList<T>(
   });
 }
 
-/** Names the pull request head: an agent session fork, a user fork, or neither for the base repository. */
-function setHeadParams(url: URL, pull: Record<string, unknown>): void {
-  if (pull.head_session_id) url.searchParams.set("headSessionId", String(pull.head_session_id));
-  if (pull.head_repository_id)
-    url.searchParams.set("headRepositoryId", String(pull.head_repository_id));
-}
-
-function compareRequest(
-  requestUrl: string,
-  repository: RepositoryRow,
-  pull: Record<string, unknown>,
-  user: TrustedUser,
-  range?: { base: string; head: string }
-): Request {
-  const merged = pull.state === "merged";
-  const gitUrl = new URL(`/repositories/${repository.id}/compare`, requestUrl);
-  gitUrl.searchParams.set(
-    "base",
-    range?.base ?? String(merged ? pull.merge_base_oid : pull.base_ref)
-  );
-  gitUrl.searchParams.set(
-    "head",
-    range?.head ?? String(merged ? pull.merge_head_oid : pull.head_ref)
-  );
-  setHeadParams(gitUrl, pull);
-  return new Request(gitUrl, { headers: trustedHeaders(user) });
-}
-
-async function pullRequestHeadOid(
-  env: ForgeEnv,
-  requestUrl: string,
-  repository: RepositoryRow,
-  pull: Record<string, unknown>,
-  user: TrustedUser
-): Promise<string | Response> {
-  const gitUrl = new URL(`/repositories/${repository.id}/pull-head`, requestUrl);
-  gitUrl.searchParams.set("head", String(pull.head_ref));
-  setHeadParams(gitUrl, pull);
-  const response = await env.GIT.fetch(new Request(gitUrl, { headers: trustedHeaders(user) }));
-  if (response.status === 404)
-    return errorResponse(409, "stale_commit", "The pull request head is no longer available.");
-  const body: unknown = response.ok ? await response.json().catch(() => null) : null;
-  const data = body && typeof body === "object" && "data" in body ? body.data : null;
-  const headOid =
-    data && typeof data === "object" && "oid" in data && typeof data.oid === "string"
-      ? data.oid
-      : null;
-  if (!headOid) {
-    createLogger(env.LOG_LEVEL, { service: "forge" }).warn("forge:pull-request-head-unresolved", {
-      repositoryId: repository.id,
-      pullRequestId: pull.id,
-      status: response.status,
-    });
-    return errorResponse(502, "git_unavailable", "The pull request head could not be resolved.");
-  }
-  return headOid;
-}
-
 /** Head used to decide whether review comments are outdated; null when it cannot be resolved. */
 async function reviewCommentHead(
   env: ForgeEnv,
@@ -352,7 +273,7 @@ async function reviewCommentHead(
   if (pull.state === "closed" && (pull.head_session_id || pull.head_repository_id)) return null;
   const gitUrl = new URL(`/repositories/${repository.id}/pull-head`, requestUrl);
   gitUrl.searchParams.set("head", String(pull.head_ref));
-  setHeadParams(gitUrl, pull);
+  setHeadParams(gitUrl, pullHead(pull));
   const response = await env.GIT.fetch(
     new Request(gitUrl, { headers: trustedHeaders(user ?? undefined) })
   );
@@ -366,28 +287,6 @@ async function reviewCommentHead(
     { pullRequestId: String(pull.id), status: response.status }
   );
   return null;
-}
-
-function mergeResultOid(value: unknown): string | null {
-  if (!value || typeof value !== "object" || !("data" in value)) return null;
-  const data = value.data;
-  if (!data || typeof data !== "object" || !("oid" in data) || typeof data.oid !== "string")
-    return null;
-  return /^[0-9a-f]{40}$/.test(data.oid) ? data.oid : null;
-}
-
-function gitFailureMessage(value: unknown): string {
-  if (
-    value &&
-    typeof value === "object" &&
-    "error" in value &&
-    value.error &&
-    typeof value.error === "object" &&
-    "message" in value.error &&
-    typeof value.error.message === "string"
-  )
-    return value.error.message.slice(0, 500);
-  return "Git merge failed.";
 }
 
 function parseJsonArray(value: unknown): string[] {
@@ -671,7 +570,7 @@ async function publicRepositoryRead(
         "head",
         String(pull.state === "merged" ? pull.merge_head_oid : pull.head_ref)
       );
-      setHeadParams(gitUrl, pull);
+      setHeadParams(gitUrl, pullHead(pull));
       createLogger(env.LOG_LEVEL, { service: "forge" }).debug("forge:public-pull-request-diff", {
         repositoryId: repository.id,
         number: parts[5],
@@ -1728,243 +1627,19 @@ async function featureRequest(
           ? dataResponse(presentForgeRow(resource, merged))
           : errorResponse(404, "not_found", "Pull request was not found.");
       }
-      if (current.state !== "open" || current.draft)
-        return errorResponse(409, "conflict", "Pull request must be open and ready to merge.");
-
-      const rules = matchingBranchRules(
-        await branchRules(env.DB, repository.id),
-        String(current.base_ref)
+      const outcome = await executeMerge(
+        { env, repository, user, pull: current, requestUrl: request.url, trigger: "manual" },
+        parsed.data
       );
-      if (rules.some((rule) => rule.locked))
-        return errorResponse(403, "protected_branch", "The base branch is locked.");
-      const allowed =
-        parsed.data.method === "merge"
-          ? repository.allow_merge_commit !== 0
-          : parsed.data.method === "squash"
-            ? repository.allow_squash_merge !== 0
-            : repository.allow_rebase_merge !== 0;
-      if (!allowed)
-        return errorResponse(403, "merge_method_disabled", "This merge method is disabled.");
-      const leaseAt = Date.now();
-      const staleBefore = leaseAt - 300_000;
-      const lease = await env.DB.prepare(
-        "UPDATE forge_pull_requests SET merge_started_at = ?, merge_base_oid = ?, merge_head_oid = ? WHERE id = ? AND state = 'open' AND draft = 0 AND (merge_started_at IS NULL OR merge_started_at < ?) RETURNING id"
-      )
-        .bind(
-          leaseAt,
-          parsed.data.expectedBaseOid,
-          parsed.data.expectedHeadOid,
-          current.id,
-          staleBefore
-        )
-        .first<{ id: string }>();
-      if (!lease)
-        return errorResponse(
-          409,
-          "conflict",
-          "Another merge is in progress for this pull request."
-        );
-      const releaseLease = async (): Promise<void> => {
-        await env.DB.prepare(
-          "UPDATE forge_pull_requests SET merge_started_at = NULL, merge_base_oid = NULL, merge_head_oid = NULL WHERE id = ? AND merge_started_at = ?"
-        )
-          .bind(current.id, leaseAt)
-          .run();
-      };
-
-      const rejected = await authorizeMerge(env, repository, user, current, parsed.data);
-      if (rejected) {
-        await releaseLease();
-        return rejected;
-      }
-      let commitMessages: string[] = [];
-      // Only merges into the default branch close issues, so other targets skip the comparison.
-      if (current.base_ref === (repository.default_branch ?? "main")) {
-        const comparison = await env.GIT.fetch(
-          compareRequest(request.url, repository, current, user, {
-            base: parsed.data.expectedBaseOid,
-            head: parsed.data.expectedHeadOid,
-          })
-        );
-        if (comparison.ok)
-          commitMessages = comparisonMessages(await comparison.json().catch(() => null));
-        else {
-          await comparison.body?.cancel();
-          logger.warn("forge:merge-commit-messages-unavailable", {
-            repositoryId: repository.id,
-            pullRequestNumber: number,
-            status: comparison.status,
-          });
-        }
-      }
-      const gitUrl = new URL(`/repositories/${repository.id}/merge`, request.url);
-      const headSessionId =
-        current.head_session_id == null ? null : String(current.head_session_id);
-      const headRepositoryId =
-        current.head_repository_id == null ? null : String(current.head_repository_id);
-      const gitHeaders = trustedHeaders(user);
-      gitHeaders.set("Content-Type", "application/json");
-      const gitResponse = await env.GIT.fetch(
-        new Request(gitUrl, {
-          method: "POST",
-          headers: gitHeaders,
-          body: JSON.stringify({
-            pullRequestId: String(current.id),
-            leaseAt,
-            method: parsed.data.method,
-            baseRef: current.base_ref,
-            headRef: current.head_ref,
-            headSessionId,
-            headRepositoryId,
-            expectedBaseOid: parsed.data.expectedBaseOid,
-            expectedHeadOid: parsed.data.expectedHeadOid,
-            author: { name: user.identifier, email: `${user.identifier}@users.gitedge.invalid` },
-            message: `${current.title}`,
-          }),
-        })
-      );
-      const payload: unknown = await gitResponse.json().catch(() => null);
-      const oid = mergeResultOid(payload);
-      if (!gitResponse.ok || !oid) {
-        await releaseLease();
-        logger.warn("forge:pull-request-git-merge-failed", {
-          repositoryId: repository.id,
-          pullRequestNumber: number,
-          status: gitResponse.status,
-        });
-        return errorResponse(
-          gitResponse.status === 409 ? 409 : 502,
-          "conflict",
-          gitFailureMessage(payload)
-        );
-      }
-      const now = Date.now();
-      const mergeApplied = {
-        sql: "EXISTS (SELECT 1 FROM forge_pull_requests WHERE id = ? AND state = 'merged' AND merged_oid = ? AND updated_at = ?)",
-        binds: [current.id, oid, now],
-      };
-      // Task binding and the progress entry share the batch with the merge record.
-      await env.DB.batch([
-        env.DB.prepare(
-          "UPDATE forge_pull_requests SET state = 'merged', merged_oid = ?, updated_at = ?, merge_started_at = NULL WHERE id = ? AND state = 'open' AND merge_started_at = ? AND merge_base_oid = ? AND merge_head_oid = ?"
-        ).bind(
-          oid,
-          now,
-          current.id,
-          leaseAt,
-          parsed.data.expectedBaseOid,
-          parsed.data.expectedHeadOid
-        ),
-        ...mergeBindingStatements(env, {
-          repositoryId: repository.id,
-          pullRequestId: String(current.id),
-          number,
-          oid,
-          baseRef: String(current.base_ref),
-          summary: String(current.title),
-          author: user.identifier,
-          actor,
-          now,
-        }),
-        outcomeNotificationStatement(
-          env.DB,
-          repository,
-          user.id,
-          { kind: "pull_request", id: String(current.id), number },
-          "merged",
-          "participants",
-          mergeApplied
-        ),
-        queueWebhookEvent(
-          env.DB,
-          repository.id,
-          pullRequestWebhook(repository, user, "closed", {
-            number,
-            title: String(current.title),
-            body: String(current.body),
-            state: "merged",
-            author: String(current.author),
-            baseRef: String(current.base_ref),
-            headRef: String(current.head_ref),
-            draft: false,
-            merged: true,
-            mergedOid: oid,
-          }),
-          mergeApplied
-        ),
-        ...mergeClosingStatements(
-          env,
-          repository,
-          {
-            id: String(current.id),
-            baseRef: String(current.base_ref),
-            title: String(current.title),
-            body: String(current.body),
-            mergedOid: oid,
-          },
-          commitMessages,
-          actor,
-          now
-        ),
-      ]);
+      if (!outcome.ok) return blockerResponse(outcome.blocker);
       const merged = await env.DB.prepare(
         `SELECT pull.*, users.identifier AS author${assignmentsSelect("forge_pull_requests", "pull")} FROM forge_pull_requests AS pull JOIN users ON users.id = pull.author_id WHERE pull.id = ?`
       )
         .bind(current.id)
         .first<Record<string, unknown>>();
-      if (merged?.state === "merged" && merged.merged_oid) {
-        await pullRequestEvent(env, repository, user, String(current.id), {
-          number,
-          state: "merged",
-          oid,
-        });
-        await recordAudit(env, {
-          action: "pull_request.merged",
-          actor: auditActor(user),
-          target: { type: "pull_request", id: String(current.id), label: `#${number}` },
-          repositoryId: repository.id,
-          namespaceId: repository.namespace_id,
-          metadata: {
-            number,
-            oid,
-            method: parsed.data.method,
-            baseRef: String(current.base_ref),
-            headRef: String(current.head_ref),
-          },
-        });
-        if (
-          repository.delete_branch_on_merge === 1 &&
-          !headSessionId &&
-          !headRepositoryId &&
-          current.head_ref !== repository.default_branch &&
-          current.head_ref !== current.base_ref
-        ) {
-          const deletion = await env.GIT.fetch(
-            new Request(new URL(`/repositories/${repository.id}/branches`, request.url), {
-              method: "DELETE",
-              headers: gitHeaders,
-              body: JSON.stringify({
-                name: current.head_ref,
-                expectedOid: parsed.data.expectedHeadOid,
-              }),
-            })
-          );
-          if (!deletion.ok)
-            logger.warn("forge:merged-branch-cleanup-skipped", {
-              repositoryId: repository.id,
-              pullRequestNumber: number,
-              status: deletion.status,
-            });
-          await deletion.body?.cancel();
-        }
-        logger.info("forge:pull-request-merged", {
-          repositoryId: repository.id,
-          pullRequestNumber: number,
-          mergedOid: merged.merged_oid,
-        });
-        return dataResponse(presentForgeRow(resource, merged));
-      }
-      return errorResponse(409, "conflict", "Pull request state changed after Git merge.");
+      return merged
+        ? dataResponse(presentForgeRow(resource, merged))
+        : errorResponse(404, "not_found", "Pull request was not found.");
     }
   }
 
@@ -2188,10 +1863,8 @@ const worker = {
         return errorResponse(409, "merge_changed", "Merge authorization expired or changed.");
       const repository = await repositoryById(env, String(pull.repository_id));
       if (!repository) return repositoryNotFound();
-      return (
-        (await authorizeMerge(env, repository, user, pull, input.data)) ??
-        dataResponse({ authorized: true })
-      );
+      const blocker = await authorizeMerge(env, repository, user, pull, input.data);
+      return blocker ? blockerResponse(blocker) : dataResponse({ authorized: true });
     }
     if (request.method === "GET" && parts[0] === "profiles" && parts.length === 2)
       return publicProfile(env, request, parts[1], user);
@@ -2682,6 +2355,8 @@ const worker = {
     if (hooks) return hooks;
     const releases = await repositoryReleases(env, request, repository, user, parts);
     if (releases) return releases;
+    const mergeAutomation = await mergeAutomationRoutes(env, request, repository, user, parts);
+    if (mergeAutomation) return mergeAutomation;
     const feature = await featureRequest(env, user, repository, parts, request);
     if (feature) return feature;
 
@@ -2689,6 +2364,7 @@ const worker = {
   },
   async scheduled(controller: ScheduledController, env: ForgeEnv): Promise<void> {
     if (controller.cron === WEBHOOK_CRON) {
+      await sweepMergeAutomation(env);
       await drainWebhookDeliveries(env);
       return;
     }
@@ -2699,12 +2375,60 @@ const worker = {
   },
 };
 
+/** Repository a successful write touched, for re-evaluating its auto-merge settings and merge queues. */
+async function writtenRepositoryId(
+  env: ForgeEnv,
+  request: Request,
+  body: Request | null
+): Promise<string | null> {
+  const parts = new URL(request.url).pathname.split("/").filter(Boolean);
+  if (parts[0] === "repositories" && parts.length >= 3 && parts[1] !== "by-name") return parts[1];
+  if (!body) return null;
+  const input: unknown = await body.json().catch(() => null);
+  if (!input || typeof input !== "object") return null;
+  if ("repositoryId" in input && typeof input.repositoryId === "string") return input.repositoryId;
+  if ("runId" in input && typeof input.runId === "string") {
+    const run = await env.DB.prepare("SELECT repository_id FROM actions_runs WHERE id = ?")
+      .bind(input.runId)
+      .first<{ repository_id: string }>();
+    return run?.repository_id ?? null;
+  }
+  return null;
+}
+
+async function reconcileAfterWrite(
+  env: ForgeEnv,
+  request: Request,
+  body: Request | null
+): Promise<void> {
+  try {
+    const repositoryId = await writtenRepositoryId(env, request, body);
+    if (repositoryId) await reconcileRepository(env, repositoryId);
+  } catch (cause) {
+    createLogger(env.LOG_LEVEL, { service: "forge" }).error("forge:reconcile-failed", {
+      error: cause instanceof Error ? cause.message : "unknown",
+    });
+  }
+  await drainWebhookDeliveries(env);
+}
+
+export { MergeQueueDurableObject } from "./merge-queue";
+
+/** Internal writes that can make a pull request mergeable; merge authorization runs inside a merge and must not start another pass. */
+const RECONCILING_INTERNAL_PATHS = new Set(["/internal/actions-check", "/internal/push-event"]);
+
 export default {
   async fetch(request: Request, env: ForgeEnv, ctx?: ExecutionContext): Promise<Response> {
+    const path = new URL(request.url).pathname;
+    const internal = path.startsWith("/internal/");
+    const writing = request.method !== "GET" && request.method !== "HEAD";
+    const reconciling = writing && (!internal || RECONCILING_INTERNAL_PATHS.has(path));
+    const internalBody = ctx && reconciling && internal ? request.clone() : null;
     const response = await worker.fetch(request, env, ctx);
-    // Deliver freshly queued webhooks right after a successful write instead of waiting for the next cron tick.
-    if (ctx && response.ok && request.method !== "GET" && request.method !== "HEAD")
-      ctx.waitUntil(drainWebhookDeliveries(env));
+    // Re-evaluate auto-merge and queues and deliver freshly queued webhooks right after a successful write instead of waiting for the next cron tick.
+    if (ctx && response.ok && reconciling)
+      ctx.waitUntil(reconcileAfterWrite(env, request, internalBody));
+    else if (ctx && response.ok && writing) ctx.waitUntil(drainWebhookDeliveries(env));
     return response;
   },
   scheduled: worker.scheduled,

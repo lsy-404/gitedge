@@ -1,4 +1,4 @@
-import type { TrustedUser } from "../../../packages/contracts/src/index";
+import type { MergeMethod, TrustedUser } from "../../../packages/contracts/src/index";
 import { branchRules, matchingBranchRules } from "../../../src/worker/common/branch-protection";
 import { repositoryRole, writableRole } from "../../../src/worker/common/repositories";
 import { parseActor, type ForgeEnv, type RepositoryRow } from "./common";
@@ -6,8 +6,22 @@ import { errorResponse } from "../../../src/worker/common/http";
 import { unresolvedThreadCount } from "./review-comments";
 
 export interface MergePolicyInput {
-  method: "merge" | "squash" | "rebase";
+  method: MergeMethod;
   expectedHeadOid: string;
+}
+/** A reason a pull request cannot merge yet, with the HTTP status direct callers report. */
+export interface MergeBlocker {
+  readonly status: number;
+  readonly code: string;
+  readonly message: string;
+  /** Machine-readable reason reported by Git when the merge itself failed. */
+  readonly cause?: string;
+}
+export function blockerResponse(blocker: MergeBlocker): Response {
+  return errorResponse(blocker.status, blocker.code, blocker.message);
+}
+function blocked(status: number, code: string, message: string): MergeBlocker {
+  return { status, code, message };
 }
 export async function authorizeMerge(
   env: ForgeEnv,
@@ -15,11 +29,11 @@ export async function authorizeMerge(
   user: TrustedUser,
   pull: Record<string, unknown>,
   input: MergePolicyInput
-): Promise<Response | null> {
+): Promise<MergeBlocker | null> {
   if (user.agentSession || !writableRole(await repositoryRole(env.DB, repository.id, user.id)))
-    return errorResponse(403, "forbidden", "Only a human repository member may merge.");
+    return blocked(403, "forbidden", "Only a human repository member may merge.");
   if (repository.archived || repository.pulls_enabled === 0)
-    return errorResponse(409, "repository_readonly", "Pull requests are unavailable or archived.");
+    return blocked(409, "repository_readonly", "Pull requests are unavailable or archived.");
   const rules = matchingBranchRules(
     await branchRules(env.DB, repository.id),
     String(pull.base_ref)
@@ -31,12 +45,12 @@ export async function authorizeMerge(
         ? repository.allow_squash_merge !== 0
         : repository.allow_rebase_merge !== 0;
   if (!allowed || rules.some((rule) => rule.locked))
-    return errorResponse(403, "protected_branch", "The merge method or target branch is locked.");
+    return blocked(403, "protected_branch", "The merge method or target branch is locked.");
   if (
     rules.some((rule) => rule.requireConversationResolution) &&
     (await unresolvedThreadCount(env, String(pull.id))) > 0
   )
-    return errorResponse(
+    return blocked(
       409,
       "threads_unresolved",
       "All review conversations must be resolved before merging."
@@ -53,7 +67,7 @@ export async function authorizeMerge(
       member: number;
     }>();
   if (reviews.results.length > 1000)
-    return errorResponse(413, "review_limit", "Review history exceeds the supported merge limit.");
+    return blocked(413, "review_limit", "Review history exceeds the supported merge limit.");
   const seen = new Set<string>();
   let approvals = 0;
   const pullActor = parseActor(pull.actor_json, pull.author_id);
@@ -62,7 +76,7 @@ export async function authorizeMerge(
     seen.add(review.actor_key);
     if (review.member !== 1) continue;
     if (review.state === "changes_requested")
-      return errorResponse(409, "changes_requested", "A current review requests changes.");
+      return blocked(409, "changes_requested", "A current review requests changes.");
     if (
       review.state === "approved" &&
       parseActor(review.actor_json, review.author_id).kind === "user" &&
@@ -74,25 +88,21 @@ export async function authorizeMerge(
     approvals <
     Math.max(repository.required_approvals ?? 0, ...rules.map((rule) => rule.requiredApprovals))
   )
-    return errorResponse(
-      409,
-      "approvals_required",
-      "The current commit needs more human approvals."
-    );
+    return blocked(409, "approvals_required", "The current commit needs more human approvals.");
   const checks = await env.DB.prepare(
     "SELECT name,status,conclusion,actor_json FROM forge_check_runs WHERE pull_request_id=? AND commit_oid=? LIMIT 101"
   )
     .bind(pull.id, input.expectedHeadOid)
     .all<{ name: string; status: string; conclusion: string | null; actor_json: string }>();
   if (checks.results.length > 100)
-    return errorResponse(413, "check_limit", "Check history exceeds the supported merge limit.");
+    return blocked(413, "check_limit", "Check history exceeds the supported merge limit.");
   if (
     checks.results.some(
       (check) =>
         check.status !== "completed" || !["success", "neutral"].includes(check.conclusion ?? "")
     )
   )
-    return errorResponse(
+    return blocked(
       409,
       "checks_incomplete",
       "Current commit checks are incomplete or unsuccessful."
@@ -106,13 +116,13 @@ export async function authorizeMerge(
     (repository.require_passing_checks === 1 || rules.some((rule) => rule.requirePassingChecks)) &&
     !passing.length
   )
-    return errorResponse(409, "checks_required", "The current commit needs a passing check.");
+    return blocked(409, "checks_required", "The current commit needs a passing check.");
   if (
     rules
       .flatMap((rule) => rule.requiredStatusChecks)
       .some((name) => !passing.some((check) => check.name === name))
   )
-    return errorResponse(
+    return blocked(
       409,
       "required_checks_missing",
       "A required named check is missing or unsuccessful."

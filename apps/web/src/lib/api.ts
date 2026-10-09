@@ -166,6 +166,12 @@ import type {
   TaskTable,
 } from "../../../../packages/contracts/src/tasks";
 import type {
+  AutoMergeStatus,
+  EnableAutoMergeInput,
+  MergeMethod,
+  PullMergeQueueStatus,
+} from "../../../../packages/contracts/src/auto-merge";
+import type {
   BranchProtectionInput,
   BranchProtectionRule,
   RepositoryCollaborator,
@@ -234,6 +240,9 @@ export type {
   Issue,
   IssueReferences,
   ListPage,
+  AutoMergeStatus,
+  MergeMethod,
+  PullMergeQueueStatus,
   PullRequest,
   Repository,
   Review,
@@ -1153,6 +1162,31 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  autoMerge: (repositoryId: string, number: number) =>
+    request<AutoMergeStatus>(repositoryPath(repositoryId, `pull-requests/${number}/auto-merge`)),
+  enableAutoMerge: (repositoryId: string, number: number, payload: EnableAutoMergeInput) =>
+    request<AutoMergeStatus>(repositoryPath(repositoryId, `pull-requests/${number}/auto-merge`), {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  disableAutoMerge: (repositoryId: string, number: number) =>
+    request<AutoMergeStatus>(repositoryPath(repositoryId, `pull-requests/${number}/auto-merge`), {
+      method: "DELETE",
+    }),
+  pullMergeQueue: (repositoryId: string, number: number) =>
+    request<PullMergeQueueStatus>(
+      repositoryPath(repositoryId, `pull-requests/${number}/merge-queue`)
+    ),
+  enqueuePull: (repositoryId: string, number: number, payload: EnableAutoMergeInput) =>
+    request<PullMergeQueueStatus>(
+      repositoryPath(repositoryId, `pull-requests/${number}/merge-queue`),
+      { method: "POST", body: JSON.stringify(payload) }
+    ),
+  dequeuePull: (repositoryId: string, number: number) =>
+    request<PullMergeQueueStatus>(
+      repositoryPath(repositoryId, `pull-requests/${number}/merge-queue`),
+      { method: "DELETE" }
+    ),
   discussions: (repositoryId: string) =>
     requestPage<Discussion>(repositoryPath(repositoryId, "discussions")),
   discussion: (repositoryId: string, number: number) =>

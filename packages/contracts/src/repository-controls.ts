@@ -27,6 +27,7 @@ export const BranchProtectionInputSchema = z.object({
   requireLinearHistory: z.boolean().default(false),
   requireSignedCommits: z.boolean().default(false),
   requireConversationResolution: z.boolean().default(false),
+  requireMergeQueue: z.boolean().default(false),
 });
 export type BranchProtectionInput = z.infer<typeof BranchProtectionInputSchema>;
 export interface BranchProtectionRule extends BranchProtectionInput {

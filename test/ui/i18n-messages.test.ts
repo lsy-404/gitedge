@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { i18n } from "../../apps/web/src/i18n";
 import { AuditActions } from "../../packages/contracts/src/audit";
+import { mergePolicyCodes } from "../../apps/web/src/lib/mergePolicy";
 import { taskDocumentKinds, taskStatuses } from "../../apps/web/src/lib/tasks";
 
 const locales = ["zh-CN", "en"] as const;
@@ -29,17 +30,8 @@ const dynamicKeys: Record<string, readonly string[]> = {
   taskCommitSource_: ["manual", "pull_request_merge"],
   review: ["approved", "changes_requested", "commented"],
   category: ["general", "ideas", "q-and-a", "announcements"],
-  mergeError_: [
-    "changes_requested",
-    "approvals_required",
-    "checks_incomplete",
-    "checks_required",
-    "required_checks_missing",
-    "threads_unresolved",
-    "protected_branch",
-    "repository_readonly",
-    "merge_method_disabled",
-  ],
+  mergeError_: mergePolicyCodes,
+  autoMergeBlocked_: ["draft", "forbidden", "review_limit", "check_limit"],
   "deployWizard.steps.": ["provision", "migrate", "deploy"],
   codeUploadRejected_: ["path", "fileSize", "totalSize", "count"],
   codeChange_: ["upload", "move", "delete"],
@@ -69,6 +61,8 @@ const dynamicKeys: Record<string, readonly string[]> = {
     "merged",
     "invited",
     "watching",
+    "auto_merge_disabled",
+    "queue_ejected",
   ],
   notificationKind_: ["issue", "pull_request", "discussion", "repository"],
   webhookEvent_: [

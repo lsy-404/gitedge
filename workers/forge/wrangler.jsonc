@@ -23,6 +23,20 @@
   "triggers": {
     "crons": ["*/15 * * * *", "* * * * *"]
   },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "MERGE_QUEUE",
+        "class_name": "MergeQueueDurableObject"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["MergeQueueDurableObject"]
+    }
+  ],
   "observability": {
     "enabled": true
   },

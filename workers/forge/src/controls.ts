@@ -100,7 +100,7 @@ export async function repositoryControls(
         now = Date.now();
       try {
         await env.DB.prepare(
-          "INSERT INTO repository_branch_rules (id,repository_id,pattern,enabled,locked,required_approvals,require_passing_checks,required_status_checks,require_linear_history,require_signed_commits,require_conversation_resolution,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET pattern=excluded.pattern,enabled=excluded.enabled,locked=excluded.locked,required_approvals=excluded.required_approvals,require_passing_checks=excluded.require_passing_checks,required_status_checks=excluded.required_status_checks,require_linear_history=excluded.require_linear_history,require_signed_commits=excluded.require_signed_commits,require_conversation_resolution=excluded.require_conversation_resolution,updated_at=excluded.updated_at"
+          "INSERT INTO repository_branch_rules (id,repository_id,pattern,enabled,locked,required_approvals,require_passing_checks,required_status_checks,require_linear_history,require_signed_commits,require_conversation_resolution,require_merge_queue,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET pattern=excluded.pattern,enabled=excluded.enabled,locked=excluded.locked,required_approvals=excluded.required_approvals,require_passing_checks=excluded.require_passing_checks,required_status_checks=excluded.required_status_checks,require_linear_history=excluded.require_linear_history,require_signed_commits=excluded.require_signed_commits,require_conversation_resolution=excluded.require_conversation_resolution,require_merge_queue=excluded.require_merge_queue,updated_at=excluded.updated_at"
         )
           .bind(
             ruleId,
@@ -114,6 +114,7 @@ export async function repositoryControls(
             Number(input.requireLinearHistory),
             Number(input.requireSignedCommits),
             Number(input.requireConversationResolution),
+            Number(input.requireMergeQueue),
             now,
             now
           )

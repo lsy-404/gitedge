@@ -117,6 +117,7 @@ describe("GitEdge API client", () => {
       requireLinearHistory: false,
       requireSignedCommits: false,
       requireConversationResolution: false,
+      requireMergeQueue: false,
     };
 
     await api.branchRules("repo-7");

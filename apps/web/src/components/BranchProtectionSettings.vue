@@ -40,6 +40,7 @@ const requiredStatusChecksText = ref("");
 const requireLinearHistory = ref(false);
 const requireSignedCommits = ref(false);
 const requireConversationResolution = ref(false);
+const requireMergeQueue = ref(false);
 const approvalOptions = computed<readonly FluentSelectOption[]>(() =>
   Array.from({ length: 6 }, (_, index) => ({ value: String(index), label: String(index) }))
 );
@@ -56,6 +57,7 @@ function resetForm(): void {
   requireLinearHistory.value = false;
   requireSignedCommits.value = false;
   requireConversationResolution.value = false;
+  requireMergeQueue.value = false;
 }
 
 async function load(): Promise<void> {
@@ -83,6 +85,7 @@ function edit(rule: BranchProtectionRule): void {
   requireLinearHistory.value = rule.requireLinearHistory;
   requireSignedCommits.value = rule.requireSignedCommits;
   requireConversationResolution.value = rule.requireConversationResolution;
+  requireMergeQueue.value = rule.requireMergeQueue;
   saveError.value = "";
   notice.value = "";
 }
@@ -101,6 +104,7 @@ function formValue(): BranchProtectionInput {
     requireLinearHistory: requireLinearHistory.value,
     requireSignedCommits: requireSignedCommits.value,
     requireConversationResolution: requireConversationResolution.value,
+    requireMergeQueue: requireMergeQueue.value,
   };
 }
 
@@ -201,7 +205,8 @@ watch(
               v-if="
                 rule.requireLinearHistory ||
                 rule.requireSignedCommits ||
-                rule.requireConversationResolution
+                rule.requireConversationResolution ||
+                rule.requireMergeQueue
               "
             >
               {{
@@ -209,6 +214,7 @@ watch(
                   rule.requireLinearHistory ? t("branchRuleLinearHistory") : "",
                   rule.requireSignedCommits ? t("branchRuleSignedCommits") : "",
                   rule.requireConversationResolution ? t("branchRuleConversation") : "",
+                  rule.requireMergeQueue ? t("branchRuleMergeQueue") : "",
                 ]
                   .filter(Boolean)
                   .join(" · ")
@@ -271,6 +277,11 @@ watch(
             :label="t('branchRuleConversationResolution')"
             :disabled="!canManage || saving"
           />
+          <FluentSwitch
+            v-model="requireMergeQueue"
+            :label="t('branchRuleMergeQueueRequire')"
+            :disabled="!canManage || saving"
+          />
         </div>
         <p class="field-hint">{{ t("branchRuleLockedHint") }}</p>
         <p v-if="requireLinearHistory" class="field-hint">
@@ -281,6 +292,9 @@ watch(
         </p>
         <p v-if="requireConversationResolution" class="field-hint">
           {{ t("branchRuleConversationHint") }}
+        </p>
+        <p v-if="requireMergeQueue" class="field-hint">
+          {{ t("branchRuleMergeQueueHint") }}
         </p>
         <FluentSelect
           :model-value="String(requiredApprovals)"

@@ -256,6 +256,25 @@ export function outcomeNotificationStatement(
   );
 }
 
+/** Tells `recipients` that automation stopped acting on a pull request; the acting user is not excluded. */
+export function automationNotificationStatement(
+  db: D1Database,
+  repository: Pick<RepositoryRow, "id">,
+  target: NotificationTarget,
+  reason: "auto_merge_disabled" | "queue_ejected",
+  recipients: readonly string[]
+): D1PreparedStatement {
+  return insertNotifications(
+    db,
+    repository.id,
+    target,
+    reason,
+    null,
+    userIds([...new Set(recipients)]),
+    Date.now()
+  );
+}
+
 /** Notifies the invitee of a pending repository invitation, even before they can read the repository. */
 export function invitationNotificationStatement(
   db: D1Database,

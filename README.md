@@ -66,6 +66,8 @@ The commit graph includes all commit parents and session fork refs. Pull request
 
 Pull request diffs support line and range comments with replies, resolvable threads, pending reviews published together with the Approve, Request changes or Comment verdict, and `suggestion` blocks rendered as a preview. A comment on a commit that is no longer the head is marked outdated and keeps its original context. `closes`, `fixes` and `resolves` followed by `#n` in a pull request title, body or commit messages close those issues when it merges into the default branch, and `#n` references render as links. The branch rule "Require conversation resolution" blocks merging while threads are unresolved.
 
+Members with merge permission can enable auto-merge on a pull request (merge, squash or rebase, as the repository allows). It is stored with the enabling user and the reviewed head commit, merges under that user's identity once reviews, checks and conversation rules pass, and turns off if anyone other than the enabler pushes the head or the enabler loses write access. The branch rule "Require merge queue" sends merges through a FIFO queue per target branch: each entry is re-validated against the latest base and head, merged one at a time with an atomic non-force update, and ejected with a notification on conflict or a changed head. Evaluation runs after check, review and push events and in a bounded every-minute sweep.
+
 CI runners submit check results through the authenticated Pull Request checks API. Agent reviews are explicitly marked separately from human reviews; the marker identifies the authenticated author, while the result and summary describe the runner's work.
 
 ## Account recovery and two-step verification
