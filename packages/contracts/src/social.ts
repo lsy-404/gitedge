@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { GitBranchSchema, type RepositoryForkOrigin } from "./forge";
+import { GitBranchSchema, RepositoryForkOriginSchema } from "./forge";
 import { RepositorySlugSchema } from "./repository-controls";
 
 export const MAX_REPOSITORY_TOPICS = 20;
@@ -38,11 +38,12 @@ export type ForkRepositoryInput = z.infer<typeof ForkRepositoryInputSchema>;
 
 export const ForkSyncInputSchema = z.object({ branch: GitBranchSchema }).strict();
 export type ForkSyncInput = z.infer<typeof ForkSyncInputSchema>;
-export interface ForkSyncResult {
-  status: "up_to_date" | "fast_forwarded";
-  branch: string;
-  oid: string;
-}
+export const ForkSyncResultSchema = z.object({
+  status: z.enum(["up_to_date", "fast_forwarded"]),
+  branch: z.string(),
+  oid: z.string(),
+});
+export type ForkSyncResult = z.infer<typeof ForkSyncResultSchema>;
 
 export const EXPLORE_PAGE_SIZE = 20;
 export const EXPLORE_MAX_PAGE_SIZE = 50;
@@ -59,33 +60,34 @@ export const ExploreQuerySchema = z.object({
 });
 export type ExploreQuery = z.infer<typeof ExploreQuerySchema>;
 
-export interface ExploreRepository {
-  id: string;
-  owner: string;
-  name: string;
-  description: string;
-  topics: string[];
-  starCount: number;
-  updatedAt: number;
-  forkOf: RepositoryForkOrigin | null;
-}
-export interface ExplorePage {
-  items: ExploreRepository[];
-  nextCursor: string | null;
-}
-export interface ExploreTopic {
-  topic: string;
-  repositories: number;
-}
+export const ExploreRepositorySchema = z.object({
+  id: z.string(),
+  owner: z.string(),
+  name: z.string(),
+  description: z.string(),
+  topics: z.array(z.string()),
+  starCount: z.number(),
+  updatedAt: z.number(),
+  forkOf: RepositoryForkOriginSchema.nullable(),
+});
+export type ExploreRepository = z.infer<typeof ExploreRepositorySchema>;
+export const ExplorePageSchema = z.object({
+  items: z.array(ExploreRepositorySchema),
+  nextCursor: z.string().nullable(),
+});
+export type ExplorePage = z.infer<typeof ExplorePageSchema>;
+export const ExploreTopicSchema = z.object({ topic: z.string(), repositories: z.number() });
+export type ExploreTopic = z.infer<typeof ExploreTopicSchema>;
 
-/** The viewer's relationship to a repository plus its public counters. */
-export interface RepositorySocial {
-  starCount: number;
-  starred: boolean;
-  watchLevel: WatchLevel;
-  forkCount: number;
-}
-export interface StarredPage {
-  items: ExploreRepository[];
-  nextCursor: string | null;
-}
+export const RepositorySocialSchema = z
+  .object({
+    starCount: z.number(),
+    starred: z.boolean(),
+    watchLevel: WatchLevelSchema,
+    forkCount: z.number(),
+  })
+  .describe("The viewer's relationship to a repository plus its public counters.");
+export type RepositorySocial = z.infer<typeof RepositorySocialSchema>;
+export const StarredPageSchema = ExplorePageSchema;
+export type StarredPage = ExplorePage;
+export const RepositoryTopicsSchema = z.object({ topics: z.array(z.string()) });

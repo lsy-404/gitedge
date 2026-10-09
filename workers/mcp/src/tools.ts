@@ -2,7 +2,16 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import {
+  AGENT_FEED_MAX_PAGE,
+  AGENT_FEED_MAX_WAIT_SECONDS,
+  AgentFeedPageSchema,
+  AutoMergeStatusSchema,
   CheckRunSchema,
+  ForkSyncResultSchema,
+  GitBranchSchema,
+  MergeMethodSchema,
+  RepositorySocialSchema,
+  TASK_LEASE_MAX_SECONDS,
   CommentSchema,
   GitFileListSchema,
   GitFileSchema,
@@ -143,6 +152,9 @@ function pullSummary(pull: PullRequest) {
     baseRef: pull.baseRef,
     headRef: pull.headRef,
     headSessionId: pull.headSessionId,
+    headRepository: pull.headRepository
+      ? `${pull.headRepository.owner}/${pull.headRepository.name}`
+      : null,
     createdAt: pull.createdAt,
     updatedAt: pull.updatedAt,
   };
@@ -155,6 +167,7 @@ function taskSummary(task: Task) {
     title: task.title,
     status: task.status,
     assignee: task.assignee,
+    lease: task.lease,
     progress: task.progress,
     updatedAt: task.updatedAt,
   };
@@ -615,7 +628,13 @@ export function createGitEdgeMcpServer(api: GitEdgeApi, logger: Logger): McpServ
             "GET",
             apiPath("git", "repositories", repo.id, "pull-head"),
             z.object({ data: z.object({ oid: GitOidSchema }) }),
-            { query: { head: pull.headRef, headSessionId: pull.headSessionId ?? undefined } }
+            {
+              query: {
+                head: pull.headRef,
+                headSessionId: pull.headSessionId ?? undefined,
+                headRepositoryId: pull.headRepositoryId ?? undefined,
+              },
+            }
           );
           headOid = head.ok ? head.data.data.oid : null;
         }
@@ -661,7 +680,7 @@ export function createGitEdgeMcpServer(api: GitEdgeApi, logger: Logger): McpServ
     "create_pull_request",
     {
       description:
-        "Open a pull request. Agent sessions propose from their own workspace unless headSessionId is given. Needs the pulls:write scope.",
+        "Open a pull request. headRepository proposes from a fork of the repository; otherwise agent sessions propose from their own workspace unless headSessionId is given. Needs the pulls:write scope.",
       inputSchema: {
         repository,
         title: z.string().min(1).max(200),
@@ -669,14 +688,28 @@ export function createGitEdgeMcpServer(api: GitEdgeApi, logger: Logger): McpServ
         baseRef: z.string().min(1).max(255).describe("Branch to merge into."),
         headRef: z.string().min(1).max(255).describe("Branch with the changes."),
         headSessionId: z.string().min(1).max(64).optional(),
+        headRepository: repository
+          .optional()
+          .describe('Fork that holds headRef, as "owner/name"; excludes headSessionId.'),
         draft: z.boolean().optional(),
       },
       annotations: WRITE,
     },
     async (input) =>
       guarded("create_pull_request", async () => {
+        if (input.headSessionId && input.headRepository)
+          throw new ToolFailure(
+            400,
+            "bad_request",
+            "Give either headSessionId or headRepository, not both."
+          );
         const repo = await resolve(input.repository);
-        const headSessionId = input.headSessionId ?? (await session()).agentSession?.id ?? null;
+        const headRepositoryId = input.headRepository
+          ? (await resolve(input.headRepository)).id
+          : null;
+        const headSessionId = headRepositoryId
+          ? null
+          : (input.headSessionId ?? (await session()).agentSession?.id ?? null);
         const pull = await readData(
           "POST",
           apiPath("forge", "repositories", repo.id, "pull-requests"),
@@ -688,6 +721,7 @@ export function createGitEdgeMcpServer(api: GitEdgeApi, logger: Logger): McpServ
               baseRef: input.baseRef,
               headRef: input.headRef,
               headSessionId,
+              headRepositoryId,
               draft: input.draft ?? false,
             },
           }
@@ -761,19 +795,34 @@ export function createGitEdgeMcpServer(api: GitEdgeApi, logger: Logger): McpServ
       })
   );
 
+  const leaseSeconds = z
+    .number()
+    .int()
+    .min(60)
+    .max(TASK_LEASE_MAX_SECONDS)
+    .optional()
+    .describe("Lease length in seconds (default 900).");
+
   server.registerTool(
     "claim_task",
     {
       description:
-        "Assign an unassigned task to yourself and mark a pending task in progress. Refused when someone else holds it. Needs the issues:write scope.",
-      inputSchema: { repository, number: itemNumber },
+        "Claim a pending task. Agent sessions take a time-boxed lease (renew it with heartbeat_task) that expires unless extended; people assign the task to themselves. Refused when someone else holds it. Needs the issues:write scope.",
+      inputSchema: { repository, number: itemNumber, ttlSeconds: leaseSeconds },
       annotations: WRITE,
     },
     async (input) =>
       guarded("claim_task", async () => {
         const repo = await resolve(input.repository);
-        const actor = actorForUser(await session());
+        const user = await session();
         const path = apiPath("forge", "repositories", repo.id, "tasks", input.number);
+        if (user.agentSession)
+          return taskSummary(
+            await readData("POST", `${path}/claim`, TaskDetailSchema, {
+              body: { ttlSeconds: input.ttlSeconds },
+            })
+          );
+        const actor = actorForUser(user);
         const task = await readData("GET", path, TaskDetailSchema);
         if (task.assignee && (task.assignee.kind !== actor.kind || task.assignee.id !== actor.id))
           throw new ToolFailure(
@@ -793,6 +842,44 @@ export function createGitEdgeMcpServer(api: GitEdgeApi, logger: Logger): McpServ
         return taskSummary(claimed);
       })
   );
+
+  for (const [name, action, description] of [
+    [
+      "heartbeat_task",
+      "heartbeat",
+      "Extend your task lease (agent sessions; never beyond 8 hours after the claim).",
+    ],
+    [
+      "release_task",
+      "release",
+      "Release a task claim so the task returns to pending and another agent can claim it.",
+    ],
+    [
+      "complete_task",
+      "complete",
+      "Mark a claimed task done and clear the lease (the claiming agent or a human writer).",
+    ],
+  ] as const)
+    server.registerTool(
+      name,
+      {
+        description: `${description} Needs the issues:write scope.`,
+        inputSchema: { repository, number: itemNumber, ttlSeconds: leaseSeconds },
+        annotations: WRITE,
+      },
+      async (input) =>
+        guarded(name, async () => {
+          const repo = await resolve(input.repository);
+          return taskSummary(
+            await readData(
+              "POST",
+              apiPath("forge", "repositories", repo.id, "tasks", input.number, action),
+              TaskDetailSchema,
+              { body: { ttlSeconds: input.ttlSeconds } }
+            )
+          );
+        })
+    );
 
   server.registerTool(
     "update_task",
@@ -851,6 +938,136 @@ export function createGitEdgeMcpServer(api: GitEdgeApi, logger: Logger): McpServ
             limit: input.limit,
             before: input.before,
           },
+        });
+      })
+  );
+
+  server.registerTool(
+    "poll_agent_events",
+    {
+      description:
+        "Read the event feed of your agent session's repository (assignments, mentions, reviews, checks, comments). Pass the returned cursor next time; wait long-polls up to 25 seconds. Needs pull delivery on the agent.",
+      inputSchema: {
+        repository,
+        cursor: z.number().int().min(0).optional().describe("Cursor from the previous call."),
+        limit: z.number().int().min(1).max(AGENT_FEED_MAX_PAGE).optional(),
+        wait: z.number().int().min(0).max(AGENT_FEED_MAX_WAIT_SECONDS).optional(),
+      },
+      annotations: READ_ONLY,
+    },
+    async (input) =>
+      guarded("poll_agent_events", async () => {
+        const repo = await resolve(input.repository);
+        return await readData(
+          "GET",
+          apiPath("forge", "repositories", repo.id, "agent-events"),
+          AgentFeedPageSchema,
+          { query: { cursor: input.cursor, limit: input.limit, wait: input.wait } }
+        );
+      })
+  );
+
+  server.registerTool(
+    "fork_repository",
+    {
+      description:
+        "Fork a repository's default branch into your account or an organization you own. Needs the repo:write scope; tokens limited to repositories and agent sessions are refused.",
+      inputSchema: {
+        repository,
+        owner: NamespaceSlugSchema.optional().describe("Namespace for the fork (default: you)."),
+        name: RepositorySlugSchema.optional().describe("Fork name (default: the parent's)."),
+      },
+      annotations: WRITE,
+    },
+    async (input) =>
+      guarded("fork_repository", async () => {
+        const repo = await resolve(input.repository);
+        return repositorySummary(
+          await readData(
+            "POST",
+            apiPath("forge", "repositories", repo.id, "forks"),
+            RepositorySchema,
+            { body: { owner: input.owner, name: input.name } }
+          )
+        );
+      })
+  );
+
+  server.registerTool(
+    "sync_fork",
+    {
+      description:
+        "Fast-forward a branch of your fork to the upstream branch of the same name. Needs the repo:write scope.",
+      inputSchema: {
+        repository: repository.describe('The fork, as "owner/name".'),
+        branch: GitBranchSchema,
+      },
+      annotations: WRITE,
+    },
+    async (input) =>
+      guarded("sync_fork", async () => {
+        const repo = await resolve(input.repository);
+        return await readData(
+          "POST",
+          apiPath("git", "repositories", repo.id, "fork-sync"),
+          ForkSyncResultSchema,
+          { body: { branch: input.branch } }
+        );
+      })
+  );
+
+  server.registerTool(
+    "star_repository",
+    {
+      description: "Star or unstar a repository. Agent sessions are refused.",
+      inputSchema: { repository, starred: z.boolean().describe("False removes your star.") },
+      annotations: WRITE,
+    },
+    async (input) =>
+      guarded("star_repository", async () => {
+        const repo = await resolve(input.repository);
+        return await readData(
+          input.starred ? "PUT" : "DELETE",
+          apiPath("forge", "repositories", repo.id, "star"),
+          RepositorySocialSchema
+        );
+      })
+  );
+
+  server.registerTool(
+    "set_auto_merge",
+    {
+      description:
+        "Turn auto-merge on or off for a pull request. Enabling needs the method and the head commit you reviewed (headOid from get_pull_request); the merge happens only for that commit once reviews and checks satisfy the policy. Human members with the pulls:write scope only.",
+      inputSchema: {
+        repository,
+        number: itemNumber,
+        enabled: z.boolean(),
+        method: MergeMethodSchema.optional().describe("Required when enabling."),
+        expectedHeadOid: GitOidSchema.optional().describe("Required when enabling."),
+      },
+      annotations: WRITE,
+    },
+    async (input) =>
+      guarded("set_auto_merge", async () => {
+        const repo = await resolve(input.repository);
+        const path = apiPath(
+          "forge",
+          "repositories",
+          repo.id,
+          "pull-requests",
+          input.number,
+          "auto-merge"
+        );
+        if (!input.enabled) return await readData("DELETE", path, AutoMergeStatusSchema);
+        if (!input.method || !input.expectedHeadOid)
+          throw new ToolFailure(
+            400,
+            "bad_request",
+            "Enabling auto-merge needs method and expectedHeadOid."
+          );
+        return await readData("PUT", path, AutoMergeStatusSchema, {
+          body: { method: input.method, expectedHeadOid: input.expectedHeadOid },
         });
       })
   );

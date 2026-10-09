@@ -1,12 +1,13 @@
 import { z } from "zod";
 import { readTextLimited } from "../../../src/worker/common/readText";
 import type { Logger } from "../../../src/worker/common/logger";
+import type { ApiMethod } from "../../../packages/contracts/src/openapi";
 
 export interface GatewayBinding {
   fetch(request: Request): Promise<Response>;
 }
 
-export type ApiMethod = "GET" | "POST" | "PUT" | "PATCH";
+export type { ApiMethod };
 
 export type ApiOutcome<T> =
   | { readonly ok: true; readonly status: number; readonly data: T }

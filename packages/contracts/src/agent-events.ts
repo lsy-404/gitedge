@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { AgentDeliveryMode, AgentEvent } from "./agents";
+import { AgentEventSchema, type AgentDeliveryMode } from "./agents";
 
 export const AGENT_FEED_RETENTION_MS = 7 * 86_400_000;
 export const AGENT_FEED_MAX_EVENTS = 500;
@@ -17,18 +17,23 @@ export const AgentFeedQuerySchema = z.object({
 });
 export type AgentFeedQuery = z.infer<typeof AgentFeedQuerySchema>;
 
-export interface AgentFeedEvent extends AgentEvent {
-  /** Monotonic position in the feed; pass the page cursor back to continue after it. */
-  cursor: number;
-}
+export const AgentFeedEventSchema = AgentEventSchema.extend({
+  cursor: z
+    .number()
+    .describe("Monotonic position in the feed; pass the page cursor back to continue after it."),
+});
+export type AgentFeedEvent = z.infer<typeof AgentFeedEventSchema>;
 
-export interface AgentFeedPage {
-  events: AgentFeedEvent[];
-  /** Cursor to send with the next request. Equals the request cursor when nothing is new. */
-  cursor: number;
-  /** True when more events are already available beyond this page. */
-  more: boolean;
-}
+export const AgentFeedPageSchema = z.object({
+  events: z.array(AgentFeedEventSchema),
+  cursor: z
+    .number()
+    .describe(
+      "Cursor to send with the next request. Equals the request cursor when nothing is new."
+    ),
+  more: z.boolean().describe("True when more events are already available beyond this page."),
+});
+export type AgentFeedPage = z.infer<typeof AgentFeedPageSchema>;
 
 /** Details of the `cursor_expired` error: events after the cursor were pruned. */
 export interface AgentFeedExpiry {

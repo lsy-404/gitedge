@@ -205,23 +205,23 @@ export type CheckRun = z.infer<typeof CheckRunSchema>;
 
 export type { Agent } from "./agents";
 
-export interface AgentSession {
-  id: string;
-  agentId: string;
-  agentName: string;
-  repositoryId: string;
-  workspaceName: string;
-  remote: string;
-  baseRef: string;
-  baseOid: string | null;
-  permission: "read" | "write";
-  status: "active" | "completed" | "revoked";
-  createdAt: number;
-  expiresAt: number;
-  /** Latest instant renewal can extend the session to. */
-  maxExpiresAt: number;
-  renewalCount: number;
-}
+export const AgentSessionSchema = z.object({
+  id: z.string(),
+  agentId: z.string(),
+  agentName: z.string(),
+  repositoryId: z.string(),
+  workspaceName: z.string(),
+  remote: z.string(),
+  baseRef: z.string(),
+  baseOid: z.string().nullable(),
+  permission: z.enum(["read", "write"]),
+  status: z.enum(["active", "completed", "revoked"]),
+  createdAt: z.number(),
+  expiresAt: z.number(),
+  maxExpiresAt: z.number().describe("Latest instant renewal can extend the session to."),
+  renewalCount: z.number(),
+});
+export type AgentSession = z.infer<typeof AgentSessionSchema>;
 
 export interface CreatedAgentSession extends AgentSession {
   token: string;
@@ -229,10 +229,12 @@ export interface CreatedAgentSession extends AgentSession {
   instructions: string | null;
 }
 
-/** Renewal keeps the session token and fork and returns the replacement Git credential once. */
-export interface RenewedAgentSession extends AgentSession {
-  gitToken: string;
-}
+export const RenewedAgentSessionSchema = AgentSessionSchema.extend({
+  gitToken: z
+    .string()
+    .describe("Replacement Git credential, returned once; the previous one is revoked."),
+}).describe("Renewal keeps the session token and fork.");
+export type RenewedAgentSession = z.infer<typeof RenewedAgentSessionSchema>;
 
 export const AGENT_SESSION_MAX_LIFETIME_MS = 7 * 86_400_000;
 

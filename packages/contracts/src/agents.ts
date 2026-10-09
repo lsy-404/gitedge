@@ -14,13 +14,15 @@ export type AgentWebhookEvent = z.infer<typeof AgentWebhookEventSchema>;
 export const AgentDeliveryModeSchema = z.enum(["webhook", "pull", "both"]);
 export type AgentDeliveryMode = z.infer<typeof AgentDeliveryModeSchema>;
 
-/** Event envelope shared by signed webhook bodies and pull-feed items. */
-export interface AgentEvent {
-  id: string;
-  event: AgentWebhookEvent;
-  createdAt: number;
-  data: Record<string, unknown>;
-}
+export const AgentEventSchema = z
+  .object({
+    id: z.string(),
+    event: AgentWebhookEventSchema,
+    createdAt: z.number(),
+    data: z.record(z.string(), z.unknown()),
+  })
+  .describe("Event envelope shared by signed webhook bodies and pull-feed items.");
+export type AgentEvent = z.infer<typeof AgentEventSchema>;
 
 /** Event data as delivered: the producer's fields plus the scoping identifiers. */
 export function agentEventData(

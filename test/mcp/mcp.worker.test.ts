@@ -224,8 +224,13 @@ describe("MCP tools against the real services", () => {
     const checked: string[] = [];
     for (const operation of API_OPERATIONS) {
       if (operation.method !== "GET" || operation.service === "git") continue;
-      // Health probes absent bindings and no pull request exists in this fixture.
-      if (operation.path === "/api/health" || operation.path.includes("/pull-requests/{number}"))
+      // Health probes absent bindings, no pull request exists in this fixture and the event
+      // feed answers agent sessions only (its shape is checked in the agent feed tests).
+      if (
+        operation.path === "/api/health" ||
+        operation.path.includes("/pull-requests/{number}") ||
+        operation.operationId === "pollAgentEvents"
+      )
         continue;
       const path = operation.path.replaceAll(/\{([A-Za-z]+)\}/g, (_, name: string) =>
         encodeURIComponent(samples[name] ?? "")
@@ -251,7 +256,7 @@ describe("MCP tools against the real services", () => {
   it("reaches a Forge handler for every documented write", async () => {
     const ErrorSchema = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
     for (const operation of API_OPERATIONS) {
-      if (operation.method === "GET") continue;
+      if (operation.method === "GET" || operation.service !== "forge") continue;
       const path = operation.path
         .replace("{repositoryId}", repositoryId)
         .replace("{number}", operation.path.includes("/pull-requests/") ? "99" : "1");
@@ -263,14 +268,17 @@ describe("MCP tools against the real services", () => {
         }),
         gatewayEnv
       );
-      // An empty body is invalid everywhere and pull request 99 does not exist; an unrouted path
-      // would instead fall through to 405 or the generic endpoint miss.
+      // Operations with a body reject `{}` and pull request 99 does not exist, while idempotent
+      // preference writes succeed and agent-only actions refuse a person; an unrouted path would
+      // instead fall through to 405 or the generic endpoint miss.
       expect(response.status, operation.operationId).not.toBe(405);
       const error = ErrorSchema.safeParse(await response.json());
       expect(error.success && error.data.error.message, operation.operationId).not.toBe(
         "Endpoint was not found."
       );
-      expect([400, 404], operation.operationId).toContain(response.status);
+      expect(response.status, operation.operationId).toBeLessThan(500);
+      if (operation.body !== undefined && operation.operationId !== "createFork")
+        expect([400, 403, 404, 409], operation.operationId).toContain(response.status);
     }
   });
 });

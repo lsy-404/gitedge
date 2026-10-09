@@ -54,6 +54,7 @@ const repository = {
   tasksEnabled: true,
   agentsEnabled: true,
   deploymentsEnabled: false,
+  pagesEnabled: false,
   graphEnabled: true,
   actionsEnabled: false,
   actionsNetworkEnabled: false,
@@ -66,6 +67,10 @@ const repository = {
   requirePassingChecks: false,
   createdAt: 1,
   updatedAt: 1,
+  topics: [],
+  starCount: 0,
+  forkCount: 0,
+  forkOf: null,
   viewerRole: "admin",
   canWrite: true,
 };
@@ -243,22 +248,30 @@ describe("MCP server through the Gateway", () => {
     expect(tools.map((tool) => tool.name).sort()).toEqual(
       [
         "claim_task",
+        "complete_task",
         "comment_issue",
         "comment_pull_request",
         "create_issue",
         "create_pull_request",
+        "fork_repository",
         "get_issue",
         "get_notifications",
         "get_pull_request",
         "get_repository",
+        "heartbeat_task",
         "list_issues",
         "list_pull_requests",
         "list_repositories",
         "list_tasks",
         "list_tree",
+        "poll_agent_events",
         "read_file",
+        "release_task",
         "search_files",
+        "set_auto_merge",
+        "star_repository",
         "submit_review",
+        "sync_fork",
         "update_task",
       ].sort()
     );
@@ -306,6 +319,38 @@ describe("MCP server through the Gateway", () => {
       WRITE_TOKEN
     );
     expect(created).toMatchObject({ isError: false, value: { number: 2, title: "New" } });
+  });
+
+  it("routes star, auto-merge and fork tools to their REST endpoints", async () => {
+    const { env, forgeCalls } = stack();
+    await callTool(env, "star_repository", { repository: "alice/site", starred: false });
+    const incomplete = await callTool(env, "set_auto_merge", {
+      repository: "alice/site",
+      number: 3,
+      enabled: true,
+      method: "squash",
+    });
+    expect(incomplete).toMatchObject({
+      isError: true,
+      value: { status: 400, code: "bad_request" },
+    });
+    await callTool(env, "set_auto_merge", {
+      repository: "alice/site",
+      number: 3,
+      enabled: true,
+      method: "squash",
+      expectedHeadOid: "a".repeat(40),
+    });
+    await callTool(env, "fork_repository", { repository: "alice/site", name: "site-copy" });
+    expect(
+      forgeCalls
+        .filter((request) => !request.url.includes("/by-name/"))
+        .map((request) => `${request.method} ${new URL(request.url).pathname}`)
+    ).toEqual([
+      "DELETE /repositories/r1/star",
+      "PUT /repositories/r1/pull-requests/3/auto-merge",
+      "POST /repositories/r1/forks",
+    ]);
   });
 
   it("rejects invalid tool input before calling the API", async () => {

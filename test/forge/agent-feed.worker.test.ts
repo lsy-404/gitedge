@@ -1,8 +1,10 @@
 import { env } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   AGENT_FEED_MAX_EVENTS,
   AGENT_FEED_RETENTION_MS,
+  AgentFeedPageSchema,
   type AgentFeedPage,
 } from "../../packages/contracts/src/index";
 import forge from "../../workers/forge/src/index";
@@ -52,9 +54,13 @@ function call(path: string, user: string, agentSession?: unknown): Promise<Respo
   return forge.fetch(new Request(`https://forge.test${path}`, { headers }), forgeEnv);
 }
 
+/** Parses a poll page against the documented schema; parsing drops undeclared keys, so equality proves there are none. */
 async function page(response: Response): Promise<AgentFeedPage> {
   expect(response.status).toBe(200);
-  return ((await response.json()) as { data: AgentFeedPage }).data;
+  const body: unknown = await response.json();
+  const parsed = z.object({ data: AgentFeedPageSchema }).parse(body);
+  expect(parsed).toEqual(body);
+  return parsed.data;
 }
 
 /** A clock whose sleeps advance time instantly. */

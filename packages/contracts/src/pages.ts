@@ -46,19 +46,25 @@ export const UpdatePagesInputSchema = z
   .strict();
 export type UpdatePagesInput = z.infer<typeof UpdatePagesInputSchema>;
 
-export interface PagesSettings extends UpdatePagesInput {
-  /** Mirrors the repository feature toggle; sites are only served while it is on. */
-  enabled: boolean;
-  /** Pages serve public repositories only. */
-  available: boolean;
-  lastPublishedOid: string | null;
-  lastPublishedAt: number | null;
-  /** Site root on the Gateway origin, always available. */
-  pathUrl: string;
-  /** Absolute site root on the sites host, null when none is configured. */
-  hostUrl: string | null;
-  canManage: boolean;
-}
+export const PagesSettingsSchema = z.object({
+  branch: z.string(),
+  folder: z.string(),
+  notFoundPath: z.string().nullable(),
+  spaFallback: z.boolean(),
+  enabled: z
+    .boolean()
+    .describe("Mirrors the repository feature toggle; sites are only served while it is on."),
+  available: z.boolean().describe("Pages serve public repositories only."),
+  lastPublishedOid: z.string().nullable(),
+  lastPublishedAt: z.number().nullable(),
+  pathUrl: z.string().describe("Site root on the Gateway origin, always available."),
+  hostUrl: z
+    .string()
+    .nullable()
+    .describe("Absolute site root on the sites host, null when none is configured."),
+  canManage: z.boolean(),
+});
+export type PagesSettings = z.infer<typeof PagesSettingsSchema>;
 
 const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
