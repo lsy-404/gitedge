@@ -6,7 +6,8 @@ import { unlimitedRateLimiter } from "../support/rate-limiter";
 import { runSqlScript } from "../support/database";
 import { FixtureArtifacts } from "../support/artifacts";
 import auth from "../../workers/auth/src/index";
-import { verifyCommitSignature } from "../../workers/git/src/signatures";
+import { verifyObjectSignature } from "../../workers/git/src/signatures";
+import { signedCommitObject } from "../support/ssh-signer";
 
 const migrations = import.meta.glob<string>("../../migrations/*.sql", {
   query: "?raw",
@@ -139,24 +140,32 @@ describe("Signing key ownership and commit signatures", () => {
     const payload =
       "tree 0000000000000000000000000000000000000000\nauthor Signer <signer@gitedge.invalid> 1 +0000\n\nSigned content\n";
     const signature = await signatureFor(payload);
-    const result = await verifyCommitSignature(env.DB, payload, signature);
-    expect(result.status).toBe("valid");
+    const verify = (object: Uint8Array) => verifyObjectSignature(env.DB, "commit", object);
+    const result = await verify(signedCommitObject(payload, signature));
+    expect(result).toMatchObject({ status: "valid", format: "openpgp" });
     expect(result.signer?.identifier).toBe("signature-owner");
-    expect((await verifyCommitSignature(env.DB, payload + "changed", signature)).status).toBe(
+    expect((await verify(signedCommitObject(payload + "changed", signature))).status).toBe(
       "invalid"
     );
-    expect((await verifyCommitSignature(env.DB, payload, undefined)).status).toBe("unsigned");
+    expect((await verify(new TextEncoder().encode(payload))).status).toBe("unsigned");
     expect(
-      (await verifyCommitSignature(env.DB, payload, "-----BEGIN SSH SIGNATURE-----\n")).status
-    ).toBe("unsupported");
+      (await verify(signedCommitObject(payload, "-----BEGIN SSH SIGNATURE-----\n"))).status
+    ).toBe("invalid");
   });
   it("revokes owned keys without granting another user control", async () => {
     expect((await request("/signing-keys/" + keyId, "DELETE", undefined, otherCookie)).status).toBe(
       404
     );
     expect((await request("/signing-keys/" + keyId, "DELETE")).status).toBe(200);
+    const payload = "tree 0000000000000000000000000000000000000000\n\nRevoked\n";
     expect(
-      (await verifyCommitSignature(env.DB, "payload", await signatureFor("payload"))).status
+      (
+        await verifyObjectSignature(
+          env.DB,
+          "commit",
+          signedCommitObject(payload, await signatureFor(payload))
+        )
+      ).status
     ).toBe("revoked_key");
   });
 });

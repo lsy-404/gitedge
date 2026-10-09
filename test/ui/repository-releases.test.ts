@@ -125,6 +125,16 @@ function mockApi(
           ],
           truncated: false,
         });
+      if (url.pathname.endsWith("/signature"))
+        return Response.json({
+          data: {
+            status: "valid",
+            format: "ssh",
+            fingerprint: "SHA256:9y8ZQ7fZSwHfxmOysYAaWEOOTGn1maYhYLhOKgddc8o",
+            signer: { id: "user-1", identifier: "owner" },
+            verifiedAt: 1,
+          },
+        });
       if (url.pathname.endsWith("/refs"))
         return Response.json({
           data: [
@@ -230,6 +240,25 @@ describe("repository releases", () => {
     ).toEqual(["/example/sample/archive/v1.0.0.zip", "/example/sample/archive/v1.0.0.tar.gz"]);
     expect(mounted.root.querySelector(".release-upload")).toBeNull();
     expect(mounted.root.textContent).not.toContain("New release");
+    mounted.unmount();
+  });
+
+  it("verifies the release tag signature on request", async () => {
+    i18n.global.locale.value = "en";
+    const calls = mockApi([release(), release({ id: "release-draft", draft: true })]);
+    const mounted = await mountReleases({ canWrite: false });
+    const cards = mounted.root.querySelectorAll(".release-card");
+    expect(cards[1].textContent).not.toContain("Verify tag signature");
+    const button = Array.from(cards[0].querySelectorAll<HTMLButtonElement>("button")).find((item) =>
+      item.textContent?.includes("Verify tag signature")
+    );
+    if (!button) throw new Error("Tag verification button did not render.");
+    button.click();
+    await settle();
+    expect(calls.some((call) => call.path.endsWith("/signature?tag=v1.0.0"))).toBe(true);
+    expect(cards[0].textContent).toContain("Verified (SSH)");
+    expect(cards[0].textContent).toContain("SHA256:9y8ZQ7fZSwHfxmOysYAaWEOOTGn1maYhYLhOKgddc8o");
+    expect(cards[0].textContent).toContain("owner");
     mounted.unmount();
   });
 

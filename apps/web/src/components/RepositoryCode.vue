@@ -48,7 +48,7 @@ import CodeLines from "./CodeLines.vue";
 import FileFinderDialog from "./FileFinderDialog.vue";
 import MarkdownContent from "./MarkdownContent.vue";
 import DiffViewer from "./DiffViewer.vue";
-import CommitSignatureStatus from "./CommitSignatureStatus.vue";
+import GitSignatureStatus from "./GitSignatureStatus.vue";
 import { preferencesState } from "../lib/preferences";
 import RepositoryBranches from "./RepositoryBranches.vue";
 import RepositoryTags from "./RepositoryTags.vue";
@@ -1248,7 +1248,7 @@ onUnmounted(() => {
         </div>
         <div class="commit-detail-body">
           <code class="commit-oid">{{ route.query.oid }}</code>
-          <CommitSignatureStatus
+          <GitSignatureStatus
             v-if="selectedCommit"
             :repository-id="repository.id"
             :ref-name="refName"

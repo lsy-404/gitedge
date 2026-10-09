@@ -145,6 +145,7 @@ describe("date formatting", () => {
       {
         id: "key-1",
         title: "Laptop",
+        format: "ssh",
         fingerprint: "SHA256:abc",
         keyIds: [],
         publicKey: "key",

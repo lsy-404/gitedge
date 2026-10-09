@@ -2,9 +2,10 @@
 import { onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { FluentButton, FluentField, FluentTextArea } from "@platform-kit/fluent/vue";
-import type {
-  SigningKey,
-  SigningKeyChallenge,
+import {
+  SSH_KEY_PROOF_NAMESPACE,
+  type SigningKey,
+  type SigningKeyChallenge,
 } from "../../../../packages/contracts/src/signatures";
 import { api, errorMessage } from "../lib/api";
 import ConfirmButton from "./ConfirmButton.vue";
@@ -18,6 +19,7 @@ const keys = ref<SigningKey[]>([]),
   busy = ref(false),
   showForm = ref(false),
   error = ref("");
+const formatNames = { openpgp: "OpenPGP", ssh: "SSH" };
 const title = ref(""),
   publicKey = ref(""),
   signature = ref("");
@@ -114,6 +116,7 @@ onMounted(load);
           <div class="settings-item-copy">
             <div class="row-title">
               {{ key.title }}
+              <StatusBadge>{{ formatNames[key.format] }}</StatusBadge>
               <StatusBadge :tone="key.revokedAt ? 'neutral' : 'success'">{{
                 t(key.revokedAt ? "settingsRevoked" : "settingsRegistered")
               }}</StatusBadge>
@@ -151,8 +154,9 @@ onMounted(load);
           maxlength="32768"
           required
           spellcheck="false"
-          placeholder="-----BEGIN PGP PUBLIC KEY BLOCK-----"
+          placeholder="ssh-ed25519 AAAA… / -----BEGIN PGP PUBLIC KEY BLOCK-----"
         />
+        <p class="field-hint">{{ t("settingsPublicKeyHint") }}</p>
         <div class="form-actions">
           <FluentButton :disabled="busy" @click="showForm = false">{{ t("cancel") }}</FluentButton>
           <FluentButton type="submit" tone="primary" :busy="busy">{{
@@ -175,7 +179,9 @@ onMounted(load);
         <div class="settings-actions">
           <FluentButton @click="download">{{ t("settingsDownloadChallenge") }}</FluentButton>
         </div>
-        <pre class="settings-code">
+        <pre v-if="challenge.format === 'ssh'" class="settings-code">
+ssh-keygen -Y sign -n {{ SSH_KEY_PROOF_NAMESPACE }} -f ~/.ssh/id_ed25519 gitedge-key-proof.txt</pre>
+        <pre v-else class="settings-code">
 gpg --armor --detach-sign --local-user {{ challenge.fingerprint }} gitedge-key-proof.txt</pre>
         <FluentTextArea
           v-model="signature"
@@ -184,8 +190,20 @@ gpg --armor --detach-sign --local-user {{ challenge.fingerprint }} gitedge-key-p
           maxlength="16384"
           required
           spellcheck="false"
-          placeholder="-----BEGIN PGP SIGNATURE-----"
+          :placeholder="
+            challenge.format === 'ssh'
+              ? '-----BEGIN SSH SIGNATURE-----'
+              : '-----BEGIN PGP SIGNATURE-----'
+          "
         />
+        <template v-if="challenge.format === 'ssh'">
+          <p>{{ t("settingsSshGitSetup") }}</p>
+          <pre class="settings-code">
+git config --global gpg.format ssh
+git config --global user.signingkey ~/.ssh/id_ed25519.pub
+git config --global commit.gpgsign true
+git config --global tag.gpgsign true</pre>
+        </template>
         <div class="form-actions">
           <FluentButton :disabled="busy" @click="challenge = null">{{ t("back") }}</FluentButton>
           <FluentButton type="submit" tone="primary" :busy="busy">{{

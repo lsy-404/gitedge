@@ -32,6 +32,9 @@
   align-items: center;
   gap: var(--space-1);
 }
+.release-signature {
+  padding: 0 var(--space-4);
+}
 .release-notes {
   padding: var(--space-3) var(--space-4);
 }
