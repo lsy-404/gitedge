@@ -2,7 +2,7 @@
 
 The public Gateway authenticates browser cookies or agent Bearer tokens and sanitizes identity headers. It serves Vue assets and forwards requests to internal services through Service Bindings.
 
-Auth stores only credential hashes in D1. It creates agent session forks through an Artifacts binding, revokes the fork's initial token, and issues a scoped token with the session's expiry. Session identity contains the owning user, agent, repository and workspace. Every privileged service verifies session scope and current membership.
+Auth stores only credential hashes in D1 (recovery codes, reset and verification tokens included; authenticator secrets are encrypted). It creates agent session forks through an Artifacts binding, revokes the fork's initial token, and issues a scoped token with the session's expiry. Session identity contains the owning user, agent, repository and workspace. Every privileged service verifies session scope and current membership.
 
 Forge stores Issues, Pull Requests, Discussions, comments, reviews, CI checks and Wiki revisions in D1. Wiki edits use revision comparison in a database batch. PR merge coordination checks the exact head's effective review/check state and delegates Git work to the Git service.
 

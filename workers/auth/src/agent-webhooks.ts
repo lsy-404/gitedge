@@ -6,12 +6,8 @@ import {
 } from "../../../packages/contracts/src/index";
 import { createLogger } from "../../../src/worker/common/logger";
 import { repositoryRole, writableRole } from "../../../src/worker/common/repositories";
-import {
-  base64ToBytes,
-  bytesToBase64,
-  bytesToHex,
-  randomHex,
-} from "../../../src/worker/common/encoding";
+import { bytesToHex, randomHex } from "../../../src/worker/common/encoding";
+import { importSealingKey, openText, sealText } from "./secret-box";
 import {
   dataResponse as response,
   errorResponse as failure,
@@ -95,42 +91,19 @@ const SETTINGS_SELECT =
 const EVENT_SELECT =
   "SELECT id, agent_id AS agentId, repository_id AS repositoryId, actor_user_id AS actorUserId, event, payload, created_at AS createdAt, next_attempt_at AS nextAttemptAt, attempts, delivery_id AS deliveryId, status, lease_until AS leaseUntil, error_code AS errorCode FROM auth_agent_events";
 
-function decodeKey(value: string | undefined): Uint8Array<ArrayBuffer> | null {
-  if (!value) return null;
-  try {
-    const bytes = base64ToBytes(value);
-    return bytes.length === 32 ? bytes : null;
-  } catch {
-    return null;
-  }
-}
 async function encryptionKey(env: AgentWebhookEnv): Promise<CryptoKey> {
-  const bytes = decodeKey(env.WEBHOOK_ENCRYPTION_KEY);
-  if (!bytes) throw new Error("webhook_encryption_unavailable");
-  return crypto.subtle.importKey("raw", bytes, "AES-GCM", false, ["encrypt", "decrypt"]);
+  const key = await importSealingKey(env.WEBHOOK_ENCRYPTION_KEY);
+  if (!key) throw new Error("webhook_encryption_unavailable");
+  return key;
 }
 async function encryptSecret(
   env: AgentWebhookEnv,
   secret: string
 ): Promise<{ ciphertext: string; iv: string }> {
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const encrypted = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
-    await encryptionKey(env),
-    new TextEncoder().encode(secret)
-  );
-  return { ciphertext: bytesToBase64(new Uint8Array(encrypted)), iv: bytesToBase64(iv) };
+  return sealText(await encryptionKey(env), secret);
 }
 async function decryptSecret(env: AgentWebhookEnv, row: SettingsRow): Promise<string> {
-  const bytes = await crypto.subtle.decrypt(
-    {
-      name: "AES-GCM",
-      iv: base64ToBytes(row.secretIv),
-    },
-    await encryptionKey(env),
-    base64ToBytes(row.secretCiphertext)
-  );
-  return new TextDecoder().decode(bytes);
+  return openText(await encryptionKey(env), { ciphertext: row.secretCiphertext, iv: row.secretIv });
 }
 function validWebhookUrl(value: string): boolean {
   try {
@@ -538,7 +511,7 @@ export async function handleAgentWebhookManagement(
       });
       if (!parsed.success || !validWebhookUrl(parsed.data.url))
         return failure(400, "bad_request", "Webhook URL or settings are invalid.");
-      if (!decodeKey(env.WEBHOOK_ENCRYPTION_KEY))
+      if (!(await importSealingKey(env.WEBHOOK_ENCRYPTION_KEY)))
         return failure(503, "service_unavailable", "Webhook encryption is not configured.");
       if (row && value.rotateSecret !== true) {
         await env.DB.prepare(

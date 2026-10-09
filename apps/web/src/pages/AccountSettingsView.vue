@@ -6,12 +6,14 @@ import AccountConnections from "../components/AccountConnections.vue";
 import CredentialSettings from "../components/CredentialSettings.vue";
 import SettingsSidebar from "../components/SettingsSidebar.vue";
 import SigningKeySettings from "../components/SigningKeySettings.vue";
+import AccountSecuritySettings from "../components/AccountSecuritySettings.vue";
 import BrowserSessions from "../components/BrowserSessions.vue";
 import "../styles/settings.css";
 const route = useRoute();
 const sections = [
   "profile",
   "preferences",
+  "security",
   "credentials",
   "signing",
   "sessions",
@@ -31,6 +33,7 @@ const section = computed(() =>
         v-if="section === 'profile' || section === 'preferences'"
         :section="section"
       />
+      <AccountSecuritySettings v-else-if="section === 'security'" />
       <CredentialSettings v-else-if="section === 'credentials'" />
       <SigningKeySettings v-else-if="section === 'signing'" />
       <BrowserSessions v-else-if="section === 'sessions'" />

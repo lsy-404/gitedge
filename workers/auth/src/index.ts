@@ -6,12 +6,11 @@ import {
 } from "./browser-accounts";
 import { ReservedAccountIdentifiers } from "../../../packages/contracts/src/account";
 import { handleSigningKeys } from "./signing-keys";
-import { timingSafeEqual } from "node:crypto";
 import { handleSso } from "./sso/routes";
 import {
   consumeRateLimit,
   LoginInputSchema,
-  type RateLimitDecision,
+  type LoginSecondFactorChallenge,
   type RateLimitNamespace,
   RegisterInputSchema,
   type ServiceResult,
@@ -19,7 +18,7 @@ import {
 } from "../../../packages/contracts/src/index";
 import { createLogger } from "../../../src/worker/common/logger";
 import { readCookie, issueSession, hashToken, createToken } from "./session";
-import { PBKDF2_ITERATIONS } from "./password";
+import { createPasswordCredential, verifyPassword } from "./password";
 import {
   authenticateAgentSession,
   authenticateGitToken,
@@ -28,16 +27,18 @@ import {
   handleAgentProfile,
 } from "./agents";
 import { dataResponse, errorResponse, jsonResponse } from "../../../src/worker/common/http";
-import { base64ToBytes, bytesToBase64 } from "../../../src/worker/common/encoding";
 import { readJsonLimited, SMALL_JSON_BYTES } from "../../../src/worker/common/readText";
 import { handleAccountProfile, handleWebSessions } from "./profile";
+import { handleAccountSecurity } from "./security/account-routes";
+import type { SecurityEnv } from "./security/env";
+import { beginSecondFactor } from "./security/factors";
+import { handlePublicSecurity } from "./security/public-routes";
+import { rateLimited } from "./security/rate-limit";
 import { drainAgentEventOutbox, handleAgentEvent } from "./agent-webhooks";
 
-export type AuthEnv = {
-  readonly DB: D1Database;
+export type AuthEnv = SecurityEnv & {
   readonly ARTIFACTS: Artifacts;
   readonly RATE_LIMITER: RateLimitNamespace;
-  readonly LOG_LEVEL?: string;
   readonly WEBHOOK_ENCRYPTION_KEY?: string;
   readonly ALLOW_PUBLIC_SIGNUP: string;
   readonly DEFAULT_USER_GROUP: string;
@@ -62,6 +63,7 @@ type SessionWithExternalIdentityRow = SessionRow & {
   provider_login: string | null;
   avatar_url: string | null;
   profile_url: string | null;
+  recent_auth_at?: number;
 };
 type ExternalIdentitySummary = {
   readonly provider: "github";
@@ -80,34 +82,12 @@ type GithubUserResponse = { id: number; login: string; avatar_url: string; html_
 const GITHUB_STATE_MAX_AGE_MS = 10 * 60 * 1000;
 const GITHUB_FLOW_COOKIE = "gitedge_github_flow";
 
+const PUBLIC_SECURITY_PATH =
+  /^\/(?:login\/(?:second-factor|passkey)(?:\/options)?|recovery\/.+|email\/verify)$/;
+const ACCOUNT_SECURITY_PATH = /^\/(?:security(?:\/.*)?|reauth(?:\/passkey\/options)?)$/;
+
 const LOGIN_ATTEMPTS_PER_MINUTE = 10;
 const REGISTRATIONS_PER_MINUTE = 5;
-
-function rateLimited(decision: RateLimitDecision): Response | null {
-  if (decision.allowed) return null;
-  return errorResponse(429, "rate_limited", "Too many attempts. Try again later.", {
-    "Retry-After": String(decision.retryAfter),
-  });
-}
-
-async function derivePasswordHash(
-  password: string,
-  salt: Uint8Array<ArrayBuffer>
-): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(password),
-    "PBKDF2",
-    false,
-    ["deriveBits"]
-  );
-  const bits = await crypto.subtle.deriveBits(
-    { name: "PBKDF2", hash: "SHA-256", salt, iterations: PBKDF2_ITERATIONS },
-    key,
-    256
-  );
-  return bytesToBase64(new Uint8Array(bits));
-}
 
 function createPkceVerifier(): string {
   return createToken();
@@ -219,7 +199,6 @@ export async function register(
       status: 409,
       error: { code: "conflict", message: "Identifier is already registered." },
     };
-  const salt: Uint8Array<ArrayBuffer> = crypto.getRandomValues(new Uint8Array(16));
   const user: TrustedUser = {
     id: crypto.randomUUID(),
     identifier,
@@ -227,12 +206,12 @@ export async function register(
   };
   const namespaceId = crypto.randomUUID();
   const now = Date.now();
-  const passwordHash = await derivePasswordHash(parsed.data.password, salt);
+  const credential = await createPasswordCredential(parsed.data.password);
   try {
     await env.DB.batch([
       env.DB.prepare(
         "INSERT INTO users (id, identifier, group_key, password_salt, password_hash, password_auth_enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-      ).bind(user.id, identifier, user.groupKey, bytesToBase64(salt), passwordHash, 1, now),
+      ).bind(user.id, identifier, user.groupKey, credential.salt, credential.hash, 1, now),
       env.DB.prepare(
         "INSERT INTO namespaces (id, slug, created_by, created_at) VALUES (?, ?, ?, ?)"
       ).bind(namespaceId, identifier, user.id, now),
@@ -263,10 +242,11 @@ export async function register(
   return { ok: true, data: { ...user, sessionToken: await issueSession(env, user.id) } };
 }
 
-export async function login(
-  env: AuthEnv,
-  input: unknown
-): Promise<ServiceResult<TrustedUser & { readonly sessionToken: string }>> {
+export type LoginOutcome =
+  | { readonly kind: "session"; readonly user: TrustedUser; readonly sessionToken: string }
+  | { readonly kind: "second_factor"; readonly challenge: LoginSecondFactorChallenge };
+
+export async function login(env: AuthEnv, input: unknown): Promise<ServiceResult<LoginOutcome>> {
   const parsed = LoginInputSchema.safeParse(input);
   if (!parsed.success)
     return {
@@ -292,32 +272,23 @@ export async function login(
       status: 401,
       error: { code: "unauthorized", message: "Invalid identifier or password." },
     };
-  let passwordMatches = false;
-  try {
-    const passwordHash = await derivePasswordHash(
-      parsed.data.password,
-      base64ToBytes(user.password_salt)
-    );
-    passwordMatches = timingSafeEqual(
-      base64ToBytes(passwordHash),
-      base64ToBytes(user.password_hash)
-    );
-  } catch {
-    // A malformed stored credential must not reveal a distinct authentication outcome.
-    passwordMatches = false;
-  }
+  const passwordMatches = await verifyPassword(parsed.data.password, {
+    salt: user.password_salt,
+    hash: user.password_hash,
+  });
   if (!passwordMatches)
     return {
       ok: false,
       status: 401,
       error: { code: "unauthorized", message: "Invalid identifier or password." },
     };
+  const challenge = await beginSecondFactor(env, user.id);
+  if (challenge) return { ok: true, data: { kind: "second_factor", challenge } };
   return {
     ok: true,
     data: {
-      id: user.id,
-      identifier: user.identifier,
-      groupKey: user.group_key,
+      kind: "session",
+      user: { id: user.id, identifier: user.identifier, groupKey: user.group_key },
       sessionToken: await issueSession(env, user.id),
     },
   };
@@ -346,7 +317,7 @@ export async function session(
       error: { code: "unauthorized", message: "Authentication is required." },
     };
   const row = await env.DB.prepare(
-    "SELECT users.id, users.identifier, users.group_key, external_identities.provider, external_identities.provider_login, external_identities.avatar_url, external_identities.profile_url FROM auth_sessions JOIN users ON users.id = auth_sessions.user_id LEFT JOIN external_identities ON external_identities.user_id = users.id AND external_identities.provider = 'github' WHERE auth_sessions.token_hash = ? AND auth_sessions.expires_at > ?"
+    "SELECT users.id, users.identifier, users.group_key, external_identities.provider, external_identities.provider_login, external_identities.avatar_url, external_identities.profile_url, auth_sessions.recent_auth_at FROM auth_sessions JOIN users ON users.id = auth_sessions.user_id LEFT JOIN external_identities ON external_identities.user_id = users.id AND external_identities.provider = 'github' WHERE auth_sessions.token_hash = ? AND auth_sessions.expires_at > ?"
   )
     .bind(await hashToken(token), Date.now())
     .first<SessionWithExternalIdentityRow>();
@@ -364,6 +335,7 @@ export async function session(
       identifier: row.identifier,
       groupKey: row.group_key,
       ...(externalIdentity ? { externalIdentity } : {}),
+      ...(row.recent_auth_at ? { recentAuthAt: row.recent_auth_at } : {}),
     },
   };
 }
@@ -600,9 +572,10 @@ export async function completeGithubOAuth(request: Request, env: AuthEnv): Promi
 }
 
 export default {
-  async fetch(request: Request, env: AuthEnv): Promise<Response> {
+  async fetch(request: Request, env: AuthEnv, ctx?: ExecutionContext): Promise<Response> {
     const logger = createLogger(env.LOG_LEVEL, { service: "auth" });
     const path = new URL(request.url).pathname;
+    const deferred: Promise<void>[] = [];
     let humanSession: Promise<ServiceResult<SessionData>> | undefined;
     const getHumanSession = () => (humanSession ??= session(env, readCookie(request)));
     if (path === "/accounts" || path.startsWith("/accounts/"))
@@ -631,6 +604,7 @@ export default {
         "/github/callback",
         "/sso/providers",
       ].includes(path) &&
+      !PUBLIC_SECURITY_PATH.test(path) &&
       !/^\/sso\/[^/]+\/(start|callback|metadata)$/.test(path) &&
       !/^\/agent-profiles\//.test(path)
     )
@@ -640,8 +614,10 @@ export default {
         "Return to your account perspective to manage human account settings."
       );
     if (
-      ["/login", "/register", "/logout"].includes(path) &&
-      request.method === "POST" &&
+      (["/login", "/register", "/logout"].includes(path) ||
+        PUBLIC_SECURITY_PATH.test(path) ||
+        ACCOUNT_SECURITY_PATH.test(path)) &&
+      request.method !== "GET" &&
       request.headers.get("Origin") !== new URL(request.url).origin
     )
       return errorResponse(403, "forbidden", "Same-origin authentication is required.");
@@ -654,6 +630,26 @@ export default {
           "conflict",
           "The active account changed. Reload before continuing."
         );
+    }
+    if (PUBLIC_SECURITY_PATH.test(path)) {
+      const response = await handlePublicSecurity(request, env, (work) => {
+        if (ctx) ctx.waitUntil(work);
+        else deferred.push(work);
+      });
+      await Promise.all(deferred);
+      if (response) return response;
+    }
+    if (ACCOUNT_SECURITY_PATH.test(path)) {
+      const authorization = request.headers.get("Authorization");
+      if (authorization)
+        return errorResponse(403, "forbidden", "Agent sessions cannot manage human accounts.");
+      const active = await getHumanSession();
+      if (!active.ok) return errorResponse(active.status, active.error.code, active.error.message);
+      const response = await handleAccountSecurity(request, env, {
+        user: active.data,
+        tokenHash: await hashToken(readCookie(request) ?? ""),
+      });
+      if (response) return response;
     }
     if (path.startsWith("/sso/")) {
       const active = request.headers.has("Authorization") ? null : await getHumanSession();
@@ -721,20 +717,17 @@ export default {
       }
       const result = await login(env, body);
       if (!result.ok) return errorResponse(result.status, result.error.code, result.error.message);
-      logger.info("auth:logged-in", { userId: result.data.id });
+      if (result.data.kind === "second_factor") {
+        logger.info("auth:second-factor-required");
+        return dataResponse(result.data.challenge);
+      }
+      logger.info("auth:logged-in", { userId: result.data.user.id });
       return rememberBrowserLogin(
         request,
         env,
-        result.data.id,
+        result.data.user.id,
         result.data.sessionToken,
-        dataResponse(
-          {
-            id: result.data.id,
-            identifier: result.data.identifier,
-            groupKey: result.data.groupKey,
-          },
-          200
-        )
+        dataResponse(result.data.user, 200)
       );
     }
     if (request.method === "POST" && path === "/logout") {

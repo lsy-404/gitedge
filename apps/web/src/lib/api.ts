@@ -13,6 +13,20 @@ import type {
   OrganizationMember,
   User,
 } from "../../../../packages/contracts/src/account";
+import type { AuthenticationResponseJSON, RegistrationResponseJSON } from "@simplewebauthn/browser";
+import type {
+  LoginResponse,
+  PasskeyAuthenticationOptions,
+  PasskeyRegistrationOptions,
+  PasskeySummary,
+  ReauthInput,
+  RecoveryCodes,
+  RecoveryOptions,
+  SecondFactorInput,
+  SecondFactorOptions,
+  SecuritySummary,
+  TotpEnrollment,
+} from "../../../../packages/contracts/src/security";
 import type { DeployPlan } from "../../../../packages/contracts/src/deploy";
 import type {
   AgentProfile,
@@ -415,7 +429,104 @@ export const api = {
   commitSignature: (repositoryId: string, ref: string, oid: string) =>
     request<CommitSignature>(gitPath(repositoryId, `signature${query({ ref, oid })}`)),
   login: (payload: { identifier: string; password: string }) =>
-    request<User>("/api/auth/login", { method: "POST", body: JSON.stringify(payload) }),
+    request<LoginResponse>("/api/auth/login", { method: "POST", body: JSON.stringify(payload) }),
+  completeLogin: (mfaToken: string, factor: SecondFactorInput) =>
+    request<User>("/api/auth/login/second-factor", {
+      method: "POST",
+      body: JSON.stringify({ mfaToken, factor }),
+    }),
+  secondFactorOptions: (mfaToken: string) =>
+    request<SecondFactorOptions>("/api/auth/login/second-factor/options", {
+      method: "POST",
+      body: JSON.stringify({ mfaToken }),
+    }),
+  passkeyLoginOptions: () =>
+    request<PasskeyAuthenticationOptions>("/api/auth/login/passkey/options", { method: "POST" }),
+  passkeyLogin: (challengeId: string, response: AuthenticationResponseJSON) =>
+    request<User>("/api/auth/login/passkey", {
+      method: "POST",
+      body: JSON.stringify({ challengeId, response }),
+    }),
+  recoveryOptions: () => request<RecoveryOptions>("/api/auth/recovery/options"),
+  resetPasswordWithRecoveryCode: (payload: {
+    identifier: string;
+    recoveryCode: string;
+    newPassword: string;
+  }) =>
+    request<{ reset: boolean }>("/api/auth/recovery/password", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  requestPasswordResetEmail: (email: string) =>
+    request<{ sent: boolean }>("/api/auth/recovery/email", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    }),
+  confirmPasswordResetEmail: (payload: {
+    token: string;
+    newPassword: string;
+    factor?: { method: "totp" | "recovery"; code: string };
+  }) =>
+    request<{ reset: boolean }>("/api/auth/recovery/email/confirm", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  verifyEmail: (token: string) =>
+    request<{ verified: boolean }>("/api/auth/email/verify", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    }),
+  security: () => request<SecuritySummary>("/api/auth/security"),
+  reauthenticate: (input: ReauthInput) =>
+    request<{ recentAuthAt: number; expiresAt: number }>("/api/auth/reauth", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  reauthPasskeyOptions: () =>
+    request<SecondFactorOptions>("/api/auth/reauth/passkey/options", { method: "POST" }),
+  changePassword: (newPassword: string) =>
+    request<{ changed: boolean }>("/api/auth/security/password", {
+      method: "POST",
+      body: JSON.stringify({ newPassword }),
+    }),
+  setEmail: (email: string) =>
+    request<{ sent: boolean }>("/api/auth/security/email", {
+      method: "PUT",
+      body: JSON.stringify({ email }),
+    }),
+  removeEmail: () =>
+    request<{ removed: boolean }>("/api/auth/security/email", { method: "DELETE" }),
+  enrollTotp: () => request<TotpEnrollment>("/api/auth/security/totp", { method: "POST" }),
+  confirmTotp: (code: string) =>
+    request<{ enabled: boolean; recoveryCodes?: string[] }>("/api/auth/security/totp/confirm", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }),
+  disableTotp: (payload: { password?: string; code: string }) =>
+    request<{ enabled: boolean }>("/api/auth/security/totp/disable", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  regenerateRecoveryCodes: () =>
+    request<RecoveryCodes>("/api/auth/security/recovery-codes", { method: "POST" }),
+  passkeyRegistrationOptions: () =>
+    request<PasskeyRegistrationOptions>("/api/auth/security/passkeys/options", {
+      method: "POST",
+    }),
+  addPasskey: (name: string, response: RegistrationResponseJSON) =>
+    request<{ passkey: PasskeySummary; recoveryCodes?: string[] }>("/api/auth/security/passkeys", {
+      method: "POST",
+      body: JSON.stringify({ name, response }),
+    }),
+  renamePasskey: (id: string, name: string) =>
+    request<{ renamed: boolean }>(`/api/auth/security/passkeys/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+    }),
+  removePasskey: (id: string) =>
+    request<{ removed: boolean }>(`/api/auth/security/passkeys/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
   register: (payload: { identifier: string; password: string }) =>
     request<User>("/api/auth/register", { method: "POST", body: JSON.stringify(payload) }),
   logout: () => request("/api/auth/logout", { method: "POST" }, true),

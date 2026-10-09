@@ -170,6 +170,9 @@ async function readSession(response: Response): Promise<SessionResult | Response
     identifier: payload.data.identifier,
     groupKey: payload.data.groupKey,
     agentSession: payload.data.agentSession,
+    ...(typeof payload.data.recentAuthAt === "number"
+      ? { recentAuthAt: payload.data.recentAuthAt }
+      : {}),
   };
 }
 

@@ -8,10 +8,20 @@ import StatusBadge from "../components/StatusBadge.vue";
 import AppIcon from "../components/AppIcon.vue";
 import { BROWSER_ACCOUNT_LIMIT } from "../../../../packages/contracts/src/browser-accounts";
 import { api, ApiError, errorMessage } from "../lib/api";
-import type { SsoProviderSummary } from "../lib/api";
+import type { SsoProviderSummary, User } from "../lib/api";
 import { setSession, sessionState } from "../lib/session";
 import { notifyBrowserIdentityChanged } from "../lib/browserIdentity";
 import TextField from "../components/TextField.vue";
+import SecondFactorStep from "../components/SecondFactorStep.vue";
+import {
+  isSecondFactorChallenge,
+  type LoginSecondFactorChallenge,
+} from "../../../../packages/contracts/src/security";
+import {
+  browserSupportsWebAuthn,
+  passkeyPromptCancelled,
+  promptPasskeyAuthentication,
+} from "../lib/webauthn";
 import "../styles/auth.css";
 const { t } = useI18n();
 const route = useRoute();
@@ -22,6 +32,8 @@ const identifier = ref("");
 const password = ref("");
 const error = ref("");
 const busy = ref(false);
+const challenge = ref<LoginSecondFactorChallenge | null>(null);
+const passkeysSupported = browserSupportsWebAuthn();
 const providers = ref<SsoProviderSummary[]>([]);
 const providersError = ref(false);
 const returnTo = computed(() => safeReturnTo(route.query.redirect));
@@ -80,20 +92,32 @@ onMounted(async () => {
   }
 });
 
+async function finishSignIn(user: User): Promise<void> {
+  setSession(user);
+  if (addingAccount.value) {
+    notifyBrowserIdentityChanged();
+    window.location.assign(returnTo.value);
+    return;
+  }
+  await router.push(returnTo.value);
+}
+
 async function submit() {
   busy.value = true;
   error.value = "";
   try {
-    const user = register.value
-      ? await api.register({ identifier: identifier.value, password: password.value })
-      : await api.login({ identifier: identifier.value, password: password.value });
-    setSession(user);
-    if (addingAccount.value) {
-      notifyBrowserIdentityChanged();
-      window.location.assign(returnTo.value);
+    if (register.value) {
+      await finishSignIn(
+        await api.register({ identifier: identifier.value, password: password.value })
+      );
       return;
     }
-    await router.push(returnTo.value);
+    const result = await api.login({ identifier: identifier.value, password: password.value });
+    if (isSecondFactorChallenge(result)) {
+      challenge.value = result;
+      return;
+    }
+    await finishSignIn(result);
   } catch (cause) {
     if (cause instanceof ApiError && cause.status === 409 && !register.value)
       error.value = t("browserAccountLimit", { limit: BROWSER_ACCOUNT_LIMIT });
@@ -113,6 +137,27 @@ async function submit() {
   } finally {
     busy.value = false;
   }
+}
+
+async function passkeyLogin() {
+  busy.value = true;
+  error.value = "";
+  try {
+    const { challengeId, options } = await api.passkeyLoginOptions();
+    const response = await promptPasskeyAuthentication(options);
+    await finishSignIn(await api.passkeyLogin(challengeId, response));
+  } catch (cause) {
+    error.value = passkeyPromptCancelled(cause)
+      ? t("passkeyCancelled")
+      : errorMessage(cause, t, { 401: "passkeyLoginFailed", 429: "authRateLimited" });
+  } finally {
+    busy.value = false;
+  }
+}
+
+function cancelSecondFactor() {
+  challenge.value = null;
+  password.value = "";
 }
 function githubLogin() {
   const prompt = addingAccount.value ? "&prompt=select_account" : "";
@@ -138,7 +183,10 @@ async function cancelAddingAccount() {
         }}
       </h1>
     </div>
-    <div class="auth-card">
+    <div v-if="challenge" class="auth-card">
+      <SecondFactorStep :challenge="challenge" @done="finishSignIn" @cancel="cancelSecondFactor" />
+    </div>
+    <div v-else class="auth-card">
       <NoticeBar v-if="callbackError" intent="error">{{ callbackError }}</NoticeBar>
       <div class="auth-provider-list">
         <FluentButton
@@ -196,9 +244,22 @@ async function cancelAddingAccount() {
         <button type="submit" class="btn btn-primary auth-submit" :disabled="busy">
           {{ busy ? t("loading") : register ? t("signUp") : t("signIn") }}
         </button>
+        <AppLink v-if="!register" class="auth-forgot" to="/forgot-password">{{
+          t("forgotPassword")
+        }}</AppLink>
       </form>
+      <button
+        v-if="!register && passkeysSupported"
+        type="button"
+        class="btn auth-provider-choice"
+        :disabled="busy"
+        @click="passkeyLogin"
+      >
+        <span class="provider-mark oidc-mark"><AppIcon name="lock" :size="16" /></span>
+        <strong>{{ t("passkeySignIn") }}</strong>
+      </button>
     </div>
-    <p v-if="addingAccount && sessionState.user" class="auth-page-footer">
+    <p v-if="addingAccount && sessionState.user && !challenge" class="auth-page-footer">
       <button class="btn btn-subtle" @click="cancelAddingAccount">
         {{ t("cancelAddingAccount") }}
       </button>

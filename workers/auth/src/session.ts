@@ -19,9 +19,9 @@ export async function issueSession(env: { DB: D1Database }, userId: string): Pro
   const id = crypto.randomUUID();
   const now = Date.now();
   await env.DB.prepare(
-    "INSERT INTO auth_sessions (id, token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?)"
+    "INSERT INTO auth_sessions (id, token_hash, user_id, expires_at, created_at, recent_auth_at) VALUES (?, ?, ?, ?, ?, ?)"
   )
-    .bind(id, await hashToken(token), userId, now + SESSION_MAX_AGE_SECONDS * 1000, now)
+    .bind(id, await hashToken(token), userId, now + SESSION_MAX_AGE_SECONDS * 1000, now, now)
     .run();
   return token;
 }

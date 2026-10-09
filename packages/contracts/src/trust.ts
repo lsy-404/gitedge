@@ -3,6 +3,8 @@ import type { TrustedUser } from "./index";
 
 export const REPOSITORY_ACCESS_DENIED_HEADER = "X-GitEdge-Repository-Access-Denied";
 
+export const RECENT_AUTH_HEADER = "X-GitEdge-Recent-Auth";
+
 export const TRUSTED_USER_HEADERS = [
   "x-gitedge-user-id",
   "x-gitedge-user-email",
@@ -10,6 +12,7 @@ export const TRUSTED_USER_HEADERS = [
   "x-gitedge-user-group",
   "x-gitedge-agent-session",
   "x-gitedge-git-grant",
+  RECENT_AUTH_HEADER.toLowerCase(),
   REPOSITORY_ACCESS_DENIED_HEADER,
 ] as const;
 
@@ -19,10 +22,18 @@ export function readTrustedUser(request: Request): TrustedUser | null {
   const groupKey = request.headers.get("X-GitEdge-User-Group");
   if (!id || !identifier || !groupKey) return null;
   const rawSession = request.headers.get("X-GitEdge-Agent-Session");
-  if (!rawSession) return { id, identifier, groupKey };
+  const rawRecent = request.headers.get(RECENT_AUTH_HEADER);
+  const recent = rawRecent && /^\d{1,16}$/.test(rawRecent) ? Number(rawRecent) : undefined;
+  const base = {
+    id,
+    identifier,
+    groupKey,
+    ...(recent === undefined ? {} : { recentAuthAt: recent }),
+  };
+  if (!rawSession) return base;
   try {
     const parsed = AgentSessionIdentitySchema.safeParse(JSON.parse(rawSession));
-    return parsed.success ? { id, identifier, groupKey, agentSession: parsed.data } : null;
+    return parsed.success ? { ...base, agentSession: parsed.data } : null;
   } catch {
     return null;
   }
@@ -41,6 +52,7 @@ export function trustedHeaders(user?: TrustedUser): Headers {
     headers.set("X-GitEdge-User-Id", user.id);
     headers.set("X-GitEdge-User-Name", user.identifier);
     headers.set("X-GitEdge-User-Group", user.groupKey);
+    if (user.recentAuthAt !== undefined) headers.set(RECENT_AUTH_HEADER, String(user.recentAuthAt));
     if (user.agentSession)
       headers.set("X-GitEdge-Agent-Session", JSON.stringify(user.agentSession));
   }

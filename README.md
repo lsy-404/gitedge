@@ -50,6 +50,10 @@ The commit graph includes all commit parents and session fork refs. Pull request
 
 CI runners submit check results through the authenticated Pull Request checks API. Agent reviews are explicitly marked separately from human reviews; the marker identifies the authenticated author, while the result and summary describe the runner's work.
 
+## Account recovery and two-step verification
+
+Accounts can add an authenticator app (TOTP), passkeys and ten single-use recovery codes under Settings, Security. Once a second factor exists, password sign-in asks for it (authenticator code, passkey or recovery code); a passkey can also sign in without a password. "Forgot password" resets the password with a username and recovery code, or with an emailed link when an optional Cloudflare Email Service binding is configured. A reset signs out every session. Sensitive changes (password, email, two-step verification, recovery codes) require a recent confirmation that lasts 10 minutes. See [account security](docs/account-security.md) and [configuration](docs/configuration.md#auth).
+
 ## Single sign-on
 
 Sign in with identity-only GitHub OAuth or configure multiple OIDC or SAML 2.0 providers (including `https://id.voidcarve.com`), link identities to existing accounts, and use provider-aware single sign-out from Account settings. Standard code-flow and SAML signature validation use maintained MIT libraries. See [SSO configuration](docs/sso.md) for provider settings, callback URLs, secrets and supported flows.

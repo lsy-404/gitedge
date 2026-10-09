@@ -139,3 +139,42 @@ describe("Static asset headers", () => {
     expect(rules).toContain("X-Content-Type-Options: nosniff");
   });
 });
+
+describe("Gateway recent-authentication claim", () => {
+  it("forwards the session's claim and drops a client-supplied one", async () => {
+    const seen: (string | null)[] = [];
+    const forged = await handleGatewayRequest(
+      new Request("https://gitedge.example.com/api/forge/repositories", {
+        headers: { "X-GitEdge-Recent-Auth": "9999999999999", Cookie: "gitedge_session=t" },
+      }),
+      environment({
+        AUTH: service(() =>
+          Response.json({ data: { id: "u1", identifier: "ada", groupKey: "free" } })
+        ),
+        FORGE: service((request) => {
+          seen.push(request.headers.get("X-GitEdge-Recent-Auth"));
+          return Response.json({ data: [] });
+        }),
+      })
+    );
+    expect(forged.status).toBe(200);
+    const claimed = await handleGatewayRequest(
+      new Request("https://gitedge.example.com/api/forge/repositories", {
+        headers: { Cookie: "gitedge_session=t" },
+      }),
+      environment({
+        AUTH: service(() =>
+          Response.json({
+            data: { id: "u1", identifier: "ada", groupKey: "free", recentAuthAt: 1234567890 },
+          })
+        ),
+        FORGE: service((request) => {
+          seen.push(request.headers.get("X-GitEdge-Recent-Auth"));
+          return Response.json({ data: [] });
+        }),
+      })
+    );
+    expect(claimed.status).toBe(200);
+    expect(seen).toEqual([null, "1234567890"]);
+  });
+});

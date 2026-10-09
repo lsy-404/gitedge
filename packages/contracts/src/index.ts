@@ -9,6 +9,7 @@ export * from "./trust";
 export * from "./account";
 export * from "./actions";
 export * from "./browser-accounts";
+export * from "./security";
 
 export const ErrorCodeSchema = z.enum([
   "bad_request",
@@ -35,6 +36,8 @@ export type TrustedUser = {
   readonly identifier: string;
   readonly groupKey: string;
   readonly agentSession?: AgentSessionIdentity;
+  /** Epoch milliseconds of the session's latest password or second-factor confirmation. */
+  readonly recentAuthAt?: number;
 };
 
 export type UserGroupLimits = {
