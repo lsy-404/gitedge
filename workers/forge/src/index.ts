@@ -2306,17 +2306,21 @@ async function reconcileAfterWrite(
 
 export { MergeQueueDurableObject } from "./merge-queue";
 
+/** Internal writes that can make a pull request mergeable; merge authorization runs inside a merge and must not start another pass. */
+const RECONCILING_INTERNAL_PATHS = new Set(["/internal/actions-check", "/internal/push-event"]);
+
 export default {
   async fetch(request: Request, env: ForgeEnv, ctx?: ExecutionContext): Promise<Response> {
+    const path = new URL(request.url).pathname;
+    const internal = path.startsWith("/internal/");
     const writing = request.method !== "GET" && request.method !== "HEAD";
-    const internalBody =
-      ctx && writing && new URL(request.url).pathname.startsWith("/internal/")
-        ? request.clone()
-        : null;
+    const reconciling = writing && (!internal || RECONCILING_INTERNAL_PATHS.has(path));
+    const internalBody = ctx && reconciling && internal ? request.clone() : null;
     const response = await worker.fetch(request, env, ctx);
     // Re-evaluate auto-merge and queues and deliver freshly queued webhooks right after a successful write instead of waiting for the next cron tick.
-    if (ctx && response.ok && writing)
+    if (ctx && response.ok && reconciling)
       ctx.waitUntil(reconcileAfterWrite(env, request, internalBody));
+    else if (ctx && response.ok && writing) ctx.waitUntil(drainWebhookDeliveries(env));
     return response;
   },
   scheduled: worker.scheduled,

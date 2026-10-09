@@ -471,6 +471,7 @@ describe("Auto-merge", () => {
     await rule("am-off", { checks: ["CI"] });
     const pull = await openPull("am-off");
     await enable(pull);
+    const before = await notifications("u2", "auto_merge_disabled");
     const removed = await call(
       `/repositories/r1/pull-requests/${pull.number}/auto-merge`,
       "DELETE",
@@ -482,6 +483,60 @@ describe("Auto-merge", () => {
     expect(await auditMetadata("pull_request.auto_merge_disabled", pull)).toMatchObject({
       reason: "manual",
     });
+    expect(await notifications("u2", "auto_merge_disabled")).toBe(before + 1);
+    const sender = await env.DB.prepare(
+      "SELECT payload FROM forge_webhook_deliveries WHERE event = 'pull_request' AND action = 'auto_merge_disabled' AND json_extract(payload, '$.number') = ?"
+    )
+      .bind(pull.number)
+      .first<{ payload: string }>();
+    expect(JSON.parse(sender?.payload ?? "{}")).toMatchObject({
+      reason: "manual",
+      sender: { login: "alice" },
+    });
+  });
+
+  it("does not start another pass from a merge authorization callback", async () => {
+    const ready = await openPull("am-callback");
+    await enable(ready);
+    const inFlight = await openPull("am-callback-other");
+    const leaseAt = Date.now();
+    await env.DB.prepare(
+      "UPDATE forge_pull_requests SET merge_started_at = ?, merge_base_oid = ?, merge_head_oid = ? WHERE id = ?"
+    )
+      .bind(leaseAt, BASE, inFlight.head, inFlight.id)
+      .run();
+    const trigger = context();
+    const authorization = await forge.fetch(
+      new Request("https://forge.internal/internal/merge-authorization", {
+        method: "POST",
+        headers: headers(...bob),
+        body: JSON.stringify({
+          repositoryId: "r1",
+          pullRequestId: inFlight.id,
+          leaseAt,
+          method: "merge",
+          baseRef: "am-callback-other",
+          headRef: inFlight.headRef,
+          headSessionId: null,
+          expectedBaseOid: BASE,
+          expectedHeadOid: inFlight.head,
+          author: { name: "bob", email: "bob@users.gitedge.invalid" },
+          message: "Change",
+        }),
+      }),
+      forgeEnv,
+      trigger.ctx
+    );
+    expect(authorization.status).toBe(200);
+    await trigger.settled();
+    expect(mergeBodies).toHaveLength(0);
+    expect(await state(ready)).toBe("open");
+
+    await env.DB.prepare("UPDATE forge_pull_requests SET merge_started_at = NULL WHERE id = ?")
+      .bind(inFlight.id)
+      .run();
+    await reconcileRepository(forgeEnv, "r1");
+    expect(mergedHeads()).toEqual([ready.headRef]);
   });
 });
 
@@ -588,6 +643,23 @@ describe("Merge queue", () => {
     expect(await json(removed)).toMatchObject({ position: null, length: 1 });
     await processMergeQueue(forgeEnv, "r1", "mq-remove", { merges: 10 });
     expect(mergedHeads()).toEqual([two.headRef]);
+  });
+
+  it("reads an unused branch queue without creating it", async () => {
+    await rule("mq-empty", { queue: true });
+    const pull = await openPull("mq-empty");
+    const status = await json(
+      await call(`/repositories/r1/pull-requests/${pull.number}/merge-queue`, "GET", eve)
+    );
+    expect(status).toMatchObject({ required: true, position: null, length: 0 });
+    const listing = await json<{ entries: unknown[] }>(
+      await call("/repositories/r1/merge-queue?branch=never-used", "GET", eve)
+    );
+    expect(listing.entries).toEqual([]);
+    const registered = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM forge_merge_queues WHERE base_ref IN ('mq-empty', 'never-used')"
+    ).first<{ count: number }>();
+    expect(registered?.count).toBe(0);
   });
 
   it("refuses queueing where no queue is required or the pull request is not ready", async () => {

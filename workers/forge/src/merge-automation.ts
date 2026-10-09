@@ -30,6 +30,7 @@ const REPOSITORY_AUTO_MERGES = 5;
 const REPOSITORY_QUEUES = 5;
 
 const SYSTEM_ACTOR: AuditActor = { kind: "system", id: null, name: "merge-automation", ref: null };
+const AUTOMATION_SENDER = { id: "merge-automation", identifier: "merge-automation" } as const;
 /** Git failures that cannot succeed on retry because the proposal itself no longer merges. */
 const TERMINAL_MERGE_CAUSES = new Set([
   "merge_conflict",
@@ -91,6 +92,20 @@ function webhookFields(pull: PullRow) {
   };
 }
 
+/** Whether the branch queue may hold entries; unregistered queues are never read, so no Durable Object is created for them. */
+export async function queueRegistered(
+  env: ForgeEnv,
+  repositoryId: string,
+  baseRef: string
+): Promise<boolean> {
+  const row = await env.DB.prepare(
+    "SELECT 1 AS present FROM forge_merge_queues WHERE repository_id = ? AND base_ref = ?"
+  )
+    .bind(repositoryId, baseRef)
+    .first<{ present: number }>();
+  return row !== null;
+}
+
 export function queueRequired(rules: ReturnType<typeof matchingBranchRules>): boolean {
   return rules.some((rule) => rule.requireMergeQueue);
 }
@@ -132,9 +147,9 @@ export async function disableAutoMerge(
     .first<{ enabled_by: string }>();
   if (!deleted) return false;
   const number = Number(pull.number);
-  const sender = actor ?? { id: row.enabled_by, identifier: "merge-automation" };
+  const sender = actor ?? AUTOMATION_SENDER;
   await env.DB.batch([
-    ...(reason === "manual"
+    ...(reason === "manual" && actor?.id === row.enabled_by
       ? []
       : [
           automationNotificationStatement(
@@ -178,6 +193,11 @@ export async function enqueueForMerge(
   input: { method: MergeMethod; expectedHeadOid: string }
 ): Promise<EnqueueOutcome> {
   const baseRef = String(pull.base_ref);
+  const register = env.DB.prepare(
+    "INSERT OR IGNORE INTO forge_merge_queues (repository_id, base_ref, checked_at) VALUES (?, ?, 0)"
+  ).bind(repository.id, baseRef);
+  // Registering before the enqueue keeps a crash from hiding entries; the second insert covers a processor that unregistered the queue in between.
+  await register.run();
   const result = await mergeQueueStub(env, repository.id, baseRef).enqueue({
     pullRequestId: String(pull.id),
     pullRequestNumber: Number(pull.number),
@@ -186,11 +206,7 @@ export async function enqueueForMerge(
     expectedHeadOid: input.expectedHeadOid,
   });
   if (result.status === "full") return result;
-  await env.DB.prepare(
-    "INSERT OR IGNORE INTO forge_merge_queues (repository_id, base_ref, checked_at) VALUES (?, ?, 0)"
-  )
-    .bind(repository.id, baseRef)
-    .run();
+  await register.run();
   if (result.created) {
     await queueWebhookEvent(
       env.DB,
@@ -238,13 +254,10 @@ export async function reportDequeued(
     queueWebhookEvent(
       env.DB,
       repository.id,
-      pullRequestWebhook(
-        repository,
-        actor ?? { id: entryUserId, identifier: "merge-automation" },
-        "dequeued",
-        webhookFields(pull),
-        { reason, message }
-      )
+      pullRequestWebhook(repository, actor ?? AUTOMATION_SENDER, "dequeued", webhookFields(pull), {
+        reason,
+        message,
+      })
     ),
   ]);
   await recordAudit(env, {
@@ -532,24 +545,28 @@ export async function reconcileRepository(
     );
 }
 
-/** Cron sweep over the least recently checked settings and queues across all repositories. */
+/** Cron sweep over the least recently checked settings and queues across all repositories; failures are logged, never thrown. */
 export async function sweepMergeAutomation(env: ForgeEnv): Promise<void> {
   const budget: AutomationBudget = { merges: SWEEP_MERGES };
-  const autoMerges = await env.DB.prepare(
-    `SELECT ${AUTO_MERGE_COLUMNS} FROM forge_auto_merges ORDER BY checked_at ASC LIMIT ?`
-  )
-    .bind(SWEEP_AUTO_MERGES)
-    .all<AutoMergeRow>();
-  await runAutoMerges(env, autoMerges.results, budget);
-  const queues = await env.DB.prepare(
-    "SELECT repository_id, base_ref FROM forge_merge_queues ORDER BY checked_at ASC LIMIT ?"
-  )
-    .bind(SWEEP_QUEUES)
-    .all<{ repository_id: string; base_ref: string }>();
-  for (const queue of queues.results)
-    await guarded(env, "merge-queue", () =>
-      processMergeQueue(env, queue.repository_id, queue.base_ref, budget)
-    );
+  await guarded(env, "auto-merge-sweep", async () => {
+    const autoMerges = await env.DB.prepare(
+      `SELECT ${AUTO_MERGE_COLUMNS} FROM forge_auto_merges ORDER BY checked_at ASC LIMIT ?`
+    )
+      .bind(SWEEP_AUTO_MERGES)
+      .all<AutoMergeRow>();
+    await runAutoMerges(env, autoMerges.results, budget);
+  });
+  await guarded(env, "merge-queue-sweep", async () => {
+    const queues = await env.DB.prepare(
+      "SELECT repository_id, base_ref FROM forge_merge_queues ORDER BY checked_at ASC LIMIT ?"
+    )
+      .bind(SWEEP_QUEUES)
+      .all<{ repository_id: string; base_ref: string }>();
+    for (const queue of queues.results)
+      await guarded(env, "merge-queue", () =>
+        processMergeQueue(env, queue.repository_id, queue.base_ref, budget)
+      );
+  });
 }
 
 /** A push by the user who enabled auto-merge moves the approved head along; any other head change is caught on evaluation. */
@@ -559,18 +576,24 @@ export async function followEnablerPushes(
   pusherId: string,
   updates: PushEventInput["updates"]
 ): Promise<void> {
-  const statements = updates
-    .filter((update) => update.ref.startsWith("refs/heads/"))
-    .map((update) =>
-      env.DB.prepare(
-        "UPDATE forge_auto_merges SET expected_head_oid = ? WHERE enabled_by = ? AND expected_head_oid = ? AND pull_request_id IN (SELECT id FROM forge_pull_requests WHERE repository_id = ? AND head_ref = ? AND head_session_id IS NULL AND state = 'open')"
-      ).bind(
-        update.after,
-        pusherId,
-        update.before,
-        repositoryId,
-        update.ref.slice("refs/heads/".length)
-      )
-    );
-  if (statements.length) await env.DB.batch(statements);
+  const branchUpdates = updates.filter((update) => update.ref.startsWith("refs/heads/"));
+  if (!branchUpdates.length) return;
+  const enabled = await env.DB.prepare(
+    "SELECT 1 AS present FROM forge_auto_merges WHERE repository_id = ? AND enabled_by = ? LIMIT 1"
+  )
+    .bind(repositoryId, pusherId)
+    .first<{ present: number }>();
+  if (!enabled) return;
+  const statements = branchUpdates.map((update) =>
+    env.DB.prepare(
+      "UPDATE forge_auto_merges SET expected_head_oid = ? WHERE enabled_by = ? AND expected_head_oid = ? AND pull_request_id IN (SELECT id FROM forge_pull_requests WHERE repository_id = ? AND head_ref = ? AND head_session_id IS NULL AND state = 'open')"
+    ).bind(
+      update.after,
+      pusherId,
+      update.before,
+      repositoryId,
+      update.ref.slice("refs/heads/".length)
+    )
+  );
+  await env.DB.batch(statements);
 }

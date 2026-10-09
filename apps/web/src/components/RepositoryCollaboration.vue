@@ -20,6 +20,7 @@ import type {
   WikiPageSummary,
 } from "../lib/api";
 import { ApiError, api, errorMessage } from "../lib/api";
+import { mergePolicyCode } from "../lib/mergePolicy";
 import { sessionState } from "../lib/session";
 import { oneOf } from "../ui/formEvents";
 import AppIcon, { type IconName } from "./AppIcon.vue";
@@ -450,17 +451,6 @@ function itemStatus(value: Issue | PullRequest | Discussion | WikiPageSummary): 
 function itemCreatedAt(value: Issue | PullRequest | Discussion | WikiPageSummary): number {
   return "createdAt" in value ? value.createdAt : value.updatedAt;
 }
-const mergePolicyCodes = [
-  "changes_requested",
-  "approvals_required",
-  "checks_incomplete",
-  "checks_required",
-  "required_checks_missing",
-  "threads_unresolved",
-  "protected_branch",
-  "repository_readonly",
-  "merge_method_disabled",
-] as const;
 function userMessage(cause: unknown): string {
   return errorMessage(cause, t);
 }
@@ -468,7 +458,7 @@ function mergeFailureMessage(cause: unknown, reloaded: boolean): string {
   if (cause instanceof ApiError) {
     if (reloaded && (cause.code === "merge_changed" || cause.code === "conflict"))
       return t("mergeStateChanged");
-    const policyCode = mergePolicyCodes.find((code) => code === cause.code);
+    const policyCode = mergePolicyCode(cause.code);
     if (policyCode) return t(`mergeError_${policyCode}`);
   }
   return errorMessage(cause, t);

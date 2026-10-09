@@ -3,6 +3,7 @@ import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { AutoMergeStatus, MergeMethod, PullMergeQueueStatus } from "../lib/api";
 import { ApiError, api, errorMessage } from "../lib/api";
+import { mergePolicyCode } from "../lib/mergePolicy";
 import NoticeBar from "./NoticeBar.vue";
 
 const props = defineProps<{
@@ -19,13 +20,27 @@ const queue = ref<PullMergeQueueStatus | null>(null);
 const busy = ref(false);
 const error = ref("");
 
+/** Blockers outside the shared merge-policy messages that only auto-merge reports. */
+const autoMergeBlockerCodes = ["draft", "forbidden", "review_limit", "check_limit"] as const;
+const METHOD_KEYS: Record<MergeMethod, string> = {
+  merge: "repoMergeMethodMerge",
+  squash: "repoMergeMethodSquash",
+  rebase: "repoMergeMethodRebase",
+};
+
 const queued = computed(() => queue.value?.position != null);
-const waitingReason = computed(() => {
-  const code = autoMerge.value?.waitingOn?.code;
-  if (!code) return "";
-  if (code === "draft") return t("autoMergeBlocked_draft");
-  return autoMerge.value?.waitingOn?.message ?? t("autoMergeBlocked_other");
-});
+function blockerText(code: string | null | undefined): string | null {
+  const policy = mergePolicyCode(code);
+  if (policy) return t(`mergeError_${policy}`);
+  const own = autoMergeBlockerCodes.find((candidate) => candidate === code);
+  return own ? t(`autoMergeBlocked_${own}`) : null;
+}
+const waitingReason = computed(
+  () => blockerText(autoMerge.value?.waitingOn?.code) ?? t("autoMergeBlocked_other")
+);
+const enabledMethod = computed(() =>
+  autoMerge.value?.method ? t(METHOD_KEYS[autoMerge.value.method]) : ""
+);
 
 async function refresh(): Promise<void> {
   try {
@@ -39,7 +54,22 @@ async function refresh(): Promise<void> {
   }
 }
 
-async function run(action: () => Promise<void>, fallback: string): Promise<void> {
+function failureText(cause: unknown, fallback: string, busyKey?: string): string {
+  if (cause instanceof ApiError) {
+    if (cause.code === "queue_full") return t("mergeQueueFull");
+    if (cause.code === "stale_commit") return t("autoMergeStale");
+    if (busyKey && cause.code === "conflict" && cause.status === 409) return t(busyKey);
+    const blocker = blockerText(cause.code);
+    if (blocker) return `${fallback} ${blocker}`;
+  }
+  return `${fallback} ${errorMessage(cause, t)}`;
+}
+
+async function run(
+  action: () => Promise<unknown>,
+  fallback: string,
+  busyKey?: string
+): Promise<void> {
   busy.value = true;
   error.value = "";
   try {
@@ -47,12 +77,7 @@ async function run(action: () => Promise<void>, fallback: string): Promise<void>
     await refresh();
     emit("changed");
   } catch (cause) {
-    error.value =
-      cause instanceof ApiError && cause.code === "queue_full"
-        ? t("mergeQueueFull")
-        : cause instanceof ApiError && cause.code === "conflict" && cause.status === 409
-          ? t("mergeQueueBusy")
-          : `${fallback} ${errorMessage(cause, t)}`;
+    error.value = failureText(cause, fallback, busyKey);
   } finally {
     busy.value = false;
   }
@@ -77,12 +102,7 @@ watch(() => [props.repositoryId, props.number, props.headOid], refresh, { immedi
         type="button"
         tone="primary"
         :disabled="busy || draft || !headOid"
-        @click="
-          run(
-            () => api.enqueuePull(repositoryId, number, payload()).then(() => undefined),
-            t('mergeQueueFailed')
-          )
-        "
+        @click="run(() => api.enqueuePull(repositoryId, number, payload()), t('mergeQueueFailed'))"
       >
         {{ t("mergeQueueAdd") }}
       </FluentButton>
@@ -91,10 +111,7 @@ watch(() => [props.repositoryId, props.number, props.headOid], refresh, { immedi
         type="button"
         :disabled="busy || queue.processing"
         @click="
-          run(
-            () => api.dequeuePull(repositoryId, number).then(() => undefined),
-            t('mergeQueueFailed')
-          )
+          run(() => api.dequeuePull(repositoryId, number), t('mergeQueueFailed'), 'mergeQueueBusy')
         "
       >
         {{ t("mergeQueueRemove") }}
@@ -104,7 +121,7 @@ watch(() => [props.repositoryId, props.number, props.headOid], refresh, { immedi
       <h4>{{ t("autoMergeTitle") }}</h4>
       <template v-if="autoMerge.enabled">
         <p>
-          {{ t("autoMergeEnabledBy", { name: autoMerge.enabledBy, method: autoMerge.method }) }}
+          {{ t("autoMergeEnabledBy", { name: autoMerge.enabledBy, method: enabledMethod }) }}
         </p>
         <p class="muted">
           {{
@@ -116,12 +133,7 @@ watch(() => [props.repositoryId, props.number, props.headOid], refresh, { immedi
         <FluentButton
           type="button"
           :disabled="busy"
-          @click="
-            run(
-              () => api.disableAutoMerge(repositoryId, number).then(() => undefined),
-              t('autoMergeFailed')
-            )
-          "
+          @click="run(() => api.disableAutoMerge(repositoryId, number), t('autoMergeFailed'))"
         >
           {{ t("autoMergeDisable") }}
         </FluentButton>
@@ -133,10 +145,7 @@ watch(() => [props.repositoryId, props.number, props.headOid], refresh, { immedi
           type="button"
           :disabled="busy || draft || !headOid"
           @click="
-            run(
-              () => api.enableAutoMerge(repositoryId, number, payload()).then(() => undefined),
-              t('autoMergeFailed')
-            )
+            run(() => api.enableAutoMerge(repositoryId, number, payload()), t('autoMergeFailed'))
           "
         >
           {{ t("autoMergeEnable") }}

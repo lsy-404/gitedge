@@ -17,6 +17,7 @@ import {
   enqueueForMerge,
   loadPull,
   mergeQueueStub,
+  queueRegistered,
   queueRequired,
   reportAutoMergeEnabled,
   reportDequeued,
@@ -73,10 +74,13 @@ async function queueStatus(
   repository: RepositoryRow,
   pull: PullRow
 ): Promise<PullMergeQueueStatus> {
+  const baseRef = String(pull.base_ref);
   const required = queueRequired(
-    matchingBranchRules(await branchRules(env.DB, repository.id), String(pull.base_ref))
+    matchingBranchRules(await branchRules(env.DB, repository.id), baseRef)
   );
-  const entries = await mergeQueueStub(env, repository.id, String(pull.base_ref)).list();
+  const entries = (await queueRegistered(env, repository.id, baseRef))
+    ? await mergeQueueStub(env, repository.id, baseRef).list()
+    : [];
   const index = entries.findIndex((entry) => entry.pullRequestId === pull.id);
   return {
     required,
@@ -91,7 +95,9 @@ async function branchQueue(
   repository: RepositoryRow,
   branch: string
 ): Promise<MergeQueueState> {
-  const entries = await mergeQueueStub(env, repository.id, branch).list();
+  const entries = (await queueRegistered(env, repository.id, branch))
+    ? await mergeQueueStub(env, repository.id, branch).list()
+    : [];
   const users = entries.length
     ? await env.DB.prepare(
         "SELECT id, identifier FROM users WHERE id IN (SELECT value FROM json_each(?))"
