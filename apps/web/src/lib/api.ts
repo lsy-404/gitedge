@@ -36,6 +36,21 @@ import type {
 } from "../../../../packages/contracts/src/security";
 import type { DeployPlan } from "../../../../packages/contracts/src/deploy";
 import type {
+  ListNotificationsQuery,
+  MarkNotificationsReadInput,
+  NotificationPage,
+  NotificationPreferences,
+  NotificationUnreadCount,
+} from "../../../../packages/contracts/src/notifications";
+import type {
+  CreateRepositoryWebhookInput,
+  RepositoryWebhook,
+  RepositoryWebhookDelivery,
+  RepositoryWebhookDeliveryDetail,
+  SavedRepositoryWebhook,
+  UpdateRepositoryWebhookInput,
+} from "../../../../packages/contracts/src/webhooks";
+import type {
   AgentProfile,
   AgentWebhookDelivery,
   AgentWebhookSettings,
@@ -1136,6 +1151,81 @@ export const api = {
     request<CollaboratorRemoval>(
       repositoryPath(repositoryId, `collaborators/${encodeURIComponent(userId)}`),
       { method: "DELETE" }
+    ),
+  notifications: (
+    filters: Partial<
+      Pick<ListNotificationsQuery, "repositoryId" | "reason" | "before" | "limit">
+    > & {
+      unread?: boolean;
+    }
+  ) =>
+    request<NotificationPage>(
+      `/api/forge/notifications${query({
+        unread: filters.unread ? "true" : undefined,
+        repositoryId: filters.repositoryId,
+        reason: filters.reason,
+        before: filters.before,
+        limit: filters.limit,
+      })}`
+    ),
+  notificationUnreadCount: () =>
+    request<NotificationUnreadCount>("/api/forge/notifications/unread-count"),
+  markNotificationsRead: (payload: MarkNotificationsReadInput) =>
+    request<{ updated: number }>("/api/forge/notifications/read", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  notificationPreferences: () =>
+    request<NotificationPreferences>("/api/forge/notification-preferences"),
+  saveNotificationPreferences: (payload: NotificationPreferences) =>
+    request<NotificationPreferences>("/api/forge/notification-preferences", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  repositoryWebhooks: (repositoryId: string) =>
+    request<RepositoryWebhook[]>(repositoryPath(repositoryId, "webhooks")),
+  createRepositoryWebhook: (repositoryId: string, payload: CreateRepositoryWebhookInput) =>
+    request<SavedRepositoryWebhook>(repositoryPath(repositoryId, "webhooks"), {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateRepositoryWebhook: (
+    repositoryId: string,
+    webhookId: string,
+    payload: UpdateRepositoryWebhookInput
+  ) =>
+    request<SavedRepositoryWebhook>(
+      repositoryPath(repositoryId, `webhooks/${encodeURIComponent(webhookId)}`),
+      { method: "PATCH", body: JSON.stringify(payload) }
+    ),
+  deleteRepositoryWebhook: (repositoryId: string, webhookId: string) =>
+    request<{ deleted: boolean }>(
+      repositoryPath(repositoryId, `webhooks/${encodeURIComponent(webhookId)}`),
+      { method: "DELETE" }
+    ),
+  pingRepositoryWebhook: (repositoryId: string, webhookId: string) =>
+    request<RepositoryWebhookDelivery>(
+      repositoryPath(repositoryId, `webhooks/${encodeURIComponent(webhookId)}/ping`),
+      { method: "POST" }
+    ),
+  repositoryWebhookDeliveries: (repositoryId: string, webhookId: string) =>
+    request<RepositoryWebhookDelivery[]>(
+      repositoryPath(repositoryId, `webhooks/${encodeURIComponent(webhookId)}/deliveries`)
+    ),
+  repositoryWebhookDelivery: (repositoryId: string, webhookId: string, deliveryId: string) =>
+    request<RepositoryWebhookDeliveryDetail>(
+      repositoryPath(
+        repositoryId,
+        `webhooks/${encodeURIComponent(webhookId)}/deliveries/${encodeURIComponent(deliveryId)}`
+      )
+    ),
+  redeliverRepositoryWebhook: (repositoryId: string, webhookId: string, deliveryId: string) =>
+    request<RepositoryWebhookDelivery>(
+      repositoryPath(
+        repositoryId,
+        `webhooks/${encodeURIComponent(webhookId)}/deliveries/${encodeURIComponent(deliveryId)}/redeliveries`
+      ),
+      { method: "POST" }
     ),
   actionWorkflows: (repositoryId: string, ref: string, oid?: string) =>
     request<{ oid: string; workflows: ActionWorkflowFile[] }>(

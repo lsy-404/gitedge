@@ -19,12 +19,20 @@ import NoticeBar from "./NoticeBar.vue";
 import StatusState from "./StatusState.vue";
 import BranchProtectionSettings from "./BranchProtectionSettings.vue";
 import RepositoryCollaborators from "./RepositoryCollaborators.vue";
+import RepositoryWebhooks from "./RepositoryWebhooks.vue";
 import RepositoryDangerActions from "./RepositoryDangerActions.vue";
 import "../styles/settings.css";
 
 type RepositoryDraft = Omit<RepositorySettings, "canManage">;
 type SettingsSection =
-  "general" | "features" | "merge" | "branchRules" | "collaborators" | "agents" | "danger";
+  | "general"
+  | "features"
+  | "merge"
+  | "branchRules"
+  | "collaborators"
+  | "webhooks"
+  | "agents"
+  | "danger";
 
 const sections = [
   ["general", "repoSettingsGeneral"],
@@ -32,6 +40,7 @@ const sections = [
   ["merge", "repoSettingsMergeRules"],
   ["branchRules", "repoSettingsBranchRules"],
   ["collaborators", "repoSettingsCollaborators"],
+  ["webhooks", "repoSettingsWebhooks"],
   ["agents", "repoSettingsAgentsMemory"],
   ["danger", "repoSettingsDangerZone"],
 ] as const satisfies ReadonlyArray<readonly [SettingsSection, string]>;
@@ -498,6 +507,11 @@ watch(() => props.repository.id, load, { immediate: true });
           />
           <RepositoryCollaborators
             v-else-if="activeSection === 'collaborators'"
+            :repository-id="props.repository.id"
+            :can-manage="canManage"
+          />
+          <RepositoryWebhooks
+            v-else-if="activeSection === 'webhooks'"
             :repository-id="props.repository.id"
             :can-manage="canManage"
           />

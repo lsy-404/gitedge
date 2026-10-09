@@ -66,7 +66,7 @@ Sign in with identity-only GitHub OAuth or configure multiple OIDC or SAML 2.0 p
 
 ## Architecture
 
-The public Gateway serves Vue assets and authenticates requests before forwarding to internal Auth, Forge, Git, Actions and Deploy Workers. Auth owns credentials, agent subaccounts, webhook delivery and sessions. Forge owns collaboration records in D1. Git owns Artifacts operations and forwards Smart HTTP streams. Actions runs bounded source snapshots in isolated Containers. Deploy interprets a reviewed deployment manifest and relays a fixed set of Cloudflare operations.
+The public Gateway serves Vue assets and authenticates requests before forwarding to internal Auth, Forge, Git, Actions and Deploy Workers. Auth owns credentials, agent subaccounts, webhook delivery and sessions. Forge owns collaboration records, in-app notifications and repository webhook delivery in D1. Git owns Artifacts operations and forwards Smart HTTP streams. Actions runs bounded source snapshots in isolated Containers. Deploy interprets a reviewed deployment manifest and relays a fixed set of Cloudflare operations.
 
 Artifacts owns repository contents, refs and Git protocol behavior. Older repositories without an Artifacts mapping must be imported before use. Preserve the prior deployment and its storage until their data has been transferred and verified; deploying the new application does not transfer existing Git data.
 
@@ -97,6 +97,12 @@ jobs:
 ```
 
 Workflow check names are their file paths, for example `.github/workflows/verify.yml`. Only the Actions service may publish these system CI checks. Agent webhooks use an encrypted signing secret configured through `WEBHOOK_ENCRYPTION_KEY`; see [configuration](docs/configuration.md#auth). Events are signed with HMAC-SHA256 and retried up to five times.
+
+## Notifications and repository webhooks
+
+Forge creates in-app notifications in the same D1 batch as the write that causes them: assignments, review requests, `@mentions` (users as `@login`, agents as `owner/@handle`, never inside code), comments on threads you take part in, failed checks, merges and collaborator invitations. Recipients must be able to read the repository both when the notification is created and every time it is listed, so removed members never see private titles. The header bell shows the unread count, refreshed once a minute while the tab is visible and when it regains focus; `/notifications` groups items by repository with unread and reason filters. Account settings, Notifications mutes reasons you do not want.
+
+Repository administrators configure webhooks under Settings, Webhooks: an HTTPS URL, JSON content type, an optional secret (generated and shown once if omitted), the events `push`, `issues`, `issue_comment`, `pull_request`, `pull_request_review` and `check_run`, and an active flag. Each request carries `X-Hub-Signature-256: sha256=<HMAC-SHA256 of the body>`, `X-GitEdge-Event` and `X-GitEdge-Delivery`. Failed deliveries retry up to five times with exponential backoff (1, 2, 4 and 8 minutes), the last 100 deliveries per webhook are kept (the latest 50 are listed) with their status and can be redelivered, and a test request can be sent at any time. Targets must resolve to public addresses; internal hosts and non-HTTPS URLs are refused. Secrets are encrypted at rest with `WEBHOOK_ENCRYPTION_KEY`, which Forge needs in addition to Auth; see [configuration](docs/configuration.md#forge). Release events are not offered because releases do not exist yet.
 
 ## Repository and organization lifecycle
 

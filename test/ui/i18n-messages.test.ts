@@ -51,6 +51,26 @@ const dynamicKeys: Record<string, readonly string[]> = {
     "import_failed",
   ],
   patOs_: ["osxkeychain", "manager", "libsecret", "store"],
+  notificationReason_: [
+    "assigned",
+    "review_requested",
+    "mentioned",
+    "comment",
+    "check_failed",
+    "merged",
+    "invited",
+  ],
+  notificationKind_: ["issue", "pull_request", "discussion", "repository"],
+  webhookEvent_: [
+    "push",
+    "issues",
+    "issue_comment",
+    "pull_request",
+    "pull_request_review",
+    "check_run",
+    "ping",
+  ],
+  webhookStatus_: ["pending", "success", "failed"],
   patScope_: ["repo_read", "repo_write", "issues_write", "pulls_write", "org_read", "admin"],
 };
 

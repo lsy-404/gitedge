@@ -1344,6 +1344,7 @@ watch(
                 <MarkdownContent
                   v-else
                   class="body-content"
+                  :mentions="!('content' in item)"
                   :source="'content' in item ? item.content : item.body"
                 />
                 <div
@@ -1741,7 +1742,7 @@ watch(
                     >
                   </header>
                   <div class="comment-body">
-                    <MarkdownContent class="body-content" :source="comment.body" />
+                    <MarkdownContent class="body-content" mentions :source="comment.body" />
                   </div>
                 </div>
               </article>
@@ -1779,6 +1780,7 @@ watch(
                     <MarkdownContent
                       v-else
                       class="composer-preview"
+                      mentions
                       :source="commentBody || t('nothingToPreview')"
                     />
                     <div class="form-actions">

@@ -15,6 +15,8 @@ import actionsMessages from "./i18n/actions";
 import browserAccountMessages from "./i18n/browserAccounts";
 import importMessages from "./i18n/imports";
 import { securityMessages } from "./i18n/security";
+import { notificationMessages } from "./i18n/notifications";
+import { webhookMessages } from "./i18n/webhooks";
 
 const messages = {
   "zh-CN": {
@@ -861,6 +863,8 @@ export const i18n = createI18n({
       ...importMessages["zh-CN"],
       ...accessTokenMessages["zh-CN"],
       ...securityMessages["zh-CN"],
+      ...notificationMessages["zh-CN"],
+      ...webhookMessages["zh-CN"],
     },
     en: {
       ...messages.en,
@@ -880,6 +884,8 @@ export const i18n = createI18n({
       ...importMessages.en,
       ...accessTokenMessages.en,
       ...securityMessages.en,
+      ...notificationMessages.en,
+      ...webhookMessages.en,
     },
   },
 });

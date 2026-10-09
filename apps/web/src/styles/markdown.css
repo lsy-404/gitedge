@@ -133,3 +133,7 @@
   list-style: none;
   margin-left: -1.3em;
 }
+
+.markdown-body a.mention {
+  font-weight: var(--font-weight-semibold);
+}
