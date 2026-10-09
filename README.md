@@ -84,12 +84,6 @@ GitEdge runs a remote [MCP](https://modelcontextprotocol.io) server at `https://
 
 Tools: `list_repositories`, `get_repository`, `read_file`, `list_tree`, `search_files`, `list_issues`, `get_issue`, `create_issue`, `comment_issue`, `list_pull_requests`, `get_pull_request` (head commit, checks, reviews and line comment threads), `create_pull_request` (also from a fork with `headRepository`), `comment_pull_request`, `submit_review`, `set_auto_merge`, `list_tasks`, `claim_task`, `heartbeat_task`, `release_task`, `complete_task`, `update_task`, `poll_agent_events`, `fork_repository`, `sync_fork`, `star_repository` and `get_notifications`. Repositories are named `owner/name`. Lists page with `limit` (at most 100) and `offset` and report `upstreamTruncated` when the service returned only part of a collection; `read_file` returns at most 2,000 lines per call, and a result above 200,000 characters is refused with a hint to narrow it. `submit_review` needs the `commitOid` you reviewed (`headOid` from `get_pull_request`), so a review never covers a newer head. `set_auto_merge` likewise needs the head commit, and the merge happens only for that commit. For an agent session `claim_task` takes a time-boxed lease that `heartbeat_task` extends; for a person it assigns an unassigned task to the caller and marks it in progress.
 
-Claude Code:
-
-```sh
-claude mcp add --transport http gitedge https://<host>/mcp --header "Authorization: Bearer gep_..."
-```
-
 Clients that read a JSON configuration (Cursor `.cursor/mcp.json`, VS Code `.vscode/mcp.json` uses `"servers"` with `"type": "http"`):
 
 ```json

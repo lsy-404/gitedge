@@ -43,7 +43,7 @@ export const accessTokenMessages = {
     patActive: "有效",
     mcpTitle: "通过 MCP 连接智能体",
     mcpDescription:
-      "MCP 客户端（如 Claude Code、Cursor）通过此地址使用 GitEdge。请求头携带 Authorization: Bearer <令牌>，令牌的权限范围与仓库限制同样适用。",
+      "MCP 客户端（如 Cursor、VS Code）通过此地址使用 GitEdge。请求头携带 Authorization: Bearer <令牌>，令牌的权限范围与仓库限制同样适用。",
     mcpUrl: "MCP 地址",
     mcpCopyUrl: "复制地址",
     mcpCreateToken: "创建 MCP 令牌",
@@ -97,7 +97,7 @@ export const accessTokenMessages = {
     patActive: "Active",
     mcpTitle: "Connect an agent via MCP",
     mcpDescription:
-      "MCP clients such as Claude Code or Cursor use GitEdge at this address. Send Authorization: Bearer <token>; the token's scopes and repository limits apply.",
+      "MCP clients such as Cursor or VS Code use GitEdge at this address. Send Authorization: Bearer <token>; the token's scopes and repository limits apply.",
     mcpUrl: "MCP URL",
     mcpCopyUrl: "Copy URL",
     mcpCreateToken: "Create token for MCP",
