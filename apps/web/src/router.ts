@@ -17,6 +17,7 @@ const NotificationsView = () => import("./pages/NotificationsView.vue");
 const UserProfileView = () => import("./pages/UserProfileView.vue");
 const ExploreView = () => import("./pages/ExploreView.vue");
 const StarredView = () => import("./pages/StarredView.vue");
+const ApiDocsView = () => import("./pages/ApiDocsView.vue");
 import { refreshSession, sessionState } from "./lib/session";
 
 export const router = createRouter({
@@ -38,6 +39,7 @@ export const router = createRouter({
     { path: "/notifications", component: NotificationsView },
     { path: "/explore", component: ExploreView, meta: { allowAnonymous: true } },
     { path: "/stars", component: StarredView },
+    { path: "/docs/api", component: ApiDocsView, meta: { allowAnonymous: true } },
     { path: "/organizations", component: OrganizationsView },
     { path: "/organizations/:slug", component: OrganizationView },
     { path: "/settings/account", component: AccountSettingsView },

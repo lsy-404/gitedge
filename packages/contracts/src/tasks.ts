@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { RepositorySlugSchema } from "./repository-controls";
-import { ActorSchema, GitBranchSchema, GitOidSchema, type Actor, type Assignee } from "./forge";
+import { ActorSchema, AssigneeSchema, GitBranchSchema, GitOidSchema, type Assignee } from "./forge";
 
 export const AGENT_MODE_VERSION = "v0.2.2";
 
@@ -55,79 +55,85 @@ export interface DocumentRevisionSummary {
   updatedAt: number;
 }
 
-export interface TaskProgress {
-  /** Linked issues and pull requests. */
-  total: number;
-  /** Linked issues that are closed and pull requests that are closed or merged. */
-  done: number;
-  /** Null when nothing is linked. */
-  percent: number | null;
-}
+export const TaskProgressSchema = z.object({
+  total: z.number().describe("Linked issues and pull requests."),
+  done: z
+    .number()
+    .describe("Linked issues that are closed and pull requests that are closed or merged."),
+  percent: z.number().nullable().describe("Null when nothing is linked."),
+});
+export type TaskProgress = z.infer<typeof TaskProgressSchema>;
 
-/** Time-boxed claim of a task by one agent; it expires unless heartbeats extend it. */
-export interface TaskLease {
-  agent: { id: string; name: string };
-  claimedAt: number;
-  expiresAt: number;
-}
+export const TaskLeaseSchema = z
+  .object({
+    agent: z.object({ id: z.string(), name: z.string() }),
+    claimedAt: z.number(),
+    expiresAt: z.number(),
+  })
+  .describe("Time-boxed claim of a task by one agent; it expires unless heartbeats extend it.");
+export type TaskLease = z.infer<typeof TaskLeaseSchema>;
 
 export const TASK_LEASE_DEFAULT_SECONDS = 900;
 export const TASK_LEASE_MAX_SECONDS = 3_600;
 /** A claim cannot be extended past this age; the agent must release and claim again. */
 export const TASK_LEASE_MAX_TOTAL_MS = 8 * 3_600_000;
 
-export interface Task {
-  id: string;
-  number: number;
-  type: string;
-  title: string;
-  motivation: string;
-  description: string;
-  status: TaskStatus;
-  assignee: Assignee | null;
-  lease: TaskLease | null;
-  actor: Actor;
-  progress: TaskProgress;
-  commitCount: number;
-  createdAt: number;
-  updatedAt: number;
-}
+export const TaskSchema = z.object({
+  id: z.string(),
+  number: z.number(),
+  type: z.string(),
+  title: z.string(),
+  motivation: z.string(),
+  description: z.string(),
+  status: TaskStatusSchema,
+  assignee: AssigneeSchema.nullable(),
+  lease: TaskLeaseSchema.nullable(),
+  actor: ActorSchema,
+  progress: TaskProgressSchema,
+  commitCount: z.number(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+export type Task = z.infer<typeof TaskSchema>;
 
 /** The task an issue or pull request belongs to. */
 export type TaskReference = Pick<Task, "number" | "type" | "title" | "status">;
 
-export interface TaskDocument {
-  kind: TaskDocumentKind;
-  content: string;
-  /** 0 until the first save. */
-  revision: number;
-  actor: RevisionActor;
-  updatedAt: number;
-}
+export const TaskDocumentSchema = z.object({
+  kind: TaskDocumentKindSchema,
+  content: z.string(),
+  revision: z.number().describe("0 until the first save."),
+  actor: RevisionActorSchema,
+  updatedAt: z.number(),
+});
+export type TaskDocument = z.infer<typeof TaskDocumentSchema>;
 
-export interface TaskLink {
-  kind: TaskLinkKind;
-  number: number;
-  title: string;
-  state: "open" | "closed" | "merged";
-  createdAt: number;
-}
+export const TaskLinkSchema = z.object({
+  kind: TaskLinkKindSchema,
+  number: z.number(),
+  title: z.string(),
+  state: z.enum(["open", "closed", "merged"]),
+  createdAt: z.number(),
+});
+export type TaskLink = z.infer<typeof TaskLinkSchema>;
 
-export interface TaskCommit {
-  oid: string;
-  ref: string;
-  summary: string;
-  author: string;
-  boundBy: RevisionActor;
-  source: TaskCommitSource;
-  boundAt: number;
-}
+export const TaskCommitSchema = z.object({
+  oid: z.string(),
+  ref: z.string(),
+  summary: z.string(),
+  author: z.string(),
+  boundBy: RevisionActorSchema,
+  source: TaskCommitSourceSchema,
+  boundAt: z.number(),
+});
+export type TaskCommit = z.infer<typeof TaskCommitSchema>;
 
-export interface TaskDetail extends Task {
-  documents: Record<TaskDocumentKind, TaskDocument>;
-  links: TaskLink[];
-  commits: TaskCommit[];
-}
+export const TaskDetailSchema = TaskSchema.extend({
+  documents: z.record(TaskDocumentKindSchema, TaskDocumentSchema),
+  links: z.array(TaskLinkSchema),
+  commits: z.array(TaskCommitSchema),
+});
+export type TaskDetail = z.infer<typeof TaskDetailSchema>;
 
 export interface TaskTable {
   /** Markdown equivalent of the tasks.md table, generated from the task list. */

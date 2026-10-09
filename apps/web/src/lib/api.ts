@@ -180,8 +180,8 @@ import type {
   BranchProtectionRule,
   RepositoryCollaborator,
   RepositoryCommunity,
-  RepositoryRole,
 } from "../../../../packages/contracts/src/repository-controls";
+import type { RepositoryRole } from "../../../../packages/contracts/src/forge";
 
 export type {
   Organization,
@@ -266,8 +266,8 @@ export type {
   RepositoryCollaborator,
   RepositoryCommunity,
   RepositoryCommunityFile,
-  RepositoryRole,
 } from "../../../../packages/contracts/src/repository-controls";
+export type { RepositoryRole } from "../../../../packages/contracts/src/forge";
 export type { ActionRun, ActionRunSummary, ActionWorkflowFile, CreateActionRunInput };
 export type { SsoIdentity, SsoProviderSummary };
 export type {

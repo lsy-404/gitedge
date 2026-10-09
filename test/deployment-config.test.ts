@@ -35,7 +35,7 @@ const WorkerConfigSchema = z.object({
 });
 const COMPATIBILITY_DATE = "2026-10-01";
 type WorkerConfig = z.infer<typeof WorkerConfigSchema>;
-const services = ["gateway", "auth", "forge", "git", "deploy", "limits", "actions"];
+const services = ["gateway", "auth", "forge", "git", "deploy", "limits", "actions", "mcp"];
 
 function parseJsonc(path: URL): unknown {
   return JSON.parse(readFileSync(path, "utf8").replace(/^\s*\/\/.*$/gm, ""));
@@ -63,8 +63,11 @@ describe("deployment isolation", () => {
           "DEPLOY",
           "FORGE",
           "GIT",
+          "MCP",
         ]);
       }
+      if (service === "mcp")
+        expect(config.services).toEqual([{ binding: "GATEWAY", service: "gitedge-gateway" }]);
     }
   });
 

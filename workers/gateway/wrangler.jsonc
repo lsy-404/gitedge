@@ -31,6 +31,10 @@
     {
       "binding": "ACTIONS",
       "service": "gitedge-actions"
+    },
+    {
+      "binding": "MCP",
+      "service": "gitedge-mcp"
     }
   ],
   "durable_objects": {

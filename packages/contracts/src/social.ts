@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { GitBranchSchema } from "./forge";
+import { GitBranchSchema, type RepositoryForkOrigin } from "./forge";
 import { RepositorySlugSchema } from "./repository-controls";
 
 export const MAX_REPOSITORY_TOPICS = 20;
@@ -59,11 +59,6 @@ export const ExploreQuerySchema = z.object({
 });
 export type ExploreQuery = z.infer<typeof ExploreQuerySchema>;
 
-export interface RepositoryForkOrigin {
-  id: string;
-  owner: string;
-  name: string;
-}
 export interface ExploreRepository {
   id: string;
   owner: string;

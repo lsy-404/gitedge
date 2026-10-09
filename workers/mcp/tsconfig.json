@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "lib": ["ES2022", "ESNext.Disposable"],
+    "skipLibCheck": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "types": ["@cloudflare/workers-types"]
+  },
+  "include": [
+    "src",
+    "../../packages/contracts/src",
+    "../../src/worker/common/logger.ts",
+    "../../src/worker/common/readText.ts"
+  ]
+}

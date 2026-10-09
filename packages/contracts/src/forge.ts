@@ -1,6 +1,4 @@
 import { z } from "zod";
-import type { RepositoryRole } from "./repository-controls";
-import type { RepositoryForkOrigin } from "./social";
 
 export const ActorSchema = z.object({
   kind: z.enum(["user", "agent", "ci"]),
@@ -9,8 +7,6 @@ export const ActorSchema = z.object({
   sessionId: z.string().optional(),
 });
 export type Actor = z.infer<typeof ActorSchema>;
-/** A human user or an agent assigned to an issue, pull request or task. */
-export type Assignee = Omit<Actor, "sessionId" | "kind"> & { kind: "user" | "agent" };
 
 export const AgentSessionIdentitySchema = z.object({
   id: z.string().min(1),
@@ -22,89 +18,113 @@ export const AgentSessionIdentitySchema = z.object({
 });
 export type AgentSessionIdentity = z.infer<typeof AgentSessionIdentitySchema>;
 
-export interface Repository {
-  id: string;
-  namespaceId: string;
-  owner: string;
-  name: string;
-  slug: string;
-  description: string;
-  visibility: "public" | "private";
-  defaultBranch: string;
-  archived: boolean;
-  issuesEnabled: boolean;
-  pullsEnabled: boolean;
-  discussionsEnabled: boolean;
-  wikiEnabled: boolean;
-  tasksEnabled: boolean;
-  agentsEnabled: boolean;
-  deploymentsEnabled: boolean;
-  pagesEnabled: boolean;
-  graphEnabled: boolean;
-  actionsEnabled: boolean;
-  actionsNetworkEnabled: boolean;
-  onlineEditingEnabled: boolean;
-  allowMergeCommit: boolean;
-  allowSquashMerge: boolean;
-  allowRebaseMerge: boolean;
-  deleteBranchOnMerge: boolean;
-  requiredApprovals: number;
-  requirePassingChecks: boolean;
-  createdAt: number;
-  updatedAt: number;
-  topics: string[];
-  starCount: number;
-  forkCount: number;
-  /** The parent repository when the viewer can read it. */
-  forkOf: RepositoryForkOrigin | null;
-  /** The viewer's effective role, null when unknown or anonymous. */
-  viewerRole: RepositoryRole | null;
-  canWrite: boolean;
-}
+export const RepositoryRoleSchema = z.enum(["read", "write", "admin"]);
+export type RepositoryRole = z.infer<typeof RepositoryRoleSchema>;
 
-export interface Issue {
-  id: string;
-  number: number;
-  title: string;
-  body: string;
-  state: "open" | "closed";
-  author: string;
-  actor: Actor;
-  labels: string[];
-  assignees: Assignee[];
-  reviewers: Assignee[];
-  createdAt: number;
-  updatedAt: number;
-}
+export const RepositoryForkOriginSchema = z.object({
+  id: z.string(),
+  owner: z.string(),
+  name: z.string(),
+});
+export type RepositoryForkOrigin = z.infer<typeof RepositoryForkOriginSchema>;
 
-export interface PullRequest {
-  id: string;
-  number: number;
-  title: string;
-  body: string;
-  state: "open" | "closed" | "merged";
-  author: string;
-  actor: Actor;
-  baseRef: string;
-  headRef: string;
-  headSessionId: string | null;
-  headRepositoryId: string | null;
-  headRepository: { owner: string; name: string } | null;
-  draft: boolean;
-  mergedOid: string | null;
-  assignees: Assignee[];
-  reviewers: Assignee[];
-  createdAt: number;
-  updatedAt: number;
-}
+export const AssigneeSchema = z.object({
+  kind: z.enum(["user", "agent"]),
+  id: z.string().min(1),
+  name: z.string().min(1),
+});
+/** A human user or an agent assigned to an issue, pull request or task. */
+export type Assignee = z.infer<typeof AssigneeSchema>;
 
-export interface Comment {
-  id: string;
-  body: string;
-  actor: Actor;
-  createdAt: number;
-  updatedAt: number;
-}
+export const RepositorySchema = z.object({
+  id: z.string(),
+  namespaceId: z.string(),
+  owner: z.string(),
+  name: z.string(),
+  slug: z.string(),
+  description: z.string(),
+  visibility: z.enum(["public", "private"]),
+  defaultBranch: z.string(),
+  archived: z.boolean(),
+  issuesEnabled: z.boolean(),
+  pullsEnabled: z.boolean(),
+  discussionsEnabled: z.boolean(),
+  wikiEnabled: z.boolean(),
+  tasksEnabled: z.boolean(),
+  agentsEnabled: z.boolean(),
+  deploymentsEnabled: z.boolean(),
+  pagesEnabled: z.boolean(),
+  graphEnabled: z.boolean(),
+  actionsEnabled: z.boolean(),
+  actionsNetworkEnabled: z.boolean(),
+  onlineEditingEnabled: z.boolean(),
+  allowMergeCommit: z.boolean(),
+  allowSquashMerge: z.boolean(),
+  allowRebaseMerge: z.boolean(),
+  deleteBranchOnMerge: z.boolean(),
+  requiredApprovals: z.number(),
+  requirePassingChecks: z.boolean(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  topics: z.array(z.string()),
+  starCount: z.number(),
+  forkCount: z.number(),
+  forkOf: RepositoryForkOriginSchema.nullable().describe(
+    "The parent repository when the viewer can read it."
+  ),
+  viewerRole: RepositoryRoleSchema.nullable().describe(
+    "The viewer's effective role, null when unknown or anonymous."
+  ),
+  canWrite: z.boolean(),
+});
+export type Repository = z.infer<typeof RepositorySchema>;
+
+export const IssueSchema = z.object({
+  id: z.string(),
+  number: z.number(),
+  title: z.string(),
+  body: z.string(),
+  state: z.enum(["open", "closed"]),
+  author: z.string(),
+  actor: ActorSchema,
+  labels: z.array(z.string()),
+  assignees: z.array(AssigneeSchema),
+  reviewers: z.array(AssigneeSchema),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+export type Issue = z.infer<typeof IssueSchema>;
+
+export const PullRequestSchema = z.object({
+  id: z.string(),
+  number: z.number(),
+  title: z.string(),
+  body: z.string(),
+  state: z.enum(["open", "closed", "merged"]),
+  author: z.string(),
+  actor: ActorSchema,
+  baseRef: z.string(),
+  headRef: z.string(),
+  headSessionId: z.string().nullable(),
+  headRepositoryId: z.string().nullable(),
+  headRepository: z.object({ owner: z.string(), name: z.string() }).nullable(),
+  draft: z.boolean(),
+  mergedOid: z.string().nullable(),
+  assignees: z.array(AssigneeSchema),
+  reviewers: z.array(AssigneeSchema),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+export type PullRequest = z.infer<typeof PullRequestSchema>;
+
+export const CommentSchema = z.object({
+  id: z.string(),
+  body: z.string(),
+  actor: ActorSchema,
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+export type Comment = z.infer<typeof CommentSchema>;
 
 export interface Discussion {
   id: string;
@@ -159,27 +179,29 @@ export interface IssueReferences {
   truncated: boolean;
 }
 
-export interface Review {
-  id: string;
-  body: string;
-  state: "commented" | "approved" | "changes_requested";
-  commitOid: string;
-  actor: Actor;
-  createdAt: number;
-}
+export const ReviewSchema = z.object({
+  id: z.string(),
+  body: z.string(),
+  state: z.enum(["commented", "approved", "changes_requested"]),
+  commitOid: z.string(),
+  actor: ActorSchema,
+  createdAt: z.number(),
+});
+export type Review = z.infer<typeof ReviewSchema>;
 
-export interface CheckRun {
-  id: string;
-  name: string;
-  commitOid: string;
-  status: "queued" | "in_progress" | "completed";
-  conclusion: "success" | "failure" | "neutral" | "cancelled" | null;
-  summary: string;
-  detailsUrl: string | null;
-  actor: Actor;
-  createdAt: number;
-  updatedAt: number;
-}
+export const CheckRunSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  commitOid: z.string(),
+  status: z.enum(["queued", "in_progress", "completed"]),
+  conclusion: z.enum(["success", "failure", "neutral", "cancelled"]).nullable(),
+  summary: z.string(),
+  detailsUrl: z.string().nullable(),
+  actor: ActorSchema,
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+export type CheckRun = z.infer<typeof CheckRunSchema>;
 
 export type { Agent } from "./agents";
 
@@ -214,99 +236,109 @@ export interface RenewedAgentSession extends AgentSession {
 
 export const AGENT_SESSION_MAX_LIFETIME_MS = 7 * 86_400_000;
 
-export interface GitRef {
-  name: string;
-  oid: string;
-  peeledOid?: string;
-}
-export interface GitCommit {
-  oid: string;
-  tree: string;
-  parents: string[];
-  message: string;
-  author: { name: string; email: string; timestamp: number };
-}
-export interface GitTreeEntry {
-  name: string;
-  path: string;
-  oid: string;
-  mode: string;
-  type: "tree" | "blob" | "commit";
-}
-export interface GitTree {
-  ref: string;
-  oid: string | null;
-  path: string;
-  entries: GitTreeEntry[];
-}
-export interface GitFile {
-  path: string;
-  oid: string;
-  size: number;
-  binary: boolean;
-  content: string | null;
-}
+export const GitRefSchema = z.object({
+  name: z.string(),
+  oid: z.string(),
+  peeledOid: z.string().optional(),
+});
+export type GitRef = z.infer<typeof GitRefSchema>;
+export const GitCommitSchema = z.object({
+  oid: z.string(),
+  tree: z.string(),
+  parents: z.array(z.string()),
+  message: z.string(),
+  author: z.object({ name: z.string(), email: z.string(), timestamp: z.number() }),
+});
+export type GitCommit = z.infer<typeof GitCommitSchema>;
+export const GitTreeEntrySchema = z.object({
+  name: z.string(),
+  path: z.string(),
+  oid: z.string(),
+  mode: z.string(),
+  type: z.enum(["tree", "blob", "commit"]),
+});
+export type GitTreeEntry = z.infer<typeof GitTreeEntrySchema>;
+export const GitTreeSchema = z.object({
+  ref: z.string(),
+  oid: z.string().nullable(),
+  path: z.string(),
+  entries: z.array(GitTreeEntrySchema),
+});
+export type GitTree = z.infer<typeof GitTreeSchema>;
+export const GitFileSchema = z.object({
+  path: z.string(),
+  oid: z.string(),
+  size: z.number(),
+  binary: z.boolean(),
+  content: z.string().nullable().describe("UTF-8 text, null for binary or oversized files."),
+});
+export type GitFile = z.infer<typeof GitFileSchema>;
 export interface GitGraph {
   commits: GitCommit[];
   refs: GitRef[];
   sessions: AgentSession[];
   truncated: boolean;
 }
-export interface GitDiffFile {
-  path: string;
-  type: "added" | "deleted" | "modified";
-  oldOid: string | null;
-  newOid: string | null;
-  patch: string | null;
-  binary: boolean;
-}
-export interface GitComparison {
-  baseOid: string;
-  headOid: string;
-  mergeBaseOid: string | null;
-  commits: GitCommit[];
-  files: GitDiffFile[];
-  truncated: boolean;
-}
-/** Every blob path of a commit tree; `truncated` when the entry or directory budget was reached. */
-export interface GitFileList {
-  oid: string;
-  paths: string[];
-  truncated: boolean;
-}
-/** First-parent commits that changed a path; `nextCursor` resumes an interrupted walk. */
-export interface GitPathHistory {
-  commits: GitCommit[];
-  inspected: number;
-  truncated: boolean;
-  nextCursor: string | null;
-}
-export interface GitBlameCommit {
-  oid: string;
-  summary: string;
-  author: { name: string; timestamp: number };
-}
-/** `commitOid` is null for lines older than the inspected history. */
-export interface GitBlameHunk {
-  startLine: number;
-  lineCount: number;
-  commitOid: string | null;
-}
-export interface GitBlame {
-  oid: string;
-  path: string;
-  blobOid: string;
-  lineCount: number;
-  hunks: GitBlameHunk[];
-  commits: GitBlameCommit[];
-  inspected: number;
-  partial: boolean;
-}
-export interface GitCommitDetail {
-  commit: GitCommit;
-  files: GitDiffFile[];
-  truncated: boolean;
-}
+export const GitDiffFileSchema = z.object({
+  path: z.string(),
+  type: z.enum(["added", "deleted", "modified"]),
+  oldOid: z.string().nullable(),
+  newOid: z.string().nullable(),
+  patch: z.string().nullable(),
+  binary: z.boolean(),
+});
+export type GitDiffFile = z.infer<typeof GitDiffFileSchema>;
+export const GitComparisonSchema = z.object({
+  baseOid: z.string(),
+  headOid: z.string(),
+  mergeBaseOid: z.string().nullable(),
+  commits: z.array(GitCommitSchema),
+  files: z.array(GitDiffFileSchema),
+  truncated: z.boolean(),
+});
+export type GitComparison = z.infer<typeof GitComparisonSchema>;
+export const GitFileListSchema = z
+  .object({ oid: z.string(), paths: z.array(z.string()), truncated: z.boolean() })
+  .describe(
+    "Every blob path of a commit tree; `truncated` when the entry or directory budget was reached."
+  );
+export type GitFileList = z.infer<typeof GitFileListSchema>;
+export const GitPathHistorySchema = z
+  .object({
+    commits: z.array(GitCommitSchema),
+    inspected: z.number(),
+    truncated: z.boolean(),
+    nextCursor: z.string().nullable(),
+  })
+  .describe("First-parent commits that changed a path; `nextCursor` resumes an interrupted walk.");
+export type GitPathHistory = z.infer<typeof GitPathHistorySchema>;
+export const GitBlameCommitSchema = z.object({
+  oid: z.string(),
+  summary: z.string(),
+  author: z.object({ name: z.string(), timestamp: z.number() }),
+});
+export type GitBlameCommit = z.infer<typeof GitBlameCommitSchema>;
+export const GitBlameHunkSchema = z
+  .object({ startLine: z.number(), lineCount: z.number(), commitOid: z.string().nullable() })
+  .describe("`commitOid` is null for lines older than the inspected history.");
+export type GitBlameHunk = z.infer<typeof GitBlameHunkSchema>;
+export const GitBlameSchema = z.object({
+  oid: z.string(),
+  path: z.string(),
+  blobOid: z.string(),
+  lineCount: z.number(),
+  hunks: z.array(GitBlameHunkSchema),
+  commits: z.array(GitBlameCommitSchema),
+  inspected: z.number(),
+  partial: z.boolean(),
+});
+export type GitBlame = z.infer<typeof GitBlameSchema>;
+export const GitCommitDetailSchema = z.object({
+  commit: GitCommitSchema,
+  files: z.array(GitDiffFileSchema),
+  truncated: z.boolean(),
+});
+export type GitCommitDetail = z.infer<typeof GitCommitDetailSchema>;
 
 const title = z.string().trim().min(1).max(200);
 const body = z.string().max(50_000);
