@@ -8,7 +8,7 @@ import {
 export type StagedChange =
   | { op: "put"; path: string; content: Blob }
   | { op: "delete"; path: string }
-  | { op: "move"; from: string; to: string };
+  | { op: "move"; from: string; to: string; content?: Blob };
 
 export interface CommitBase {
   branch: string;
@@ -28,11 +28,23 @@ export function commitPayload(
   changes: readonly StagedChange[]
 ): CommitPayload | null {
   const files = new Map<string, Blob>();
-  const wire = changes.map((change) => {
-    if (change.op !== "put") return change;
+  function attach(content: Blob): string {
     const part = `f${files.size}`;
-    files.set(part, change.content);
-    return { op: "put" as const, path: change.path, part };
+    files.set(part, content);
+    return part;
+  }
+  const wire = changes.map((change) => {
+    if (change.op === "put")
+      return { op: "put" as const, path: change.path, part: attach(change.content) };
+    if (change.op === "move" && change.content)
+      return {
+        op: "move" as const,
+        from: change.from,
+        to: change.to,
+        part: attach(change.content),
+      };
+    if (change.op === "move") return { op: "move" as const, from: change.from, to: change.to };
+    return change;
   });
   const manifest = CommitRepositoryChangesSchema.safeParse({ ...base, changes: wire });
   return manifest.success ? { manifest: manifest.data, files } : null;

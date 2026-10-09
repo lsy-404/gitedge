@@ -55,13 +55,14 @@ async function gitCall(
 async function commitCall(
   manifest: unknown,
   files: Record<string, Uint8Array> = {},
-  user: keyof typeof users = "owner"
+  user: keyof typeof users = "owner",
+  search = ""
 ) {
   const form = new FormData();
   form.set("manifest", JSON.stringify(manifest));
   for (const [name, content] of Object.entries(files)) form.set(name, new File([content], name));
   return gitWorker.fetch(
-    new Request(`https://forge.test/repositories/${repositoryId}/commit`, {
+    new Request(`https://forge.test/repositories/${repositoryId}/commit${search}`, {
       method: "POST",
       headers: trustedHeaders(users[user]),
       body: form,
@@ -325,6 +326,29 @@ describe("Agent session workspace access", () => {
     );
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ error: { code: "refs_changed" } });
+  });
+
+  it("commits multi-file changes into the session workspace, not the repository", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("clone unavailable");
+      })
+    );
+    const fork = artifacts.repositories.get(forkName);
+    const [head] = fork?.commits ?? [];
+    fork?.branchCommits.set("agent-work", [{ ...head, hash: oid("9") }]);
+    const forkBefore = artifacts.snapshot(forkName).tokens.length;
+    const repositoryBefore = tokenCount();
+    const response = await commitCall(
+      { ...upload, branch: "agent-work", expectedOid: oid("9") },
+      bytes,
+      "owner",
+      `?sessionId=${sessionId}`
+    );
+    expect(response.status).not.toBe(409);
+    expect(artifacts.snapshot(forkName).tokens.length).toBe(forkBefore + 1);
+    expect(tokenCount()).toBe(repositoryBefore);
   });
 
   describe("published pull request heads", () => {

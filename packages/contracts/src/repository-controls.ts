@@ -60,26 +60,37 @@ export const REPOSITORY_COMMIT_LIMITS = {
   totalBytes: 10 * 1024 * 1024,
   manifestBytes: 256 * 1024,
 } as const;
+/** Git's own `.git` guards: HFS+ ignores these code points and NTFS trims dots and spaces. */
+function gitDirectoryAlias(part: string): boolean {
+  const folded = part
+    .replace(/[\u200c-\u200f\u202a-\u202e\u206a-\u206f\ufeff]/g, "")
+    .replace(/[. ]+$/, "")
+    .toLowerCase();
+  return folded === ".git" || folded === "git~1";
+}
 export function editablePath(path: string): boolean {
+  const parts = path.split("/");
   return (
     path.length > 0 &&
     path.length <= 1000 &&
     !path.startsWith("/") &&
     !path.includes("\\") &&
     !/[\x00-\x1f\x7f]/.test(path) &&
-    path
-      .split("/")
-      .every(
-        (part) => part !== "" && part !== "." && part !== ".." && part.toLowerCase() !== ".git"
-      ) &&
-    path.split("/").length <= 32
+    parts.length <= 32 &&
+    parts.every((part) => part !== "" && part !== "." && part !== ".." && !gitDirectoryAlias(part))
   );
 }
 const EditablePathSchema = z.string().refine(editablePath, "Invalid repository path");
+const FilePartSchema = z.string().min(1).max(64);
 export const RepositoryChangeSchema = z.discriminatedUnion("op", [
-  z.object({ op: z.literal("put"), path: EditablePathSchema, part: z.string().min(1).max(64) }),
+  z.object({ op: z.literal("put"), path: EditablePathSchema, part: FilePartSchema }),
   z.object({ op: z.literal("delete"), path: EditablePathSchema }),
-  z.object({ op: z.literal("move"), from: EditablePathSchema, to: EditablePathSchema }),
+  z.object({
+    op: z.literal("move"),
+    from: EditablePathSchema,
+    to: EditablePathSchema,
+    part: FilePartSchema.optional(),
+  }),
 ]);
 export type RepositoryChangeInput = z.infer<typeof RepositoryChangeSchema>;
 function touchedPaths(change: RepositoryChangeInput): string[] {
@@ -112,8 +123,10 @@ export const CommitRepositoryChangesSchema = z
     "A path cannot move into itself"
   )
   .refine((value) => {
-    const parts = value.changes.flatMap((change) => (change.op === "put" ? [change.part] : []));
-    return new Set(parts).size === parts.length;
+    const parts = value.changes.flatMap((change) =>
+      change.op !== "delete" && change.part ? [change.part] : []
+    );
+    return new Set(parts).size === parts.length && !parts.includes("manifest");
   }, "File parts must be unique");
 export type CommitRepositoryChangesInput = z.infer<typeof CommitRepositoryChangesSchema>;
 export interface CommitRepositoryChangesResult {

@@ -51,6 +51,11 @@ describe("repository paths", () => {
       "src/.GIT/hooks",
       "a/.git",
       "bad\u0000name",
+      ".git./config",
+      ".git /config",
+      "GIT~1/config",
+      ".g\u200cit/config",
+      "a/.git\ufeff/hooks",
       Array.from({ length: 33 }, () => "d").join("/"),
     ])
       expect(editablePath(bad), bad).toBe(false);
@@ -109,6 +114,19 @@ describe("readCommitRequest", () => {
     const put = result.changes[0];
     expect(put?.op === "put" && [...put.content]).toEqual([...bytes]);
     expect(result.changes.slice(1).map((change) => change.op)).toEqual(["delete", "move"]);
+  });
+
+  it("reads replacement content for a renamed file", async () => {
+    const result = await readCommitRequest(
+      await multipart(
+        { ...base, changes: [{ op: "move", from: "a.sh", to: "bin/a.sh", part: "f0" }] },
+        { f0: new Uint8Array([7]) }
+      )
+    );
+    const move = result.changes[0];
+    expect(move?.op === "move" && move.content && [...move.content]).toEqual([7]);
+    const missing = { ...base, changes: [{ op: "move", from: "a", to: "b", part: "f0" }] };
+    expect((await failure(await multipart(missing))).status).toBe(400);
   });
 
   it("rejects non-multipart bodies, bad manifests, missing and extra parts", async () => {

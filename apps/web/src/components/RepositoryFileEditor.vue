@@ -5,7 +5,7 @@ import { useUnsavedGuard } from "../lib/unsavedGuard";
 import { useI18n } from "vue-i18n";
 import { editablePath } from "../../../../packages/contracts/src/repository-controls";
 import type { GitFile, GitTreeEntry, Repository, RepositoryBranch } from "../lib/api";
-import { ApiError, api } from "../lib/api";
+import { ApiError, api, errorMessage } from "../lib/api";
 import { useCommitTarget } from "../lib/commitTarget";
 import { commitPayload, type StagedChange } from "../lib/repositoryCommit";
 import AppIcon from "./AppIcon.vue";
@@ -116,19 +116,27 @@ watch(
   }
 );
 function saveErrorFor(cause: unknown): string {
-  if (cause instanceof ApiError && cause.status === 409) return t("codeEditConflict");
-  if (cause instanceof ApiError && cause.status === 403) {
+  if (cause instanceof ApiError && cause.code === "refs_changed") return t("codeEditConflict");
+  if (cause instanceof ApiError && cause.code === "protected_branch") {
     protectedRejected.value = true;
     return t("codeProtectedEditNeedsBranch");
   }
   if (cause instanceof ApiError && cause.status === 413) return t("codeFileTooLarge");
-  return t("apiError");
+  if (cause instanceof ApiError && cause.status === 400)
+    return t("codeChangeRejected", { reason: cause.message });
+  return errorMessage(cause, t);
 }
 function fileChanges(): StagedChange[] {
-  const body = { op: "put" as const, path: trimmedPath.value, content: new Blob([content.value]) };
-  if (!props.file || !renamed.value) return [body];
-  if (!contentChanged.value) return [{ op: "move", from: props.file.path, to: trimmedPath.value }];
-  return [{ op: "delete", path: props.file.path }, body];
+  const body = new Blob([content.value]);
+  if (!props.file || !renamed.value) return [{ op: "put", path: trimmedPath.value, content: body }];
+  return [
+    {
+      op: "move",
+      from: props.file.path,
+      to: trimmedPath.value,
+      ...(contentChanged.value ? { content: body } : {}),
+    },
+  ];
 }
 async function commitChanges(changes: StagedChange[]): Promise<SavedFile | null> {
   saving.value = true;
@@ -151,7 +159,7 @@ async function commitChanges(changes: StagedChange[]): Promise<SavedFile | null>
     const result = await api.commitRepositoryChanges(props.repository.id, payload);
     return { ...result, path: trimmedPath.value };
   } catch (cause) {
-    if (cause instanceof ApiError && cause.status === 409) conflict.value = true;
+    if (cause instanceof ApiError && cause.code === "refs_changed") conflict.value = true;
     saveError.value = saveErrorFor(cause);
     return null;
   } finally {

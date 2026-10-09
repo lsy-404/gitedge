@@ -6,7 +6,7 @@ import {
   editablePath,
 } from "../../../../packages/contracts/src/repository-controls";
 import type { Repository, RepositoryBranch } from "../lib/api";
-import { ApiError, api, formatBytes } from "../lib/api";
+import { ApiError, api, errorMessage, formatBytes } from "../lib/api";
 import { useCommitTarget } from "../lib/commitTarget";
 import {
   commitPayload,
@@ -49,6 +49,8 @@ const target = useCommitTarget(
 );
 const { message, newBranch, createPull, protectedRejected, protectedBranch, targetBranch } = target;
 const { targetBranchValid } = target;
+// A new branch from the web usually exists to be proposed, as on other forges.
+createPull.value = true;
 const staged = ref<StagedUpload[]>([]);
 const rejected = ref<RejectedUpload[]>([]);
 const truncated = ref(false);
@@ -136,18 +138,18 @@ function resultDirectory(): string {
 }
 function failureMessage(cause: unknown): string {
   if (cause instanceof ApiError) {
-    if (cause.status === 409) {
+    if (cause.code === "refs_changed") {
       conflict.value = true;
       return t("codeEditConflict");
     }
-    if (cause.status === 403) {
+    if (cause.code === "protected_branch") {
       protectedRejected.value = true;
       return t("codeProtectedEditNeedsBranch");
     }
     if (cause.status === 413) return t("codeUploadTooLarge");
     if (cause.status === 400) return t("codeChangeRejected", { reason: cause.message });
   }
-  return t("apiError");
+  return errorMessage(cause, t);
 }
 async function commit() {
   if (!canCommit.value) return;
@@ -175,7 +177,7 @@ async function commit() {
       ...result,
       directory: resultDirectory(),
       pull:
-        createPull.value && result.branch !== props.branch
+        createPull.value && props.repository.pullsEnabled && result.branch !== props.branch
           ? { base: props.branch, head: result.branch, title: message.value.trim() }
           : null,
     });

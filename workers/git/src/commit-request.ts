@@ -1,9 +1,9 @@
 import {
   CommitRepositoryChangesSchema,
   REPOSITORY_COMMIT_LIMITS,
+  editablePath,
+  type EditRepositoryFileInput,
 } from "../../../packages/contracts/src/repository-controls";
-import { editablePath } from "../../../packages/contracts/src/repository-controls";
-import type { EditRepositoryFileInput } from "../../../packages/contracts/src/repository-controls";
 import type { RepositoryChange } from "./changes";
 import type { RepositoryCommitInput } from "./write";
 
@@ -64,7 +64,7 @@ async function readForm(request: Request): Promise<FormData> {
   }
 }
 
-/** Parses a multipart commit: a `manifest` JSON field plus one file field per `put` change. */
+/** Parses a multipart commit: a `manifest` JSON field plus one file field per referenced part. */
 export async function readCommitRequest(request: Request): Promise<RepositoryCommitInput> {
   const form = await readForm(request);
   const manifest = form.get("manifest");
@@ -81,20 +81,15 @@ export async function readCommitRequest(request: Request): Promise<RepositoryCom
   const { changes, ...input } = parsed.data;
   const referenced = new Set<string>(["manifest"]);
   let total = 0;
-  const resolved: RepositoryChange[] = [];
-  for (const change of changes) {
-    if (change.op !== "put") {
-      resolved.push(change);
-      continue;
-    }
-    const file = form.get(change.part);
+  async function readPart(part: string, path: string): Promise<Uint8Array> {
+    const file = form.get(part);
     if (typeof file === "string" || file === null)
-      throw new CommitRequestError(400, "bad_request", `File part for ${change.path} is missing.`);
+      throw new CommitRequestError(400, "bad_request", `File part for ${path} is missing.`);
     if (file.size > REPOSITORY_COMMIT_LIMITS.fileBytes)
       throw new CommitRequestError(
         413,
         "file_too_large",
-        `${change.path} exceeds the per-file size limit.`
+        `${path} exceeds the per-file size limit.`
       );
     total += file.size;
     if (total > REPOSITORY_COMMIT_LIMITS.totalBytes)
@@ -103,12 +98,26 @@ export async function readCommitRequest(request: Request): Promise<RepositoryCom
         "payload_too_large",
         "The commit exceeds the total size limit."
       );
-    referenced.add(change.part);
-    resolved.push({
-      op: "put",
-      path: change.path,
-      content: new Uint8Array(await file.arrayBuffer()),
-    });
+    referenced.add(part);
+    return new Uint8Array(await file.arrayBuffer());
+  }
+  const resolved: RepositoryChange[] = [];
+  for (const change of changes) {
+    if (change.op === "put")
+      resolved.push({
+        op: "put",
+        path: change.path,
+        content: await readPart(change.part, change.path),
+      });
+    else if (change.op === "move" && change.part)
+      resolved.push({
+        op: "move",
+        from: change.from,
+        to: change.to,
+        content: await readPart(change.part, change.to),
+      });
+    else if (change.op === "move") resolved.push({ op: "move", from: change.from, to: change.to });
+    else resolved.push(change);
   }
   for (const key of form.keys())
     if (!referenced.has(key))

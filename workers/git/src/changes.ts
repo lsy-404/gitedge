@@ -5,7 +5,7 @@ export class GitWriteInputError extends Error {}
 export type RepositoryChange =
   | { op: "put"; path: string; content: Uint8Array; textEdit?: boolean }
   | { op: "delete"; path: string }
-  | { op: "move"; from: string; to: string };
+  | { op: "move"; from: string; to: string; content?: Uint8Array };
 
 type ObjectStore = { fs: git.CallbackFsClient | git.PromiseFsClient; dir: string };
 
@@ -94,7 +94,12 @@ export async function applyRepositoryChanges(
       if (!source) throw new GitWriteInputError("The path does not exist.");
       if (await lookup(store, root, change.to.split("/")))
         throw new GitWriteInputError("The destination already exists.");
-      const { mode, type, oid } = source;
+      const { mode, type } = source;
+      if (change.content && (type !== "blob" || mode === "120000"))
+        throw new GitWriteInputError("Only regular files can be replaced.");
+      const oid = change.content
+        ? await git.writeBlob({ ...store, blob: change.content })
+        : source.oid;
       root = await replace(store, root, change.to.split("/"), () => ({ mode, type, oid }));
       root = await replace(store, root, change.from.split("/"), () => null);
     }

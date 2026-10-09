@@ -473,7 +473,7 @@ describe("repository Code view", () => {
     i18n.global.locale.value = "en";
     mockCodeApi({
       onEdit: () =>
-        new Response(JSON.stringify({ error: { code: "conflict", message: "stale" } }), {
+        new Response(JSON.stringify({ error: { code: "refs_changed", message: "stale" } }), {
           status: 409,
         }),
     });
@@ -668,9 +668,12 @@ describe("repository Code view", () => {
         editBodies.push(body);
         attempt += 1;
         return attempt === 1
-          ? new Response(JSON.stringify({ error: { code: "forbidden", message: "protected" } }), {
-              status: 403,
-            })
+          ? new Response(
+              JSON.stringify({ error: { code: "protected_branch", message: "protected" } }),
+              {
+                status: 403,
+              }
+            )
           : jsonResponse(
               { oid: createdCommitOid, branch: "feature/editor", path: "readme.md" },
               201
@@ -1280,8 +1283,7 @@ describe("repository web file operations", () => {
     await settle();
     const checkbox = form.querySelector<HTMLInputElement>(".fluent-checkbox__input");
     if (!checkbox) throw new Error("Pull request option was not rendered.");
-    checkbox.click();
-    await settle();
+    expect(checkbox.checked).toBe(true);
     submit(form);
     await settle();
 
@@ -1293,6 +1295,35 @@ describe("repository web file operations", () => {
       head: "feature/upload",
       title: "Upload new file",
     });
+    mounted.unmount();
+  });
+
+  it("opens the new branch instead of a pull request form when pull requests are disabled", async () => {
+    i18n.global.locale.value = "en";
+    mockCodeApi({
+      onEdit: () => jsonResponse({ oid: createdCommitOid, branch: "feature/upload" }, 201),
+    });
+    const mounted = await mountCode("/example/sample?ref=main", "code", {
+      ...writer,
+      pullsEnabled: false,
+    });
+    buttonWithText(mounted.root, "Upload files").click();
+    await settle();
+    const zone = mounted.root.querySelector(".drop-zone");
+    if (!zone) throw new Error("Drop zone was not rendered.");
+    dropFiles(zone, [new File(["x"], "new.txt")]);
+    await settle();
+    const form = changeForm(mounted.root);
+    const fields = form.querySelectorAll<HTMLInputElement>('input:not([type="file"])');
+    fill(fields[0], "Upload new file");
+    fill(fields[1], "feature/upload");
+    await settle();
+    expect(form.querySelector(".fluent-checkbox__input")).toBeNull();
+    submit(form);
+    await settle();
+
+    expect(router.currentRoute.value.path).toBe("/example/sample");
+    expect(router.currentRoute.value.query.ref).toBe("feature/upload");
     mounted.unmount();
   });
 
@@ -1442,7 +1473,37 @@ describe("repository web file operations", () => {
     mounted.unmount();
   });
 
-  it("deletes the old path and writes the new one when a rename also edits content", async () => {
+  it("shows the server reason when a rename targets an existing path", async () => {
+    i18n.global.locale.value = "en";
+    mockCodeApi({
+      onEdit: () =>
+        new Response(
+          JSON.stringify({
+            error: { code: "bad_request", message: "The destination already exists." },
+          }),
+          { status: 400 }
+        ),
+    });
+    const mounted = await mountCode("/example/sample/blob/readme.md?ref=main", "code", writer);
+    Array.from(mounted.root.querySelectorAll<HTMLButtonElement>(".file-actions button"))
+      .find((button) => button.textContent?.includes("Edit"))
+      ?.click();
+    await settle();
+    const editor = mounted.root.querySelector<HTMLFormElement>(".file-editor form");
+    if (!editor) throw new Error("File editor was not rendered.");
+    fill(editor.querySelector<HTMLInputElement>('input[maxlength="1000"]')!, "docs/taken.md");
+    fill(editor.querySelector<HTMLInputElement>('input[maxlength="500"]')!, "Move readme");
+    await settle();
+    submit(editor);
+    await settle();
+
+    expect(mounted.root.querySelector(".file-editor")?.textContent).toContain(
+      "The server rejected this change: The destination already exists."
+    );
+    mounted.unmount();
+  });
+
+  it("moves the file with its new content when a rename also edits content", async () => {
     i18n.global.locale.value = "en";
     const sent: Array<Record<string, unknown>> = [];
     mockCodeApi({
@@ -1466,10 +1527,7 @@ describe("repository web file operations", () => {
     await settle();
 
     expect(sent[0]).toMatchObject({
-      changes: [
-        { op: "delete", path: "readme.md" },
-        { op: "put", path: "docs/readme.md" },
-      ],
+      changes: [{ op: "move", from: "readme.md", to: "docs/readme.md", part: "f0" }],
       content: "changed",
     });
     mounted.unmount();

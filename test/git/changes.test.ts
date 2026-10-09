@@ -91,6 +91,40 @@ describe("applyRepositoryChanges", () => {
     expect((await git.readTree({ ...repo, oid: next })).tree[0]?.mode).toBe("100755");
   });
 
+  it("keeps the mode when a file is renamed with new content", async () => {
+    const repo = store();
+    await git.init({ ...repo, defaultBranch: "main" });
+    const blob = await git.writeBlob({ ...repo, blob: text("#!/bin/sh") });
+    const tree = await git.writeTree({
+      ...repo,
+      tree: [
+        { path: "run.sh", mode: "100755", type: "blob", oid: blob },
+        { path: "taken.sh", mode: "100644", type: "blob", oid: blob },
+      ],
+    });
+    const next = await applyRepositoryChanges(repo, tree, [
+      { op: "move", from: "run.sh", to: "bin/run.sh", content: text("#!/bin/bash") },
+    ]);
+    expect(await listing(repo, next)).toEqual(["bin/run.sh", "taken.sh"]);
+    const bin = (await git.readTree({ ...repo, oid: next })).tree.find((e) => e.path === "bin");
+    expect((await git.readTree({ ...repo, oid: bin!.oid })).tree[0]?.mode).toBe("100755");
+    expect(new TextDecoder().decode(await blobAt(repo, next, "bin/run.sh"))).toBe("#!/bin/bash");
+    await expect(
+      applyRepositoryChanges(repo, tree, [
+        { op: "move", from: "run.sh", to: "taken.sh", content: text("x") },
+      ])
+    ).rejects.toBeInstanceOf(GitWriteInputError);
+  });
+
+  it("refuses to replace the content of a moved directory", async () => {
+    const { repo, root } = await seed({ "dir/x.txt": text("x") });
+    await expect(
+      applyRepositoryChanges(repo, root, [
+        { op: "move", from: "dir", to: "other", content: text("x") },
+      ])
+    ).rejects.toBeInstanceOf(GitWriteInputError);
+  });
+
   it("creates a file inside a missing folder given a slash path", async () => {
     const { repo, root } = await seed({ "a.txt": text("a") });
     const next = await applyRepositoryChanges(repo, root, [

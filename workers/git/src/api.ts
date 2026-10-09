@@ -96,11 +96,13 @@ export async function handleGitApi(
   const resource = parts[2];
   const proposalComparison =
     (resource === "compare" || resource === "pull-head") && url.searchParams.has("headSessionId");
-  // Commit lookups answer whether the repository itself holds a commit, never a private fork.
+  const committing = (resource === "edit" || resource === "commit") && request.method === "POST";
+  // Commit lookups answer whether the repository itself holds a commit, never a private fork;
+  // commit writes stay in the session workspace like every other mutation.
   const repositoryScoped =
     proposalComparison ||
     resource === "pull-head" ||
-    resource === "commit" ||
+    (resource === "commit" && !committing) ||
     resource === "signature" ||
     resource === "snapshot";
   using repo = await env.ARTIFACTS.get(
@@ -116,8 +118,11 @@ export async function handleGitApi(
   logger.debug("artifacts:request", { resource, sessionId: session?.id });
   if (resource === "graph" && access.repository.graphEnabled === 0)
     return errorResponse(404, "feature_disabled", "Commit graph is disabled.");
-  const committing = resource === "edit" || resource === "commit";
-  if ((committing || resource === "branches") && request.method !== "GET") {
+  if (
+    (resource === "edit" || resource === "commit" || resource === "branches") &&
+    request.method !== "GET" &&
+    request.method !== "HEAD"
+  ) {
     if (!access.user || !access.repository.canWrite || userSession?.permission === "read")
       return errorResponse(403, "forbidden", "Repository write access is required.");
     if (access.repository.archived)
@@ -139,9 +144,9 @@ export async function handleGitApi(
         }
       }
     } catch (cause) {
-      if (cause instanceof CommitRequestError)
-        return errorResponse(cause.status, cause.code, cause.message);
-      throw cause;
+      if (!(cause instanceof CommitRequestError)) throw cause;
+      logger.warn("git:commit-request-rejected", { resource, code: cause.code });
+      return errorResponse(cause.status, cause.code, cause.message);
     }
     const value = committing ? null : await readJsonLimited(request, 2_100_000);
     const create =

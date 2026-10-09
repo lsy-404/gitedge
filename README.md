@@ -80,7 +80,7 @@ Repository deployment accepts prebuilt JavaScript modules plus declared D1, R2 a
 
 Repository settings independently enable collaboration areas, agents, deployments, commit graphs, Actions and online editing. Renaming preserves historical repository URLs. Branch patterns can require PRs, human approvals, named checks, linear history and verified signatures. Repository collaborators have read, write or admin access.
 
-The web Code view can upload files and folders (drag and drop or pickers), create, rename and move files by editing their path, and rename or delete folders. Every flow produces one commit through `POST /api/git/repositories/:id/commit`: at most 100 changes, 5 MiB per file and 10 MiB per commit, committed against the loaded branch head. Protected branches require a new branch, and choosing a new branch can open the pull request form prefilled after the commit.
+The web Code view can upload files and folders (drag and drop or pickers), create, rename and move files by editing their path (a rename keeps the file mode, even with edits), and rename or delete folders. Every flow produces one commit through `POST /api/git/repositories/:id/commit`: at most 100 changes, 5 MiB per file and 10 MiB per commit, committed against the loaded branch head. Protected branches require a new branch, and choosing a new branch can open the pull request form prefilled after the commit.
 
 `node test/e2e/repository-controls.mjs` creates a nonempty verification repository and checks online edits, stale SHA rejection, protected native pushes, squash/rebase, signed-commit requirements, redirects and community defaults.
 
