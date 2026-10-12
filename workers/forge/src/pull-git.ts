@@ -43,7 +43,7 @@ export function compareRequest(
     range?.head ?? String(merged ? pull.merge_head_oid : pull.head_ref)
   );
   setHeadParams(gitUrl, pullHead(pull));
-  return new Request(gitUrl, { headers: trustedHeaders(user) });
+  return new Request(gitUrl, { headers: user ? trustedHeaders(user) : undefined });
 }
 
 /** Resolves the tip commit of a branch, optionally inside an agent session fork or user fork. */
@@ -53,12 +53,14 @@ export async function branchTipOid(
   repository: RepositoryRow,
   ref: string,
   head: PullHead | null,
-  user: TrustedUser
+  user: TrustedUser | null
 ): Promise<string | Response> {
   const gitUrl = new URL(`/repositories/${repository.id}/pull-head`, requestUrl);
   gitUrl.searchParams.set("head", ref);
   setHeadParams(gitUrl, head);
-  const response = await env.GIT.fetch(new Request(gitUrl, { headers: trustedHeaders(user) }));
+  const response = await env.GIT.fetch(
+    new Request(gitUrl, { headers: user ? trustedHeaders(user) : undefined })
+  );
   if (response.status === 404) {
     await response.body?.cancel();
     return errorResponse(409, "stale_commit", "The pull request head is no longer available.");
@@ -86,7 +88,7 @@ export function pullRequestHeadOid(
   requestUrl: string,
   repository: RepositoryRow,
   pull: Record<string, unknown>,
-  user: TrustedUser
+  user: TrustedUser | null
 ): Promise<string | Response> {
   return branchTipOid(env, requestUrl, repository, String(pull.head_ref), pullHead(pull), user);
 }

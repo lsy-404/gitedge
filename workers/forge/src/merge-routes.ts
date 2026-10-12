@@ -25,7 +25,8 @@ import {
 } from "./merge-automation";
 import { hasActiveMergeLease, mergeMethodAllowed, PULL_WITH_AUTHOR_SQL } from "./merge-execution";
 import { authorizeMerge, blockerResponse } from "./merge-policy";
-import { pullRequestHeadOid } from "./pull-git";
+import { pullRequestHeadOid, INTERNAL_GIT_ORIGIN } from "./pull-git";
+import { evaluateMergeRequirements, unmetRequirementIds } from "./merge-requirements";
 
 type PullRow = Record<string, unknown>;
 
@@ -50,22 +51,54 @@ async function autoMergeStatus(
       waitingOn: null,
     };
   const enabler = await actingUser(env, row.enabled_by);
-  const blocker =
-    pull.draft === 1
-      ? { code: "draft", message: "Draft pull requests cannot merge." }
-      : enabler
-        ? await authorizeMerge(env, repository, enabler, pull, {
-            method: row.method,
-            expectedHeadOid: row.expected_head_oid,
-          })
-        : { code: "forbidden", message: "The user who enabled auto-merge is unavailable." };
+  let waitingOn: AutoMergeStatus["waitingOn"] = null;
+  if (!enabler)
+    waitingOn = {
+      code: "forbidden",
+      message: "The user who enabled auto-merge is unavailable.",
+      unmet: [],
+    };
+  else {
+    const head = await pullRequestHeadOid(env, INTERNAL_GIT_ORIGIN, repository, pull, enabler);
+    if (head instanceof Response)
+      waitingOn = {
+        code: "head_unavailable",
+        message: "The current head could not be resolved.",
+        unmet: ["current_head"],
+      };
+    else {
+      const evaluation = await evaluateMergeRequirements(env, repository, pull, {
+        method: row.method,
+        headOid: head,
+      });
+      const blocker = await authorizeMerge(
+        env,
+        repository,
+        enabler,
+        pull,
+        { method: row.method, expectedHeadOid: head },
+        evaluation
+      );
+      const unmet = unmetRequirementIds(evaluation);
+      waitingOn =
+        head !== row.expected_head_oid
+          ? {
+              code: "head_changed",
+              message: "The approved head changed.",
+              unmet: ["current_head", ...unmet],
+            }
+          : blocker
+            ? { code: blocker.code, message: blocker.message, unmet }
+            : null;
+    }
+  }
   return {
     enabled: true,
     method: row.method,
     enabledBy: row.enabled_by_name,
     enabledAt: row.enabled_at,
     expectedHeadOid: row.expected_head_oid,
-    waitingOn: blocker ? { code: blocker.code, message: blocker.message } : null,
+    waitingOn,
   };
 }
 

@@ -5,6 +5,7 @@ export const AgentWebhookEventSchema = z.enum([
   "agent.assigned",
   "agent.mentioned",
   "pull_request.updated",
+  "pull_request.head_updated",
   "review.requested",
   "review.submitted",
   "check.completed",

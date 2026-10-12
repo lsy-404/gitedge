@@ -12,6 +12,7 @@ export interface RefUpdate {
 export class InvalidReceiveCommands extends Error {}
 export async function readReceiveCommands(body: ReadableStream<Uint8Array> | null): Promise<{
   updates: RefUpdate[];
+  capabilities: string[];
   body: ReadableStream<Uint8Array>;
   cancel: () => Promise<void>;
 }> {
@@ -19,6 +20,7 @@ export async function readReceiveCommands(body: ReadableStream<Uint8Array> | nul
   const reader = body.getReader(),
     chunks: Uint8Array[] = [],
     updates: RefUpdate[] = [];
+  let capabilities: string[] = [];
   let prefix = new Uint8Array(0),
     offset = 0,
     done = false;
@@ -43,10 +45,17 @@ export async function readReceiveCommands(body: ReadableStream<Uint8Array> | nul
         const nul = text.indexOf("\0");
         if (nul >= 0) {
           if (updates.length) throw new InvalidReceiveCommands("Invalid command capabilities.");
+          capabilities = text
+            .slice(nul + 1)
+            .replace(/\n$/, "")
+            .split(" ")
+            .filter(Boolean);
           text = text.slice(0, nul);
         }
         text = text.replace(/\n$/, "");
-        const match = /^([0-9a-f]{40}) ([0-9a-f]{40}) (refs\/(?:heads|tags)\/(.+))$/.exec(text);
+        const match = /^([0-9a-f]{40}) ([0-9a-f]{40}) (refs\/(?:heads|tags|gitedge)\/(.+))$/.exec(
+          text
+        );
         if (
           !match ||
           !GitOidSchema.safeParse(match[1]).success ||
@@ -92,7 +101,7 @@ export async function readReceiveCommands(body: ReadableStream<Uint8Array> | nul
         reader.releaseLock();
       },
     });
-    return { updates, body: stream, cancel: () => stream.cancel() };
+    return { updates, capabilities, body: stream, cancel: () => stream.cancel() };
   } catch (error) {
     await reader.cancel();
     reader.releaseLock();
@@ -131,6 +140,44 @@ function concat(left: Uint8Array, right: Uint8Array): Uint8Array {
 function framePacket(payload: Uint8Array): Uint8Array {
   const header = new TextEncoder().encode((payload.length + 4).toString(16).padStart(4, "0"));
   return concat(header, payload);
+}
+
+/**
+ * Builds an atomic rejection in the receive-pack report-status format: every ref is reported
+ * `ng`, with the supplied reason where one exists. Null when the client did not ask for a report.
+ */
+export function rejectionReport(
+  updates: readonly RefUpdate[],
+  capabilities: readonly string[],
+  reasons: ReadonlyMap<string, string>
+): Uint8Array | null {
+  if (!capabilities.includes("report-status") && !capabilities.includes("report-status-v2"))
+    return null;
+  const encoder = new TextEncoder();
+  const lines = [
+    "unpack ok\n",
+    ...updates.map(
+      (update) =>
+        `ng ${update.ref} ${reasons.get(update.ref) ?? "push rejected: another ref was denied"}\n`
+    ),
+  ];
+  const report = concat(
+    lines.map((line) => framePacket(encoder.encode(line))).reduce(concat, new Uint8Array(0)),
+    encoder.encode("0000")
+  );
+  const sideBand = capabilities.includes("side-band");
+  const sideBand64k = capabilities.includes("side-band-64k");
+  if (!sideBand && !sideBand64k) return report;
+  const chunkSize = sideBand ? 995 : 65_515;
+  const banded: Uint8Array[] = [];
+  for (let offset = 0; offset < report.length; offset += chunkSize) {
+    const chunk = report.subarray(offset, offset + chunkSize);
+    const payload = new Uint8Array(chunk.length + 1);
+    payload[0] = 1;
+    payload.set(chunk, 1);
+    banded.push(framePacket(payload));
+  }
+  return concat(banded.reduce(concat, new Uint8Array(0)), encoder.encode("0000"));
 }
 
 /**

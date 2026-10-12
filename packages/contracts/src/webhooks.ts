@@ -79,8 +79,12 @@ export interface RepositoryWebhookDeliveryDetail extends RepositoryWebhookDelive
 }
 
 export const PushEventInputSchema = z.object({
+  eventId: z.uuid(),
+  occurredAt: z.number().int().nonnegative(),
   repositoryId: z.string().min(1),
   pusherId: z.string().min(1),
+  /** Set when the refs live in an agent session fork rather than in the repository itself. */
+  agentSessionId: z.string().min(1).optional(),
   updates: z
     .array(
       z.object({
@@ -93,3 +97,34 @@ export const PushEventInputSchema = z.object({
     .max(128),
 });
 export type PushEventInput = z.infer<typeof PushEventInputSchema>;
+
+export const PushEventRefHeadInputSchema = z.object({
+  repositoryId: z.string().min(1),
+  pusherId: z.string().min(1),
+  agentSessionId: z.string().min(1).optional(),
+  updates: z
+    .array(
+      z.object({
+        ref: z.string().min(1).max(512),
+        after: z.string().regex(/^[0-9a-f]{40}$/),
+      })
+    )
+    .min(1)
+    .max(WEBHOOK_PUSH_REFS_LIMIT),
+});
+export type PushEventRefHeadInput = z.infer<typeof PushEventRefHeadInputSchema>;
+
+export const PushEventRefHeadsSchema = z.object({
+  heads: z
+    .array(
+      z.object({
+        ref: z.string(),
+        oid: z
+          .string()
+          .regex(/^[0-9a-f]{40}$/)
+          .nullable(),
+      })
+    )
+    .max(WEBHOOK_PUSH_REFS_LIMIT),
+});
+export type PushEventRefHeads = z.infer<typeof PushEventRefHeadsSchema>;

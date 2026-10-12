@@ -264,6 +264,39 @@ describe("tag permissions", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("returns a conflict instead of updating an existing tag", async () => {
+    const pkt = (text: string) => {
+      const length = new TextEncoder().encode(text).length + 4;
+      return length.toString(16).padStart(4, "0") + text;
+    };
+    const refs =
+      pkt(`${commitOid} HEAD\n`) +
+      pkt(`${commitOid} refs/heads/main\n`) +
+      pkt(`${commitOid} refs/tags/v1.0.0\n`) +
+      "0000";
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.includes("info/refs"))
+        return new Response(
+          pkt("version 2\n") + pkt("ls-refs=unborn\n") + pkt("fetch=shallow\n") + "0000",
+          { headers: { "Content-Type": "application/x-git-upload-pack-advertisement" } }
+        );
+      return new Response(refs, {
+        headers: { "Content-Type": "application/x-git-upload-pack-result" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await gitCall("public", "tags", {
+      method: "POST",
+      body: { name: "v1.0.0", target: "main" },
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: { code: "tag_exists" } });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("lists tags with annotated flags from the advertised refs", async () => {
     const commit = commitOid;
     const tagObject = "e".repeat(40);

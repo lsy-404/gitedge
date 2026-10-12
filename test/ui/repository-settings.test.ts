@@ -344,7 +344,7 @@ describe("RepositorySettings", () => {
     for (const section of [
       "Features",
       "Merge rules",
-      "Branch protection",
+      "Branch and tag protection",
       "Collaborators",
       "Agents & memory",
       "Danger zone",

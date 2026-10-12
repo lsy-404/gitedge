@@ -2,8 +2,13 @@ import { repositoryNotFound } from "../../../src/worker/common/repository-respon
 import { recordGitWrite, reportPushEvent } from "./events";
 import { ReceiveReport, type RefUpdate } from "./receive-commands";
 import { resolveRepositoryPath } from "../../../src/worker/common/repositories";
-import { branchRules, matchingBranchRules } from "../../../src/worker/common/branch-protection";
-import { readReceiveCommands, InvalidReceiveCommands } from "./receive-commands";
+import {
+  branchRules,
+  matchingBranchRules,
+  reservedRef,
+  tagChangeForbidden,
+} from "../../../src/worker/common/branch-protection";
+import { readReceiveCommands, InvalidReceiveCommands, rejectionReport } from "./receive-commands";
 import { z } from "zod";
 import { accessTokenAllows } from "../../../packages/contracts/src/access-tokens";
 import { resolveGitAccess, type GitEnv } from "./access";
@@ -84,6 +89,40 @@ export async function proxyGitTransport(
     try {
       const parsed = await readReceiveCommands(request.body);
       const defaultRef = `refs/heads/${access.repository.defaultBranch}`;
+      const rules = await branchRules(env.DB, repository.id);
+      const reasons = new Map<string, string>();
+      for (const update of parsed.updates) {
+        const created = /^0{40}$/.test(update.oldOid);
+        const removal = /^0{40}$/.test(update.newOid);
+        const tag = update.ref.startsWith("refs/tags/") ? update.ref.slice(10) : null;
+        if (reservedRef(update.ref)) reasons.set(update.ref, "reserved namespace");
+        else if (tag && removal && tagChangeForbidden(rules, tag, "delete"))
+          reasons.set(update.ref, "protected tag cannot be deleted");
+        else if (
+          tag &&
+          update.oldOid !== update.newOid &&
+          !created &&
+          !removal &&
+          tagChangeForbidden(rules, tag, "update")
+        )
+          reasons.set(update.ref, "protected tag cannot be moved");
+      }
+      if (reasons.size) {
+        await parsed.cancel();
+        createLogger(env.LOG_LEVEL, { service: "git-proxy", repoId: repository.id }).warn(
+          "git:ref-update-denied",
+          { count: reasons.size, refs: [...reasons.keys()].slice(0, 10) }
+        );
+        const report = rejectionReport(parsed.updates, parsed.capabilities, reasons);
+        return report
+          ? new Response(report, {
+              headers: {
+                "Content-Type": "application/x-git-receive-pack-result",
+                "Cache-Control": "no-store",
+              },
+            })
+          : errorResponse(403, "protected_ref", [...reasons.values()][0]);
+      }
       if (
         parsed.updates.some((update) => update.ref === defaultRef && /^0{40}$/.test(update.newOid))
       ) {
@@ -91,7 +130,6 @@ export async function proxyGitTransport(
         return errorResponse(409, "default_branch", "The default branch cannot be deleted.");
       }
       if (!access.user?.agentSession) {
-        const rules = await branchRules(env.DB, repository.id);
         const denied = parsed.updates.some(
           (update) =>
             update.ref.startsWith("refs/heads/") &&
@@ -159,7 +197,7 @@ export async function proxyGitTransport(
     const writer = access.user;
     const report = new ReceiveReport();
     const body =
-      response.ok && writer && !writer.agentSession && updates.length && response.body
+      response.ok && writer && updates.length && response.body
         ? response.body.pipeThrough(
             new TransformStream<Uint8Array, Uint8Array>({
               transform(chunk, controller) {
@@ -172,7 +210,7 @@ export async function proxyGitTransport(
                   logger.warn("git:receive-report-unparsed", { count: updates.length });
                 const applied = accepted
                   ? updates.filter((update) => accepted.has(update.ref))
-                  : updates;
+                  : [];
                 const changed = applied.filter(
                   (update) =>
                     update.ref.startsWith("refs/heads/") && update.newOid !== "0".repeat(40)
@@ -188,16 +226,17 @@ export async function proxyGitTransport(
                       after: update.newOid,
                     }))
                   );
-                  for (const update of changed.slice(0, 3))
-                    await recordGitWrite(
-                      env,
-                      repository.id,
-                      artifactName,
-                      writer,
-                      update.ref.slice(11),
-                      update.newOid
-                    );
-                  if (changed.length > 3)
+                  if (!writer.agentSession)
+                    for (const update of changed.slice(0, 3))
+                      await recordGitWrite(
+                        env,
+                        repository.id,
+                        artifactName,
+                        writer,
+                        update.ref.slice(11),
+                        update.newOid
+                      );
+                  if (!writer.agentSession && changed.length > 3)
                     logger.warn("actions:push-branches-truncated", { count: changed.length });
                 };
                 if (ctx) ctx.waitUntil(notify());

@@ -29,6 +29,7 @@ import AppLink from "./AppLink.vue";
 import AssignmentPanel from "./AssignmentPanel.vue";
 import FormActions from "./FormActions.vue";
 import NoticeBar from "./NoticeBar.vue";
+import PullMergeRequirements from "./PullMergeRequirements.vue";
 import PullMergeAutomation from "./PullMergeAutomation.vue";
 import SelectField from "./SelectField.vue";
 import StatusBadge from "./StatusBadge.vue";
@@ -105,6 +106,7 @@ const wikiDraft = ref({ title: "", content: "" });
 const diff = ref<GitComparison | null>(null);
 const mergeError = ref("");
 const mergeQueueRequired = ref(false);
+const mergeRequirementsReady = ref(false);
 const loading = ref(false);
 const loadError = ref("");
 const actionError = ref("");
@@ -215,7 +217,15 @@ const filteredIssues = computed(() => {
     ? [...rows].sort((left, right) => right.updatedAt - left.updatedAt)
     : rows;
 });
-const filteredPulls = computed(() => pulls.value.filter(matchesFilters));
+const attentionOnly = ref(false);
+function awaitingMe(pull: PullRequest): boolean {
+  return pull.attention.some(
+    (entry) => entry.kind === "user" && entry.id === sessionState.user?.id
+  );
+}
+const filteredPulls = computed(() =>
+  pulls.value.filter((pull) => matchesFilters(pull) && (!attentionOnly.value || awaitingMe(pull)))
+);
 const filteredDiscussions = computed(() => discussions.value.filter(matchesFilters));
 const openCount = computed(() => collectionRows.value.filter((row) => row.state === "open").length);
 const closedCount = computed(
@@ -333,12 +343,6 @@ const pullTabs = computed(() => [
     count: checks.value.length,
   },
 ]);
-interface MergeStatusRow {
-  key: string;
-  icon: IconName;
-  tone: MarkTone | "muted" | "warning";
-  text: string;
-}
 const previewCheck = computed(() =>
   props.section === "pulls" && diff.value
     ? (checks.value.find(
@@ -347,77 +351,6 @@ const previewCheck = computed(() =>
       ) ?? null)
     : null
 );
-/** Reviews and checks bound to the current head, summarized next to the merge controls. */
-const mergeStatusRows = computed<MergeStatusRow[]>(() => {
-  const head = diff.value?.headOid ?? "";
-  const latest = new Map<string, Review>();
-  for (const review of [...reviews.value].sort((a, b) => a.createdAt - b.createdAt))
-    if (review.commitOid === head) latest.set(`${review.actor.kind}:${review.actor.id}`, review);
-  const verdicts = [...latest.values()];
-  const subject = item.value;
-  const author = subject && "headRef" in subject ? subject.actor : null;
-  const approvals = verdicts.filter(
-    (review) =>
-      review.state === "approved" &&
-      review.actor.kind === "user" &&
-      !(author?.kind === "user" && review.actor.id === author.id)
-  ).length;
-  const rows: MergeStatusRow[] = [];
-  if (verdicts.some((review) => review.state === "changes_requested"))
-    rows.push({ key: "reviews", icon: "alert", tone: "danger", text: t("mergeReviewsChanges") });
-  else if (approvals)
-    rows.push({
-      key: "reviews",
-      icon: "checkCircle",
-      tone: "success",
-      text: t("mergeReviewsApproved", { count: approvals }),
-    });
-  else rows.push({ key: "reviews", icon: "circle", tone: "muted", text: t("mergeReviewsNone") });
-  const current = checks.value.filter(
-    (check) => check.commitOid === head && !isPagesPreviewCheck(check)
-  );
-  const pending = current.filter((check) => check.status !== "completed").length;
-  const failing = current.filter(
-    (check) =>
-      check.status === "completed" &&
-      (check.conclusion === "failure" || check.conclusion === "cancelled")
-  ).length;
-  if (!current.length)
-    rows.push({ key: "checks", icon: "circle", tone: "muted", text: t("mergeChecksNone") });
-  else if (failing)
-    rows.push({
-      key: "checks",
-      icon: "alert",
-      tone: "danger",
-      text: t("mergeChecksFailing", { count: failing }),
-    });
-  else if (pending)
-    rows.push({
-      key: "checks",
-      icon: "clock",
-      tone: "warning",
-      text: t("mergeChecksPending", { count: pending }),
-    });
-  else
-    rows.push({
-      key: "checks",
-      icon: "checkCircle",
-      tone: "success",
-      text: t("mergeChecksPassed", { count: current.length }),
-    });
-  const open = reviewThreads.unresolved.value.length;
-  rows.push(
-    open
-      ? {
-          key: "threads",
-          icon: "alert",
-          tone: "warning",
-          text: t("mergeThreadsUnresolved", { count: open }),
-        }
-      : { key: "threads", icon: "checkCircle", tone: "success", text: t("mergeThreadsResolved") }
-  );
-  return rows;
-});
 let loadVersion = 0;
 
 type MarkTone = "success" | "done" | "danger";
@@ -1173,6 +1106,15 @@ watch(
                 }}</span>
               </button>
             </div>
+            <button
+              v-if="section === 'pulls' && sessionState.user"
+              type="button"
+              class="filter-button"
+              :aria-pressed="attentionOnly"
+              @click="attentionOnly = !attentionOnly"
+            >
+              {{ t("pullAttentionMe") }}
+            </button>
             <SelectField
               v-if="section === 'discussions'"
               v-model="categoryFilter"
@@ -1242,6 +1184,9 @@ watch(
               <span class="collab-row-content"
                 ><span class="collab-row-title"
                   ><strong>{{ row.title }}</strong
+                  ><StatusBadge v-if="awaitingMe(row)" tone="brand">{{
+                    t("pullAttentionMe")
+                  }}</StatusBadge
                   ><StatusBadge v-if="row.draft">{{ t("draftPull") }}</StatusBadge
                   ><StatusBadge v-if="row.headSessionId" tone="brand">{{
                     t("agentSession")
@@ -1418,6 +1363,22 @@ watch(
         :aria-labelledby="section === 'pulls' ? `pull-tab-${detailTab}` : undefined"
       >
         <div class="detail-main">
+          <section v-if="'attention' in item && item.attention.length" class="box">
+            <header class="box-header">
+              <h3>{{ t("pullAttentionTitle") }}</h3>
+            </header>
+            <p v-for="entry in item.attention" :key="`${entry.kind}:${entry.id}`" class="box-row">
+              {{
+                t("pullAttentionEntry", {
+                  name: entry.name,
+                  reason: t(`pullAttention_${entry.reason}`),
+                })
+              }}
+              <StatusBadge v-if="entry.kind === 'agent'" tone="brand">{{
+                t("pullAttentionAgent")
+              }}</StatusBadge>
+            </p>
+          </section>
           <article
             v-if="section !== 'pulls' || detailTab === 'conversation'"
             class="detail-card timeline-entry"
@@ -1678,17 +1639,18 @@ watch(
                 {{ change.binary ? t("binaryPreviewUnavailable") : t("diffTooLarge") }}
               </p>
             </div>
-            <div v-if="showEditActions && pullIsOpen" class="box merge-box">
+            <div v-if="pullIsOpen" class="box merge-box">
               <header class="box-header">
                 <h3>{{ t("mergeBoxTitle") }}</h3>
               </header>
-              <ul class="merge-status">
-                <li v-for="row in mergeStatusRows" :key="row.key" class="box-row">
-                  <AppIcon class="state-icon" :class="`state-${row.tone}`" :name="row.icon" />
-                  <span>{{ row.text }}</span>
-                </li>
-              </ul>
-              <div class="merge-actions">
+              <PullMergeRequirements
+                :repository-id="repository.id"
+                :number="detailNumber"
+                :head-oid="diff.headOid"
+                :method="mergeMethod"
+                @evaluated="mergeRequirementsReady = $event"
+              />
+              <div v-if="showEditActions" class="merge-actions">
                 <SelectField v-model="mergeMethod" :label="t('repoMergeMethod')">
                   <option v-if="repository.allowMergeCommit" value="merge">
                     {{ t("repoMergeMethodMerge") }}
@@ -1705,6 +1667,7 @@ watch(
                   tone="primary"
                   :disabled="
                     saving ||
+                    !mergeRequirementsReady ||
                     mergeQueueRequired ||
                     !diff.headOid ||
                     (!repository.allowMergeCommit &&
@@ -1722,7 +1685,7 @@ watch(
                 <NoticeBar v-if="mergeError" intent="error">{{ mergeError }}</NoticeBar>
               </div>
               <PullMergeAutomation
-                v-if="detailNumber && diff.headOid"
+                v-if="showEditActions && detailNumber && diff.headOid"
                 :repository-id="repository.id"
                 :number="detailNumber"
                 :head-oid="diff.headOid"

@@ -3,6 +3,12 @@ import { i18n } from "../../apps/web/src/i18n";
 import { AuditActions } from "../../packages/contracts/src/audit";
 import { mergePolicyCodes } from "../../apps/web/src/lib/mergePolicy";
 import { taskDocumentKinds, taskStatuses } from "../../apps/web/src/lib/tasks";
+import {
+  ExcludedApprovalReasonSchema,
+  MergeRequirementIds,
+  MergeRequirementStatusSchema,
+} from "../../packages/contracts/src/merge-requirements";
+import { PullAttentionReasonSchema } from "../../packages/contracts/src/forge";
 
 const locales = ["zh-CN", "en"] as const;
 
@@ -32,6 +38,10 @@ const dynamicKeys: Record<string, readonly string[]> = {
   review: ["approved", "changes_requested", "commented"],
   category: ["general", "ideas", "q-and-a", "announcements"],
   mergeError_: mergePolicyCodes,
+  mergeRequirement_: MergeRequirementIds,
+  mergeRequirementStatus_: MergeRequirementStatusSchema.options,
+  mergeExcluded_: ExcludedApprovalReasonSchema.options,
+  pullAttention_: PullAttentionReasonSchema.options,
   autoMergeBlocked_: ["draft", "forbidden", "review_limit", "check_limit"],
   "deployWizard.steps.": ["provision", "migrate", "deploy"],
   codeUploadRejected_: ["path", "fileSize", "totalSize", "count"],

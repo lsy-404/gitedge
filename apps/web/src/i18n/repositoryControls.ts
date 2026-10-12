@@ -1,5 +1,8 @@
 const repositoryControlsMessages = {
   "zh-CN": {
+    branchRuleIndependentApproval: "要求独立人工批准",
+    branchRuleIndependentHint:
+      "作者、session 主人、关联任务发起人和当前 head 最后推送者的批准不计数。旧 head 的批准也不计数。",
     repoSettingsTasks: "任务与项目记忆",
     repoSettingsTasksHint: "启用仓库内的工作任务和项目记忆。",
     repoSettingsAgents: "仓库智能体",
@@ -26,11 +29,18 @@ const repositoryControlsMessages = {
     repoSettingsDeleteBranchOnMerge: "合并后删除源分支",
     repoSettingsDeleteBranchHint: "仅在成功合并后删除 PR 的源分支。",
     repoSettingsMergeMethodRequired: "至少启用一种合并方式。",
-    repoSettingsBranchRules: "分支保护",
+    repoSettingsBranchRules: "分支与标签保护",
     repoSettingsCollaborators: "协作者",
     branchRulesIntro:
-      "为匹配的分支设置保护条件。启用规则后，只能通过 PR 更新分支；禁止原生直接 push 和在线编辑。",
+      "启用分支规则后只能通过 PR 更新，并阻止原生直接 push 和在线编辑；标签规则可禁止匹配标签被移动或删除。",
+    branchRuleTarget: "保护目标",
+    branchRuleTargetBranch: "分支",
+    branchRuleTargetTag: "标签",
     branchRulePattern: "分支模式",
+    tagRulePattern: "标签模式",
+    branchRuleForbidTagUpdate: "禁止移动标签",
+    branchRuleForbidTagDeletion: "禁止删除标签",
+    tagRuleRequiredActionHint: "至少选择一项标签限制。",
     branchRuleEnabled: "启用规则",
     branchRuleDisabled: "已停用",
     branchRuleLocked: "锁定分支",
@@ -73,6 +83,9 @@ const repositoryControlsMessages = {
     repositoryNameInvalid: "仓库名称无效。名称可以包含字母、数字、点、连字符和下划线。",
   },
   en: {
+    branchRuleIndependentApproval: "Require independent human approval",
+    branchRuleIndependentHint:
+      "Approvals from the author, session owner, linked task requester and current head pusher do not count. Approvals on older heads do not count either.",
     repoSettingsTasks: "Tasks and project memory",
     repoSettingsTasksHint: "Enable repository tasks and project memory.",
     repoSettingsAgents: "Repository agents",
@@ -101,11 +114,18 @@ const repositoryControlsMessages = {
     repoSettingsDeleteBranchHint:
       "Delete a pull request's source branch only after a successful merge.",
     repoSettingsMergeMethodRequired: "Enable at least one merge method.",
-    repoSettingsBranchRules: "Branch protection",
+    repoSettingsBranchRules: "Branch and tag protection",
     repoSettingsCollaborators: "Collaborators",
     branchRulesIntro:
-      "Set protection requirements for matching branches. Enabled rules require PRs and block native direct pushes and online edits.",
+      "Enabled branch rules require PRs for updates and block native direct pushes and online edits; tag rules can prevent matching tags from being moved or deleted.",
+    branchRuleTarget: "Protection target",
+    branchRuleTargetBranch: "Branch",
+    branchRuleTargetTag: "Tag",
     branchRulePattern: "Branch pattern",
+    tagRulePattern: "Tag pattern",
+    branchRuleForbidTagUpdate: "Prevent tag updates",
+    branchRuleForbidTagDeletion: "Prevent tag deletion",
+    tagRuleRequiredActionHint: "Choose at least one tag restriction.",
     branchRuleEnabled: "Enable rule",
     branchRuleDisabled: "Disabled",
     branchRuleLocked: "Lock branch",

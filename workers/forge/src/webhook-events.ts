@@ -84,6 +84,7 @@ export interface PullRequestFields extends ConversationFields {
   readonly draft: boolean;
   readonly merged: boolean;
   readonly mergedOid: string | null;
+  readonly headOid?: string;
 }
 
 function pullRequestFields(pull: PullRequestFields): Record<string, unknown> {
@@ -97,7 +98,7 @@ function pullRequestFields(pull: PullRequestFields): Record<string, unknown> {
     merge_commit_sha: pull.mergedOid,
     user: { login: pull.author },
     base: { ref: pull.baseRef },
-    head: { ref: pull.headRef },
+    head: { ref: pull.headRef, ...(pull.headOid ? { sha: pull.headOid } : {}) },
   };
 }
 
@@ -109,6 +110,7 @@ export function pullRequestWebhook(
     | "edited"
     | "closed"
     | "reopened"
+    | "synchronize"
     | "auto_merge_enabled"
     | "auto_merge_disabled"
     | "enqueued"

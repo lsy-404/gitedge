@@ -113,6 +113,21 @@ function stack(): Stack {
         );
       if (path === "/repositories/r1") return Response.json({ data: repository });
       if (path === "/repositories/by-name/alice/site") return Response.json({ data: repository });
+      if (
+        path === "/repositories/r1/pull-requests/1/merge-requirements" &&
+        request.method === "GET"
+      )
+        return Response.json({
+          data: {
+            headOid: "a".repeat(40),
+            ready: false,
+            requirements: [
+              { id: "approvals", status: "unsatisfied", detail: "More approvals required." },
+              { id: "no_conflicts", status: "checked_at_merge", detail: "Git verifies conflicts." },
+            ],
+            excludedApprovals: [{ name: "member", reason: "last_pusher" }],
+          },
+        });
       if (path === "/repositories/r1/issues" && request.method === "GET")
         return Response.json({ data: [issue], truncated: false });
       if (path === "/repositories/r1/issues" && request.method === "POST") {
@@ -255,6 +270,7 @@ describe("MCP server through the Gateway", () => {
         "create_pull_request",
         "fork_repository",
         "get_issue",
+        "get_merge_requirements",
         "get_notifications",
         "get_pull_request",
         "get_repository",
@@ -299,6 +315,36 @@ describe("MCP server through the Gateway", () => {
       expect(request.headers.has("Authorization")).toBe(false);
       expect(readTrustedUser(request)?.token?.id).toBe("t-read");
     }
+  });
+
+  it("reads all merge requirements with the selected head through the caller's Gateway credential", async () => {
+    const { env, forgeCalls } = stack();
+    const headOid = "a".repeat(40);
+    const result = await callTool(env, "get_merge_requirements", {
+      repository: "alice/site",
+      number: 1,
+      headOid,
+      method: "squash",
+    });
+    expect(result).toMatchObject({
+      isError: false,
+      value: {
+        headOid,
+        ready: false,
+        requirements: [
+          { id: "approvals", status: "unsatisfied" },
+          { id: "no_conflicts", status: "checked_at_merge" },
+        ],
+        excludedApprovals: [{ reason: "last_pusher" }],
+      },
+    });
+    const request = forgeCalls.find((entry) =>
+      new URL(entry.url).pathname.endsWith("/merge-requirements")
+    );
+    expect(request?.method).toBe("GET");
+    expect(request && new URL(request.url).searchParams.get("headOid")).toBe(headOid);
+    expect(request && new URL(request.url).searchParams.get("method")).toBe("squash");
+    expect(request && readTrustedUser(request)?.token?.id).toBe("t-read");
   });
 
   it("keeps token scopes authoritative for write tools", async () => {

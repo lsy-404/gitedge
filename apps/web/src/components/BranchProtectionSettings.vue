@@ -31,6 +31,7 @@ const notice = ref("");
 const saving = ref(false);
 const deletingId = ref("");
 const editingId = ref<string | null>(null);
+const target = ref<"branch" | "tag">("branch");
 const pattern = ref("");
 const enabled = ref(true);
 const locked = ref(false);
@@ -41,6 +42,13 @@ const requireLinearHistory = ref(false);
 const requireSignedCommits = ref(false);
 const requireConversationResolution = ref(false);
 const requireMergeQueue = ref(false);
+const requireIndependentApproval = ref(false);
+const forbidTagUpdate = ref(false);
+const forbidTagDeletion = ref(false);
+const targetOptions = computed<readonly FluentSelectOption[]>(() => [
+  { value: "branch", label: t("branchRuleTargetBranch") },
+  { value: "tag", label: t("branchRuleTargetTag") },
+]);
 const approvalOptions = computed<readonly FluentSelectOption[]>(() =>
   Array.from({ length: 6 }, (_, index) => ({ value: String(index), label: String(index) }))
 );
@@ -48,6 +56,7 @@ let loadVersion = 0;
 
 function resetForm(): void {
   editingId.value = null;
+  target.value = "branch";
   pattern.value = "";
   enabled.value = true;
   locked.value = false;
@@ -58,6 +67,9 @@ function resetForm(): void {
   requireSignedCommits.value = false;
   requireConversationResolution.value = false;
   requireMergeQueue.value = false;
+  requireIndependentApproval.value = false;
+  forbidTagUpdate.value = false;
+  forbidTagDeletion.value = false;
 }
 
 async function load(): Promise<void> {
@@ -76,6 +88,7 @@ async function load(): Promise<void> {
 
 function edit(rule: BranchProtectionRule): void {
   editingId.value = rule.id;
+  target.value = rule.target;
   pattern.value = rule.pattern;
   enabled.value = rule.enabled;
   locked.value = rule.locked;
@@ -86,31 +99,45 @@ function edit(rule: BranchProtectionRule): void {
   requireSignedCommits.value = rule.requireSignedCommits;
   requireConversationResolution.value = rule.requireConversationResolution;
   requireMergeQueue.value = rule.requireMergeQueue;
+  requireIndependentApproval.value = rule.requireIndependentApproval;
+  forbidTagUpdate.value = rule.forbidTagUpdate;
+  forbidTagDeletion.value = rule.forbidTagDeletion;
   saveError.value = "";
   notice.value = "";
 }
 
 function formValue(): BranchProtectionInput {
   return {
+    target: target.value,
     pattern: pattern.value,
     enabled: enabled.value,
-    locked: locked.value,
-    requiredApprovals: requiredApprovals.value,
-    requirePassingChecks: requirePassingChecks.value,
-    requiredStatusChecks: requiredStatusChecksText.value
-      .split("\n")
-      .map((value) => value.trim())
-      .filter(Boolean),
-    requireLinearHistory: requireLinearHistory.value,
-    requireSignedCommits: requireSignedCommits.value,
-    requireConversationResolution: requireConversationResolution.value,
-    requireMergeQueue: requireMergeQueue.value,
+    locked: target.value === "branch" && locked.value,
+    requiredApprovals: target.value === "branch" ? requiredApprovals.value : 0,
+    requirePassingChecks: target.value === "branch" && requirePassingChecks.value,
+    requiredStatusChecks:
+      target.value === "branch"
+        ? requiredStatusChecksText.value
+            .split("\n")
+            .map((value) => value.trim())
+            .filter(Boolean)
+        : [],
+    requireLinearHistory: target.value === "branch" && requireLinearHistory.value,
+    requireSignedCommits: target.value === "branch" && requireSignedCommits.value,
+    requireConversationResolution: target.value === "branch" && requireConversationResolution.value,
+    requireMergeQueue: target.value === "branch" && requireMergeQueue.value,
+    requireIndependentApproval: target.value === "branch" && requireIndependentApproval.value,
+    forbidTagUpdate: target.value === "tag" && forbidTagUpdate.value,
+    forbidTagDeletion: target.value === "tag" && forbidTagDeletion.value,
   };
 }
 
 function handleEnter(event: KeyboardEvent): void {
   event.stopPropagation();
   if (event.target instanceof HTMLInputElement) event.preventDefault();
+}
+
+function setTarget(value: string): void {
+  if (value === "branch" || value === "tag") target.value = value;
 }
 
 async function save(): Promise<void> {
@@ -182,16 +209,39 @@ watch(
         <li v-for="rule in rules" :key="rule.id" class="box-row settings-item">
           <div class="settings-item-copy">
             <div class="row-title">
+              <span class="field-hint">{{
+                t(rule.target === "tag" ? "branchRuleTargetTag" : "branchRuleTargetBranch")
+              }}</span>
               {{ rule.pattern }}
               <StatusBadge :tone="rule.enabled ? 'success' : 'neutral'">{{
                 rule.enabled ? t("branchRuleEnabled") : t("branchRuleDisabled")
               }}</StatusBadge>
             </div>
-            <small v-if="rule.locked">{{ t("branchRuleLocked") }}</small>
-            <small v-if="rule.requiredApprovals"
+            <small v-if="rule.target === 'tag' && (rule.forbidTagUpdate || rule.forbidTagDeletion)">
+              {{
+                [
+                  rule.forbidTagUpdate ? t("branchRuleForbidTagUpdate") : "",
+                  rule.forbidTagDeletion ? t("branchRuleForbidTagDeletion") : "",
+                ]
+                  .filter(Boolean)
+                  .join(" · ")
+              }}
+            </small>
+            <small v-if="rule.target === 'branch' && rule.locked">{{
+              t("branchRuleLocked")
+            }}</small>
+            <small v-if="rule.target === 'branch' && rule.requireIndependentApproval">{{
+              t("branchRuleIndependentApproval")
+            }}</small>
+            <small v-if="rule.target === 'branch' && rule.requiredApprovals"
               >{{ t("branchRuleApprovals") }}: {{ rule.requiredApprovals }}</small
             >
-            <small v-if="rule.requirePassingChecks || rule.requiredStatusChecks.length">
+            <small
+              v-if="
+                rule.target === 'branch' &&
+                (rule.requirePassingChecks || rule.requiredStatusChecks.length)
+              "
+            >
               {{
                 [
                   rule.requirePassingChecks ? t("branchRulePassingChecks") : "",
@@ -203,10 +253,11 @@ watch(
             </small>
             <small
               v-if="
-                rule.requireLinearHistory ||
-                rule.requireSignedCommits ||
-                rule.requireConversationResolution ||
-                rule.requireMergeQueue
+                rule.target === 'branch' &&
+                (rule.requireLinearHistory ||
+                  rule.requireSignedCommits ||
+                  rule.requireConversationResolution ||
+                  rule.requireMergeQueue)
               "
             >
               {{
@@ -241,9 +292,16 @@ watch(
 
       <div class="box-form form-stack branch-rule-form" @keydown.enter="handleEnter">
         <h4>{{ t(editingId ? "branchRuleEdit" : "branchRuleCreate") }}</h4>
+        <FluentSelect
+          :model-value="target"
+          :label="t('branchRuleTarget')"
+          :options="targetOptions"
+          :disabled="!canManage || saving"
+          @update:model-value="setTarget"
+        />
         <FluentField
           v-model="pattern"
-          :label="t('branchRulePattern')"
+          :label="t(target === 'branch' ? 'branchRulePattern' : 'tagRulePattern')"
           :disabled="!canManage || saving"
         />
         <div class="control-fields">
@@ -252,63 +310,88 @@ watch(
             :label="t('branchRuleEnabled')"
             :disabled="!canManage || saving"
           />
-          <FluentSwitch
-            v-model="locked"
-            :label="t('branchRuleLocked')"
-            :disabled="!canManage || saving"
-          />
-          <FluentSwitch
-            v-model="requirePassingChecks"
-            :label="t('branchRulePassingChecks')"
-            :disabled="!canManage || saving"
-          />
-          <FluentSwitch
-            v-model="requireLinearHistory"
-            :label="t('branchRuleLinearHistory')"
-            :disabled="!canManage || saving"
-          />
-          <FluentSwitch
-            v-model="requireSignedCommits"
-            :label="t('branchRuleSignedCommits')"
-            :disabled="!canManage || saving"
-          />
-          <FluentSwitch
-            v-model="requireConversationResolution"
-            :label="t('branchRuleConversationResolution')"
-            :disabled="!canManage || saving"
-          />
-          <FluentSwitch
-            v-model="requireMergeQueue"
-            :label="t('branchRuleMergeQueueRequire')"
-            :disabled="!canManage || saving"
-          />
+          <template v-if="target === 'branch'">
+            <FluentSwitch
+              v-model="requireIndependentApproval"
+              :label="t('branchRuleIndependentApproval')"
+              :disabled="!canManage || saving"
+            />
+            <FluentSwitch
+              v-model="locked"
+              :label="t('branchRuleLocked')"
+              :disabled="!canManage || saving"
+            />
+            <FluentSwitch
+              v-model="requirePassingChecks"
+              :label="t('branchRulePassingChecks')"
+              :disabled="!canManage || saving"
+            />
+            <FluentSwitch
+              v-model="requireLinearHistory"
+              :label="t('branchRuleLinearHistory')"
+              :disabled="!canManage || saving"
+            />
+            <FluentSwitch
+              v-model="requireSignedCommits"
+              :label="t('branchRuleSignedCommits')"
+              :disabled="!canManage || saving"
+            />
+            <FluentSwitch
+              v-model="requireConversationResolution"
+              :label="t('branchRuleConversationResolution')"
+              :disabled="!canManage || saving"
+            />
+            <FluentSwitch
+              v-model="requireMergeQueue"
+              :label="t('branchRuleMergeQueueRequire')"
+              :disabled="!canManage || saving"
+            />
+          </template>
+          <template v-else>
+            <FluentSwitch
+              v-model="forbidTagUpdate"
+              :label="t('branchRuleForbidTagUpdate')"
+              :disabled="!canManage || saving"
+            />
+            <FluentSwitch
+              v-model="forbidTagDeletion"
+              :label="t('branchRuleForbidTagDeletion')"
+              :disabled="!canManage || saving"
+            />
+          </template>
         </div>
-        <p class="field-hint">{{ t("branchRuleLockedHint") }}</p>
-        <p v-if="requireLinearHistory" class="field-hint">
-          {{ t("branchRuleLinearHint") }}
-        </p>
-        <p v-if="requireSignedCommits" class="field-hint">
-          {{ t("branchRuleSignedHint") }}
-        </p>
-        <p v-if="requireConversationResolution" class="field-hint">
-          {{ t("branchRuleConversationHint") }}
-        </p>
-        <p v-if="requireMergeQueue" class="field-hint">
-          {{ t("branchRuleMergeQueueHint") }}
-        </p>
-        <FluentSelect
-          :model-value="String(requiredApprovals)"
-          :label="t('branchRuleApprovals')"
-          :options="approvalOptions"
-          :disabled="!canManage || saving"
-          @update:model-value="requiredApprovals = Number($event)"
-        />
-        <p class="field-hint">{{ t("branchRuleRequiredChecksHint") }}</p>
-        <FluentTextArea
-          v-model="requiredStatusChecksText"
-          :label="t('branchRuleRequiredChecks')"
-          :disabled="!canManage || saving"
-        />
+        <template v-if="target === 'branch'">
+          <p class="field-hint">{{ t("branchRuleLockedHint") }}</p>
+          <p v-if="requireIndependentApproval" class="field-hint">
+            {{ t("branchRuleIndependentHint") }}
+          </p>
+          <p v-if="requireLinearHistory" class="field-hint">
+            {{ t("branchRuleLinearHint") }}
+          </p>
+          <p v-if="requireSignedCommits" class="field-hint">
+            {{ t("branchRuleSignedHint") }}
+          </p>
+          <p v-if="requireConversationResolution" class="field-hint">
+            {{ t("branchRuleConversationHint") }}
+          </p>
+          <p v-if="requireMergeQueue" class="field-hint">
+            {{ t("branchRuleMergeQueueHint") }}
+          </p>
+          <FluentSelect
+            :model-value="String(requiredApprovals)"
+            :label="t('branchRuleApprovals')"
+            :options="approvalOptions"
+            :disabled="!canManage || saving"
+            @update:model-value="requiredApprovals = Number($event)"
+          />
+          <p class="field-hint">{{ t("branchRuleRequiredChecksHint") }}</p>
+          <FluentTextArea
+            v-model="requiredStatusChecksText"
+            :label="t('branchRuleRequiredChecks')"
+            :disabled="!canManage || saving"
+          />
+        </template>
+        <p v-if="target === 'tag'" class="field-hint">{{ t("tagRuleRequiredActionHint") }}</p>
         <NoticeBar v-if="saveError" intent="error">{{ saveError }}</NoticeBar>
         <NoticeBar v-if="deleteError" intent="error">{{ deleteError }}</NoticeBar>
         <NoticeBar v-if="notice" intent="success">{{ notice }}</NoticeBar>

@@ -95,6 +95,20 @@ export const IssueSchema = z.object({
 });
 export type Issue = z.infer<typeof IssueSchema>;
 
+export const PullAttentionReasonSchema = z.enum([
+  "review_requested",
+  "head_updated",
+  "reply",
+  "changes_requested",
+  "reviewed",
+  "reviewers_needed",
+  "head_missing",
+  "head_unverified",
+  "history_unavailable",
+]);
+export const PullAttentionSchema = AssigneeSchema.extend({ reason: PullAttentionReasonSchema });
+export type PullAttention = z.infer<typeof PullAttentionSchema>;
+
 export const PullRequestSchema = z.object({
   id: z.string(),
   number: z.number(),
@@ -112,6 +126,9 @@ export const PullRequestSchema = z.object({
   mergedOid: z.string().nullable(),
   assignees: z.array(AssigneeSchema),
   reviewers: z.array(AssigneeSchema),
+  attention: z
+    .array(PullAttentionSchema)
+    .describe("Identities whose next review action is pending, derived from published activity."),
   createdAt: z.number(),
   updatedAt: z.number(),
 });

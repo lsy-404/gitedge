@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
-import type { BranchProtectionRule } from "../../packages/contracts/src/repository-controls";
-import { matchingBranchRules } from "../../src/worker/common/branch-protection";
+import {
+  BranchProtectionInputSchema,
+  type BranchProtectionRule,
+} from "../../packages/contracts/src/repository-controls";
+import {
+  matchingBranchRules,
+  matchingTagRules,
+  reservedRef,
+  tagChangeForbidden,
+} from "../../src/worker/common/branch-protection";
 
 function rule(
   pattern: string,
@@ -8,6 +16,7 @@ function rule(
 ): BranchProtectionRule {
   return {
     id: pattern,
+    target: "branch",
     pattern,
     enabled: true,
     locked: false,
@@ -18,6 +27,8 @@ function rule(
     requireSignedCommits: false,
     requireConversationResolution: false,
     requireMergeQueue: false,
+    forbidTagUpdate: false,
+    forbidTagDeletion: false,
     createdAt: 1,
     updatedAt: 1,
     ...overrides,
@@ -51,5 +62,39 @@ describe("matchingBranchRules", () => {
 
   it("ignores disabled rules", () => {
     expect(matches("main", "main", { enabled: false })).toBe(false);
+  });
+});
+
+describe("tag protection rules", () => {
+  const tagRule: BranchProtectionRule = {
+    ...rule("release/**"),
+    target: "tag",
+    forbidTagUpdate: true,
+    forbidTagDeletion: false,
+  };
+
+  it("keeps branch and tag patterns in separate namespaces", () => {
+    expect(matchingBranchRules([tagRule], "release/v1")).toEqual([]);
+    expect(matchingTagRules([rule("release/**"), tagRule], "release/v1")).toEqual([tagRule]);
+    expect(tagChangeForbidden([tagRule], "release/v1", "update")).toBe(true);
+    expect(tagChangeForbidden([tagRule], "release/v1", "delete")).toBe(false);
+  });
+
+  it("requires a tag rule to forbid at least one tag operation", () => {
+    expect(
+      BranchProtectionInputSchema.safeParse({ target: "tag", pattern: "release/*" }).success
+    ).toBe(false);
+    expect(
+      BranchProtectionInputSchema.safeParse({
+        target: "tag",
+        pattern: "release/*",
+        forbidTagDeletion: true,
+      }).success
+    ).toBe(true);
+  });
+
+  it("recognizes the server-owned ref namespace", () => {
+    expect(reservedRef("refs/gitedge/sessions/one")).toBe(true);
+    expect(reservedRef("refs/tags/v1")).toBe(false);
   });
 });

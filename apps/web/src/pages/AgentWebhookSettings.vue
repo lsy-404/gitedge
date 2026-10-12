@@ -47,6 +47,7 @@ const eventLabels: Record<AgentWebhookEvent, string> = {
   "agent.assigned": "agentWebhookAssigned",
   "agent.mentioned": "agentWebhookMentioned",
   "pull_request.updated": "agentWebhookPullUpdated",
+  "pull_request.head_updated": "agentWebhookPullHeadUpdated",
   "review.requested": "agentWebhookReviewRequested",
   "review.submitted": "agentWebhookReviewSubmitted",
   "check.completed": "agentWebhookCheckCompleted",

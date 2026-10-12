@@ -22,8 +22,18 @@ const ids = { site: "", hidden: "" };
 
 const GIT = {
   async fetch(request: Request): Promise<Response> {
-    if (new URL(request.url).pathname.endsWith("/pull-head"))
-      return Response.json({ data: { oid: headOid } });
+    const url = new URL(request.url);
+    if (url.pathname === "/internal/ref-heads") {
+      const input = z
+        .object({
+          updates: z.array(z.object({ ref: z.string(), after: z.string() })),
+        })
+        .parse(await request.json());
+      return Response.json({
+        data: { heads: input.updates.map(({ ref, after }) => ({ ref, oid: after })) },
+      });
+    }
+    if (url.pathname.endsWith("/pull-head")) return Response.json({ data: { oid: headOid } });
     return Response.json({ data: [] });
   },
 };
@@ -451,11 +461,23 @@ describe("Pull request previews", () => {
   });
 
   it("records a check for each pushed head of an open pull request", async () => {
+    expect((await enable(ids.site)).status).toBe(200);
+    const created = await forgeCall(`/repositories/${ids.site}/pull-requests`, "POST", {
+      title: "Pushed head",
+      body: "",
+      baseRef: "main",
+      headRef: "feature",
+    });
+    expect(created.status).toBe(201);
+    const pullId = z.object({ data: z.object({ id: z.string() }) }).parse(await created.json())
+      .data.id;
     const next = "e".repeat(40);
     const event = await forge.fetch(
       new Request("https://forge.internal/internal/push-event", {
         method: "POST",
         body: JSON.stringify({
+          eventId: crypto.randomUUID(),
+          occurredAt: Date.now(),
           repositoryId: ids.site,
           pusherId: owner.id,
           updates: [{ ref: "refs/heads/feature", before: headOid, after: next }],
@@ -465,9 +487,9 @@ describe("Pull request previews", () => {
     );
     expect(event.status).toBe(200);
     const rows = await env.DB.prepare(
-      "SELECT commit_oid FROM forge_check_runs WHERE repository_id=? AND name=? ORDER BY commit_oid"
+      "SELECT commit_oid FROM forge_check_runs WHERE pull_request_id=? AND name=? ORDER BY commit_oid"
     )
-      .bind(ids.site, PAGES_CHECK_NAME)
+      .bind(pullId, PAGES_CHECK_NAME)
       .all<{ commit_oid: string }>();
     expect(rows.results.map((row) => row.commit_oid).sort()).toEqual([next, headOid].sort());
   });
@@ -480,11 +502,14 @@ describe("Pull request previews", () => {
   });
 
   it("tracks the last published source-branch head", async () => {
+    expect((await enable(ids.site)).status).toBe(200);
     const next = "d".repeat(40);
     await forge.fetch(
       new Request("https://forge.internal/internal/push-event", {
         method: "POST",
         body: JSON.stringify({
+          eventId: crypto.randomUUID(),
+          occurredAt: Date.now(),
           repositoryId: ids.site,
           pusherId: owner.id,
           updates: [{ ref: "refs/heads/main", before: headOid, after: next }],

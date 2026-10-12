@@ -47,6 +47,14 @@ const compareUrls: URL[] = [];
 const GIT = {
   async fetch(request: Request) {
     const url = new URL(request.url);
+    if (url.pathname === "/internal/ref-heads") {
+      const input = z
+        .object({ updates: z.array(z.object({ ref: z.string(), after: z.string() })) })
+        .parse(await request.json());
+      return Response.json({
+        data: { heads: input.updates.map(({ ref, after }) => ({ ref, oid: after })) },
+      });
+    }
     if (url.pathname.endsWith("/compare")) compareUrls.push(url);
     if (url.pathname.endsWith("/pull-head")) return Response.json({ data: { oid: head } });
     if (url.pathname.endsWith("/compare"))
@@ -148,6 +156,8 @@ function pushEvent(repositoryId: string) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        eventId: crypto.randomUUID(),
+        occurredAt: Date.now(),
         repositoryId,
         pusherId: "u2",
         updates: [{ ref: "refs/heads/topic", before: "0".repeat(40), after: head }],

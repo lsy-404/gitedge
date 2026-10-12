@@ -51,22 +51,43 @@ export async function reportPushEvent(
   env: GitEnv,
   repositoryId: string,
   user: TrustedUser,
-  updates: PushEventInput["updates"]
+  updates: PushEventInput["updates"],
+  agentSessionId = user.agentSession?.id
 ): Promise<void> {
-  if (!env.FORGE || user.agentSession || updates.length === 0) return;
+  if (!env.FORGE || updates.length === 0) return;
   const logger = createLogger(env.LOG_LEVEL, { service: "git-events", repoId: repositoryId });
-  try {
-    const input: PushEventInput = { repositoryId, pusherId: user.id, updates };
-    const response = await env.FORGE.fetch(
-      new Request("https://forge.internal/internal/push-event", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(input),
-      })
-    );
-    if (!response.ok) logger.warn("webhooks:push-report-failed", { status: response.status });
+  const input: PushEventInput = {
+    eventId: crypto.randomUUID(),
+    occurredAt: Date.now(),
+    repositoryId,
+    pusherId: user.id,
+    ...(agentSessionId ? { agentSessionId } : {}),
+    updates,
+  };
+  const body = JSON.stringify(input);
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    let response: Response;
+    try {
+      response = await env.FORGE.fetch(
+        new Request("https://forge.internal/internal/push-event", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+        })
+      );
+    } catch {
+      if (attempt < 2) continue;
+      logger.error("webhooks:push-report-error", { count: updates.length, attempts: attempt });
+      return;
+    }
+    if (response.ok) {
+      await response.body?.cancel();
+      return;
+    }
     await response.body?.cancel();
-  } catch {
-    logger.error("webhooks:push-report-error", { count: updates.length });
+    if (response.status < 500 || attempt === 2) {
+      logger.warn("webhooks:push-report-failed", { status: response.status, attempts: attempt });
+      return;
+    }
   }
 }

@@ -68,7 +68,7 @@ describe("PullMergeAutomation", () => {
       method: "squash",
       enabledBy: "example-user",
       expectedHeadOid: HEAD,
-      waitingOn: { code: "approvals_required", message: "server text" },
+      waitingOn: { code: "approvals_required", message: "server text", unmet: ["approvals"] },
     });
     findButton(mounted.root, "Enable auto-merge").click();
     await settle();

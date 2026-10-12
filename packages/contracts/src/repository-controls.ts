@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { GitBranchSchema, GitOidSchema, RepositoryRoleSchema, type RepositoryRole } from "./forge";
+import {
+  GitBranchSchema,
+  GitRefNameSchema,
+  GitOidSchema,
+  RepositoryRoleSchema,
+  type RepositoryRole,
+} from "./forge";
 
 export const RepositorySlugSchema = z
   .string()
@@ -12,29 +18,48 @@ export const RepositorySlugSchema = z
     (value) => value !== "." && value !== ".." && !value.endsWith(".git") && !value.endsWith("."),
     "Invalid repository name"
   );
-export const BranchProtectionInputSchema = z.object({
-  pattern: z
-    .string()
-    .trim()
-    .min(1)
-    .max(100)
-    .refine((value) => GitBranchSchema.safeParse(value.replace(/[*?]/g, "x")).success),
-  enabled: z.boolean().default(true),
-  locked: z.boolean().default(false),
-  requiredApprovals: z.number().int().min(0).max(5).default(0),
-  requirePassingChecks: z.boolean().default(false),
-  requiredStatusChecks: z.array(z.string().trim().min(1).max(100)).max(20).default([]),
-  requireLinearHistory: z.boolean().default(false),
-  requireSignedCommits: z.boolean().default(false),
-  requireConversationResolution: z.boolean().default(false),
-  requireMergeQueue: z.boolean().default(false),
-});
+export const BranchProtectionInputSchema = z
+  .object({
+    target: z.enum(["branch", "tag"]).default("branch"),
+    pattern: z.string().trim().min(1).max(100),
+    enabled: z.boolean().default(true),
+    locked: z.boolean().default(false),
+    requiredApprovals: z.number().int().min(0).max(5).default(0),
+    requirePassingChecks: z.boolean().default(false),
+    requiredStatusChecks: z.array(z.string().trim().min(1).max(100)).max(20).default([]),
+    requireLinearHistory: z.boolean().default(false),
+    requireSignedCommits: z.boolean().default(false),
+    requireConversationResolution: z.boolean().default(false),
+    requireMergeQueue: z.boolean().default(false),
+    requireIndependentApproval: z.boolean().default(false),
+    forbidTagUpdate: z.boolean().default(false),
+    forbidTagDeletion: z.boolean().default(false),
+  })
+  .superRefine((value, context) => {
+    const name = value.pattern.replace(/[*?]/g, "x");
+    const valid =
+      value.target === "tag"
+        ? GitRefNameSchema.safeParse(name).success
+        : GitBranchSchema.safeParse(name).success;
+    if (!valid) context.addIssue({ code: "custom", path: ["pattern"], message: "Invalid pattern" });
+    if (value.target === "tag" && !value.forbidTagUpdate && !value.forbidTagDeletion)
+      context.addIssue({
+        code: "custom",
+        path: ["forbidTagUpdate"],
+        message: "A tag rule must forbid updates or deletion",
+      });
+  });
 export type BranchProtectionInput = z.infer<typeof BranchProtectionInputSchema>;
 export interface BranchProtectionRule extends BranchProtectionInput {
   id: string;
   createdAt: number;
   updatedAt: number;
 }
+export const BranchProtectionRuleSchema = BranchProtectionInputSchema.extend({
+  id: z.string().min(1),
+  createdAt: z.number().int(),
+  updatedAt: z.number().int(),
+});
 export interface RepositoryCollaborator {
   id: string;
   identifier: string;

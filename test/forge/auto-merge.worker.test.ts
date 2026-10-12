@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { z } from "zod";
 import forge from "../../workers/forge/src/index";
 import {
   processMergeQueue,
@@ -33,6 +34,26 @@ const forgeEnv: Parameters<typeof forge.fetch>[1] = {
   GIT: {
     async fetch(request: Request) {
       const url = new URL(request.url);
+      if (request.method === "POST" && url.pathname === "/internal/ref-heads") {
+        const input = z
+          .object({
+            repositoryId: z.string(),
+            updates: z.array(z.object({ ref: z.string(), after: z.string() })),
+          })
+          .parse(await request.json());
+        return Response.json({
+          data: {
+            heads: input.updates.map((update) => {
+              const branch = update.ref.slice("refs/heads/".length);
+              return {
+                ref: update.ref,
+                oid:
+                  heads.get(`${input.repositoryId}:${branch}`) ?? heads.get(branch) ?? update.after,
+              };
+            }),
+          },
+        });
+      }
       if (request.method === "GET" && url.pathname.endsWith("/pull-head")) {
         const fork = url.searchParams.get("headRepositoryId");
         const head = url.searchParams.get("head") ?? "";
@@ -353,6 +374,8 @@ describe("Auto-merge", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          eventId: crypto.randomUUID(),
+          occurredAt: Date.now(),
           repositoryId: "r1",
           pusherId: "u2",
           updates: [{ ref: `refs/heads/${pull.headRef}`, before: pull.head, after: next }],
@@ -819,6 +842,8 @@ describe("Merge automation across tracks", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            eventId: crypto.randomUUID(),
+            occurredAt: Date.now(),
             repositoryId,
             pusherId: "u2",
             updates: [{ ref: `refs/heads/${pull.headRef}`, before: pull.head, after: next }],

@@ -10,6 +10,8 @@ import {
   purgeAiSummaryRecords,
 } from "./ai-summary";
 import { authorizeMerge, blockerResponse } from "./merge-policy";
+import { readMergeRequirements } from "./merge-requirements-route";
+import { pullAttention, pullAttentionColumn, filterPullAttention } from "./pull-attention";
 import { reconcileRepository, sweepMergeAutomation } from "./merge-automation";
 import { mergeAutomationRoutes } from "./merge-routes";
 import { executeMerge, hasActiveMergeLease } from "./merge-execution";
@@ -167,7 +169,7 @@ type ForgeTable = "forge_issues" | "forge_pull_requests" | "forge_discussions";
 function assignmentsSelect(table: ForgeTable, alias: string): string {
   if (table === "forge_issues") return `, ${assignmentsColumn("issue", alias)}`;
   if (table === "forge_pull_requests")
-    return `, ${assignmentsColumn("pull_request", alias)}, (SELECT n.slug FROM repositories h JOIN namespaces n ON n.id = h.namespace_id WHERE h.id = ${alias}.head_repository_id AND h.deleted_at IS NULL) AS head_owner, (SELECT h.slug FROM repositories h WHERE h.id = ${alias}.head_repository_id AND h.deleted_at IS NULL) AS head_name`;
+    return `, ${assignmentsColumn("pull_request", alias)}, ${pullAttentionColumn(alias)}, (SELECT n.slug FROM repositories h JOIN namespaces n ON n.id = h.namespace_id WHERE h.id = ${alias}.head_repository_id AND h.deleted_at IS NULL) AS head_owner, (SELECT h.slug FROM repositories h WHERE h.id = ${alias}.head_repository_id AND h.deleted_at IS NULL) AS head_name`;
   return "";
 }
 
@@ -372,6 +374,7 @@ function presentForgeRow(resource: string, row: Record<string, unknown>): Record
           ? { owner: row.head_owner, name: row.head_name }
           : null,
       draft: row.draft === 1 || row.draft === true,
+      attention: pullAttention(row),
       mergedOid: row.merged_oid ?? row.mergedOid ?? null,
       ...parseAssignments(row.assignments_json),
       createdAt,
@@ -503,12 +506,18 @@ async function publicRepositoryRead(
     return boundedList(rows.results, (row) => presentForgeRow("issues", row));
   }
   if (resource === "pull-requests" && parts.length === 5) {
+    const attention = new URL(request.url).searchParams.get("attention");
+    if (attention && attention !== "me")
+      return errorResponse(400, "bad_request", "Invalid attention filter.");
     const rows = await env.DB.prepare(
       `SELECT forge_pull_requests.*, users.identifier AS author${assignmentsSelect("forge_pull_requests", "forge_pull_requests")} FROM forge_pull_requests JOIN users ON users.id = forge_pull_requests.author_id WHERE forge_pull_requests.repository_id = ? ORDER BY forge_pull_requests.number DESC LIMIT ?`
     )
       .bind(repository.id, MAX_LIST_ROWS + 1)
       .all<Record<string, unknown>>();
-    return boundedList(rows.results, (row) => presentForgeRow("pull-requests", row));
+    return boundedList(
+      new URL(request.url).searchParams.get("attention") === "me" ? [] : rows.results,
+      (row) => presentForgeRow("pull-requests", row)
+    );
   }
   if (resource === "wiki" && parts.length === 5) {
     const rows = await env.DB.prepare(
@@ -586,7 +595,7 @@ async function publicRepositoryRead(
   if (
     resource === "pull-requests" &&
     parts.length === 7 &&
-    ["reviews", "checks", "diff"].includes(parts[6])
+    ["reviews", "checks", "diff", "merge-requirements"].includes(parts[6])
   ) {
     const pull = await env.DB.prepare(
       "SELECT * FROM forge_pull_requests WHERE repository_id = ? AND number = ?"
@@ -594,6 +603,8 @@ async function publicRepositoryRead(
       .bind(repository.id, Number(parts[5]))
       .first<Record<string, unknown>>();
     if (!pull) return errorResponse(404, "not_found", "Pull request was not found.");
+    if (parts[6] === "merge-requirements")
+      return readMergeRequirements(env, request, repository, pull, null);
     if (parts[6] === "diff") {
       if (pull.state === "closed" && (pull.head_session_id || pull.head_repository_id))
         return errorResponse(404, "not_found", "Pull request head was not found.");
@@ -740,7 +751,28 @@ async function featureRequest(
       )
         .bind(repository.id, MAX_LIST_ROWS + 1)
         .all<Record<string, unknown>>();
-      return boundedList(rows.results, (row) => presentForgeRow(resource, row));
+      const attentionFilter = new URL(request.url).searchParams.get("attention");
+      if (resource === "pull-requests" && attentionFilter && attentionFilter !== "me")
+        return errorResponse(400, "bad_request", "Invalid attention filter.");
+      const listed =
+        resource === "pull-requests" && attentionFilter === "me"
+          ? filterPullAttention(
+              rows.results.slice(0, MAX_LIST_ROWS),
+              user.agentSession
+                ? {
+                    kind: "agent",
+                    id: user.agentSession.agentId,
+                    name: user.agentSession.agentName,
+                  }
+                : { kind: "user", id: user.id, name: user.identifier }
+            )
+          : rows.results;
+      return resource === "pull-requests" && attentionFilter === "me"
+        ? jsonResponse({
+            data: listed.map((row) => presentForgeRow(resource, row)),
+            truncated: rows.results.length > MAX_LIST_ROWS,
+          })
+        : boundedList(listed, (row) => presentForgeRow(resource, row));
     }
     const denied = requireWrite();
     if (denied) return denied;
@@ -945,22 +977,14 @@ async function featureRequest(
         pullRequestNumber: number,
         actorKind: actor.kind,
       });
-      return dataResponse(
-        {
-          id,
-          number,
-          ...parsed.data,
-          state: "open",
-          author: user.identifier,
-          actor,
-          mergedOid: null,
-          assignees: [],
-          reviewers: [],
-          createdAt: now,
-          updatedAt: now,
-        },
-        201
-      );
+      const created = await env.DB.prepare(
+        `SELECT p.*${assignmentsSelect("forge_pull_requests", "p")} FROM forge_pull_requests p WHERE p.id = ?`
+      )
+        .bind(id)
+        .first();
+      return created
+        ? dataResponse(presentForgeRow("pull-requests", created), 201)
+        : errorResponse(404, "not_found", "Pull request was not found.");
     }
     const parsed = CreateDiscussionInputSchema.safeParse(await parseJson(request));
     if (!parsed.success) return errorResponse(400, "bad_request", "Invalid discussion payload.");
@@ -1479,6 +1503,12 @@ async function featureRequest(
       );
     if (targetTable === "forge_issues" && action === "references" && request.method === "GET")
       return issueReferences(env, String(current.id));
+    if (
+      targetTable === "forge_pull_requests" &&
+      action === "merge-requirements" &&
+      request.method === "GET"
+    )
+      return readMergeRequirements(env, request, repository, current, user);
     if (targetTable === "forge_pull_requests" && action === "reviews" && request.method === "GET") {
       const rows = await env.DB.prepare(
         "SELECT * FROM forge_reviews WHERE pull_request_id = ? ORDER BY created_at DESC"

@@ -31,12 +31,14 @@ import {
 } from "./index";
 import { NotificationPageSchema, NotificationReasonSchema } from "./notifications";
 import { HealthResponseSchema } from "./ops";
+import { BranchProtectionInputSchema, BranchProtectionRuleSchema } from "./repository-controls";
 import {
   AGENT_FEED_MAX_PAGE,
   AGENT_FEED_MAX_WAIT_SECONDS,
   AgentFeedPageSchema,
 } from "./agent-events";
 import { AiSummaryStateSchema } from "./ai-summary";
+import { MergeRequirementsSchema, MergeRequirementsQuerySchema } from "./merge-requirements";
 import {
   AutoMergeStatusSchema,
   EnableAutoMergeInputSchema,
@@ -392,6 +394,56 @@ export const API_OPERATIONS: readonly ApiOperation[] = [
     response: dataOf(RepositorySchema),
   },
   {
+    operationId: "listRepositoryBranchRules",
+    method: "GET",
+    path: `${forgeRepository}/branch-rules`,
+    service: "forge",
+    tag: "Repositories",
+    summary: "List branch and tag protection rules (administrators).",
+    scope: "repo:read",
+    anonymous: false,
+    status: 200,
+    response: dataOf(z.array(BranchProtectionRuleSchema)),
+  },
+  {
+    operationId: "createRepositoryBranchRule",
+    method: "POST",
+    path: `${forgeRepository}/branch-rules`,
+    service: "forge",
+    tag: "Repositories",
+    summary: "Create a branch or tag protection rule (administrators).",
+    scope: "admin",
+    anonymous: false,
+    body: BranchProtectionInputSchema,
+    status: 201,
+    response: dataOf(BranchProtectionRuleSchema),
+  },
+  {
+    operationId: "updateRepositoryBranchRule",
+    method: "PATCH",
+    path: `${forgeRepository}/branch-rules/{ruleId}`,
+    service: "forge",
+    tag: "Repositories",
+    summary: "Update a branch or tag protection rule (administrators).",
+    scope: "admin",
+    anonymous: false,
+    body: BranchProtectionInputSchema,
+    status: 200,
+    response: dataOf(BranchProtectionRuleSchema),
+  },
+  {
+    operationId: "deleteRepositoryBranchRule",
+    method: "DELETE",
+    path: `${forgeRepository}/branch-rules/{ruleId}`,
+    service: "forge",
+    tag: "Repositories",
+    summary: "Delete a branch or tag protection rule (administrators).",
+    scope: "admin",
+    anonymous: false,
+    status: 200,
+    response: dataOf(z.object({ deleted: z.boolean() })),
+  },
+  {
     operationId: "listIssues",
     method: "GET",
     path: `${forgeRepository}/issues`,
@@ -472,7 +524,15 @@ export const API_OPERATIONS: readonly ApiOperation[] = [
     path: `${forgeRepository}/pull-requests`,
     service: "forge",
     tag: "Pull requests",
-    summary: "List pull requests, newest first (at most 500).",
+    summary: "List pull requests and pending review identities, newest first (at most 500).",
+    query: [
+      {
+        name: "attention",
+        schema: z.literal("me"),
+        description:
+          "Only pull requests awaiting the authenticated human or agent; anonymous readers get no matches. Truncated reflects the underlying 500-row list.",
+      },
+    ],
     scope: "repo:read",
     anonymous: true,
     status: 200,
@@ -602,6 +662,31 @@ export const API_OPERATIONS: readonly ApiOperation[] = [
     body: CreateReviewCommentInputSchema,
     status: 201,
     response: dataOf(ReviewCommentSchema),
+  },
+  {
+    operationId: "getMergeRequirements",
+    method: "GET",
+    path: `${forgePullRequest}/merge-requirements`,
+    service: "forge",
+    tag: "Pull requests",
+    summary:
+      "Every merge condition at one head, including excluded approvals and conditions checked by Git at merge time.",
+    scope: "repo:read",
+    anonymous: true,
+    query: [
+      {
+        name: "headOid",
+        schema: MergeRequirementsQuerySchema.shape.headOid,
+        description: "Head commit to evaluate; omitted to resolve the published pull request head.",
+      },
+      {
+        name: "method",
+        schema: MergeRequirementsQuerySchema.shape.method,
+        description: "Intended merge method; omitted to evaluate whether any method is enabled.",
+      },
+    ],
+    status: 200,
+    response: dataOf(MergeRequirementsSchema),
   },
   {
     operationId: "getAutoMerge",

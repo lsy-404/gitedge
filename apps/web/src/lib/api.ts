@@ -1,3 +1,4 @@
+import type { MergeRequirements } from "../../../../packages/contracts/src/merge-requirements";
 import type {
   AccountProfile,
   AccountPreferences,
@@ -245,6 +246,7 @@ export type {
   IssueReferences,
   ListPage,
   AutoMergeStatus,
+  MergeRequirements,
   MergeMethod,
   PullMergeQueueStatus,
   PullRequest,
@@ -1125,8 +1127,10 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
-  pulls: (repositoryId: string) =>
-    requestPage<PullRequest>(repositoryPath(repositoryId, "pull-requests")),
+  pulls: (repositoryId: string, attention?: "me") =>
+    requestPage<PullRequest>(
+      `${repositoryPath(repositoryId, "pull-requests")}${attention ? "?attention=me" : ""}`
+    ),
   pull: (repositoryId: string, number: number) =>
     request<PullRequest>(repositoryPath(repositoryId, `pull-requests/${number}`)),
   createPullRequest: (
@@ -1175,6 +1179,19 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  mergeRequirements: (
+    repositoryId: string,
+    number: number,
+    headOid?: string,
+    method?: MergeMethod
+  ) => {
+    const query = new URLSearchParams();
+    if (headOid) query.set("headOid", headOid);
+    if (method) query.set("method", method);
+    return request<MergeRequirements>(
+      `${repositoryPath(repositoryId, `pull-requests/${number}/merge-requirements`)}?${query}`
+    );
+  },
   autoMerge: (repositoryId: string, number: number) =>
     request<AutoMergeStatus>(repositoryPath(repositoryId, `pull-requests/${number}/auto-merge`)),
   enableAutoMerge: (repositoryId: string, number: number, payload: EnableAutoMergeInput) =>

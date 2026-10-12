@@ -2,10 +2,14 @@ import { followEnablerPushes } from "./merge-automation";
 import {
   CreateRepositoryWebhookInputSchema,
   PushEventInputSchema,
+  PushEventRefHeadInputSchema,
+  PushEventRefHeadsSchema,
   REPOSITORY_WEBHOOK_LIMIT,
   RepositoryWebhookEventSchema,
   UpdateRepositoryWebhookInputSchema,
   WEBHOOK_PUSH_REFS_LIMIT,
+  type AgentSessionIdentity,
+  type PushEventRefHeads,
   type RepositoryWebhook,
   type RepositoryWebhookDelivery,
   type RepositoryWebhookDeliveryDetail,
@@ -30,20 +34,29 @@ import {
 } from "../../../src/worker/common/webhooks";
 import { z } from "zod";
 import { enqueueAiSummariesForPush } from "./ai-summary";
-import { parseJson, type ForgeEnv, type RepositoryRow } from "./common";
+import { isMember, parseJson, type ForgeEnv, type RepositoryRow } from "./common";
+import { repositoryPayload } from "./webhook-events";
 import {
-  pushWebhook,
-  queueWebhookEvent,
-  repositoryPayload,
-  type WebhookEvent,
-} from "./webhook-events";
+  dispatchPushHeadUpdates,
+  pushEventTimeIsValid,
+  snapshotPushRefVersions,
+  type PushRefVersion,
+} from "./pull-head-updates";
 
 const LEASE_MS = 60_000;
 const DRAIN_LIMIT = 10;
 const HISTORY_LIMIT = 100;
 const LIST_LIMIT = 50;
 const RETENTION_MS = 30 * 86_400_000;
-
+type PushActorRow = Pick<TrustedUser, "id" | "identifier" | "agentSession">;
+type SessionPushActorRow = PushActorRow & {
+  sessionId: string;
+  agentId: string;
+  agentName: string;
+  repositoryId: string;
+  workspaceName: string;
+  permission: AgentSessionIdentity["permission"];
+};
 interface WebhookRow {
   id: string;
   repositoryId: string;
@@ -583,37 +596,153 @@ export async function handlePushEvent(
     return errorResponse(404, "not_found", "Endpoint was not found.");
   const parsed = PushEventInputSchema.safeParse(await parseJson(request));
   if (!parsed.success) return errorResponse(400, "bad_request", "Invalid push event.");
+  const now = Date.now();
+  if (!pushEventTimeIsValid(parsed.data.occurredAt, now))
+    return errorResponse(400, "bad_request", "Push event is outside the acceptance window.");
   const logger = createLogger(env.LOG_LEVEL, {
     service: "forge-webhooks",
     repoId: parsed.data.repositoryId,
   });
   const repository = await loadRepository(parsed.data.repositoryId);
   if (!repository) return dataResponse({ queued: 0 });
-  const pusher = await env.DB.prepare("SELECT id, identifier FROM users WHERE id = ?")
-    .bind(parsed.data.pusherId)
-    .first<{ id: string; identifier: string }>();
+  const sessionId = parsed.data.agentSessionId;
+  let pusher: PushActorRow | null;
+  let actorJson: string;
+  if (sessionId) {
+    const session = await env.DB.prepare(
+      "SELECT s.id AS sessionId, s.user_id AS id, u.identifier, s.agent_id AS agentId, a.name AS agentName, s.repository_id AS repositoryId, s.workspace_name AS workspaceName, s.permission FROM auth_agent_sessions s JOIN auth_agents a ON a.id = s.agent_id AND a.user_id = s.user_id JOIN users u ON u.id = s.user_id AND u.disabled_at IS NULL JOIN auth_git_tokens t ON t.id = s.git_token_id AND t.user_id = s.user_id AND t.repository_id = s.repository_id AND t.permission = s.permission JOIN repositories r ON r.id = s.repository_id AND r.deleted_at IS NULL AND r.agents_enabled = 1 WHERE s.id = ? AND s.repository_id = ? AND s.user_id = ? AND s.permission = 'write' AND s.status = 'active' AND s.expires_at > ? AND a.disabled_at IS NULL AND t.revoked_at IS NULL AND t.expires_at > ?"
+    )
+      .bind(sessionId, repository.id, parsed.data.pusherId, now, now)
+      .first<SessionPushActorRow>();
+    if (!session || !(await isMember(env, repository.id, session.id)))
+      return errorResponse(403, "forbidden", "Invalid agent session push.");
+    pusher = {
+      id: session.id,
+      identifier: session.identifier,
+      agentSession: {
+        id: session.sessionId,
+        agentId: session.agentId,
+        agentName: session.agentName,
+        repositoryId: session.repositoryId,
+        workspaceName: session.workspaceName,
+        permission: session.permission,
+      },
+    };
+    actorJson = JSON.stringify({
+      kind: "agent",
+      id: session.agentId,
+      name: session.agentName,
+      sessionId: session.sessionId,
+    });
+  } else {
+    pusher = await env.DB.prepare(
+      "SELECT id, identifier FROM users WHERE id = ? AND disabled_at IS NULL"
+    )
+      .bind(parsed.data.pusherId)
+      .first<PushActorRow>();
+    if (!pusher) return errorResponse(404, "not_found", "Pusher was not found.");
+    actorJson = JSON.stringify({ kind: "user", id: pusher.id, name: pusher.identifier });
+  }
   if (!pusher) return errorResponse(404, "not_found", "Pusher was not found.");
+
   const updates = parsed.data.updates.slice(0, WEBHOOK_PUSH_REFS_LIMIT);
-  if (parsed.data.updates.length > updates.length)
-    logger.warn("webhook:push-refs-truncated", { count: parsed.data.updates.length });
-  const events: WebhookEvent[] = updates.map((update) => pushWebhook(repository, pusher, update));
-  await env.DB.batch(events.map((event) => queueWebhookEvent(env.DB, repository.id, event)));
-  await followEnablerPushes(env, repository.id, pusher.id, parsed.data.updates);
-  await enqueueAiSummariesForPush(
-    env,
-    repository,
-    pusher.id,
-    updates.map((update) => update.ref)
-  );
+  const truncated = parsed.data.updates.length > updates.length;
+  if (truncated) logger.warn("webhook:push-refs-truncated", { count: parsed.data.updates.length });
+  const headRequest = PushEventRefHeadInputSchema.safeParse({
+    repositoryId: repository.id,
+    pusherId: pusher.id,
+    ...(sessionId ? { agentSessionId: sessionId } : {}),
+    updates: updates.map(({ ref, after }) => ({ ref, after })),
+  });
+  if (!headRequest.success) return errorResponse(400, "bad_request", "Invalid ref head request.");
+  let versions: PushRefVersion[];
   try {
-    await syncPagesAfterPush(env, repository, updates);
+    versions = await snapshotPushRefVersions(
+      env,
+      repository.id,
+      sessionId,
+      updates.map(({ ref }) => ref)
+    );
   } catch (cause) {
-    logger.error("pages:push-sync-failed", {
+    logger.error("push-event:ref-version-read-failed", {
       error: cause instanceof Error ? cause.message : "unknown",
     });
+    return errorResponse(503, "service_unavailable", "Current ref version could not be verified.");
+  }
+  let response: Response;
+  try {
+    response = await env.GIT.fetch(
+      new Request("https://git.internal/internal/ref-heads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(headRequest.data),
+      })
+    );
+  } catch {
+    logger.error("git:ref-head-lookup-failed", { count: updates.length });
+    return errorResponse(503, "service_unavailable", "Current Git refs could not be verified.");
+  }
+  if (!response.ok) {
+    logger.error("git:ref-head-lookup-rejected", { status: response.status });
+    await response.body?.cancel();
+    return errorResponse(503, "service_unavailable", "Current Git refs could not be verified.");
+  }
+  let heads: PushEventRefHeads;
+  try {
+    const parsedHeads = z
+      .object({ data: PushEventRefHeadsSchema })
+      .safeParse(await response.json());
+    if (!parsedHeads.success) throw new Error("invalid_ref_heads");
+    heads = parsedHeads.data.data;
+  } catch {
+    logger.error("git:ref-head-response-invalid", { count: updates.length });
+    return errorResponse(503, "service_unavailable", "Current Git refs could not be verified.");
+  }
+  const checkedRefs = new Set(heads.heads.map((head) => head.ref));
+  const requestedRefs = new Set(updates.map((update) => update.ref));
+  if (
+    heads.heads.length !== updates.length ||
+    [...checkedRefs].some((ref) => !requestedRefs.has(ref)) ||
+    updates.some((update) => !checkedRefs.has(update.ref))
+  ) {
+    logger.error("git:ref-head-response-incomplete", {
+      requested: updates.length,
+      returned: heads.heads.length,
+    });
+    return errorResponse(503, "service_unavailable", "Current Git refs could not be verified.");
+  }
+  const dispatched = await dispatchPushHeadUpdates(
+    env,
+    repository,
+    parsed.data,
+    pusher,
+    actorJson,
+    heads.heads,
+    updates,
+    versions,
+    truncated,
+    logger
+  );
+  if (dispatched instanceof Response) return dispatched;
+
+  if (!sessionId && dispatched.acceptedUpdates.length > 0) {
+    await followEnablerPushes(env, repository.id, pusher.id, dispatched.acceptedUpdates);
+    await enqueueAiSummariesForPush(
+      env,
+      repository,
+      pusher.id,
+      dispatched.acceptedUpdates.map((update) => update.ref)
+    );
+    try {
+      await syncPagesAfterPush(env, repository, dispatched.acceptedUpdates);
+    } catch (cause) {
+      logger.error("pages:push-sync-failed", {
+        error: cause instanceof Error ? cause.message : "unknown",
+      });
+    }
   }
   return dataResponse({
-    queued: events.length,
-    truncated: parsed.data.updates.length > updates.length,
+    queued: dispatched.queued,
+    ...(dispatched.truncated ? { truncated: true } : {}),
   });
 }

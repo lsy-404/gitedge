@@ -100,11 +100,12 @@ export async function repositoryControls(
         now = Date.now();
       try {
         await env.DB.prepare(
-          "INSERT INTO repository_branch_rules (id,repository_id,pattern,enabled,locked,required_approvals,require_passing_checks,required_status_checks,require_linear_history,require_signed_commits,require_conversation_resolution,require_merge_queue,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET pattern=excluded.pattern,enabled=excluded.enabled,locked=excluded.locked,required_approvals=excluded.required_approvals,require_passing_checks=excluded.require_passing_checks,required_status_checks=excluded.required_status_checks,require_linear_history=excluded.require_linear_history,require_signed_commits=excluded.require_signed_commits,require_conversation_resolution=excluded.require_conversation_resolution,require_merge_queue=excluded.require_merge_queue,updated_at=excluded.updated_at"
+          "INSERT INTO repository_branch_rules (id,repository_id,target,pattern,enabled,locked,required_approvals,require_passing_checks,required_status_checks,require_linear_history,require_signed_commits,require_conversation_resolution,require_merge_queue,require_independent_approval,forbid_tag_update,forbid_tag_deletion,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET target=excluded.target,pattern=excluded.pattern,enabled=excluded.enabled,locked=excluded.locked,required_approvals=excluded.required_approvals,require_passing_checks=excluded.require_passing_checks,required_status_checks=excluded.required_status_checks,require_linear_history=excluded.require_linear_history,require_signed_commits=excluded.require_signed_commits,require_conversation_resolution=excluded.require_conversation_resolution,require_merge_queue=excluded.require_merge_queue,require_independent_approval=excluded.require_independent_approval,forbid_tag_update=excluded.forbid_tag_update,forbid_tag_deletion=excluded.forbid_tag_deletion,updated_at=excluded.updated_at"
         )
           .bind(
             ruleId,
             repo.id,
+            input.target,
             input.pattern,
             Number(input.enabled),
             Number(input.locked),
@@ -115,6 +116,9 @@ export async function repositoryControls(
             Number(input.requireSignedCommits),
             Number(input.requireConversationResolution),
             Number(input.requireMergeQueue),
+            Number(input.requireIndependentApproval),
+            Number(input.forbidTagUpdate),
+            Number(input.forbidTagDeletion),
             now,
             now
           )
@@ -133,10 +137,14 @@ export async function repositoryControls(
           label: input.pattern,
         },
         {
+          target: input.target,
           pattern: input.pattern,
+          forbidTagUpdate: input.forbidTagUpdate,
+          forbidTagDeletion: input.forbidTagDeletion,
           enabled: input.enabled,
           locked: input.locked,
           requiredApprovals: input.requiredApprovals,
+          requireIndependentApproval: input.requireIndependentApproval,
           requirePassingChecks: input.requirePassingChecks,
           requireLinearHistory: input.requireLinearHistory,
           requireSignedCommits: input.requireSignedCommits,

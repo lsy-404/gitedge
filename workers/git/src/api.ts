@@ -16,6 +16,7 @@ import {
   branchRules,
   matchingBranchRules,
   protectedBranch,
+  tagChangeForbidden,
 } from "../../../src/worker/common/branch-protection";
 import { readJsonLimited } from "../../../src/worker/common/readText";
 import {
@@ -224,11 +225,21 @@ export async function handleGitApi(
       }
       const input = DeleteTagInputSchema.safeParse(value);
       if (!input.success) return errorResponse(400, "bad_request", "Invalid tag.");
+      const tagForbidden = async () =>
+        tagChangeForbidden(await branchRules(env.DB, repositoryId), input.data.name, "delete");
+      if (await tagForbidden()) {
+        logger.warn("git:tag-delete-denied", { tag: input.data.name });
+        return errorResponse(403, "protected_tag", "This tag is protected and cannot be deleted.");
+      }
       await deleteRepositoryTag(
         repo,
         input.data.name,
         input.data.expectedOid,
-        beforeWrite,
+        async () => {
+          await beforeWrite();
+          if (await tagForbidden())
+            throw new GitWriteConflict("Tag protection changed. Reload before retrying.");
+        },
         env.LOG_LEVEL
       );
       return dataResponse({ deleted: true });
@@ -312,20 +323,28 @@ export async function handleGitApi(
         );
     };
     const written = async (branch: string, oid: string, before: string) => {
-      if (session || !access.user) return;
-      const operation = Promise.all([
-        recordGitWrite(
+      if (!access.user) return;
+      const operations: Promise<void>[] = [
+        reportPushEvent(
           env,
           repositoryId,
-          access.repository.artifactName!,
           access.user,
-          branch,
-          oid
+          [{ ref: `refs/heads/${branch}`, before, after: oid }],
+          session?.id
         ),
-        reportPushEvent(env, repositoryId, access.user, [
-          { ref: `refs/heads/${branch}`, before, after: oid },
-        ]),
-      ]);
+      ];
+      if (!session)
+        operations.push(
+          recordGitWrite(
+            env,
+            repositoryId,
+            access.repository.artifactName!,
+            access.user,
+            branch,
+            oid
+          )
+        );
+      const operation = Promise.all(operations).then(() => undefined);
       if (ctx) ctx.waitUntil(operation);
       else await operation;
     };
@@ -371,14 +390,20 @@ export async function handleGitApi(
           beforeWrite,
           env.LOG_LEVEL
         );
-        if (!session && access.user) {
-          const reported = reportPushEvent(env, repositoryId, access.user, [
-            {
-              ref: `refs/heads/${remove.data.name}`,
-              before: remove.data.expectedOid,
-              after: ZERO_OID,
-            },
-          ]);
+        if (access.user) {
+          const reported = reportPushEvent(
+            env,
+            repositoryId,
+            access.user,
+            [
+              {
+                ref: `refs/heads/${remove.data.name}`,
+                before: remove.data.expectedOid,
+                after: ZERO_OID,
+              },
+            ],
+            session?.id
+          );
           if (ctx) ctx.waitUntil(reported);
           else await reported;
         }

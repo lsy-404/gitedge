@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { GitOidSchema } from "./forge";
+import { MergeRequirementIdSchema } from "./merge-requirements";
 
 export const MergeMethodSchema = z.enum(["merge", "squash", "rebase"]);
 export type MergeMethod = z.infer<typeof MergeMethodSchema>;
@@ -18,7 +19,13 @@ export const AutoMergeDisabledReasons = [
 ] as const;
 export type AutoMergeDisabledReason = (typeof AutoMergeDisabledReasons)[number];
 
-export const AutoMergeBlockerSchema = z.object({ code: z.string(), message: z.string() });
+export const AutoMergeBlockerSchema = z.object({
+  code: z.string(),
+  message: z.string(),
+  unmet: z
+    .array(MergeRequirementIdSchema)
+    .describe("Every merge requirement that is currently unsatisfied, in evaluation order."),
+});
 export type AutoMergeBlocker = z.infer<typeof AutoMergeBlockerSchema>;
 
 export const AutoMergeStatusSchema = z.object({

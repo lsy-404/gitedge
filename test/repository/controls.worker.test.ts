@@ -356,6 +356,58 @@ describe("Branch protection rules", () => {
     }
   });
 
+  it("separates branch and tag patterns and requires a tag restriction", async () => {
+    const createdIds: string[] = [];
+    try {
+      const branch = await call(rulesPath(), "POST", "owner", { pattern: "release/*" });
+      expect(branch.status).toBe(201);
+      createdIds.push(createdRule.parse(await branch.json()).data.id);
+
+      const invalidTag = await call(rulesPath(), "POST", "owner", {
+        target: "tag",
+        pattern: "release/*",
+      });
+      expect(invalidTag.status).toBe(400);
+
+      const tag = await call(rulesPath(), "POST", "owner", {
+        target: "tag",
+        pattern: "release/*",
+        forbidTagUpdate: true,
+      });
+      expect(tag.status).toBe(201);
+      const tagBody = z
+        .object({
+          data: z.object({
+            id: z.string(),
+            target: z.literal("tag"),
+            forbidTagUpdate: z.literal(true),
+            forbidTagDeletion: z.literal(false),
+          }),
+        })
+        .parse(await tag.json()).data;
+      createdIds.push(tagBody.id);
+
+      const duplicateTag = await call(rulesPath(), "POST", "owner", {
+        target: "tag",
+        pattern: "release/*",
+        forbidTagDeletion: true,
+      });
+      expect(duplicateTag.status).toBe(409);
+      expect((await ruleList()).map(({ id }) => id)).toContain(createdIds[0]);
+      expect((await ruleList()).map(({ id }) => id)).toContain(tagBody.id);
+
+      await expect(
+        env.DB.prepare(
+          "INSERT INTO repository_branch_rules (id,repository_id,target,pattern,created_at,updated_at) VALUES ('invalid-tag-rule',?,'tag','invalid/*',1,1)"
+        )
+          .bind(repositoryId)
+          .run()
+      ).rejects.toThrow();
+    } finally {
+      for (const id of createdIds) await call(`${rulesPath()}/${id}`, "DELETE", "owner");
+    }
+  });
+
   it("refuses Git merges into a locked branch", async () => {
     const created = await call(rulesPath(), "POST", "owner", {
       pattern: "locked-target",

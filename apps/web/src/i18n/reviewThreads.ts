@@ -38,8 +38,6 @@ export default {
     linkMentions: "引用了此 Issue",
     closedByPullRequest: "{name} 通过 Pull Request #{number} 关闭了此 Issue",
     mergeError_threads_unresolved: "仍有未解决的审核讨论，请先解决后再合并。",
-    mergeThreadsUnresolved: "尚未解决的审核讨论：{count}",
-    mergeThreadsResolved: "所有审核讨论均已解决",
     branchRuleConversationResolution: "合并前要求解决所有审核讨论",
     branchRuleConversationHint: "存在未解决的行评论讨论时，禁止合并。",
     branchRuleConversation: "需解决讨论",
@@ -87,8 +85,6 @@ export default {
     closedByPullRequest: "{name} closed this issue through pull request #{number}",
     mergeError_threads_unresolved:
       "Review conversations are still unresolved. Resolve them before merging.",
-    mergeThreadsUnresolved: "Unresolved review conversations: {count}",
-    mergeThreadsResolved: "All review conversations are resolved",
     branchRuleConversationResolution: "Require conversation resolution before merging",
     branchRuleConversationHint: "Block merging while line comment conversations are unresolved.",
     branchRuleConversation: "Resolved conversations",

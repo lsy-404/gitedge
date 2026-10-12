@@ -2,6 +2,7 @@
 export const mergePolicyCodes = [
   "changes_requested",
   "approvals_required",
+  "independent_approval_unverified",
   "checks_incomplete",
   "checks_required",
   "required_checks_missing",

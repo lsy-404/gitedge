@@ -234,6 +234,25 @@ export function assignmentNotificationStatement(
   ];
 }
 
+export function pullHeadUpdatedNotificationStatement(
+  db: D1Database,
+  repository: Pick<RepositoryRow, "id">,
+  actorId: string,
+  target: NotificationTarget,
+  when?: StatementCondition
+): D1PreparedStatement {
+  return insertNotifications(
+    db,
+    repository.id,
+    target,
+    "review_requested",
+    actorId,
+    participantIds(target),
+    Date.now(),
+    when
+  );
+}
+
 /** Notifies the pull request author and assignees (`owners`) or every participant of the outcome. */
 export function outcomeNotificationStatement(
   db: D1Database,

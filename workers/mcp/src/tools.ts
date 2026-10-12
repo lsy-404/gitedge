@@ -6,6 +6,7 @@ import {
   AGENT_FEED_MAX_WAIT_SECONDS,
   AgentFeedPageSchema,
   AutoMergeStatusSchema,
+  MergeRequirementsSchema,
   CheckRunSchema,
   ForkSyncResultSchema,
   GitBranchSchema,
@@ -151,6 +152,7 @@ function pullSummary(pull: PullRequest) {
     author: pull.author,
     baseRef: pull.baseRef,
     headRef: pull.headRef,
+    attention: pull.attention,
     headSessionId: pull.headSessionId,
     headRepository: pull.headRepository
       ? `${pull.headRepository.owner}/${pull.headRepository.name}`
@@ -236,13 +238,15 @@ export function createGitEdgeMcpServer(api: GitEdgeApi, logger: Logger): McpServ
   /** Reads a bounded service list; `truncated` is true when the service cut it short. */
   async function readList<T>(
     path: string,
-    schema: z.ZodType<T>
+    schema: z.ZodType<T>,
+    request: ApiRequest = {}
   ): Promise<{ data: T[]; truncated: boolean }> {
     return unwrap(
       await api.call(
         "GET",
         path,
-        z.object({ data: z.array(schema), truncated: z.boolean().default(false) })
+        z.object({ data: z.array(schema), truncated: z.boolean().default(false) }),
+        request
       )
     );
   }
@@ -580,10 +584,12 @@ export function createGitEdgeMcpServer(api: GitEdgeApi, logger: Logger): McpServ
   server.registerTool(
     "list_pull_requests",
     {
-      description: "List pull requests, newest first.",
+      description:
+        "List pull requests and their pending review identities, newest first. attention=me filters actions due to your human or agent identity.",
       inputSchema: {
         repository,
         state: z.enum(["open", "closed", "merged", "all"]).optional(),
+        attention: z.literal("me").optional(),
         limit,
         offset,
       },
@@ -594,11 +600,44 @@ export function createGitEdgeMcpServer(api: GitEdgeApi, logger: Logger): McpServ
         const repo = await resolve(input.repository);
         const list = await readList(
           apiPath("forge", "repositories", repo.id, "pull-requests"),
-          PullRequestSchema
+          PullRequestSchema,
+          { query: { attention: input.attention } }
         );
         const state = input.state ?? "open";
         const rows = list.data.filter((pull) => state === "all" || pull.state === state);
         return page(rows.map(pullSummary), input.offset, input.limit, list.truncated);
+      })
+  );
+
+  server.registerTool(
+    "get_merge_requirements",
+    {
+      description:
+        "Read every merge condition and excluded approval at the published head. Git checks conflicts, signatures and refs at merge time.",
+      inputSchema: {
+        repository,
+        number: itemNumber,
+        headOid: GitOidSchema.optional(),
+        method: MergeMethodSchema.optional(),
+      },
+      annotations: READ_ONLY,
+    },
+    async (input) =>
+      guarded("get_merge_requirements", async () => {
+        const repo = await resolve(input.repository);
+        return await readData(
+          "GET",
+          apiPath(
+            "forge",
+            "repositories",
+            repo.id,
+            "pull-requests",
+            input.number,
+            "merge-requirements"
+          ),
+          MergeRequirementsSchema,
+          { query: { headOid: input.headOid, method: input.method } }
+        );
       })
   );
 

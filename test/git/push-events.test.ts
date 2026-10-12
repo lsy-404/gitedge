@@ -28,10 +28,12 @@ describe("push event reporting", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe("https://forge.internal/internal/push-event");
     const body = PushEventInputSchema.parse(await calls[0].json());
-    expect(body).toEqual({ repositoryId: "repo-1", pusherId: "u1", updates: [update] });
+    expect(body).toMatchObject({ repositoryId: "repo-1", pusherId: "u1", updates: [update] });
+    expect(body.eventId).toMatch(/[0-9a-f-]{36}/);
+    expect(body.occurredAt).toBeGreaterThan(0);
   });
 
-  it("skips agent sessions, empty updates and a missing Forge binding", async () => {
+  it("reports an agent session identity for Forge-side validation", async () => {
     const { env, calls } = environment();
     await reportPushEvent(
       env,
@@ -49,6 +51,17 @@ describe("push event reporting", () => {
       },
       [update]
     );
+    expect(calls).toHaveLength(1);
+    expect(PushEventInputSchema.parse(await calls[0].json())).toMatchObject({
+      repositoryId: "repo-1",
+      pusherId: "u1",
+      agentSessionId: "s",
+      updates: [update],
+    });
+  });
+
+  it("skips empty updates and a missing Forge binding", async () => {
+    const { env, calls } = environment();
     await reportPushEvent(env, "repo-1", user, []);
     await reportPushEvent({ ...env, FORGE: undefined }, "repo-1", user, [update]);
     expect(calls).toEqual([]);
@@ -67,5 +80,28 @@ describe("push event reporting", () => {
       },
     };
     await expect(reportPushEvent(failing, "repo-1", user, [update])).resolves.toBeUndefined();
+  });
+
+  it("reuses one event identity when retrying the same accepted report", async () => {
+    const calls: Request[] = [];
+    let attempt = 0;
+    const env: GitEnv = {
+      DB: {} as D1Database,
+      ARTIFACTS: {} as Artifacts,
+      FORGE: {
+        async fetch(request: Request) {
+          calls.push(request);
+          attempt += 1;
+          return new Response(null, { status: attempt === 1 ? 503 : 200 });
+        },
+      },
+    };
+    await reportPushEvent(env, "repo-1", user, [update]);
+    expect(calls).toHaveLength(2);
+    const reports = await Promise.all(
+      calls.map(async (request) => PushEventInputSchema.parse(await request.json()))
+    );
+    expect(reports[0]?.eventId).toBe(reports[1]?.eventId);
+    expect(reports[0]?.occurredAt).toBe(reports[1]?.occurredAt);
   });
 });

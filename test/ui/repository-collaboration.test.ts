@@ -94,6 +94,7 @@ function pull(overrides: Partial<PullRequest> = {}): PullRequest {
     mergedOid: null,
     assignees: [],
     reviewers: [],
+    attention: [],
     createdAt: 10,
     updatedAt: 11,
     ...overrides,
@@ -179,6 +180,12 @@ function submit(form: HTMLFormElement): void {
 }
 
 beforeEach(() => {
+  vi.spyOn(api, "mergeRequirements").mockResolvedValue({
+    headOid: "b".repeat(40),
+    ready: true,
+    requirements: [],
+    excludedApprovals: [],
+  });
   vi.spyOn(api, "issueReferences").mockResolvedValue({
     pullRequests: [],
     events: [],
@@ -1246,6 +1253,18 @@ describe("RepositoryCollaboration review threads", () => {
   });
 
   it("renders threads inline, lists unresolved ones, and marks outdated threads away from the diff", async () => {
+    vi.mocked(api.mergeRequirements).mockResolvedValue({
+      headOid: "b".repeat(40),
+      ready: false,
+      requirements: [
+        {
+          id: "conversations_resolved",
+          status: "unsatisfied",
+          detail: "Two unresolved conversations.",
+        },
+      ],
+      excludedApprovals: [],
+    });
     const reloaded = mockPull([
       reviewComment(),
       reviewComment({ id: "rc-2", inReplyTo: "rc-1", body: "Done in a follow-up", createdAt: 21 }),
@@ -1268,7 +1287,7 @@ describe("RepositoryCollaboration review threads", () => {
     const summary = mounted.root.querySelector(".thread-summary");
     expect(summary?.textContent).toContain("Unresolved conversations: 2");
     expect(mounted.root.querySelector(".merge-status")?.textContent).toContain(
-      "Unresolved review conversations: 2"
+      "Review conversations are resolved — Not satisfied"
     );
     expect(summary?.textContent).toContain("Outdated");
     const inline = mounted.root.querySelectorAll(".diff-thread .review-thread");
@@ -1295,6 +1314,14 @@ describe("RepositoryCollaboration review threads", () => {
   });
 
   it("offers to finish a pending review and reports unresolved threads next to the merge controls", async () => {
+    vi.mocked(api.mergeRequirements).mockResolvedValue({
+      headOid: "b".repeat(40),
+      ready: true,
+      requirements: [
+        { id: "conversations_resolved", status: "satisfied", detail: "All resolved." },
+      ],
+      excludedApprovals: [],
+    });
     mockPull([reviewComment({ pending: true })]);
     const mounted = await mountSection("/_verify/pulls/12", "pulls");
     await openFiles(mounted);
@@ -1303,7 +1330,7 @@ describe("RepositoryCollaboration review threads", () => {
       "Pending comments: 1."
     );
     expect(mounted.root.querySelector(".merge-status")?.textContent).toContain(
-      "All review conversations are resolved"
+      "Review conversations are resolved — Satisfied"
     );
     findButton(mounted.root, "Finish your review").click();
     await settle();

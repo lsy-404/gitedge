@@ -26,6 +26,7 @@ import {
 
 const rule: BranchProtectionRule = {
   id: "rule-1",
+  target: "branch",
   pattern: "main",
   enabled: true,
   locked: false,
@@ -36,6 +37,9 @@ const rule: BranchProtectionRule = {
   requireSignedCommits: false,
   requireConversationResolution: false,
   requireMergeQueue: false,
+  requireIndependentApproval: false,
+  forbidTagUpdate: false,
+  forbidTagDeletion: false,
   createdAt: 1,
   updatedAt: 2,
 };
@@ -109,11 +113,11 @@ describe("branch protection controls", () => {
       h(RepositorySettings, { repository })
     );
     Array.from(mounted.root.querySelectorAll<HTMLButtonElement>(".settings-nav button"))
-      .find((button) => button.textContent?.trim() === "Branch protection")
+      .find((button) => button.textContent?.trim() === "Branch and tag protection")
       ?.click();
     await settle();
     expect(mounted.root.textContent).toContain(
-      "Enabled rules require PRs and block native direct pushes and online edits."
+      "Enabled branch rules require PRs for updates and block native direct pushes and online edits; tag rules can prevent matching tags from being moved or deleted."
     );
     Array.from(mounted.root.querySelectorAll<HTMLButtonElement>(".settings-nav button"))
       .find((button) => button.textContent?.trim() === "Collaborators")
@@ -142,6 +146,7 @@ describe("branch protection controls", () => {
     findButton(mounted.root, "Save rule").click();
     await settle();
     expect(update).toHaveBeenCalledWith(repository.id, rule.id, {
+      target: "branch",
       pattern: "release/*",
       enabled: true,
       locked: false,
@@ -152,11 +157,95 @@ describe("branch protection controls", () => {
       requireSignedCommits: false,
       requireConversationResolution: false,
       requireMergeQueue: false,
+      requireIndependentApproval: false,
+      forbidTagUpdate: false,
+      forbidTagDeletion: false,
     });
 
     await confirmClick(findButton(mounted.root, "Delete"));
     expect(remove).toHaveBeenCalledWith(repository.id, rule.id);
     expect(mounted.root.textContent).toContain("Branch protection rule deleted.");
+    mounted.unmount();
+  });
+
+  it("saves independent approval through the branch control", async () => {
+    vi.spyOn(api, "branchRules").mockResolvedValue([]);
+    const create = vi
+      .spyOn(api, "createBranchRule")
+      .mockResolvedValue({ ...rule, requireIndependentApproval: true });
+    const mounted = await mountAt(
+      "/_verify/independent-controls",
+      "/_verify/independent-controls",
+      () => h(BranchProtectionSettings, { repositoryId: repository.id, canManage: true })
+    );
+    fill(control(mounted.root, ".branch-rule-form input"), "main");
+    const toggle = Array.from(
+      mounted.root.querySelectorAll<HTMLButtonElement>("[role='switch']")
+    ).find((element) => element.textContent?.includes("Require independent human approval"));
+    expect(toggle).toBeDefined();
+    toggle?.click();
+    await settle();
+    expect(mounted.root.textContent).toContain("linked task requester");
+    findButton(mounted.root, "Add rule").click();
+    await settle();
+    expect(create).toHaveBeenCalledWith(
+      repository.id,
+      expect.objectContaining({ target: "branch", requireIndependentApproval: true })
+    );
+  });
+
+  it("creates tag protection with only the selected tag operation", async () => {
+    vi.spyOn(api, "branchRules").mockResolvedValue([]);
+    const tagRule: BranchProtectionRule = {
+      ...rule,
+      id: "tag-rule-1",
+      target: "tag",
+      pattern: "release/*",
+      requiredApprovals: 0,
+      requirePassingChecks: false,
+      requiredStatusChecks: [],
+      forbidTagUpdate: true,
+    };
+    const create = vi.spyOn(api, "createBranchRule").mockResolvedValue(tagRule);
+    const mounted = await mountAt("/_verify/tag-controls", "/_verify/tag-controls", () =>
+      h(BranchProtectionSettings, { repositoryId: repository.id, canManage: true })
+    );
+
+    Array.from(mounted.root.querySelectorAll<HTMLButtonElement>("[role='switch']"))
+      .find((toggle) => toggle.textContent?.includes("Require independent human approval"))
+      ?.click();
+    await settle();
+    control(mounted.root, '[role="combobox"]').click();
+    await settle();
+    Array.from(mounted.root.querySelectorAll<HTMLElement>("[role='option']"))
+      .find((option) => option.textContent?.trim() === "Tag")
+      ?.click();
+    await settle();
+    fill(control(mounted.root, ".branch-rule-form input"), "release/*");
+    Array.from(mounted.root.querySelectorAll<HTMLButtonElement>("[role='switch']"))
+      .find((toggle) => toggle.textContent?.includes("Prevent tag updates"))
+      ?.click();
+    await settle();
+    findButton(mounted.root, "Add rule").click();
+    await settle();
+
+    expect(create).toHaveBeenCalledWith(repository.id, {
+      target: "tag",
+      pattern: "release/*",
+      enabled: true,
+      locked: false,
+      requiredApprovals: 0,
+      requirePassingChecks: false,
+      requiredStatusChecks: [],
+      requireLinearHistory: false,
+      requireSignedCommits: false,
+      requireConversationResolution: false,
+      requireMergeQueue: false,
+      requireIndependentApproval: false,
+      forbidTagUpdate: true,
+      forbidTagDeletion: false,
+    });
+    expect(mounted.root.textContent).toContain("Prevent tag updates");
     mounted.unmount();
   });
 
