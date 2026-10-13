@@ -1,7 +1,9 @@
 #!/usr/bin/env node
+import { experimental_readRawConfig } from "wrangler";
+import { finished } from "node:stream/promises";
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
@@ -20,7 +22,7 @@ function usage() {
   console.log(`GitEdge backup and isolated recovery rehearsal
 
 Usage:
-  pnpm run recovery -- backup --output <new-directory> [--base-url <https://host>]
+  pnpm run recovery -- backup --output <new-directory> --base-url <https://host>
   pnpm run recovery -- verify --backup <directory>
   pnpm run recovery -- rehearse --backup <directory> --destination-db <name> --destination-config <wrangler.jsonc> --destination-base-url <https://host> --destination-release-bucket <bucket> --destination-account-id <id> --destination-artifacts-namespace <namespace>
 
@@ -46,8 +48,15 @@ function required(opts, name) {
   return value;
 }
 
-function escapeRegex(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function configAt(path) {
+  return experimental_readRawConfig({ config: path }).rawConfig;
+}
+
+async function containedPath(directory, path) {
+  const base = await realpath(directory);
+  const target = await realpath(resolve(directory, path));
+  if (!target.startsWith(base + sep)) throw new Error(`Unsafe backup path: ${path}`);
+  return target;
 }
 
 function safeUrl(value, name) {
@@ -84,15 +93,27 @@ function run(command, args, { cwd = root, stdoutFile, env = process.env } = {}) 
     });
     if (stdoutFile) child.stdout.pipe(out);
     child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) resolvePromise();
-      else reject(new Error(`${command} failed (${code}): ${sanitize(stderr)}`));
+    child.on("close", async (code) => {
+      if (code === 0) {
+        if (stdoutFile) {
+          try {
+            await finished(out);
+          } catch (error) {
+            reject(error);
+            return;
+          }
+        }
+        resolvePromise();
+      } else reject(new Error(`${command} failed (${code}): ${sanitize(stderr)}`));
     });
   });
 }
 
-async function wrangler(args, outputFile) {
-  await run("pnpm", ["exec", "wrangler", ...args], { stdoutFile: outputFile });
+async function wrangler(args, outputFile, accountId = configAt(authConfig).account_id) {
+  await run("pnpm", ["exec", "wrangler", ...args], {
+    stdoutFile: outputFile,
+    env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: accountId },
+  });
 }
 
 async function sha256(path) {
@@ -126,7 +147,7 @@ async function queryPage(config, sql, database = sourceDb) {
   ];
   const child = spawn("pnpm", ["exec", "wrangler", ...args], {
     cwd: root,
-    env: process.env,
+    env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: configAt(config).account_id },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let stdout = "";
@@ -175,7 +196,7 @@ async function snapshotRows() {
   );
   const sessions = await queryAll(
     authConfig,
-    "SELECT s.id, s.repository_id, s.workspace_name, s.remote, s.status, s.expires_at FROM auth_agent_sessions s ORDER BY s.id"
+    "SELECT s.id, s.repository_id, s.workspace_name, s.remote, s.status, s.expires_at FROM auth_agent_sessions s JOIN repositories r ON r.id = s.repository_id WHERE r.deleted_at IS NULL ORDER BY s.id"
   );
   const assets = await queryAll(
     authConfig,
@@ -187,6 +208,21 @@ async function snapshotRows() {
 function remoteUrl(value, label) {
   safeUrl(value, label);
   return value;
+}
+
+async function artifactInfo(accountId, namespace, repo) {
+  const base = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/artifacts/namespaces/${encodeURIComponent(namespace)}`;
+  const response = await fetch(`${base}/repos/${encodeURIComponent(repo)}`, {
+    headers: { Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}` },
+    signal: AbortSignal.timeout(30_000),
+  });
+  const payload = await response.json();
+  if (!response.ok || !payload.success || !payload.result?.remote)
+    throw new Error(`Artifacts repository lookup failed (${response.status})`);
+  return {
+    remote: remoteUrl(payload.result.remote, "Artifacts remote"),
+    defaultBranch: payload.result.default_branch,
+  };
 }
 
 async function artifactToken(accountId, namespace, repo, scope) {
@@ -238,8 +274,8 @@ async function backup(opts) {
     throw new Error("Set CLOUDFLARE_ACCOUNT_ID for the configured Cloudflare account");
   if (!process.env.CLOUDFLARE_API_TOKEN)
     throw new Error("Set CLOUDFLARE_API_TOKEN with Artifacts token creation/read access");
-  const sourceConfig = await readFile(authConfig, "utf8");
-  const configuredAccountId = sourceConfig.match(/"account_id"\s*:\s*"([^"]+)"/)?.[1];
+  const sourceConfig = configAt(authConfig);
+  const configuredAccountId = sourceConfig.account_id;
   if (configuredAccountId !== process.env.CLOUDFLARE_ACCOUNT_ID)
     throw new Error("CLOUDFLARE_ACCOUNT_ID does not match the source Wrangler config");
   await mkdir(output, { recursive: false, mode: 0o700 });
@@ -250,7 +286,8 @@ async function backup(opts) {
     format: "gitedge-backup-v1",
     source: {
       accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
-      artifactsNamespace: "gitedge",
+      artifactsNamespace: sourceConfig.artifacts.find((binding) => binding.binding === "ARTIFACTS")
+        .namespace,
       database: sourceDb,
       releaseBucket: "gitedge-release-assets",
       baseUrl: sourceHost,
@@ -267,6 +304,33 @@ async function backup(opts) {
     files: [],
   };
 
+  const initialSources = new Map();
+  for (const item of [
+    ...before.repositories.map((repo) => ({ id: repo.id, name: repo.artifact_name })),
+    ...before.sessions.map((session) => ({ id: session.id, name: session.workspace_name })),
+  ]) {
+    try {
+      if (!item.name) throw new Error("Repository has no Artifacts mapping");
+      const info = await artifactInfo(
+        manifest.source.accountId,
+        manifest.source.artifactsNamespace,
+        item.name
+      );
+      const refs = await readArtifactRefs(
+        info.remote,
+        manifest.source.accountId,
+        manifest.source.artifactsNamespace,
+        item.name
+      );
+      initialSources.set(item.id, { ...info, refs });
+    } catch (error) {
+      manifest.consistency.incomplete.push({
+        kind: "initial-ref-inventory",
+        id: item.id,
+        reason: sanitize(error.message).slice(0, 500),
+      });
+    }
+  }
   const sqlPath = join(backupDir, "database.sql");
   await wrangler([
     "d1",
@@ -291,9 +355,10 @@ async function backup(opts) {
   for (const repo of before.repositories) {
     const dir = join(backupDir, "git", "repositories", repo.id + ".git");
     await mkdir(dirname(dir), { recursive: true });
-    const source = `https://${manifest.source.accountId}.artifacts.cloudflare.net/git/${manifest.source.artifactsNamespace}/${encodeURIComponent(repo.artifact_name)}.git`;
+    const source = initialSources.get(repo.id)?.remote;
     try {
-      if (!repo.artifact_name) throw new Error("D1 repository has no Artifacts mapping");
+      if (!repo.artifact_name || !source)
+        throw new Error("Repository metadata or initial refs are unavailable");
       await cloneArtifact(
         source,
         dir,
@@ -325,7 +390,8 @@ async function backup(opts) {
     const dir = join(backupDir, "git", "sessions", session.id + ".git");
     await mkdir(dirname(dir), { recursive: true });
     try {
-      const remote = remoteUrl(session.remote, `session ${session.id} remote`);
+      const remote = initialSources.get(session.id)?.remote;
+      if (!remote) throw new Error("Session fork metadata or initial refs are unavailable");
       await cloneArtifact(
         remote,
         dir,
@@ -393,7 +459,10 @@ async function backup(opts) {
         manifest.source.artifactsNamespace,
         mirror.repo
       );
-      if (JSON.stringify(refs) !== JSON.stringify(mirror.refs))
+      if (
+        JSON.stringify(refs) !== JSON.stringify(mirror.refs) ||
+        JSON.stringify(initialSources.get(mirror.id)?.refs) !== JSON.stringify(mirror.refs)
+      )
         manifest.consistency.changedRefs.push({
           id: mirror.id,
           refsAtCopy: mirror.refs,
@@ -501,8 +570,7 @@ async function verify(opts) {
     throw new Error("Unsupported backup manifest format");
   const problems = [];
   for (const file of manifest.files) {
-    const path = resolve(backupDir, file.path);
-    if (!path.startsWith(backupDir + sep)) throw new Error(`Unsafe manifest path: ${file.path}`);
+    const path = await containedPath(backupDir, file.path);
     try {
       const info = await stat(path);
       if (info.size !== file.bytes || (await sha256(path)) !== file.sha256)
@@ -513,7 +581,7 @@ async function verify(opts) {
     }
   }
   for (const item of manifest.consistency.repositoryMapping) {
-    const path = resolve(backupDir, item.mirror);
+    const path = await containedPath(backupDir, item.mirror);
     try {
       await run("git", ["-C", path, "fsck", "--full"]);
       if (JSON.stringify(await gitRefs(path)) !== JSON.stringify(item.refs))
@@ -541,32 +609,29 @@ async function rehearse(opts) {
   const manifest = JSON.parse(await readFile(join(backupDir, manifestName), "utf8"));
   if (destinationDb.toLowerCase() === sourceDb.toLowerCase())
     throw new Error("Refusing to restore into source database gitedge");
-  const targetConfig = await readFile(destinationConfig, "utf8");
-  const sourceConfig = await readFile(authConfig, "utf8");
-  const sourceDbId = sourceConfig.match(/"database_id"\s*:\s*"([^"]+)"/)?.[1];
-  const sourceAccountId = sourceConfig.match(/"account_id"\s*:\s*"([^"]+)"/)?.[1];
-  const destinationDbId = targetConfig.match(/"database_id"\s*:\s*"([^"]+)"/)?.[1];
-  const destinationAccountId = targetConfig.match(/"account_id"\s*:\s*"([^"]+)"/)?.[1];
+  const targetConfig = configAt(destinationConfig);
+  const sourceConfig = configAt(authConfig);
+  const sourceDbId = sourceConfig.d1_databases.find(
+    (binding) => binding.database_name === sourceDb
+  )?.database_id;
+  const destinationDbId = targetConfig.d1_databases?.find(
+    (binding) => binding.database_name === destinationDb
+  )?.database_id;
   if (!destinationDbId || destinationDbId === sourceDbId)
-    throw new Error("Destination Wrangler config must bind a distinct D1 database");
-  if (destinationAccountId !== destinationAccount)
-    throw new Error("Destination account ID must match the destination Wrangler config");
-  if (sourceAccountId !== manifest.source.accountId)
-    throw new Error(
-      "Source backup account does not match this repository's source Wrangler config"
-    );
+    throw new Error("Destination config must bind a distinct named D1 database");
+  if (targetConfig.account_id !== destinationAccount)
+    throw new Error("Destination account must match its config");
+  if (sourceConfig.account_id !== manifest.source.accountId)
+    throw new Error("Source backup account differs from the source config");
   if (destinationHost === manifest.source.baseUrl)
     throw new Error("Refusing to push to source host");
-  if (destinationBucket === manifest.source.releaseBucket)
-    throw new Error("Refusing to upload to source release bucket");
-  if (destinationBucket.includes("/"))
-    throw new Error("Destination release bucket must be a bucket name only");
-  if (destinationNamespace === manifest.source.artifactsNamespace)
-    throw new Error("Use a distinct Artifacts namespace for recovery rehearsal");
-  if (!new RegExp(`"namespace"\\s*:\\s*"${escapeRegex(destinationNamespace)}"`).test(targetConfig))
-    throw new Error("Destination Wrangler config must bind the destination Artifacts namespace");
-  if (!new RegExp(`"database_name"\\s*:\\s*"${escapeRegex(destinationDb)}"`).test(targetConfig))
-    throw new Error("Destination Wrangler config must bind the named destination database");
+  if (destinationBucket === manifest.source.releaseBucket || destinationBucket.includes("/"))
+    throw new Error("Choose a distinct destination bucket name");
+  if (
+    destinationNamespace === manifest.source.artifactsNamespace ||
+    !targetConfig.artifacts?.some((binding) => binding.namespace === destinationNamespace)
+  )
+    throw new Error("Destination config must bind a distinct Artifacts namespace");
   if (manifest.consistency.incomplete.length || manifest.consistency.changedDuringBackup)
     throw new Error(
       "Refusing rehearsal from an incomplete or changed snapshot; repair or take a clean backup first"
@@ -592,16 +657,20 @@ async function rehearse(opts) {
   if (existingTables.length) throw new Error("Destination D1 database must be empty");
   const sql = manifest.files.find((file) => file.kind === "d1-sql");
   if (!sql) throw new Error("Backup has no D1 export");
-  await wrangler([
-    "d1",
-    "execute",
-    destinationDb,
-    "--remote",
-    "--config",
-    destinationConfig,
-    "--file",
-    resolve(backupDir, sql.path),
-  ]);
+  await wrangler(
+    [
+      "d1",
+      "execute",
+      destinationDb,
+      "--remote",
+      "--config",
+      destinationConfig,
+      "--file",
+      resolve(backupDir, sql.path),
+    ],
+    undefined,
+    destinationAccount
+  );
   const destinationSessionRemotes = [];
   for (const item of manifest.consistency.repositoryMapping) {
     const repoName = item.artifactName ?? item.workspaceName;
@@ -619,7 +688,15 @@ async function rehearse(opts) {
     if (item.sessionId)
       destinationSessionRemotes.push({
         id: item.sessionId,
-        remote: remoteUrl(created.result.remote, `destination session ${item.sessionId} remote`),
+        remote: (() => {
+          const parent = manifest.consistency.repositoryMapping.find(
+            (entry) => !entry.sessionId && entry.repositoryId === item.repositoryId
+          );
+          if (!parent) throw new Error("The session parent is missing from the backup");
+          const gatewayRemote = new URL(`/${parent.namespace}/${parent.slug}.git`, destinationHost);
+          gatewayRemote.username = item.sessionId;
+          return gatewayRemote.toString();
+        })(),
       });
     const env = { ...process.env };
     delete env.CLOUDFLARE_API_TOKEN;
@@ -672,42 +749,54 @@ async function rehearse(opts) {
         ({ id, remote }) =>
           `UPDATE auth_agent_sessions SET remote=${sqlString(remote)} WHERE id=${sqlString(id)}`
       );
-    await wrangler([
-      "d1",
-      "execute",
-      destinationDb,
-      "--remote",
-      "--config",
-      destinationConfig,
-      "--command",
-      statements.join(";"),
-    ]);
+    await wrangler(
+      [
+        "d1",
+        "execute",
+        destinationDb,
+        "--remote",
+        "--config",
+        destinationConfig,
+        "--command",
+        statements.join(";"),
+      ],
+      undefined,
+      destinationAccount
+    );
   }
   for (const file of manifest.files.filter((entry) => entry.kind === "release-asset")) {
-    await wrangler([
-      "r2",
-      "object",
-      "put",
-      `${destinationBucket}/${file.repositoryId}/${file.assetId}`,
-      "--remote",
-      "--file",
-      resolve(backupDir, file.path),
-      "--config",
-      destinationConfig,
-    ]);
-    const verificationPath = join(tmpdir(), `gitedge-asset-${file.assetId}`);
-    try {
-      await wrangler([
+    await wrangler(
+      [
         "r2",
         "object",
-        "get",
+        "put",
         `${destinationBucket}/${file.repositoryId}/${file.assetId}`,
         "--remote",
         "--file",
-        verificationPath,
+        resolve(backupDir, file.path),
         "--config",
         destinationConfig,
-      ]);
+      ],
+      undefined,
+      destinationAccount
+    );
+    const verificationPath = join(tmpdir(), `gitedge-asset-${file.assetId}`);
+    try {
+      await wrangler(
+        [
+          "r2",
+          "object",
+          "get",
+          `${destinationBucket}/${file.repositoryId}/${file.assetId}`,
+          "--remote",
+          "--file",
+          verificationPath,
+          "--config",
+          destinationConfig,
+        ],
+        undefined,
+        destinationAccount
+      );
       if ((await sha256(verificationPath)) !== file.sha256)
         throw new Error(`Destination release asset hash differs for ${file.assetId}`);
     } finally {
@@ -725,7 +814,7 @@ async function rehearse(opts) {
     destinationDb
   );
   for (const item of manifest.consistency.repositoryMapping) {
-    const valid = item.repositoryId
+    const valid = !item.sessionId
       ? restoredRepositories.some(
           (row) => row.id === item.repositoryId && row.artifact_name === (item.artifactName ?? null)
         )
