@@ -2,6 +2,7 @@ import { isAlias, isMap, isSeq, parseDocument } from "yaml";
 import picomatch from "picomatch";
 import {
   ActionWorkflowSchema,
+  ActionEventTypeSchema,
   ActionTriggerFilterSchema,
   ActionArtifactSchema,
   ActionCacheSchema,
@@ -133,11 +134,7 @@ function parseTriggers(value: unknown): {
       throw new WorkflowValidationError(`on.${key} options are unsupported.`);
     }
   }
-  const parsed: Array<"workflow_dispatch" | "push" | "pull_request" | "merge_group"> = [];
-  for (const key of keys) {
-    if (supported.has(key))
-      parsed.push(key as "workflow_dispatch" | "push" | "pull_request" | "merge_group");
-  }
+  const parsed = keys.map((key) => ActionEventTypeSchema.parse(key));
   return { events: parsed, filters: Object.keys(filters).length ? filters : undefined };
 }
 

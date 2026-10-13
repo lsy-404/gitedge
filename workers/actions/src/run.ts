@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { z } from "zod";
 import { createLogger } from "../../../src/worker/common/logger";
 import type {
   ActionArtifact,
@@ -25,6 +26,20 @@ const MAX_ARCHIVE_BYTES = 24 * 1024 * 1024;
 const MAX_ARCHIVE_CHUNKS = Math.ceil(MAX_ARCHIVE_BYTES / OUTPUT_CHUNK_SIZE);
 const MAX_OUTPUT_BYTES = 16 * 1024;
 const RUN_TIMEOUT_MS = 10 * 60_000;
+
+async function deleteChunks(
+  storage: Pick<DurableObjectStorage, "delete">,
+  prefix: string,
+  count: number
+): Promise<void> {
+  for (let offset = 0; offset < count; offset += 128)
+    await storage.delete(
+      Array.from(
+        { length: Math.min(128, count - offset) },
+        (_, index) => `${prefix}${offset + index}`
+      )
+    );
+}
 
 interface ActionRunEnv {
   readonly LOG_LEVEL?: string;
@@ -333,9 +348,7 @@ export class ActionRun extends DurableObject<ActionRunEnv> {
   async discardCacheInput(): Promise<void> {
     const count = await this.ctx.storage.get<number>("cacheChunkCount");
     if (count !== undefined && count > 0)
-      await this.ctx.storage.delete(
-        Array.from({ length: count }, (_unused, index) => `${CACHE_CHUNK_PREFIX}${index}`)
-      );
+      await deleteChunks(this.ctx.storage, CACHE_CHUNK_PREFIX, count);
     await this.ctx.storage.put("cacheChunkCount", 0);
   }
 
@@ -373,106 +386,70 @@ export class ActionRun extends DurableObject<ActionRunEnv> {
   }
 
   async markOutputPublished(name: string, artifact: ActionRunArtifact | null): Promise<void> {
-    const run = await this.readRun();
-    if (!run) throw new Error("Action run was not found.");
-    const output = run.outputs.find((item) => item.name === name);
-    if (!output) return;
-    await this.ctx.storage.delete(
-      Array.from(
-        { length: output.chunks },
-        (_unused, index) => `${OUTPUT_CHUNK_PREFIX}${name}:${index}`
-      )
-    );
-    const next: StoredRun = {
+    await this.updateOutputs((run) => ({
       ...run,
       outputs: run.outputs.filter((item) => item.name !== name),
-      ...(artifact
-        ? { artifacts: [...run.artifacts.filter((item) => item.name !== name), artifact] }
-        : {}),
+      artifacts: artifact
+        ? [...run.artifacts.filter((item) => item.name !== name), artifact]
+        : run.artifacts,
       artifactOutcomes: run.artifactOutcomes.map((item) =>
         item.name === name && artifact ? { name, status: "ready", message: null } : item
       ),
-      updatedAt: Date.now(),
-    };
-    await this.saveRun(next);
+    }));
   }
 
   async markArtifactFailed(name: string, message: string): Promise<void> {
-    const run = await this.readRun();
-    if (!run) return;
-    const output = run.outputs.find((item) => item.name === name);
-    if (output) {
-      await this.ctx.storage.delete(
-        Array.from(
-          { length: output.chunks },
-          (_unused, index) => `${OUTPUT_CHUNK_PREFIX}${name}:${index}`
-        )
-      );
-    }
-    await this.saveRun({
+    await this.updateOutputs((run) => ({
       ...run,
       outputs: run.outputs.filter((item) => item.name !== name),
       artifactOutcomes: run.artifactOutcomes.map((item) =>
         item.name === name ? { name, status: "failed", message: message.slice(0, 200) } : item
       ),
-      updatedAt: Date.now(),
-    });
+    }));
   }
 
   async markArtifactSkipped(name: string): Promise<void> {
-    const run = await this.readRun();
-    if (!run) return;
-    await this.saveRun({
+    await this.updateOutputs((run) => ({
       ...run,
       artifactOutcomes: run.artifactOutcomes.map((item) =>
         item.name === name
           ? { name, status: "skipped", message: "No matching files were produced." }
           : item
       ),
-      updatedAt: Date.now(),
-    });
+    }));
   }
 
   async setCacheOutcome(outcome: ActionCacheOutcome): Promise<void> {
-    const run = await this.readRun();
-    if (run) await this.saveRun({ ...run, cacheOutcome: outcome, updatedAt: Date.now() });
+    await this.updateOutputs((run) => ({ ...run, cacheOutcome: outcome }));
   }
 
   async markCacheSaved(): Promise<void> {
-    const run = await this.readRun();
-    const output = run?.outputs.find((item) => item.kind === "cache");
-    if (!run || !output) return;
-    await this.ctx.storage.delete(
-      Array.from(
-        { length: output.chunks },
-        (_unused, index) => `${OUTPUT_CHUNK_PREFIX}${output.name}:${index}`
-      )
-    );
-    await this.saveRun({
+    await this.updateOutputs((run) => ({
       ...run,
-      outputs: run.outputs.filter((item) => item.name !== output.name),
+      outputs: run.outputs.filter((item) => item.kind !== "cache"),
       cacheOutcome: "saved",
-      updatedAt: Date.now(),
-    });
+    }));
   }
 
   async markCacheFailed(): Promise<void> {
-    const run = await this.readRun();
-    const output = run?.outputs.find((item) => item.kind === "cache");
-    if (!run) return;
-    if (output) {
-      await this.ctx.storage.delete(
-        Array.from(
-          { length: output.chunks },
-          (_unused, index) => `${OUTPUT_CHUNK_PREFIX}${output.name}:${index}`
-        )
-      );
-    }
-    await this.saveRun({
+    await this.updateOutputs((run) => ({
       ...run,
-      outputs: output ? run.outputs.filter((item) => item.name !== output.name) : run.outputs,
+      outputs: run.outputs.filter((item) => item.kind !== "cache"),
       cacheOutcome: "failed",
-      updatedAt: Date.now(),
+    }));
+  }
+
+  private async updateOutputs(update: (run: StoredRun) => StoredRun): Promise<void> {
+    await this.ctx.storage.transaction(async (txn) => {
+      const value: unknown = await txn.get(RUN_KEY);
+      if (!isStoredRun(value)) return;
+      const next = update(value);
+      for (const output of value.outputs) {
+        if (!next.outputs.some((item) => item.name === output.name)) {
+          await deleteChunks(txn, `${OUTPUT_CHUNK_PREFIX}${output.name}:`, output.chunks);
+        }
+      }
+      await txn.put(RUN_KEY, { ...next, updatedAt: Date.now() });
     });
   }
 
@@ -748,7 +725,7 @@ export class ActionRun extends DurableObject<ActionRunEnv> {
 
       const beforeOutputCapture = await this.readRun();
       if (beforeOutputCapture && !beforeOutputCapture.cancelRequested)
-        await this.captureOutputs(beforeOutputCapture, budget);
+        await this.captureOutputs(beforeOutputCapture);
       const current = await this.readRun();
       if (!current) return;
       const cancelled = current.cancelRequested;
@@ -1002,9 +979,7 @@ export class ActionRun extends DurableObject<ActionRunEnv> {
       chunks.push(chunk);
     }
     const parsed: unknown = JSON.parse(chunks.join(""));
-    await this.ctx.storage.delete(
-      Array.from({ length: count }, (_unused, index) => `${INPUT_CHUNK_PREFIX}${index}`)
-    );
+    await deleteChunks(this.ctx.storage, INPUT_CHUNK_PREFIX, count);
     if (!Array.isArray(parsed)) throw new Error("Action run input is invalid.");
     for (const value of parsed) {
       if (
@@ -1082,10 +1057,10 @@ export class ActionRun extends DurableObject<ActionRunEnv> {
     if (exitCode !== 0) throw new Error(errorText || "Cache archive could not be restored safely.");
   }
 
-  private async captureOutputs(run: StoredRun, budget: OutputBudget): Promise<void> {
+  private async captureOutputs(run: StoredRun): Promise<void> {
     if (run.cachePaths.length && run.cacheKey) {
       try {
-        await this.captureArchive("cache", "cache", run.cachePaths, budget);
+        await this.captureArchive("cache", "cache", run.cachePaths);
       } catch (cause) {
         await this.setCacheOutcome("failed");
         createLogger(this.env.LOG_LEVEL, {
@@ -1099,7 +1074,7 @@ export class ActionRun extends DurableObject<ActionRunEnv> {
     }
     for (const artifact of run.artifactsToCapture) {
       try {
-        await this.captureArchive(artifact.name, "artifact", artifact.paths, budget);
+        await this.captureArchive(artifact.name, "artifact", artifact.paths);
       } catch (cause) {
         await this.markArtifactFailed(
           artifact.name,
@@ -1112,9 +1087,9 @@ export class ActionRun extends DurableObject<ActionRunEnv> {
   private async captureArchive(
     name: string,
     kind: ActionOutputMetadata["kind"],
-    paths: readonly string[],
-    budget: OutputBudget
+    paths: readonly string[]
   ): Promise<void> {
+    const budget: OutputBudget = { used: 0, truncated: false };
     const container = this.ctx.container;
     if (!container?.running) throw new Error("Action container is not running.");
     const scan = await this.execBounded(
@@ -1127,7 +1102,13 @@ export class ActionRun extends DurableObject<ActionRunEnv> {
     if (scan.exitCode !== 0) throw new Error(scan.stderr || "Output paths could not be inspected.");
     let scanResult: { files: number; bytes: number; paths: string[] };
     try {
-      scanResult = JSON.parse(scan.log) as { files: number; bytes: number; paths: string[] };
+      scanResult = z
+        .object({
+          files: z.number().int().nonnegative(),
+          bytes: z.number().int().nonnegative(),
+          paths: z.array(z.string()).max(16),
+        })
+        .parse(JSON.parse(scan.log));
     } catch {
       throw new Error("Output path inspection returned invalid data.");
     }
@@ -1238,12 +1219,7 @@ export class ActionRun extends DurableObject<ActionRunEnv> {
       if (carry.length) await save(carry);
     } catch (cause) {
       await reader.cancel();
-      await this.ctx.storage.delete(
-        Array.from(
-          { length: index },
-          (_unused, chunkIndex) => `${OUTPUT_CHUNK_PREFIX}${name}:${chunkIndex}`
-        )
-      );
+      await deleteChunks(this.ctx.storage, `${OUTPUT_CHUNK_PREFIX}${name}:`, index);
       throw cause;
     } finally {
       reader.releaseLock();
@@ -1268,15 +1244,11 @@ export class ActionRun extends DurableObject<ActionRunEnv> {
   private async clearRunInput(): Promise<void> {
     const count = await this.ctx.storage.get<number>("inputChunkCount");
     if (count !== undefined && count > 0) {
-      await this.ctx.storage.delete(
-        Array.from({ length: count }, (_unused, index) => `${INPUT_CHUNK_PREFIX}${index}`)
-      );
+      await deleteChunks(this.ctx.storage, INPUT_CHUNK_PREFIX, count);
     }
     const cacheCount = await this.ctx.storage.get<number>("cacheChunkCount");
     if (cacheCount !== undefined && cacheCount > 0) {
-      await this.ctx.storage.delete(
-        Array.from({ length: cacheCount }, (_unused, index) => `${CACHE_CHUNK_PREFIX}${index}`)
-      );
+      await deleteChunks(this.ctx.storage, CACHE_CHUNK_PREFIX, cacheCount);
     }
     await this.ctx.storage.delete(["inputChunkCount", "cacheChunkCount", "runPlan"]);
   }

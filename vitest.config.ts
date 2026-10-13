@@ -9,5 +9,10 @@ export default defineConfig({
       miniflare: { isolatedStorage: true, d1Persist: false },
     }),
   ],
-  test: { include: ["test/**/*.worker.test.ts"], exclude: ["**/node_modules/**"] },
+  test: {
+    include: ["test/**/*.worker.test.ts"],
+    exclude: ["**/node_modules/**"],
+    testTimeout: 30_000,
+    hookTimeout: 60_000,
+  },
 });

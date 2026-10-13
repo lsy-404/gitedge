@@ -19,9 +19,9 @@ export async function candidateState(
   row: MergeCandidateRecord
 ): Promise<MergeCandidate> {
   const runs = await env.DB.prepare(
-    "SELECT path AS name, check_status AS status, check_conclusion AS conclusion FROM actions_runs WHERE candidate_id = ? ORDER BY path LIMIT 4"
+    "SELECT path AS name, check_status AS status, check_conclusion AS conclusion FROM actions_runs WHERE candidate_id = ? AND commit_oid = ? ORDER BY path LIMIT 4"
   )
-    .bind(row.id)
+    .bind(row.id, row.result_oid)
     .all<{ name: string; status: string | null; conclusion: string | null }>();
   const checks = runs.results.map((run) => ({ ...run, status: run.status ?? "queued" }));
   const expected = z.array(z.string()).max(3).parse(JSON.parse(row.expected_workflows));

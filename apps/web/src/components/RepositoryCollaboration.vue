@@ -18,6 +18,7 @@ import type {
   Review,
   WikiPage,
   WikiPageSummary,
+  CollaborationListQuery,
 } from "../lib/api";
 import { isPagesPreviewCheck } from "../../../../packages/contracts/src/pages";
 import { ApiError, api, errorMessage } from "../lib/api";
@@ -973,7 +974,7 @@ async function loadMore() {
   if (cursor === null || listLoadingMore.value) return;
   listLoadingMore.value = true;
   try {
-    const query = {
+    const query: CollaborationListQuery = {
       state: stateFilter.value,
       q: queryText.value.trim() || undefined,
       category:
@@ -988,7 +989,7 @@ async function loadMore() {
         props.section === "issues" && issueView.value === "assigned"
           ? sessionState.user?.id
           : undefined,
-      attention: attentionOnly.value ? ("me" as const) : undefined,
+      attention: attentionOnly.value ? "me" : undefined,
       cursor,
       limit: 30,
     };

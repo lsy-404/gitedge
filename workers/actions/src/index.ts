@@ -564,21 +564,28 @@ async function publishActionOutputs(
       continue;
     }
     try {
-      const transfer = new FixedLengthStream(output.size);
-      const copying = outputBody(stub, output).pipeTo(transfer.writable);
-      await Promise.all([
-        copying,
-        env.RELEASE_ASSETS.put(objectKey, transfer.readable, {
-          httpMetadata: {
-            contentType: "application/gzip",
-            contentDisposition:
-              output.kind === "artifact"
-                ? `attachment; filename="${output.name}.tar.gz"`
-                : undefined,
-          },
-          customMetadata: { sha256: output.sha256, runId },
-        }),
-      ]);
+      const stored = await env.RELEASE_ASSETS.head(objectKey);
+      if (
+        !stored ||
+        stored.size !== output.size ||
+        stored.customMetadata?.sha256 !== output.sha256
+      ) {
+        const transfer = new FixedLengthStream(output.size);
+        const copying = outputBody(stub, output).pipeTo(transfer.writable);
+        await Promise.all([
+          copying,
+          env.RELEASE_ASSETS.put(objectKey, transfer.readable, {
+            httpMetadata: {
+              contentType: "application/gzip",
+              contentDisposition:
+                output.kind === "artifact"
+                  ? `attachment; filename="${output.name}.tar.gz"`
+                  : undefined,
+            },
+            customMetadata: { sha256: output.sha256, runId },
+          }),
+        ]);
+      }
       if (output.kind === "cache") {
         if (!row.lockfile_hash || !row.cache_event_type || !row.cache_key) {
           await stub.markCacheFailed();

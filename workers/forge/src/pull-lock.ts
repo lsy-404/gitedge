@@ -37,7 +37,7 @@ export async function pullLockRoute(
   if (pull.state !== "open")
     return errorResponse(409, "pull_closed", "Only open pull requests can be locked.");
   const source = await env.DB.prepare(
-    `SELECT COALESCE(s.workspace_name, r.artifact_name) AS artifactName,
+    `SELECT CASE WHEN p.head_session_id IS NOT NULL THEN s.workspace_name ELSE r.artifact_name END AS artifactName,
     s.git_token_id AS legacyToken FROM forge_pull_requests p
     JOIN repositories r ON r.id = COALESCE(p.head_repository_id, p.repository_id)
     LEFT JOIN auth_agent_sessions s ON s.id = p.head_session_id WHERE p.id = ?`

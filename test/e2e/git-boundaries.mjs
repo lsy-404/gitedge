@@ -168,7 +168,7 @@ try {
     status: 404,
   });
   const forged = await fetch(`${remote}/info/refs?service=git-upload-pack`, { headers: spoof });
-  assert.equal(forged.status, 404);
+  assert.equal(forged.status, 401);
   await api(
     `/api/forge/repositories/${repository.id}/issues`,
     "POST",

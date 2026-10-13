@@ -16,7 +16,8 @@ const lockedSource = `SELECT p.id FROM forge_pull_requests p
   LEFT JOIN auth_agent_sessions s ON s.id = p.head_session_id
   JOIN repositories r ON r.id = COALESCE(p.head_repository_id, p.repository_id)
   WHERE p.state = 'open' AND p.locked_at IS NOT NULL
-    AND COALESCE(s.workspace_name, r.artifact_name) = ? AND 'refs/heads/' || p.head_ref = ?`;
+    AND CASE WHEN p.head_session_id IS NOT NULL THEN s.workspace_name ELSE r.artifact_name END = ?
+    AND 'refs/heads/' || p.head_ref = ?`;
 
 export async function acquireRefWrites(
   db: D1Database,

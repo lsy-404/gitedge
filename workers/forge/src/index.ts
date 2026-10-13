@@ -1505,7 +1505,7 @@ async function featureRequest(
         const p = parsed.data;
         const now = Date.now();
         const stateChanged = p.state !== undefined && p.state !== current.state;
-        if (stateChanged && current.locked_at != null)
+        if (p.state !== undefined && current.locked_at != null)
           return errorResponse(
             409,
             "pull_locked",
@@ -1517,7 +1517,7 @@ async function featureRequest(
         };
         const [changed] = await env.DB.batch([
           env.DB.prepare(
-            "UPDATE forge_pull_requests SET title = COALESCE(?, title), body = COALESCE(?, body), state = COALESCE(?, state), draft = COALESCE(?, draft), locked_at = CASE WHEN ?3 IS NULL THEN locked_at ELSE NULL END, locked_by = CASE WHEN ?3 IS NULL THEN locked_by ELSE NULL END, locked_head_oid = CASE WHEN ?3 IS NULL THEN locked_head_oid ELSE NULL END, updated_at = ?, merge_started_at = NULL, merge_base_oid = NULL, merge_head_oid = NULL WHERE id = ? AND state != 'merged' AND (merge_started_at IS NULL OR merge_started_at < ?)"
+            "UPDATE forge_pull_requests SET title = COALESCE(?, title), body = COALESCE(?, body), state = COALESCE(?, state), draft = COALESCE(?, draft), locked_at = CASE WHEN ?3 IS NULL THEN locked_at ELSE NULL END, locked_by = CASE WHEN ?3 IS NULL THEN locked_by ELSE NULL END, locked_head_oid = CASE WHEN ?3 IS NULL THEN locked_head_oid ELSE NULL END, updated_at = ?, merge_started_at = NULL, merge_base_oid = NULL, merge_head_oid = NULL WHERE id = ? AND state != 'merged' AND (?3 IS NULL OR locked_at IS NULL) AND (merge_started_at IS NULL OR merge_started_at < ?)"
           ).bind(
             p.title ?? null,
             p.body ?? null,
