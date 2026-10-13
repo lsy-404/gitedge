@@ -58,6 +58,8 @@ export function task(overrides: Partial<Task> = {}): Task {
     title: "Agent memory",
     motivation: "Agents need durable context",
     description: "Store project memory per repository",
+    acceptanceCriteria: "",
+    blockedReason: null,
     status: "in_progress",
     assignee: null,
     actor: human,

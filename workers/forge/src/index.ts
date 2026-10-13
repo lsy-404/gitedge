@@ -15,6 +15,7 @@ import {
 import { authorizeMerge, blockerResponse } from "./merge-policy";
 import { readMergeRequirements } from "./merge-requirements-route";
 import { pullAttention, pullAttentionColumn, filterPullAttention } from "./pull-attention";
+import { dashboardAttention } from "./dashboard";
 import { reconcileRepository, sweepMergeAutomation } from "./merge-automation";
 import { pullLockRoute } from "./pull-lock";
 import { mergeAutomationRoutes } from "./merge-routes";
@@ -1336,6 +1337,18 @@ async function featureRequest(
             current.id,
             staleMergeCutoff
           ),
+          ...(stateChanged
+            ? targetStateProgressStatements(
+                env,
+                "pull_request",
+                String(current.id),
+                `Pull request #${number} ${p.state === "closed" ? "closed" : "reopened"} by ${actor.name}`,
+                now,
+                p.state === "closed"
+                  ? { from: "in_review", to: "in_progress" }
+                  : { from: "in_progress", to: "in_review" }
+              )
+            : []),
           ...((p.title !== undefined || p.body !== undefined) && current.state !== "merged"
             ? syncLinkStatements(
                 env,
@@ -1343,15 +1356,6 @@ async function featureRequest(
                 String(current.id),
                 p.title ?? String(current.title),
                 p.body ?? String(current.body),
-                now
-              )
-            : []),
-          ...(stateChanged
-            ? targetStateProgressStatements(
-                env,
-                "pull_request",
-                String(current.id),
-                `Pull request #${number} ${p.state === "closed" ? "closed" : "reopened"} by ${actor.name}`,
                 now
               )
             : []),
@@ -2056,6 +2060,18 @@ const worker = {
         "forbidden",
         "Agent sessions cannot resolve repositories by name for writes."
       );
+
+    if (parts[0] === "dashboard" && parts[1] === "attention") {
+      if (request.method !== "GET")
+        return errorResponse(405, "method_not_allowed", "Method is not allowed for this endpoint.");
+      if (user.agentSession || user.token)
+        return errorResponse(
+          403,
+          "forbidden",
+          "Dashboard attention requires a human account session."
+        );
+      return dashboardAttention(env, request, user);
+    }
 
     const personal = await handleNotifications(env, request, user, parts);
     if (personal) return personal;

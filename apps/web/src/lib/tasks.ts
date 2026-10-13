@@ -20,6 +20,8 @@ export interface DocumentView {
 export const taskStatuses = [
   "pending",
   "in_progress",
+  "blocked",
+  "in_review",
   "done",
   "abandoned",
 ] as const satisfies readonly TaskStatus[];
@@ -42,6 +44,10 @@ export function taskStatusTone(status: TaskStatus): BadgeTone {
       return "brand";
     case "done":
       return "success";
+    case "blocked":
+      return "danger";
+    case "in_review":
+      return "warning";
     case "abandoned":
       return "warning";
     default:

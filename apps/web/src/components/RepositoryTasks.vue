@@ -37,7 +37,13 @@ const error = ref("");
 /** Set when the server hides tasks and memory from this viewer (403/404). */
 const unavailable = ref(false);
 const showForm = ref(false);
-const form = ref({ type: "Feature", title: "", motivation: "", description: "" });
+const form = ref({
+  type: "Feature",
+  title: "",
+  motivation: "",
+  description: "",
+  acceptanceCriteria: "",
+});
 const formError = ref("");
 const saving = ref(false);
 const copied = ref(false);
@@ -150,9 +156,16 @@ async function createTask() {
       title: form.value.title.trim(),
       motivation: form.value.motivation,
       description: form.value.description,
+      acceptanceCriteria: form.value.acceptanceCriteria,
     });
     showForm.value = false;
-    form.value = { type: "Feature", title: "", motivation: "", description: "" };
+    form.value = {
+      type: "Feature",
+      title: "",
+      motivation: "",
+      description: "",
+      acceptanceCriteria: "",
+    };
     await router.push(
       `/${props.repository.owner}/${props.repository.name}/tasks/${created.number}`
     );
@@ -259,6 +272,11 @@ watch(
         <TextField v-model="form.title" required>{{ t("taskTitle") }}</TextField>
         <TextAreaField v-model="form.motivation" rows="3" :label="t('taskMotivation')" />
         <TextAreaField v-model="form.description" rows="4" :label="t('description')" />
+        <TextAreaField
+          v-model="form.acceptanceCriteria"
+          rows="4"
+          :label="t('taskAcceptanceCriteria')"
+        />
         <NoticeBar v-if="formError" intent="error">{{ formError }}</NoticeBar>
         <div class="form-actions">
           <FluentButton type="button" @click="showForm = false">{{ t("cancel") }}</FluentButton>

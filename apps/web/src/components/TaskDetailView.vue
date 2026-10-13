@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type {
+  Agent,
+  AgentSession,
   AssigneeCandidate,
+  CreatedAgentSession,
   Issue,
   PullRequest,
   Repository,
@@ -26,6 +29,8 @@ import {
   type DocumentView,
 } from "../lib/tasks";
 import { oneOf } from "../ui/formEvents";
+import { clearAgentSessionSecrets } from "../lib/credentialSecurity";
+import { credentialHelperHints } from "../lib/gitClone";
 import AppIcon from "./AppIcon.vue";
 import AppLink from "./AppLink.vue";
 import ConfirmButton from "./ConfirmButton.vue";
@@ -43,6 +48,28 @@ const { t, d } = useI18n();
 const task = ref<TaskDetail | null>(null);
 const documents = ref<Record<TaskDocumentKind, TaskDocument> | null>(null);
 const candidates = ref<AssigneeCandidate[]>([]);
+const agents = ref<Agent[]>([]);
+const repositorySessions = ref<AgentSession[]>([]);
+const preparingSession = ref(false);
+const creatingSession = ref(false);
+const selectedAgentId = ref("");
+const sessionError = ref("");
+const createdSession = ref<CreatedAgentSession | null>(null);
+const mcpConfig = computed(() => {
+  if (!createdSession.value || typeof window === "undefined") return "";
+  return JSON.stringify(
+    {
+      mcpServers: {
+        gitedge: {
+          url: new URL("/mcp", window.location.origin).toString(),
+          headers: { Authorization: `Bearer ${createdSession.value.token}` },
+        },
+      },
+    },
+    null,
+    2
+  );
+});
 const loading = ref(true);
 const error = ref("");
 const notFound = ref(false);
@@ -52,7 +79,14 @@ const saving = ref(false);
 const activeDocument = ref<TaskDocumentKind>("plan");
 const documentTablist = ref<HTMLElement | null>(null);
 const editing = ref(false);
-const draft = ref({ type: "", title: "", motivation: "", description: "" });
+const draft = ref({
+  type: "",
+  title: "",
+  motivation: "",
+  description: "",
+  acceptanceCriteria: "",
+  blockedReason: "",
+});
 
 const showLinkForm = ref(false);
 const linkOptions = ref<LinkOption[]>([]);
@@ -76,6 +110,17 @@ const assigneeOutsideCandidates = computed(() => {
     : { key, name: assignee.name };
 });
 const progress = computed(() => task.value?.progress ?? { total: 0, done: 0, percent: null });
+const taskSessions = computed(() => {
+  const agentId =
+    task.value?.lease?.agent.id ??
+    (task.value?.assignee?.kind === "agent" ? task.value.assignee.id : null);
+  if (!agentId) return [];
+  const now = Date.now();
+  return repositorySessions.value.filter(
+    (session) =>
+      session.agentId === agentId && session.status === "active" && session.expiresAt > now
+  );
+});
 
 async function load() {
   const version = ++loadVersion;
@@ -84,21 +129,29 @@ async function load() {
   notFound.value = false;
   unavailable.value = false;
   try {
-    const [detail, people] = await Promise.all([
+    const [detail, people, ownedAgents, sessions] = await Promise.all([
       api.task(props.repository.id, props.number),
       canEdit.value
         ? api.assigneeCandidates(props.repository.id).catch(() => [])
+        : Promise.resolve([]),
+      canEdit.value ? api.agents().catch(() => []) : Promise.resolve([]),
+      canEdit.value
+        ? api.repositorySessions(props.repository.id).catch(() => [])
         : Promise.resolve([]),
     ]);
     if (version !== loadVersion) return;
     task.value = detail;
     documents.value = detail.documents;
     candidates.value = people;
+    agents.value = ownedAgents.filter((agent) => agent.disabledAt === null);
+    repositorySessions.value = sessions;
     draft.value = {
       type: detail.type,
       title: detail.title,
       motivation: detail.motivation,
       description: detail.description,
+      acceptanceCriteria: detail.acceptanceCriteria,
+      blockedReason: detail.blockedReason ?? "",
     };
   } catch (cause) {
     if (version !== loadVersion) return;
@@ -140,9 +193,58 @@ function setStatus(value: string) {
   if (!current) return;
   const status = oneOf(taskStatuses, value, current.status);
   if (status === current.status) return;
+  const blockedReason =
+    status === "blocked"
+      ? window.prompt(t("taskBlockedReasonPrompt"), current.blockedReason ?? "")?.trim()
+      : undefined;
+  if (status === "blocked" && !blockedReason) return;
+  const accepted = true;
   void run(async () => {
-    applyDetail(await api.updateTask(props.repository.id, props.number, { status }));
+    applyDetail(
+      await api.updateTask(props.repository.id, props.number, {
+        status,
+        ...(status === "done" ? { accepted } : {}),
+        ...(status === "blocked" ? { blockedReason } : {}),
+      })
+    );
   });
+}
+
+function openSessionPreparation() {
+  selectedAgentId.value =
+    (task.value?.assignee?.kind === "agent" ? task.value.assignee.id : "") ||
+    agents.value[0]?.id ||
+    "";
+  sessionError.value = "";
+  createdSession.value = null;
+  preparingSession.value = true;
+}
+
+function closeSessionPreparation() {
+  if (createdSession.value) createdSession.value = clearAgentSessionSecrets(createdSession.value);
+  createdSession.value = null;
+  preparingSession.value = false;
+  sessionError.value = "";
+}
+
+async function createTaskSession() {
+  if (!selectedAgentId.value) return;
+  creatingSession.value = true;
+  sessionError.value = "";
+  try {
+    createdSession.value = await api.createAgentSession(selectedAgentId.value, {
+      repositoryId: props.repository.id,
+      baseRef: props.repository.defaultBranch,
+      permission: "write",
+      ttlSeconds: 3600,
+    });
+    await refresh();
+    repositorySessions.value = await api.repositorySessions(props.repository.id).catch(() => []);
+  } catch (cause) {
+    sessionError.value = errorMessage(cause, t);
+  } finally {
+    creatingSession.value = false;
+  }
 }
 
 function setAssignee(value: string) {
@@ -172,6 +274,10 @@ function submitEdit() {
           title: draft.value.title.trim(),
           motivation: draft.value.motivation,
           description: draft.value.description,
+          acceptanceCriteria: draft.value.acceptanceCriteria,
+          ...(task.value?.status === "blocked"
+            ? { blockedReason: draft.value.blockedReason.trim() || null }
+            : {}),
         })
       );
       editing.value = false;
@@ -323,6 +429,9 @@ function linkTone(state: TaskLink["state"]): "success" | "danger" | "brand" {
 }
 
 watch(() => [props.repository.id, props.number], load, { immediate: true });
+onUnmounted(() => {
+  if (createdSession.value) createdSession.value = clearAgentSessionSecrets(createdSession.value);
+});
 </script>
 
 <template>
@@ -404,6 +513,42 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
           </div>
         </div>
 
+        <div class="task-overview">
+          <div>
+            <p class="eyebrow">{{ t("taskNextAction") }}</p>
+            <p class="body-text">{{ t(`taskNextAction_${task.status}`) }}</p>
+          </div>
+          <div>
+            <p class="eyebrow">{{ t("taskLease") }}</p>
+            <p v-if="task.lease" class="body-text">
+              {{ t("taskLeaseHeld", { name: task.lease.agent.name }) }} ·
+              {{ t("sessionExpiresAt", { date: d(task.lease.expiresAt, "long") }) }}
+            </p>
+            <p v-else class="muted">{{ t("taskLeaseNone") }}</p>
+          </div>
+          <div v-if="taskSessions.length">
+            <p class="eyebrow">{{ t("taskAgentSessions") }}</p>
+            <ul class="plain-list">
+              <li v-for="session in taskSessions" :key="session.id" class="box-row">
+                <code>{{ session.id }}</code>
+                <span>
+                  {{ session.workspaceName }} · {{ session.baseRef }} ·
+                  {{ t(session.permission === "write" ? "writeAccess" : "readOnly") }}
+                </span>
+                <small class="muted">{{
+                  t("sessionExpiresAt", { date: d(session.expiresAt, "long") })
+                }}</small>
+              </li>
+            </ul>
+          </div>
+          <div v-if="canEdit && agents.length">
+            <p class="eyebrow">{{ t("taskAgentSession") }}</p>
+            <FluentButton type="button" size="small" @click="openSessionPreparation">
+              {{ t("taskPrepareSession") }}
+            </FluentButton>
+          </div>
+        </div>
+
         <div class="actor-line">
           {{ task.actor.name
           }}<template v-if="task.actor.kind === 'agent'"> · {{ t("agent") }}</template> ·
@@ -416,6 +561,17 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
           <TextField v-model="draft.title" required>{{ t("taskTitle") }}</TextField>
           <TextAreaField v-model="draft.motivation" rows="3" :label="t('taskMotivation')" />
           <TextAreaField v-model="draft.description" rows="5" :label="t('description')" />
+          <TextAreaField
+            v-model="draft.acceptanceCriteria"
+            rows="5"
+            :label="t('taskAcceptanceCriteria')"
+          />
+          <TextAreaField
+            v-if="task.status === 'blocked'"
+            v-model="draft.blockedReason"
+            rows="3"
+            :label="t('taskBlockedReason')"
+          />
           <div class="form-actions">
             <FluentButton type="submit" tone="primary" :disabled="saving">{{
               t("save")
@@ -432,6 +588,15 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
             <p class="eyebrow">{{ t("description") }}</p>
             <p v-if="task.description" class="body-text">{{ task.description }}</p>
             <p v-else class="muted">{{ t("taskDescriptionEmpty") }}</p>
+          </div>
+          <div>
+            <p class="eyebrow">{{ t("taskAcceptanceCriteria") }}</p>
+            <p v-if="task.acceptanceCriteria" class="body-text">{{ task.acceptanceCriteria }}</p>
+            <p v-else class="muted">{{ t("taskAcceptanceCriteriaEmpty") }}</p>
+          </div>
+          <div v-if="task.blockedReason">
+            <p class="eyebrow">{{ t("taskBlockedReason") }}</p>
+            <p class="body-text">{{ task.blockedReason }}</p>
           </div>
         </div>
         <NoticeBar v-if="actionError" intent="error">{{ actionError }}</NoticeBar>
@@ -553,6 +718,12 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
             <AppIcon :name="link.kind === 'issue' ? 'issue' : 'pr'" />
             <AppLink :to="linkPath(link)">#{{ link.number }} {{ link.title }}</AppLink>
             <StatusBadge :tone="linkTone(link.state)">{{ t(link.state) }}</StatusBadge>
+            <StatusBadge v-if="link.failedChecks" tone="danger">
+              {{ t("taskFailedChecks", { count: link.failedChecks }) }}
+            </StatusBadge>
+            <StatusBadge v-if="link.latestReview" tone="warning">
+              {{ t(`taskLatestReview_${link.latestReview}`) }}
+            </StatusBadge>
             <ConfirmButton
               v-if="canEdit"
               size="small"
@@ -567,6 +738,77 @@ watch(() => [props.repository.id, props.number], load, { immediate: true });
         </ul>
         <p v-else class="box-row muted">{{ t("taskLinksEmpty") }}</p>
       </section>
+
+      <FluentDialog
+        :open="preparingSession"
+        :label="t('taskPrepareSession')"
+        close-on-outside
+        @close="closeSessionPreparation"
+      >
+        <template #title
+          ><h2>{{ t("taskPrepareSession") }}</h2></template
+        >
+        <form v-if="!createdSession" class="form-stack" @submit.prevent="createTaskSession">
+          <p class="muted">{{ t("taskSessionScopeHint", { branch: repository.defaultBranch }) }}</p>
+          <SelectField v-model="selectedAgentId" :label="t('agent')" required>
+            <option v-for="agent in agents" :key="agent.id" :value="agent.id">
+              {{ agent.name }}
+            </option>
+          </SelectField>
+          <NoticeBar v-if="sessionError" intent="error">{{ sessionError }}</NoticeBar>
+          <div class="form-actions">
+            <FluentButton type="button" @click="closeSessionPreparation">{{
+              t("cancel")
+            }}</FluentButton>
+            <FluentButton
+              type="submit"
+              tone="primary"
+              :disabled="creatingSession || !selectedAgentId"
+            >
+              {{ creatingSession ? t("loading") : t("taskPrepareSession") }}
+            </FluentButton>
+          </div>
+        </form>
+        <div v-else class="form-stack">
+          <NoticeBar intent="warning">{{ t("taskSessionSecretsOnce") }}</NoticeBar>
+          <p>
+            <strong>{{ t("taskSessionExpiry") }}:</strong> {{ d(createdSession.expiresAt, "long") }}
+          </p>
+          <p>
+            <strong>{{ t("taskSessionId") }}:</strong> <code>{{ createdSession.id }}</code>
+          </p>
+          <p>
+            <strong>{{ t("taskSessionRemote") }}:</strong> <code>{{ createdSession.remote }}</code>
+          </p>
+          <label class="form-stack">
+            <span>{{ t("taskSessionMcpConfig") }}</span>
+            <textarea readonly rows="8" :value="mcpConfig"></textarea>
+          </label>
+          <label class="form-stack">
+            <span>{{ t("taskSessionGitToken") }}</span>
+            <textarea readonly rows="3" :value="createdSession.gitToken"></textarea>
+          </label>
+          <p class="muted">{{ t("taskSessionGitHint") }}</p>
+          <ul class="plain-list">
+            <li
+              v-for="helper in credentialHelperHints.filter((entry) => !entry.plaintext)"
+              :key="helper.id"
+              class="box-row"
+            >
+              <code>{{ helper.command }}</code>
+            </li>
+          </ul>
+          <label v-if="createdSession.instructions" class="form-stack">
+            <span>{{ t("taskSessionInstructions") }}</span>
+            <textarea readonly rows="6" :value="createdSession.instructions"></textarea>
+          </label>
+          <div class="form-actions">
+            <FluentButton type="button" tone="primary" @click="closeSessionPreparation">
+              {{ t("done") }}
+            </FluentButton>
+          </div>
+        </div>
+      </FluentDialog>
 
       <section class="box commits-card" :aria-label="t('taskCommits')">
         <header class="box-header">

@@ -2,7 +2,13 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
-import { api, type Organization, type Repository, errorMessage } from "../lib/api";
+import {
+  api,
+  type DashboardAttentionPage,
+  type Organization,
+  type Repository,
+  errorMessage,
+} from "../lib/api";
 import { sessionState } from "../lib/session";
 import FormActions from "../components/FormActions.vue";
 import StatusState from "../components/StatusState.vue";
@@ -19,6 +25,13 @@ import { RepositorySlugSchema } from "../../../../packages/contracts/src/reposit
 import "../styles/workspace.css";
 
 const visibilities = ["private", "public"] as const;
+const attentionKinds = [
+  "review_requested",
+  "changes_requested",
+  "failed_check",
+  "blocked_task",
+  "expiring_session",
+] as const;
 const { t, d } = useI18n();
 const route = useRoute();
 const router = useRouter();
@@ -55,6 +68,11 @@ const form = ref<{
   initializeReadme: false,
 });
 const organizations = ref<Organization[]>([]);
+const attention = ref<DashboardAttentionPage | null>(null);
+const attentionError = ref("");
+const attentionLoading = ref(false);
+const attentionCursor = ref<string | null>(null);
+const attentionLoadingMore = ref(false);
 const owner = ref("");
 const filter = ref(typeof route.query.q === "string" ? route.query.q : "");
 const visibleRepos = computed(() => {
@@ -85,6 +103,33 @@ async function load() {
   }
   owner.value = owner.value || sessionState.user?.identifier || "";
   loading.value = false;
+  void loadAttention();
+}
+
+async function loadAttention(cursor?: string) {
+  attentionLoading.value = !cursor;
+  attentionLoadingMore.value = Boolean(cursor);
+  attentionError.value = "";
+  try {
+    const page = await api.dashboardAttention(cursor);
+    attention.value =
+      cursor && attention.value
+        ? {
+            ...page,
+            items: [
+              ...new Map(
+                [...attention.value.items, ...page.items].map((item) => [item.id, item])
+              ).values(),
+            ],
+          }
+        : page;
+    attentionCursor.value = page.nextCursor;
+  } catch (cause) {
+    attentionError.value = errorMessage(cause, t);
+  } finally {
+    attentionLoading.value = false;
+    attentionLoadingMore.value = false;
+  }
 }
 
 async function createRepository() {
@@ -222,6 +267,80 @@ onMounted(load);
       </header>
 
       <PendingInvitations @accepted="load" />
+
+      <section class="box dashboard-attention" aria-labelledby="dashboard-attention-title">
+        <div class="box-header workspace-panel-heading">
+          <div>
+            <h2 id="dashboard-attention-title">{{ t("dashboardAttention") }}</h2>
+            <p class="muted">{{ t("dashboardAttentionHint") }}</p>
+          </div>
+          <div v-if="attention" class="dashboard-attention-counts" aria-live="polite">
+            <span v-for="kind in attentionKinds" :key="kind">
+              {{ t(`dashboardAttention_${kind}`) }} <strong>{{ attention.counts[kind] }}</strong>
+            </span>
+          </div>
+          <button class="btn btn-subtle btn-sm" type="button" @click="loadAttention()">
+            {{ t("refresh") }}
+          </button>
+        </div>
+        <StatusState
+          v-if="attentionLoading || attentionError"
+          :loading="attentionLoading"
+          :error="attentionError"
+          :empty="false"
+          @retry="loadAttention()"
+        />
+        <p v-if="attention?.truncated" class="box-row muted" role="status">
+          {{ t("dashboardAttentionLimited") }}
+        </p>
+        <div
+          v-if="!attentionLoading && !attentionError && attention?.items.length"
+          class="dashboard-attention-list"
+        >
+          <RouterLink
+            v-for="item in attention.items"
+            :key="item.id"
+            class="box-row dashboard-attention-row"
+            :to="item.url"
+          >
+            <span class="grow">
+              <strong>{{ item.title }}</strong>
+              <small
+                >{{ item.owner }}/{{ item.repository }} ·
+                {{ t(`dashboardAttention_${item.kind}`) }}</small
+              >
+              <small v-if="item.kind === 'blocked_task' && item.detail">{{ item.detail }}</small>
+              <small v-else-if="item.kind === 'expiring_session'">{{
+                t("sessionExpiresAt", { date: d(new Date(item.detail), "long") })
+              }}</small>
+            </span>
+            <StatusBadge
+              :tone="
+                item.kind === 'blocked_task' || item.kind === 'failed_check' ? 'danger' : 'warning'
+              "
+            >
+              {{ t(`dashboardAttention_${item.kind}`) }}
+            </StatusBadge>
+          </RouterLink>
+        </div>
+        <p
+          v-if="
+            !attentionLoading && !attentionError && !attentionCursor && !attention?.items.length
+          "
+          class="box-row muted"
+        >
+          {{ t("dashboardAttentionEmpty") }}
+        </p>
+        <button
+          v-if="attentionCursor"
+          class="btn btn-subtle"
+          type="button"
+          :disabled="attentionLoadingMore"
+          @click="loadAttention(attentionCursor)"
+        >
+          {{ attentionLoadingMore ? t("loading") : t("loadMore") }}
+        </button>
+      </section>
 
       <div class="dashboard-columns">
         <div class="dashboard-main-column">

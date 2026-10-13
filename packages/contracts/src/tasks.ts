@@ -7,7 +7,14 @@ export const AGENT_MODE_VERSION = "v0.2.2";
 const markdown = z.string().max(200_000);
 
 export const TaskTypeSchema = z.string().regex(/^[A-Za-z]{2,24}$/);
-export const TaskStatusSchema = z.enum(["pending", "in_progress", "done", "abandoned"]);
+export const TaskStatusSchema = z.enum([
+  "pending",
+  "in_progress",
+  "blocked",
+  "in_review",
+  "done",
+  "abandoned",
+]);
 export type TaskStatus = z.infer<typeof TaskStatusSchema>;
 export const TaskDocumentKindSchema = z.enum(["plan", "findings", "progress"]);
 export type TaskDocumentKind = z.infer<typeof TaskDocumentKindSchema>;
@@ -85,6 +92,8 @@ export const TaskSchema = z.object({
   title: z.string(),
   motivation: z.string(),
   description: z.string(),
+  acceptanceCriteria: z.string(),
+  blockedReason: z.string().nullable(),
   status: TaskStatusSchema,
   assignee: AssigneeSchema.nullable(),
   lease: TaskLeaseSchema.nullable(),
@@ -113,6 +122,8 @@ export const TaskLinkSchema = z.object({
   number: z.number(),
   title: z.string(),
   state: z.enum(["open", "closed", "merged"]),
+  failedChecks: z.number().int().nonnegative(),
+  latestReview: z.enum(["commented", "approved", "changes_requested"]).nullable(),
   createdAt: z.number(),
 });
 export type TaskLink = z.infer<typeof TaskLinkSchema>;
@@ -203,6 +214,7 @@ export const CreateTaskInputSchema = z.object({
   title: z.string().trim().min(1).max(200),
   motivation: z.string().max(5_000).default(""),
   description: z.string().max(20_000).default(""),
+  acceptanceCriteria: z.string().max(20_000).default(""),
 });
 
 export const UpdateTaskInputSchema = z
@@ -211,9 +223,21 @@ export const UpdateTaskInputSchema = z
     title: z.string().trim().min(1).max(200).optional(),
     motivation: z.string().max(5_000).optional(),
     description: z.string().max(20_000).optional(),
+    acceptanceCriteria: z.string().max(20_000).optional(),
+    blockedReason: z.string().max(5_000).nullable().optional(),
     status: TaskStatusSchema.optional(),
+    accepted: z.literal(true).optional(),
   })
-  .refine((value) => Object.keys(value).length > 0);
+  .refine((value) => Object.keys(value).length > 0)
+  .refine((value) => value.status !== "done" || value.accepted === true, {
+    message: "Explicit acceptance is required to complete a task.",
+  })
+  .refine(
+    (value) =>
+      value.status !== "blocked" ||
+      (typeof value.blockedReason === "string" && value.blockedReason.trim().length > 0),
+    { message: "A blocked task requires a reason." }
+  );
 
 export const TaskLeaseInputSchema = z.object({
   ttlSeconds: z
@@ -222,6 +246,10 @@ export const TaskLeaseInputSchema = z.object({
     .min(60)
     .max(TASK_LEASE_MAX_SECONDS)
     .default(TASK_LEASE_DEFAULT_SECONDS),
+});
+
+export const CompleteTaskInputSchema = TaskLeaseInputSchema.extend({
+  accepted: z.literal(true),
 });
 
 export const AssignTaskInputSchema = z.object({ assignee: AssigneeRefSchema.nullable() });
@@ -288,6 +316,8 @@ export const UpdateRepositorySettingsInputSchema = z
 export const TASK_STATUS_LABELS: Readonly<Record<TaskStatus, string>> = {
   pending: "⏳ 待处理",
   in_progress: "🔄 进行中",
+  blocked: "⛔ 已阻塞",
+  in_review: "👀 待验收",
   done: "✅ 已完成",
   abandoned: "❌ 已废弃",
 };

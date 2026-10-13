@@ -15,6 +15,7 @@ const MIGRATIONS_UNDER_TEST = [
   "0010_agent_tasks.sql",
   "0012_repository_settings.sql",
   "0030_agent_collaboration_loop.sql",
+  "0040_task_acceptance_workflow.sql",
 ];
 const MERGE_OID = "c".repeat(40);
 const BASE_OID = "a".repeat(40);
@@ -539,11 +540,12 @@ describe("Task links, progress and commits", () => {
     detail = await data(await call(`/repositories/r1/tasks/${task.number}`, "GET", bob));
     expect(detail.progress).toEqual({ total: 2, done: 2, percent: 100 });
     const lines = (detail.documents.progress.content as string).trim().split("\n");
-    expect(lines).toHaveLength(4);
-    expect(lines[0]).toContain(`Issue #${issue} closed by alice`);
-    expect(lines[1]).toContain(`Issue #${issue} reopened by alice`);
-    expect(lines[3]).toContain(`Pull request #${pull} closed by alice`);
-    expect(detail.documents.progress.revision).toBe(4);
+    expect(lines).toHaveLength(5);
+    expect(lines[0]).toContain("Task moved to review after pull request");
+    expect(lines[1]).toContain(`Issue #${issue} closed by alice`);
+    expect(lines[2]).toContain(`Issue #${issue} reopened by alice`);
+    expect(lines[4]).toContain(`Pull request #${pull} closed by alice`);
+    expect(detail.documents.progress.revision).toBe(5);
 
     // Unlinked items change state without touching any task.
     const loose = await createIssue("Loose issue");
@@ -635,9 +637,9 @@ describe("Task links, progress and commits", () => {
     const history = await data(
       await call(`/repositories/r1/tasks/${task.number}/documents/progress/history`, "GET", alice)
     );
-    expect(history).toHaveLength(2);
+    expect(history).toHaveLength(3);
     expect(history[0].actor).toMatchObject({ kind: "system" });
-    expect(detail.status).toBe("done");
+    expect(detail.status).toBe("in_review");
 
     // A second merge of an unlinked pull request leaves task data alone.
     const before = await env.DB.prepare("SELECT COUNT(*) AS count FROM forge_task_commits").first<{
@@ -730,7 +732,7 @@ describe("Commit verification, merge entries and link moves", () => {
     expect(detail.documents.progress.content).toContain(
       `Pull request #${pull} merged as ccccccc into main`
     );
-    expect(detail.documents.progress.revision).toBe(2);
+    expect(detail.documents.progress.revision).toBe(3);
   });
 
   it("keeps non-member authors out of members-only task progress", async () => {
@@ -1237,7 +1239,13 @@ describe("Task leases and merge completion", () => {
   });
 
   const lease = (number: number, action: string, who: [string, string], session?: unknown) =>
-    call(`/repositories/r1/tasks/${number}/${action}`, "POST", who, {}, session);
+    call(
+      `/repositories/r1/tasks/${number}/${action}`,
+      "POST",
+      who,
+      action === "complete" ? { accepted: true } : {},
+      session
+    );
 
   it("lets one agent claim a pending task and rejects everyone else", async () => {
     const task = await createTask("Leased work");
@@ -1336,7 +1344,7 @@ describe("Task leases and merge completion", () => {
     expect((await lease(other.number, "release", alice)).status).toBe(409);
   });
 
-  it("completes the linked task in the merge batch, by explicit link or task reference", async () => {
+  it("moves linked tasks to review after the pull request merges", async () => {
     const linked = await createTask("Linked completion");
     await lease(linked.number, "claim", bob, writeSession);
     const pull = await createPull("Linked pull");
@@ -1349,9 +1357,9 @@ describe("Task leases and merge completion", () => {
       (await call(`/repositories/r1/pull-requests/${pull}/merge`, "POST", alice, mergeBody)).status
     ).toBe(200);
     const done = await data(await call(`/repositories/r1/tasks/${linked.number}`, "GET", alice));
-    expect(done).toMatchObject({ status: "done", lease: null });
+    expect(done).toMatchObject({ status: "in_review", lease: null });
     expect(done.documents.progress.content).toContain(
-      `Task completed by the merge of pull request #${pull}`
+      `Pull request #${pull} merged; task is waiting for acceptance`
     );
 
     const referenced = await createTask("Referenced completion");
@@ -1369,7 +1377,7 @@ describe("Task leases and merge completion", () => {
     await call(`/repositories/r1/pull-requests/${referencedPull}/merge`, "POST", alice, mergeBody);
     expect(
       (await data(await call(`/repositories/r1/tasks/${referenced.number}`, "GET", alice))).status
-    ).toBe("done");
+    ).toBe("in_review");
   });
 
   it("ignores task references in pull requests opened by non-members", async () => {

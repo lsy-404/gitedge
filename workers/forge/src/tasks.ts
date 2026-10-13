@@ -8,6 +8,7 @@ import {
   AttachTaskLinkInputSchema,
   BindTaskCommitInputSchema,
   CreateTaskInputSchema,
+  CompleteTaskInputSchema,
   GitOidSchema,
   MemoryVisibilitySchema,
   MoveTaskLinkInputSchema,
@@ -68,6 +69,8 @@ type TaskRow = {
   title: string;
   motivation: string;
   description: string;
+  acceptance_criteria: string;
+  blocked_reason: string | null;
   status: TaskStatus;
   assignee_kind: "user" | "agent" | null;
   assignee_id: string | null;
@@ -112,6 +115,8 @@ type LinkRow = {
   number: number;
   title: string;
   state: "open" | "closed" | "merged";
+  failed_checks: number;
+  latest_review: "commented" | "approved" | "changes_requested" | null;
   created_at: number;
 };
 type HistoryRow = { revision: number; actor_json: string; size: number; updated_at: number };
@@ -131,7 +136,7 @@ const LINK_TABLES: Record<TaskLinkKind, "forge_issues" | "forge_pull_requests"> 
   pull_request: "forge_pull_requests",
 };
 
-const TASK_SELECT = `SELECT t.id, t.number, t.type, t.title, t.motivation, t.description, t.status, t.assignee_kind, t.assignee_id, COALESCE(u.identifier, g.name, t.assignee_id) AS assignee_name, t.lease_agent_id, (SELECT name FROM auth_agents WHERE id = t.lease_agent_id) AS lease_agent_name, t.lease_claimed_at, t.lease_expires_at, t.actor_json, t.created_by, t.created_at, t.updated_at,
+const TASK_SELECT = `SELECT t.id, t.number, t.type, t.title, t.motivation, t.description, t.acceptance_criteria, t.blocked_reason, t.status, t.assignee_kind, t.assignee_id, COALESCE(u.identifier, g.name, t.assignee_id) AS assignee_name, t.lease_agent_id, (SELECT name FROM auth_agents WHERE id = t.lease_agent_id) AS lease_agent_name, t.lease_claimed_at, t.lease_expires_at, t.actor_json, t.created_by, t.created_at, t.updated_at,
   (SELECT COUNT(*) FROM forge_task_links l WHERE l.task_id = t.id) AS link_total,
   (SELECT COUNT(*) FROM forge_task_links l LEFT JOIN forge_issues i ON l.target_kind = 'issue' AND i.id = l.target_id LEFT JOIN forge_pull_requests p ON l.target_kind = 'pull_request' AND p.id = l.target_id WHERE l.task_id = t.id AND (i.state = 'closed' OR p.state IN ('closed', 'merged'))) AS link_done,
   (SELECT COUNT(*) FROM forge_task_commits c WHERE c.task_id = t.id) AS commit_count
@@ -174,6 +179,8 @@ function presentTask(row: TaskRow): Task {
     title: row.title,
     motivation: row.motivation,
     description: row.description,
+    acceptanceCriteria: row.acceptance_criteria,
+    blockedReason: row.blocked_reason,
     status: row.status,
     assignee,
     lease: presentLease(row),
@@ -339,9 +346,18 @@ export function targetStateProgressStatements(
   targetKind: TaskLinkKind,
   targetId: string,
   text: string,
-  now: number
+  now: number,
+  taskTransition?: { from: TaskStatus; to: TaskStatus }
 ): D1PreparedStatement[] {
-  return systemProgressStatements(env, { targetKind, targetId }, text, now, true);
+  const progress = systemProgressStatements(env, { targetKind, targetId }, text, now, true);
+  return taskTransition
+    ? [
+        ...progress,
+        env.DB.prepare(
+          `UPDATE forge_tasks SET status = ?, ${CLEAR_LEASE}, updated_at = ? WHERE id = (SELECT task_id FROM forge_task_links WHERE target_kind = ? AND target_id = ?) AND status = ? AND changes() = 1`
+        ).bind(taskTransition.to, now, targetKind, targetId, taskTransition.from),
+      ]
+    : progress;
 }
 
 export type MergedPullRequest = {
@@ -410,12 +426,12 @@ export function mergeCompletionStatements(
   if (merge.baseRef !== defaultBranch) return [];
   return [
     env.DB.prepare(
-      `UPDATE forge_tasks SET status = 'done', ${CLEAR_LEASE}, updated_at = ? WHERE status IN ('pending', 'in_progress') AND id = (SELECT task_id FROM forge_task_links WHERE target_kind = 'pull_request' AND target_id = ?) AND EXISTS (SELECT 1 FROM forge_pull_requests WHERE id = ? AND state = 'merged' AND merged_oid = ?)`
+      `UPDATE forge_tasks SET status = 'in_review', ${CLEAR_LEASE}, updated_at = ? WHERE status IN ('pending', 'in_progress', 'in_review') AND id = (SELECT task_id FROM forge_task_links WHERE target_kind = 'pull_request' AND target_id = ?) AND EXISTS (SELECT 1 FROM forge_pull_requests WHERE id = ? AND state = 'merged' AND merged_oid = ?)`
     ).bind(merge.now, merge.pullRequestId, merge.pullRequestId, merge.oid),
     ...systemProgressStatements(
       env,
       { targetKind: "pull_request", targetId: merge.pullRequestId },
-      `Task completed by the merge of pull request #${merge.number}`,
+      `Pull request #${merge.number} merged; task is waiting for acceptance`,
       merge.now,
       true
     ),
@@ -450,6 +466,16 @@ export function taskReferenceStatements(
       repository.id,
       number,
       pullRequestId
+    ),
+    env.DB.prepare(
+      `UPDATE forge_tasks SET status = 'in_review', ${CLEAR_LEASE}, updated_at = ? WHERE id = (SELECT task_id FROM forge_task_links WHERE target_kind = 'pull_request' AND target_id = ?) AND status IN ('pending', 'in_progress') AND EXISTS (SELECT 1 FROM forge_pull_requests WHERE id = ? AND state = 'open') AND changes() = 1`
+    ).bind(now, pullRequestId, pullRequestId),
+    ...systemProgressStatements(
+      env,
+      { targetKind: "pull_request", targetId: pullRequestId },
+      "Task moved to review after a linked pull request was opened",
+      now,
+      true
     ),
   ];
 }
@@ -635,7 +661,10 @@ async function taskDetail(env: ForgeEnv, taskId: string): Promise<TaskDetail | n
       .bind(taskId)
       .all<DocumentRow>(),
     env.DB.prepare(
-      "SELECT l.target_kind AS kind, COALESCE(i.number, p.number) AS number, COALESCE(i.title, p.title) AS title, COALESCE(i.state, p.state) AS state, l.created_at FROM forge_task_links l LEFT JOIN forge_issues i ON l.target_kind = 'issue' AND i.id = l.target_id LEFT JOIN forge_pull_requests p ON l.target_kind = 'pull_request' AND p.id = l.target_id WHERE l.task_id = ? ORDER BY l.created_at ASC, number ASC"
+      `SELECT l.target_kind AS kind, COALESCE(i.number, p.number) AS number, COALESCE(i.title, p.title) AS title, COALESCE(i.state, p.state) AS state, l.created_at,
+        CASE WHEN l.target_kind = 'pull_request' THEN (SELECT COUNT(*) FROM forge_check_runs c WHERE c.pull_request_id = p.id AND c.status = 'completed' AND c.conclusion = 'failure' AND c.commit_oid = COALESCE((SELECT h.oid FROM forge_ref_pushers h WHERE h.repository_id = COALESCE(p.head_repository_id, p.repository_id) AND h.session_id = COALESCE(p.head_session_id, '') AND h.ref = 'refs/heads/' || p.head_ref), (SELECT u.new_oid FROM forge_pull_head_updates u WHERE u.pull_request_id = p.id ORDER BY u.created_at DESC, u.id DESC LIMIT 1))) ELSE 0 END AS failed_checks,
+        CASE WHEN l.target_kind = 'pull_request' THEN (SELECT r.state FROM forge_reviews r WHERE r.pull_request_id = p.id AND r.commit_oid = COALESCE((SELECT h.oid FROM forge_ref_pushers h WHERE h.repository_id = COALESCE(p.head_repository_id, p.repository_id) AND h.session_id = COALESCE(p.head_session_id, '') AND h.ref = 'refs/heads/' || p.head_ref), (SELECT u.new_oid FROM forge_pull_head_updates u WHERE u.pull_request_id = p.id ORDER BY u.created_at DESC, u.id DESC LIMIT 1)) ORDER BY r.created_at DESC, r.rowid DESC LIMIT 1) ELSE NULL END AS latest_review
+        FROM forge_task_links l LEFT JOIN forge_issues i ON l.target_kind = 'issue' AND i.id = l.target_id LEFT JOIN forge_pull_requests p ON l.target_kind = 'pull_request' AND p.id = l.target_id WHERE l.task_id = ? ORDER BY l.created_at ASC, number ASC`
     )
       .bind(taskId)
       .all<LinkRow>(),
@@ -667,6 +696,8 @@ async function taskDetail(env: ForgeEnv, taskId: string): Promise<TaskDetail | n
       number: row.number,
       title: row.title,
       state: row.state,
+      failedChecks: row.failed_checks,
+      latestReview: row.latest_review,
       createdAt: row.created_at,
     })),
     commits: commits.results.map(presentCommit),
@@ -688,7 +719,7 @@ async function createTask(
   const now = Date.now();
   await env.DB.batch([
     env.DB.prepare(
-      "INSERT INTO forge_tasks (id, repository_id, number, type, title, motivation, description, status, created_by, actor_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)"
+      "INSERT INTO forge_tasks (id, repository_id, number, type, title, motivation, description, acceptance_criteria, status, created_by, actor_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)"
     ).bind(
       id,
       repository.id,
@@ -697,6 +728,7 @@ async function createTask(
       parsed.data.title,
       parsed.data.motivation,
       parsed.data.description,
+      parsed.data.acceptanceCriteria,
       user.id,
       actorJson,
       now,
@@ -731,13 +763,19 @@ async function updateTask(
   const statusChanged = p.status !== undefined && p.status !== task.status;
   await env.DB.batch([
     env.DB.prepare(
-      "UPDATE forge_tasks SET type = COALESCE(?, type), title = COALESCE(?, title), motivation = COALESCE(?, motivation), description = COALESCE(?, description), status = COALESCE(?, status), lease_agent_id = CASE WHEN ?6 THEN NULL ELSE lease_agent_id END, lease_claimed_at = CASE WHEN ?6 THEN NULL ELSE lease_claimed_at END, lease_expires_at = CASE WHEN ?6 THEN NULL ELSE lease_expires_at END, lease_assigned = CASE WHEN ?6 THEN 0 ELSE lease_assigned END, updated_at = ?7 WHERE id = ?8"
+      "UPDATE forge_tasks SET type = COALESCE(?1, type), title = COALESCE(?2, title), motivation = COALESCE(?3, motivation), description = COALESCE(?4, description), acceptance_criteria = COALESCE(?5, acceptance_criteria), blocked_reason = CASE WHEN ?6 IS NULL THEN COALESCE(?7, blocked_reason) WHEN ?6 = 'blocked' THEN ?8 ELSE NULL END, status = COALESCE(?6, status), lease_agent_id = CASE WHEN ?9 THEN NULL ELSE lease_agent_id END, lease_claimed_at = CASE WHEN ?10 THEN NULL ELSE lease_claimed_at END, lease_expires_at = CASE WHEN ?11 THEN NULL ELSE lease_expires_at END, lease_assigned = CASE WHEN ?12 THEN 0 ELSE lease_assigned END, updated_at = ?13 WHERE id = ?14"
     ).bind(
       p.type ?? null,
       p.title ?? null,
       p.motivation ?? null,
       p.description ?? null,
+      p.acceptanceCriteria ?? null,
       p.status ?? null,
+      p.blockedReason ?? null,
+      p.blockedReason ?? null,
+      Number(statusChanged),
+      Number(statusChanged),
+      Number(statusChanged),
       Number(statusChanged),
       now,
       task.id
@@ -861,7 +899,8 @@ async function leaseRequest(
   task: { id: string; number: number },
   action: "claim" | "heartbeat" | "complete" | "release"
 ): Promise<Response> {
-  const parsed = TaskLeaseInputSchema.safeParse((await parseJson(request)) ?? {});
+  const payloadSchema = action === "complete" ? CompleteTaskInputSchema : TaskLeaseInputSchema;
+  const parsed = payloadSchema.safeParse((await parseJson(request)) ?? {});
   if (!parsed.success) return errorResponse(400, "bad_request", "Invalid task lease payload.");
   const logger = createLogger(env.LOG_LEVEL, { service: "forge", repoId: repository.id });
   const agentId = user.agentSession?.agentId ?? null;
@@ -925,7 +964,12 @@ async function leaseRequest(
     return errorResponse(403, "forbidden", "Only the claiming agent or a human can do this.");
   if (action === "release" && !leased)
     return errorResponse(409, "not_claimed", "The task has no active claim.");
-  if (action === "complete" && state.status !== "pending" && state.status !== "in_progress")
+  if (
+    action === "complete" &&
+    state.status !== "pending" &&
+    state.status !== "in_progress" &&
+    state.status !== "in_review"
+  )
     return errorResponse(409, "conflict", "Only open tasks can be completed.");
   const actorName = actorForUser(user).name;
   const [changed] = await env.DB.batch([
@@ -1065,19 +1109,35 @@ async function linkRequest(
       .first<{ id: string; title: string; state: LinkRow["state"] }>();
     if (!target) return errorResponse(404, "not_found", "Issue or pull request was not found.");
     const now = Date.now();
-    const inserted = await env.DB.prepare(
+    const linkInsert = env.DB.prepare(
       "INSERT INTO forge_task_links (id, repository_id, task_id, target_kind, target_id, actor_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(target_kind, target_id) DO NOTHING"
-    )
-      .bind(
-        crypto.randomUUID(),
-        repository.id,
-        task.id,
-        parsed.data.kind,
-        target.id,
-        JSON.stringify(actorForUser(user)),
-        now
-      )
-      .run();
+    ).bind(
+      crypto.randomUUID(),
+      repository.id,
+      task.id,
+      parsed.data.kind,
+      target.id,
+      JSON.stringify(actorForUser(user)),
+      now
+    );
+    const linked = await env.DB.batch([
+      linkInsert,
+      ...(parsed.data.kind === "pull_request"
+        ? [
+            env.DB.prepare(
+              `UPDATE forge_tasks SET status = 'in_review', ${CLEAR_LEASE}, updated_at = ? WHERE id = ? AND status IN ('pending', 'in_progress') AND EXISTS (SELECT 1 FROM forge_pull_requests WHERE id = ? AND state = 'open') AND changes() = 1`
+            ).bind(now, task.id, target.id),
+            ...systemProgressStatements(
+              env,
+              { taskId: task.id },
+              `Task moved to review after pull request #${parsed.data.number} was linked`,
+              now,
+              true
+            ),
+          ]
+        : []),
+    ]);
+    const inserted = linked[0];
     if (inserted.meta.changes !== 1) {
       logger.warn("forge:task-link-conflict", {
         repositoryId: repository.id,
@@ -1092,16 +1152,13 @@ async function linkRequest(
       targetKind: parsed.data.kind,
       targetNumber: parsed.data.number,
     });
-    return dataResponse(
-      {
-        kind: parsed.data.kind,
-        number: parsed.data.number,
-        title: target.title,
-        state: target.state,
-        createdAt: now,
-      } satisfies TaskLink,
-      201
+    const detail = await taskDetail(env, task.id);
+    const link = detail?.links.find(
+      (entry) => entry.kind === parsed.data.kind && entry.number === parsed.data.number
     );
+    return link
+      ? dataResponse(link satisfies TaskLink, 201)
+      : errorResponse(409, "conflict", "Task link changed while it was being attached.");
   }
   if (request.method === "DELETE" && kindParam && numberParam) {
     const kind = z.enum(["issue", "pull_request"]).safeParse(kindParam);

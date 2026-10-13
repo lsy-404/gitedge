@@ -27,7 +27,7 @@ export function pullAttentionColumn(alias: string): string {
   const scope = `p.repository_id=COALESCE(${alias}.head_repository_id,${alias}.repository_id) AND p.session_id=COALESCE(${alias}.head_session_id,'') AND p.ref='refs/heads/'||${alias}.head_ref`;
   const lastUpdate = `(SELECT json_object('oid',h.new_oid,'at',h.created_at) FROM forge_pull_head_updates h WHERE h.pull_request_id=${alias}.id ORDER BY h.created_at DESC,h.id DESC LIMIT 1)`;
   const head = `COALESCE((SELECT json_object('oid',p.oid,'at',p.updated_at) FROM forge_ref_pushers p WHERE ${scope}),${lastUpdate})`;
-  const headOid = `json_extract(${head},'$.oid')`;
+  const headOid = pullCurrentHeadOidExpression(alias);
   const currentReview = `r.pull_request_id=${alias}.id AND r.commit_oid=${headOid}`;
   const reviewObject = `json_object('actor',r.actor_json,'authorId',r.author_id,'at',r.created_at,'state',r.state)`;
   const review = `(SELECT ${reviewObject} FROM forge_reviews r WHERE ${currentReview} ORDER BY r.created_at DESC,r.rowid DESC LIMIT 1)`;
@@ -37,6 +37,11 @@ export function pullAttentionColumn(alias: string): string {
   const comment = `(SELECT json_object('actor',c.actor_json,'authorId',c.author_id,'at',c.at) FROM (SELECT id,actor_json,author_id,created_at AS at FROM forge_comments WHERE target_kind='pull_request' AND target_id=${alias}.id UNION ALL SELECT id,actor_json,author_id,created_at AS at FROM forge_review_comments WHERE pull_request_id=${alias}.id AND pending=0) c ORDER BY c.at DESC,c.id DESC LIMIT 1)`;
   const limited = `(SELECT COUNT(*) FROM (SELECT 1 FROM forge_reviews limited WHERE limited.pull_request_id=${alias}.id AND limited.commit_oid=${headOid} LIMIT ${MERGE_REVIEW_LIMIT + 1}))>${MERGE_REVIEW_LIMIT}`;
   return `CASE WHEN ${limited} THEN json_object('truncated',json('true'),'head',NULL,'reviewers',json('[]'),'review',NULL,'changesRequestedAt',NULL,'comment',NULL) ELSE json_object('truncated',json('false'),'head',json(${head}),'reviewers',json(${reviewers}),'review',json(${review}),'changesRequestedAt',${changesRequested},'comment',json(${comment})) END AS attention_json`;
+}
+
+export function pullCurrentHeadOidExpression(alias: string): string {
+  const refScope = `ref.repository_id=COALESCE(${alias}.head_repository_id,${alias}.repository_id) AND ref.session_id=COALESCE(${alias}.head_session_id,'') AND ref.ref='refs/heads/'||${alias}.head_ref`;
+  return `COALESCE((SELECT ref.oid FROM forge_ref_pushers ref WHERE ${refScope}),(SELECT update_event.new_oid FROM forge_pull_head_updates update_event WHERE update_event.pull_request_id=${alias}.id ORDER BY update_event.created_at DESC,update_event.id DESC LIMIT 1))`;
 }
 
 function subject(actor: Actor): Assignee | null {

@@ -170,6 +170,7 @@ describe("repository task list", () => {
       title: "New work",
       motivation: "",
       description: "",
+      acceptanceCriteria: "",
     });
     await vi.waitFor(() =>
       expect(mounted.root.querySelector(".task-heading h2")?.textContent).toContain("New work")
@@ -325,7 +326,15 @@ describe("task detail", () => {
     let current = detail({
       commits: [merged],
       links: [
-        { kind: "pull_request", number: 8, title: "Memory PR", state: "merged", createdAt: 5 },
+        {
+          kind: "pull_request",
+          number: 8,
+          title: "Memory PR",
+          state: "merged",
+          failedChecks: 0,
+          latestReview: null,
+          createdAt: 5,
+        },
       ],
     });
     vi.spyOn(api, "task").mockImplementation(async () => current);
@@ -362,7 +371,15 @@ describe("task detail", () => {
         ...current,
         links: [
           ...current.links,
-          { kind: "issue", number: 3, title: "Track memory", state: "open", createdAt: 6 },
+          {
+            kind: "issue",
+            number: 3,
+            title: "Track memory",
+            state: "open",
+            failedChecks: 0,
+            latestReview: null,
+            createdAt: 6,
+          },
         ],
       });
       return current.links[current.links.length - 1];
@@ -440,7 +457,7 @@ describe("task detail", () => {
     const dropdowns = mounted.root.querySelectorAll<HTMLElement>(".task-controls select");
     fill(dropdowns[0], "done");
     await settle();
-    expect(updateSpy).toHaveBeenCalledWith("repo-1", 1, { status: "done" });
+    expect(updateSpy).toHaveBeenCalledWith("repo-1", 1, { status: "done", accepted: true });
 
     fill(dropdowns[1], "agent:agent-1");
     await settle();

@@ -184,6 +184,7 @@ import type {
   RepositoryCommunity,
 } from "../../../../packages/contracts/src/repository-controls";
 import type { RepositoryRole } from "../../../../packages/contracts/src/forge";
+import type { DashboardAttentionPage } from "../../../../packages/contracts/src/dashboard";
 
 export type {
   Organization,
@@ -271,6 +272,7 @@ export type {
   RepositoryCommunityFile,
 } from "../../../../packages/contracts/src/repository-controls";
 export type { RepositoryRole } from "../../../../packages/contracts/src/forge";
+export type { DashboardAttentionPage } from "../../../../packages/contracts/src/dashboard";
 export type { ActionRun, ActionRunSummary, ActionWorkflowFile, CreateActionRunInput };
 export type { SsoIdentity, SsoProviderSummary };
 export type {
@@ -1431,11 +1433,19 @@ export const api = {
     request<Task[]>(repositoryPath(repositoryId, `tasks${query({ status })}`)),
   taskTable: (repositoryId: string) =>
     request<TaskTable>(repositoryPath(repositoryId, "tasks/table")),
+  dashboardAttention: (cursor?: string) =>
+    request<DashboardAttentionPage>(`/api/forge/dashboard/attention${query({ cursor })}`),
   task: (repositoryId: string, number: number) =>
     request<TaskDetail>(repositoryPath(repositoryId, `tasks/${number}`)),
   createTask: (
     repositoryId: string,
-    payload: { type: string; title: string; motivation: string; description: string }
+    payload: {
+      type: string;
+      title: string;
+      motivation: string;
+      description: string;
+      acceptanceCriteria: string;
+    }
   ) =>
     request<TaskDetail>(repositoryPath(repositoryId, "tasks"), {
       method: "POST",
@@ -1444,7 +1454,18 @@ export const api = {
   updateTask: (
     repositoryId: string,
     number: number,
-    payload: Partial<Pick<Task, "type" | "title" | "motivation" | "description" | "status">>
+    payload: Partial<
+      Pick<
+        Task,
+        | "type"
+        | "title"
+        | "motivation"
+        | "description"
+        | "acceptanceCriteria"
+        | "blockedReason"
+        | "status"
+      >
+    > & { accepted?: true }
   ) =>
     request<TaskDetail>(repositoryPath(repositoryId, `tasks/${number}`), {
       method: "PATCH",

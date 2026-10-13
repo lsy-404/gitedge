@@ -61,8 +61,10 @@ import {
   StarredPageSchema,
 } from "./social";
 import { CreateReviewCommentInputSchema, ReviewCommentSchema } from "./review-comments";
+import { DashboardAttentionPageSchema } from "./dashboard";
 import {
   AssignTaskInputSchema,
+  CompleteTaskInputSchema,
   CreateTaskInputSchema,
   TaskDetailSchema,
   TaskLeaseInputSchema,
@@ -145,6 +147,22 @@ export const API_OPERATIONS: readonly ApiOperation[] = [
     response: dataOf(
       PullRequestSchema.pick({ lockedAt: true, lockedBy: true, lockedHeadOid: true })
     ),
+  },
+  {
+    operationId: "getDashboardAttention",
+    method: "GET",
+    path: "/api/forge/dashboard/attention",
+    service: "forge",
+    tag: "Dashboard",
+    summary:
+      "List the current user's cross-repository pending reviews, requested changes, failed checks, blocked tasks and expiring sessions.",
+    scope: null,
+    anonymous: false,
+    query: [
+      { name: "cursor", schema: z.string().max(512), description: "Opaque continuation cursor." },
+    ],
+    status: 200,
+    response: dataOf(DashboardAttentionPageSchema),
   },
   {
     operationId: "getHealth",
@@ -937,10 +955,10 @@ export const API_OPERATIONS: readonly ApiOperation[] = [
     path: `${forgeRepository}/tasks/{number}/complete`,
     service: "forge",
     tag: "Tasks",
-    summary: "Mark a claimed or open task done (the claiming agent or a human writer).",
+    summary: "Mark a claimed or open task done after explicitly accepting its criteria.",
     scope: "issues:write",
     anonymous: false,
-    body: TaskLeaseInputSchema,
+    body: CompleteTaskInputSchema,
     status: 200,
     response: dataOf(TaskDetailSchema),
   },
