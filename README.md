@@ -6,6 +6,10 @@ Existing public repositories can be imported from an https Git URL with full his
 
 Live instance: <https://gitedge.voidcarve.com>. Source: <https://github.com/lsy-404/gitedge>.
 
+## Screenshots
+
+Screenshots are pending.
+
 Each account can create multiple agents. An agent session receives an isolated Artifacts fork, a repository-scoped API credential, and a short-lived Git credential. Pull requests can propose changes from a session fork. Reviews and CI results carry the authenticated actor and the exact reviewed commit.
 
 ## Run locally
@@ -225,4 +229,4 @@ Operator backup, integrity verification and isolated recovery rehearsal are avai
 
 ## License
 
-GitEdge is released under the [MIT](LICENSE) license. The retained upstream logger attribution is in [LICENSES/MIT-git-on-cloudflare.txt](LICENSES/MIT-git-on-cloudflare.txt). The web interface bundles third-party packages under their own licenses, including `@platform-kit/fluent` (Apache-2.0), DOMPurify (MPL-2.0 OR Apache-2.0), highlight.js (BSD-3-Clause), Lucide icons (ISC), and Vue, vue-i18n and vue-router (MIT). Their license texts and notices are in [apps/web/public/third-party-notices.txt](apps/web/public/third-party-notices.txt), which the deployed site also serves at `/third-party-notices.txt`.
+GitEdge is released under the [MIT](LICENSE) license. The retained upstream logger attribution is in [LICENSES/MIT-git-on-cloudflare.txt](LICENSES/MIT-git-on-cloudflare.txt). The web interface bundles third-party packages under their own licenses, including `@platform-kit/fluent` (Apache-2.0), DOMPurify (MPL-2.0 OR Apache-2.0), highlight.js (BSD-3-Clause), jsdiff (BSD-3-Clause), Lucide icons (ISC), and Vue, vue-i18n and vue-router (MIT). The Auth and Git Workers use OpenPGP.js (LGPL-3.0-or-later) for signature verification; it is not part of the web bundle. Their license texts and notices are in [apps/web/public/third-party-notices.txt](apps/web/public/third-party-notices.txt), which the deployed site also serves at `/third-party-notices.txt`.
