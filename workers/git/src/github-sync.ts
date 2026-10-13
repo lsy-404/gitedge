@@ -17,6 +17,8 @@ import { repositoryRole } from "../../../src/worker/common/repositories";
 import type { GitEnv } from "./access";
 import { gitHttpClient } from "./http";
 import { ZERO_OID, revokeWriteToken } from "./write";
+import { refContainsCommit } from "./read";
+import { GitBranchSchema, GitOidSchema } from "../../../packages/contracts/src/forge";
 
 interface SyncRepository {
   repository_id: string;
@@ -82,6 +84,14 @@ export async function handleGithubGitSync(request: Request, env: GitEnv): Promis
   if (url.hostname !== "git.internal" || request.method !== "POST")
     return errorResponse(404, "not_found", "Endpoint was not found.");
   const raw = await readJsonLimited(request, 16_384);
+  if (url.pathname === "/internal/github-sync/contains") {
+    const parsed = CredentialsSchema.extend({ ref: GitBranchSchema, oid: GitOidSchema }).strict().safeParse(raw);
+    if (!parsed.success) return errorResponse(400, "bad_request", "Invalid containment request.");
+    const row = await authorizedSync(env, parsed.data);
+    if (!row) return errorResponse(403, "sync_ineligible", "Synchronization is not authorized.");
+    using repo = await env.ARTIFACTS.get(row.artifact_name);
+    return dataResponse({ contains: await refContainsCommit(repo, parsed.data.ref, parsed.data.oid) });
+  }
   if (url.pathname === "/internal/github-sync/refs") {
     const parsed = CredentialsSchema.strict().safeParse(raw);
     if (!parsed.success) return errorResponse(400, "bad_request", "Invalid synchronization request.");

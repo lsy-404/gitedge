@@ -37,3 +37,11 @@ export async function githubSyncRefs(env: ForgeEnv, connection: GithubConnection
     connectionId: connection.id, jobId: job.id, lease: job.lease, token: credentials.token,
   })).data;
 }
+export async function localRefContains(
+  env: ForgeEnv, connection: GithubConnectionRow, credentials: GithubCredentials, job: GithubJobRow,
+  ref: string, oid: string
+): Promise<boolean> {
+  return z.object({ data: z.object({ contains: z.boolean() }) }).parse(await gitRequest(env, "/contains", {
+    connectionId: connection.id, jobId: job.id, lease: job.lease, token: credentials.token, ref, oid,
+  })).data.contains;
+}
