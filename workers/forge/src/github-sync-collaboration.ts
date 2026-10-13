@@ -19,6 +19,9 @@ import { githubSyncRefs, localRefContains, syncGithubRef } from "./github-sync-g
 import type { StatementCondition } from "./notifications";
 
 const GithubActor = z.object({ id: z.number().int().positive(), login: z.string().min(1) });
+const GithubLabel = z
+  .object({ name: z.string().min(1), color: z.string().regex(/^[0-9a-f]{6}$/i) })
+  .passthrough();
 const GithubIssue = z
   .object({
     id: z.number().int().positive(),
@@ -169,6 +172,24 @@ const ReviewCommentRowSchema = z.object({
 function fingerprint(value: unknown): string {
   return JSON.stringify(value);
 }
+function normalizeLabels(labels: string[]): string[] {
+  const unique = new Map(labels.map((label) => [label.toLowerCase(), label]));
+  return [...unique.values()].sort((left, right) =>
+    left.toLowerCase().localeCompare(right.toLowerCase())
+  );
+}
+function pullRemoteValue(pull: z.infer<typeof GithubPull>): unknown[] {
+  const value: unknown[] = [
+    pull.title,
+    pull.body ?? "",
+    pull.merged ? "merged" : pull.state,
+    pull.draft,
+    pull.base.ref,
+    pull.head.ref,
+  ];
+  if (pull.merged) value.push(pull.merge_commit_sha ?? null);
+  return value;
+}
 function millis(value: string | null): number {
   return value ? Date.parse(value) : 0;
 }
@@ -189,6 +210,29 @@ function originMarker(
   localId: string
 ): string {
   return `<!-- gitedge-origin:${connection.id}:${kind}:${localId} -->`;
+}
+function mergedStateMarker(
+  connection: GithubConnectionRow,
+  pullRequestId: string,
+  mergeOid: string
+): string {
+  return `<!-- gitedge-merged:${connection.id}:${pullRequestId}:${mergeOid} -->`;
+}
+function mergedStateNote(mergeOid: string): string {
+  return `Merged on GitEdge at ${mergeOid}.`;
+}
+function stripMergedStateNote(
+  body: string,
+  connection: GithubConnectionRow,
+  pullRequestId: string
+): string {
+  const markerPrefix = `\n<!-- gitedge-merged:${connection.id}:${pullRequestId}:`;
+  const markerIndex = body.lastIndexOf(markerPrefix);
+  if (markerIndex >= 0) {
+    const noteStart = body.lastIndexOf("\n\nMerged on GitEdge at ", markerIndex);
+    if (noteStart >= 0) return body.slice(0, noteStart);
+  }
+  return body;
 }
 function outboundBody(
   connection: GithubConnectionRow,
@@ -261,6 +305,44 @@ async function findMarked<T>(
   conflict("github_origin_scan_limit");
 }
 
+async function ensureGithubLabels(
+  token: string,
+  repositoryPath: string,
+  requested: string[]
+): Promise<string[]> {
+  const labels = normalizeLabels(requested);
+  if (labels.length > 20) conflict("github_label_limit");
+  const known = new Map<string, string>();
+  for (let page = 1; page <= 10; page++) {
+    const rows = z
+      .array(GithubLabel)
+      .parse(await githubRequest(token, `${repositoryPath}/labels?per_page=100&page=${page}`));
+    for (const label of rows) known.set(label.name.toLowerCase(), label.name);
+    if (labels.every((label) => known.has(label.toLowerCase()))) break;
+    if (rows.length < 100) break;
+    if (page === 10) conflict("github_label_inventory_limit");
+  }
+  for (const name of labels) {
+    if (known.has(name.toLowerCase())) continue;
+    try {
+      const created = GithubLabel.parse(
+        await githubRequest(token, `${repositoryPath}/labels`, "POST", {
+          name,
+          color: "ededed",
+        })
+      );
+      known.set(created.name.toLowerCase(), created.name);
+    } catch (error) {
+      if (!(error instanceof GithubApiError) || error.status !== 422) throw error;
+      const existing = GithubLabel.parse(
+        await githubRequest(token, `${repositoryPath}/labels/${encodeURIComponent(name)}`)
+      );
+      known.set(existing.name.toLowerCase(), existing.name);
+    }
+  }
+  return normalizeLabels(labels.map((label) => known.get(label.toLowerCase()) ?? label));
+}
+
 async function localFingerprint(
   env: ForgeEnv,
   repositoryId: string,
@@ -317,19 +399,22 @@ async function saveMapping(
   }).run();
 }
 
-async function assertNoConcurrentEdit(
+async function inboundExpectedFingerprint(
   env: ForgeEnv,
   connection: GithubConnectionRow,
-  mapping: GithubMappingRow | null
-): Promise<void> {
-  if (!mapping) return;
+  mapping: GithubMappingRow,
+  desiredFingerprint: string
+): Promise<string> {
   const current = await localFingerprint(
     env,
     connection.repository_id,
     mapping.kind,
     mapping.local_id
   );
-  if (current !== mapping.local_fingerprint) conflict("concurrent_local_edit");
+  if (current === null) conflict("github_local_resource_missing");
+  if (current !== mapping.local_fingerprint && current !== desiredFingerprint)
+    conflict("concurrent_local_edit");
+  return current;
 }
 
 async function remoteObject(token: string, path: string): Promise<unknown> {
@@ -349,18 +434,17 @@ async function inboundIssue(
   const existing = await githubMapping(env.DB, connection.id, "issue", {
     remoteId: String(current.id),
   });
-  const remoteValue = [
-    current.title,
-    current.body ?? "",
-    current.state,
-    current.labels.map((label) => label.name),
-  ];
+  const remoteLabels = normalizeLabels(current.labels.map((label) => label.name));
+  const remoteValue = [current.title, current.body ?? "", current.state, remoteLabels];
   const remoteFp = fingerprint(remoteValue);
   if (existing && existing.remote_fingerprint === remoteFp) return;
-  await assertNoConcurrentEdit(env, connection, existing);
   const now = millis(current.updated_at);
-  const labels = JSON.stringify(current.labels.map((label) => label.name));
+  const labels = JSON.stringify(remoteLabels);
   const body = existing ? stripOrigin(current.body ?? "") : (current.body ?? "");
+  const desiredLocalFingerprint = fingerprint([current.title, body, current.state, labels]);
+  const expectedLocalFingerprint = existing
+    ? await inboundExpectedFingerprint(env, connection, existing, desiredLocalFingerprint)
+    : null;
   const statements: D1PreparedStatement[] = [];
   if (existing) {
     statements.push(
@@ -406,7 +490,7 @@ async function inboundIssue(
         String(current.id),
         current.number,
         remoteFp,
-        fingerprint([current.title, body, current.state, labels]),
+        desiredLocalFingerprint,
         now
       )
     );
@@ -415,20 +499,14 @@ async function inboundIssue(
     statements.push(
       env.DB.prepare(
         "UPDATE forge_github_mappings SET remote_fingerprint=?,local_fingerprint=?,remote_updated_at=? WHERE connection_id=? AND kind='issue' AND local_id=?"
-      ).bind(
-        remoteFp,
-        fingerprint([current.title, body, current.state, labels]),
-        now,
-        connection.id,
-        existing.local_id
-      )
+      ).bind(remoteFp, desiredLocalFingerprint, now, connection.id, existing.local_id)
     );
   await applyGithubInbound(
     env.DB,
     connection.id,
     statements,
     existing
-      ? localRowGuard(connection, "issue", existing.local_id, existing.local_fingerprint ?? "null")
+      ? localRowGuard(connection, "issue", existing.local_id, expectedLocalFingerprint)
       : undefined
   );
   await enqueueThreadBackfill(env, connection, "issue", current.number);
@@ -438,9 +516,11 @@ async function enqueueThreadBackfill(
   env: ForgeEnv,
   connection: GithubConnectionRow,
   kind: "issue" | "pull_request",
-  number: number
+  number: number,
+  forceSuffix?: string
 ): Promise<void> {
   const categories = kind === "issue" ? ["comment"] : ["comment", "review", "review_comment"];
+  const suffix = forceSuffix ? `:reconcile:${forceSuffix}` : "";
   for (const category of categories)
     await enqueueGithubJob(
       env.DB,
@@ -448,7 +528,7 @@ async function enqueueThreadBackfill(
       "inbound",
       "bootstrap",
       { phase: "thread", kind, number, category, page: 1 },
-      `github-thread:${connection.id}:${kind}:${number}:${category}:1`
+      `github-thread:${connection.id}:${kind}:${number}:${category}:1${suffix}`
     );
 }
 
@@ -469,20 +549,9 @@ async function inboundPull(
   const existing = await githubMapping(env.DB, connection.id, "pull_request", {
     remoteId: String(current.id),
   });
-  const state = current.merged ? "merged" : current.state;
-  const remoteValue = [
-    current.title,
-    current.body ?? "",
-    state,
-    current.draft,
-    current.base.ref,
-    current.head.ref,
-    current.head.sha,
-    current.merge_commit_sha ?? null,
-  ];
+  const remoteValue = pullRemoteValue(current);
   const remoteFp = fingerprint(remoteValue);
-  if (existing && existing.remote_fingerprint === remoteFp) return "success";
-  await assertNoConcurrentEdit(env, connection, existing);
+  const remoteDataChanged = !existing || existing.remote_fingerprint !== remoteFp;
   const localId = existing?.local_id ?? crypto.randomUUID();
   const now = millis(current.updated_at);
   const prior = existing
@@ -507,11 +576,16 @@ async function inboundPull(
     : null;
   const mergeOid = current.merge_commit_sha;
   if (current.merged && !mergeOid) conflict("github_merge_oid_missing");
-  if (current.merged && prior?.state === "merged" && prior.merged_oid !== mergeOid)
+  const localAlreadyMerged = prior?.state === "merged";
+  if (localAlreadyMerged && !prior.merge_head_oid) conflict("github_merged_head_unpinned");
+  if (localAlreadyMerged && prior.merge_head_oid !== current.head.sha)
+    conflict("github_merged_head_changed");
+  if (current.merged && localAlreadyMerged && prior.merged_oid !== mergeOid)
     conflict("github_merged_oid_not_imported");
   if (
     prior?.locked_at !== null &&
     prior?.locked_at !== undefined &&
+    !localAlreadyMerged &&
     !current.merged &&
     current.state !== "open"
   )
@@ -519,16 +593,39 @@ async function inboundPull(
   const nativeOrigin = Boolean(
     prior && parseActor(prior.actor_json, prior.author_id).kind !== "external"
   );
+  const sameRepositoryHead =
+    current.head.repo?.full_name.toLowerCase() ===
+    `${connection.owner}/${connection.name}`.toLowerCase();
   const targetHeadRef =
     nativeOrigin && prior
       ? `refs/heads/${prior.head_ref}`
-      : `refs/heads/github/pr/${current.number}`;
+      : sameRepositoryHead
+        ? `refs/heads/${current.head.ref}`
+        : `refs/heads/github/pr/${current.number}`;
   if (
     prior?.locked_at !== null &&
     prior?.locked_at !== undefined &&
     prior.locked_head_oid !== current.head.sha
   )
     conflict("locked_pull_source_changed");
+  const safeState = localAlreadyMerged || current.merged ? "merged" : current.state;
+  const body = existing
+    ? stripMergedStateNote(stripOrigin(current.body ?? ""), connection, existing.local_id)
+    : (current.body ?? "");
+  const targetHeadName = targetHeadRef.slice("refs/heads/".length);
+  const localValue = [
+    current.title,
+    body,
+    safeState,
+    current.draft ? 1 : 0,
+    current.base.ref,
+    targetHeadName,
+  ];
+  const desiredLocalFingerprint = fingerprint(localValue);
+  const expectedLocalFingerprint =
+    existing && remoteDataChanged
+      ? await inboundExpectedFingerprint(env, connection, existing, desiredLocalFingerprint)
+      : null;
   const baseTransfer = await syncGithubRef(env, connection, credentials, job, {
     ref: `refs/heads/${current.base.ref}`,
     targetRef: `refs/heads/${current.base.ref}`,
@@ -543,16 +640,16 @@ async function inboundPull(
     )
       conflict("github_merge_oid_not_in_target");
   }
-  const headTransfer = await syncGithubRef(env, connection, credentials, job, {
-    ref: `refs/pull/${current.number}/head`,
-    targetRef: targetHeadRef,
-    before: null,
-    after: current.head.sha,
-    ...(nativeOrigin ? { pullRequestId: localId } : {}),
-  });
-  if (headTransfer.status === "stale") return "ignored";
-  const safeState = current.merged ? "merged" : current.state;
-  const body = existing ? stripOrigin(current.body ?? "") : (current.body ?? "");
+  if (!localAlreadyMerged) {
+    const headTransfer = await syncGithubRef(env, connection, credentials, job, {
+      ref: `refs/pull/${current.number}/head`,
+      targetRef: targetHeadRef,
+      before: null,
+      after: current.head.sha,
+      ...(nativeOrigin ? { pullRequestId: localId } : {}),
+    });
+    if (headTransfer.status === "stale") return "ignored";
+  }
   let mergeBaseOid: string | null = null;
   if (current.merged) {
     const mergeCommit = GithubCommit.parse(
@@ -562,7 +659,7 @@ async function inboundPull(
     if (!mergeBaseOid) conflict("github_merge_parent_missing");
   }
   const statements: D1PreparedStatement[] = [];
-  if (existing) {
+  if (existing && remoteDataChanged) {
     statements.push(
       env.DB.prepare(
         "UPDATE forge_pull_requests SET title=?,body=?,state=?,draft=?,base_ref=?,head_ref=?,merged_oid=COALESCE(merged_oid,?),merge_base_oid=COALESCE(merge_base_oid,?),merge_head_oid=COALESCE(merge_head_oid,?),updated_at=? WHERE id=? AND repository_id=? AND (locked_at IS NULL OR locked_head_oid=?)"
@@ -572,7 +669,7 @@ async function inboundPull(
         safeState,
         current.draft ? 1 : 0,
         current.base.ref,
-        nativeOrigin && prior ? prior.head_ref : `github/pr/${current.number}`,
+        targetHeadName,
         current.merged ? mergeOid : null,
         mergeBaseOid,
         current.merged ? current.head.sha : null,
@@ -582,7 +679,7 @@ async function inboundPull(
         current.head.sha
       )
     );
-  } else {
+  } else if (!existing) {
     const localNumber = await nextNumber(env, "forge_pull_requests", repo.id);
     statements.push(
       env.DB.prepare(
@@ -607,35 +704,34 @@ async function inboundPull(
       )
     );
   }
-  const localValue = [
-    current.title,
-    body,
-    safeState,
-    current.draft ? 1 : 0,
-    current.base.ref,
-    nativeOrigin && prior ? prior.head_ref : `github/pr/${current.number}`,
-  ];
-  statements.push(
-    env.DB.prepare(
-      "INSERT INTO forge_github_mappings (connection_id,kind,local_id,remote_id,remote_number,remote_fingerprint,local_fingerprint,remote_updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(connection_id,kind,local_id) DO UPDATE SET remote_id=excluded.remote_id,remote_number=excluded.remote_number,remote_fingerprint=excluded.remote_fingerprint,local_fingerprint=excluded.local_fingerprint,remote_updated_at=excluded.remote_updated_at"
-    ).bind(
-      connection.id,
-      "pull_request",
-      localId,
-      String(current.id),
-      current.number,
-      remoteFp,
-      fingerprint(localValue),
-      now
-    )
-  );
+  if (!existing || remoteDataChanged)
+    statements.push(
+      env.DB.prepare(
+        "INSERT INTO forge_github_mappings (connection_id,kind,local_id,remote_id,remote_number,remote_fingerprint,local_fingerprint,remote_updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(connection_id,kind,local_id) DO UPDATE SET remote_id=excluded.remote_id,remote_number=excluded.remote_number,remote_fingerprint=excluded.remote_fingerprint,local_fingerprint=excluded.local_fingerprint,remote_updated_at=excluded.remote_updated_at"
+      ).bind(
+        connection.id,
+        "pull_request",
+        localId,
+        String(current.id),
+        current.number,
+        remoteFp,
+        desiredLocalFingerprint,
+        now
+      )
+    );
+  else
+    statements.push(
+      env.DB.prepare(
+        "UPDATE forge_github_mappings SET remote_updated_at=? WHERE connection_id=? AND kind='pull_request' AND local_id=?"
+      ).bind(now, connection.id, localId)
+    );
   const guard =
-    existing && prior
+    existing && prior && remoteDataChanged
       ? localRowGuard(
           connection,
           "pull_request",
           localId,
-          existing.local_fingerprint ?? "null",
+          expectedLocalFingerprint,
           "AND head_ref IS ? AND head_session_id IS ? AND head_repository_id IS ? AND locked_at IS ? AND locked_by IS ? AND locked_head_oid IS ?",
           [
             prior.head_ref,
@@ -694,7 +790,11 @@ async function inboundComment(
   const kind: GithubResourceKind = "comment";
   const remoteFp = fingerprint([current.body]);
   if (existing && existing.remote_fingerprint === remoteFp) return;
-  await assertNoConcurrentEdit(env, connection, existing);
+  const body = existing ? stripOrigin(current.body) : current.body;
+  const desiredLocalFingerprint = fingerprint([body]);
+  const expectedLocalFingerprint = existing
+    ? await inboundExpectedFingerprint(env, connection, existing, desiredLocalFingerprint)
+    : null;
   const parentKind = issue.pull_request ? "pull_request" : "issue";
   const canonicalPull =
     parentKind === "pull_request"
@@ -717,7 +817,6 @@ async function inboundComment(
   }
   if (!parent) throw new Error("github_parent_pending");
   const now = millis(current.updated_at);
-  const body = existing ? stripOrigin(current.body) : current.body;
   const statements: D1PreparedStatement[] = [];
   if (existing)
     statements.push(
@@ -739,7 +838,7 @@ async function inboundComment(
         parent.local_id,
         JSON.stringify(externalActor(current.user)),
         connection.created_by,
-        current.body,
+        body,
         now,
         now
       )
@@ -747,26 +846,29 @@ async function inboundComment(
     statements.push(
       env.DB.prepare(
         "INSERT INTO forge_github_mappings (connection_id,kind,local_id,remote_id,remote_number,remote_fingerprint,local_fingerprint,remote_updated_at) VALUES (?,?,?,?,NULL,?,?,?)"
-      ).bind(connection.id, kind, localId, String(current.id), remoteFp, fingerprint([body]), now)
+      ).bind(
+        connection.id,
+        kind,
+        localId,
+        String(current.id),
+        remoteFp,
+        desiredLocalFingerprint,
+        now
+      )
     );
   }
   if (existing)
     statements.push(
       env.DB.prepare(
         "UPDATE forge_github_mappings SET remote_fingerprint=?,local_fingerprint=?,remote_updated_at=? WHERE connection_id=? AND kind='comment' AND local_id=?"
-      ).bind(remoteFp, fingerprint([body]), now, connection.id, existing.local_id)
+      ).bind(remoteFp, desiredLocalFingerprint, now, connection.id, existing.local_id)
     );
   await applyGithubInbound(
     env.DB,
     connection.id,
     statements,
     existing
-      ? localRowGuard(
-          connection,
-          "comment",
-          existing.local_id,
-          existing.local_fingerprint ?? "null"
-        )
+      ? localRowGuard(connection, "comment", existing.local_id, expectedLocalFingerprint)
       : undefined
   );
 }
@@ -814,7 +916,10 @@ async function inboundReview(
     verdict === "DISMISSED" ? `${importedBody}\n\nGitHub review dismissed.`.trim() : importedBody;
   const remoteFp = fingerprint([current.body, verdict, current.commit_id]);
   if (old && old.remote_fingerprint === remoteFp) return;
-  await assertNoConcurrentEdit(env, connection, old);
+  const desiredLocalFingerprint = fingerprint([state, body, current.commit_id]);
+  const expectedLocalFingerprint = old
+    ? await inboundExpectedFingerprint(env, connection, old, desiredLocalFingerprint)
+    : null;
   const now = millis(current.submitted_at);
   const statements: D1PreparedStatement[] = [];
   if (old)
@@ -857,7 +962,7 @@ async function inboundReview(
         localId,
         String(current.id),
         remoteFp,
-        fingerprint([state, body, current.commit_id]),
+        desiredLocalFingerprint,
         now
       )
     );
@@ -866,21 +971,13 @@ async function inboundReview(
     statements.push(
       env.DB.prepare(
         "UPDATE forge_github_mappings SET remote_fingerprint=?,local_fingerprint=?,remote_updated_at=? WHERE connection_id=? AND kind='review' AND local_id=?"
-      ).bind(
-        remoteFp,
-        fingerprint([state, body, current.commit_id]),
-        now,
-        connection.id,
-        old.local_id
-      )
+      ).bind(remoteFp, desiredLocalFingerprint, now, connection.id, old.local_id)
     );
   await applyGithubInbound(
     env.DB,
     connection.id,
     statements,
-    old
-      ? localRowGuard(connection, "review", old.local_id, old.local_fingerprint ?? "null")
-      : undefined
+    old ? localRowGuard(connection, "review", old.local_id, expectedLocalFingerprint) : undefined
   );
 }
 
@@ -925,11 +1022,20 @@ async function inboundReviewComment(
     current.in_reply_to_id,
   ]);
   if (old && old.remote_fingerprint === remoteFp) return;
-  await assertNoConcurrentEdit(env, connection, old);
   const now = millis(current.updated_at);
   const body = old ? stripOrigin(current.body) : current.body;
   const line = current.line ?? current.original_line;
   if (!line) conflict("github_review_comment_line_missing");
+  const desiredLocalFingerprint = fingerprint([
+    body,
+    current.commit_id,
+    current.path,
+    current.side,
+    line,
+  ]);
+  const expectedLocalFingerprint = old
+    ? await inboundExpectedFingerprint(env, connection, old, desiredLocalFingerprint)
+    : null;
   const review = current.pull_request_review_id
     ? await githubMapping(env.DB, connection.id, "review", {
         remoteId: String(current.pull_request_review_id),
@@ -938,8 +1044,16 @@ async function inboundReviewComment(
   const statements: D1PreparedStatement[] = [];
   if (old)
     statements.push(
-      env.DB.prepare("UPDATE forge_review_comments SET body=?,updated_at=? WHERE id=?").bind(
+      env.DB.prepare(
+        "UPDATE forge_review_comments SET body=?,commit_oid=?,path=?,side=?,line=?,start_line=?,diff_hunk=?,updated_at=? WHERE id=?"
+      ).bind(
         body,
+        current.commit_id,
+        current.path,
+        current.side,
+        line,
+        current.start_line ?? current.original_start_line ?? null,
+        current.diff_hunk,
         now,
         old.local_id
       )
@@ -978,7 +1092,7 @@ async function inboundReviewComment(
         localId,
         String(current.id),
         remoteFp,
-        fingerprint([body, current.commit_id, current.path, current.side, line]),
+        desiredLocalFingerprint,
         now
       )
     );
@@ -987,20 +1101,14 @@ async function inboundReviewComment(
     statements.push(
       env.DB.prepare(
         "UPDATE forge_github_mappings SET remote_fingerprint=?,local_fingerprint=?,remote_updated_at=? WHERE connection_id=? AND kind='review_comment' AND local_id=?"
-      ).bind(
-        remoteFp,
-        fingerprint([body, current.commit_id, current.path, current.side, line]),
-        now,
-        connection.id,
-        old.local_id
-      )
+      ).bind(remoteFp, desiredLocalFingerprint, now, connection.id, old.local_id)
     );
   await applyGithubInbound(
     env.DB,
     connection.id,
     statements,
     old
-      ? localRowGuard(connection, "review_comment", old.local_id, old.local_fingerprint ?? "null")
+      ? localRowGuard(connection, "review_comment", old.local_id, expectedLocalFingerprint)
       : undefined
   );
 }
@@ -1106,7 +1214,10 @@ async function outbound(
   if (!row) return;
   if (kind === "issue") {
     const issue = IssueRowSchema.parse(row);
-    const labels = z.array(z.string()).parse(JSON.parse(issue.labels_json));
+    const requestedLabels = normalizeLabels(
+      z.array(z.string()).parse(JSON.parse(issue.labels_json))
+    );
+    const labels = await ensureGithubLabels(credentials.token, path, requestedLabels);
     const localSnapshot = fingerprint([issue.title, issue.body, issue.state, issue.labels_json]);
     const title = issue.title;
     const body = outboundBody(
@@ -1122,12 +1233,28 @@ async function outbound(
       const remote = GithubIssue.parse(
         await githubRequest(credentials.token, `${path}/issues/${mapping.remote_number}`)
       );
-      assertRemoteUnchanged(mapping, [
+      const remoteValue = [
         remote.title,
         remote.body ?? "",
         remote.state,
-        remote.labels.map((label) => label.name),
-      ]);
+        normalizeLabels(remote.labels.map((label) => label.name)),
+      ];
+      const intendedValue = [title, body, issue.state, labels];
+      if (fingerprint(remoteValue) === fingerprint(intendedValue)) {
+        await saveMapping(
+          env,
+          connection,
+          kind,
+          issue.id,
+          String(remote.id),
+          remote.number,
+          remoteValue,
+          millis(remote.updated_at),
+          localSnapshot
+        );
+        return;
+      }
+      assertRemoteUnchanged(mapping, remoteValue);
       if (mapping.local_fingerprint === localSnapshot) return;
       result = await githubRequest(
         credentials.token,
@@ -1146,11 +1273,17 @@ async function outbound(
         if (
           existing.title !== title ||
           existing.body !== body ||
-          fingerprint(existing.labels.map((label) => label.name)) !== fingerprint(labels) ||
           (issue.state === "open" && existing.state !== "open")
         )
           conflict("remote_create_discovery_mismatch");
-        result = existing;
+        const remoteLabels = normalizeLabels(existing.labels.map((label) => label.name));
+        result =
+          fingerprint(remoteLabels) === fingerprint(labels)
+            ? existing
+            : await githubRequest(credentials.token, `${path}/issues/${existing.number}`, "PATCH", {
+                labels,
+                state: issue.state,
+              });
       } else {
         result = await githubRequest(credentials.token, `${path}/issues`, "POST", {
           title,
@@ -1173,7 +1306,12 @@ async function outbound(
       issue.id,
       String(parsed.id),
       parsed.number,
-      [parsed.title, parsed.body ?? "", parsed.state, parsed.labels.map((label) => label.name)],
+      [
+        parsed.title,
+        parsed.body ?? "",
+        parsed.state,
+        normalizeLabels(parsed.labels.map((label) => label.name)),
+      ],
       millis(parsed.updated_at),
       localSnapshot
     );
@@ -1181,6 +1319,7 @@ async function outbound(
   }
   if (kind === "pull_request") {
     const pull = PullRowSchema.parse(row);
+    if (pull.state === "merged" && !pull.merged_oid) conflict("pull_merge_oid_missing");
     const localSnapshot = fingerprint([
       pull.title,
       pull.body,
@@ -1194,21 +1333,43 @@ async function outbound(
     const remoteBase = refs.remote.find((ref) => ref.ref === `refs/heads/${pull.base_ref}`);
     if (!localBase || !remoteBase) conflict("pull_target_branch_unavailable");
     let mappedRemote: z.infer<typeof GithubPull> | null = null;
+    let mappedRemoteBaseline: unknown[] | null = null;
+    const desiredBody = outboundBody(
+      connection,
+      kind,
+      pull.id,
+      pull.body,
+      pull.actor_json,
+      pull.author_id
+    );
     if (mapping) {
       mappedRemote = GithubPull.parse(
         await githubRequest(credentials.token, `${path}/pulls/${mapping.remote_number}`)
       );
-      assertRemoteUnchanged(mapping, [
-        mappedRemote.title,
-        mappedRemote.body ?? "",
-        mappedRemote.merged ? "merged" : mappedRemote.state,
-        mappedRemote.draft,
-        mappedRemote.base.ref,
-        mappedRemote.head.ref,
-        mappedRemote.head.sha,
-        mappedRemote.merge_commit_sha ?? null,
-      ]);
-      if (mappedRemote.draft !== Boolean(pull.draft)) {
+      mappedRemoteBaseline = pullRemoteValue(mappedRemote);
+      const intendedRemoteValue = [
+        pull.title,
+        desiredBody,
+        pull.state,
+        Boolean(pull.draft),
+        pull.base_ref,
+        `gitedge/pr/${pull.number}`,
+      ];
+      const draftAdjustedBaseline = [...mappedRemoteBaseline];
+      draftAdjustedBaseline[3] = Boolean(pull.draft);
+      const alreadyMirroredMerge =
+        pull.merged_oid !== null &&
+        ((mappedRemote.merged && mappedRemote.merge_commit_sha === pull.merged_oid) ||
+          (mappedRemote.state === "closed" &&
+            mappedRemote.body?.includes(mergedStateMarker(connection, pull.id, pull.merged_oid))));
+      if (
+        fingerprint(mappedRemoteBaseline) !== mapping.remote_fingerprint &&
+        fingerprint(mappedRemoteBaseline) !== fingerprint(intendedRemoteValue) &&
+        fingerprint(mappedRemoteBaseline) !== fingerprint(draftAdjustedBaseline) &&
+        !alreadyMirroredMerge
+      )
+        conflict("concurrent_remote_edit");
+      if (!pull.merged_oid && mappedRemote.draft !== Boolean(pull.draft)) {
         if (!mappedRemote.node_id || mappedRemote.state !== "open")
           conflict("github_draft_change_unavailable");
         const mutation = pull.draft ? "convertPullRequestToDraft" : "markPullRequestReadyForReview";
@@ -1246,11 +1407,63 @@ async function outbound(
         after: localBase.oid,
       });
       if (baseSync.status === "stale") conflict("pull_target_changed_during_merge_publish");
-      const remote = GithubPull.parse(
+      let remote = GithubPull.parse(
         await githubRequest(credentials.token, `${path}/pulls/${mapping.remote_number}`)
       );
-      if (!remote.merged) conflict("github_merge_requires_distinct_merge");
-      if (remote.merge_commit_sha !== pull.merged_oid) conflict("github_merge_oid_conflict");
+      if (remote.merged) {
+        if (remote.merge_commit_sha !== pull.merged_oid) conflict("github_merge_oid_conflict");
+      } else {
+        const marker = mergedStateMarker(connection, pull.id, pull.merged_oid);
+        const annotatedBody = `${pull.body}${pull.body ? "\n\n" : ""}${mergedStateNote(pull.merged_oid)}\n${marker}`;
+        const body = outboundBody(
+          connection,
+          kind,
+          pull.id,
+          annotatedBody,
+          pull.actor_json,
+          pull.author_id
+        );
+        const remoteValue = pullRemoteValue(remote);
+        const intendedClosedValue = [
+          pull.title,
+          body,
+          "closed",
+          remote.draft,
+          pull.base_ref,
+          remote.head.ref,
+        ];
+        if (
+          remote.state === "closed" &&
+          remote.body?.includes(marker) &&
+          fingerprint(remoteValue) === fingerprint(intendedClosedValue)
+        ) {
+          await saveMapping(
+            env,
+            connection,
+            kind,
+            pull.id,
+            String(remote.id),
+            remote.number,
+            pullRemoteValue(remote),
+            millis(remote.updated_at),
+            localSnapshot
+          );
+          return;
+        }
+        if (remote.state !== "open" && !remote.body?.includes(marker))
+          conflict("github_closed_pull_without_gitedge_merge_marker");
+        assertRemoteUnchanged(mapping, remoteValue);
+        remote = GithubPull.parse(
+          await githubRequest(
+            credentials.token,
+            `${path}/pulls/${mapping.remote_number}`,
+            "PATCH",
+            { title: pull.title, body, base: pull.base_ref, state: "closed" }
+          )
+        );
+        if (remote.merged || remote.state !== "closed" || !remote.body?.includes(marker))
+          conflict("github_gitedge_merge_annotation_failed");
+      }
       await saveMapping(
         env,
         connection,
@@ -1258,16 +1471,7 @@ async function outbound(
         pull.id,
         String(remote.id),
         remote.number,
-        [
-          remote.title,
-          remote.body ?? "",
-          "merged",
-          remote.draft,
-          remote.base.ref,
-          remote.head.ref,
-          remote.head.sha,
-          remote.merge_commit_sha ?? null,
-        ],
+        pullRemoteValue(remote),
         millis(remote.updated_at),
         localSnapshot
       );
@@ -1294,19 +1498,6 @@ async function outbound(
     }
     if (published && pull.locked_at !== null && pull.locked_head_oid !== published.oid)
       conflict("locked_pull_source_changed");
-    if (
-      mapping?.local_fingerprint === localSnapshot &&
-      (pull.state !== "open" || mappedRemote?.head.sha === published?.oid)
-    )
-      return;
-    const desiredBody = outboundBody(
-      connection,
-      kind,
-      pull.id,
-      pull.body,
-      pull.actor_json,
-      pull.author_id
-    );
     if (pull.state === "open") {
       const publishedOid = published?.oid ?? conflict("pull_head_unavailable");
       const headSync = await syncGithubRef(env, connection, credentials, job, {
@@ -1331,31 +1522,43 @@ async function outbound(
       const currentRemote = GithubPull.parse(
         await githubRequest(credentials.token, `${path}/pulls/${mapping.remote_number}`)
       );
-      const expectedAfterHeadSync = [
-        mappedRemote.title,
-        mappedRemote.body ?? "",
-        mappedRemote.merged ? "merged" : mappedRemote.state,
-        mappedRemote.draft,
-        mappedRemote.base.ref,
-        mappedRemote.head.ref,
-        pull.state === "open"
-          ? (published?.oid ?? conflict("pull_head_unavailable"))
-          : mappedRemote.head.sha,
-        mappedRemote.merge_commit_sha ?? null,
+      const currentRemoteValue = pullRemoteValue(currentRemote);
+      const intendedRemoteValue = [
+        pull.title,
+        desiredBody,
+        pull.state,
+        Boolean(pull.draft),
+        pull.base_ref,
+        `gitedge/pr/${pull.number}`,
       ];
+      const intendedRemoteMatches =
+        fingerprint(currentRemoteValue) === fingerprint(intendedRemoteValue) &&
+        (pull.state !== "open" || currentRemote.head.sha === published?.oid);
+      if (intendedRemoteMatches) {
+        await saveMapping(
+          env,
+          connection,
+          kind,
+          pull.id,
+          String(currentRemote.id),
+          currentRemote.number,
+          currentRemoteValue,
+          millis(currentRemote.updated_at),
+          localSnapshot
+        );
+        return;
+      }
+      if (pull.state === "open" && currentRemote.head.sha !== published?.oid)
+        conflict("pull_remote_head_not_published");
+      const draftAdjustedBaseline = mappedRemoteBaseline ? [...mappedRemoteBaseline] : null;
+      if (draftAdjustedBaseline && mappedRemoteBaseline?.[3] !== Boolean(pull.draft))
+        draftAdjustedBaseline[3] = Boolean(pull.draft);
       if (
-        fingerprint([
-          currentRemote.title,
-          currentRemote.body ?? "",
-          currentRemote.merged ? "merged" : currentRemote.state,
-          currentRemote.draft,
-          currentRemote.base.ref,
-          currentRemote.head.ref,
-          currentRemote.head.sha,
-          currentRemote.merge_commit_sha ?? null,
-        ]) !== fingerprint(expectedAfterHeadSync)
+        fingerprint(currentRemoteValue) !== fingerprint(mappedRemoteBaseline) &&
+        fingerprint(currentRemoteValue) !== fingerprint(draftAdjustedBaseline)
       )
         conflict("concurrent_remote_edit");
+      if (mapping.local_fingerprint === localSnapshot && pull.state !== "open") return;
       result = await githubRequest(
         credentials.token,
         `${path}/pulls/${mapping.remote_number}`,
@@ -1382,6 +1585,7 @@ async function outbound(
           existing.draft !== Boolean(pull.draft)
         )
           conflict("remote_create_discovery_mismatch");
+        if (existing.head.sha !== published?.oid) conflict("pull_remote_head_not_published");
         result = existing;
       } else result = await githubRequest(credentials.token, `${path}/pulls`, "POST", createInput);
     }
@@ -1393,16 +1597,7 @@ async function outbound(
       pull.id,
       String(parsed.id),
       parsed.number,
-      [
-        parsed.title,
-        parsed.body ?? "",
-        parsed.merged ? "merged" : parsed.state,
-        parsed.draft,
-        parsed.base.ref,
-        parsed.head.ref,
-        parsed.head.sha,
-        parsed.merge_commit_sha ?? null,
-      ],
+      pullRemoteValue(parsed),
       millis(parsed.updated_at),
       localSnapshot
     );
@@ -1431,7 +1626,22 @@ async function outbound(
       const remote = GithubComment.parse(
         await githubRequest(credentials.token, `${path}/issues/comments/${mapping.remote_id}`)
       );
-      assertRemoteUnchanged(mapping, [remote.body]);
+      const remoteValue = [remote.body];
+      if (fingerprint(remoteValue) === fingerprint([body])) {
+        await saveMapping(
+          env,
+          connection,
+          kind,
+          comment.id,
+          String(remote.id),
+          null,
+          remoteValue,
+          millis(remote.updated_at),
+          localSnapshot
+        );
+        return;
+      }
+      assertRemoteUnchanged(mapping, remoteValue);
       if (mapping.local_fingerprint === localSnapshot) return;
       result = await githubRequest(
         credentials.token,
@@ -1489,7 +1699,23 @@ async function outbound(
           `${path}/pulls/${parent.remote_number}/reviews/${mapping.remote_id}`
         )
       );
-      assertRemoteUnchanged(mapping, [remote.body, remote.state, remote.commit_id]);
+      const remoteValue = [remote.body, remote.state, remote.commit_id];
+      const intendedValue = [body, "COMMENTED", commitOid];
+      if (fingerprint(remoteValue) === fingerprint(intendedValue)) {
+        await saveMapping(
+          env,
+          connection,
+          kind,
+          review.id,
+          String(remote.id),
+          null,
+          remoteValue,
+          millis(remote.submitted_at),
+          localSnapshot
+        );
+        return;
+      }
+      assertRemoteUnchanged(mapping, remoteValue);
       if (mapping.local_fingerprint === localSnapshot) return;
       if (remote.commit_id !== commitOid) conflict("github_review_commit_immutable");
       result = await githubRequest(
@@ -1573,14 +1799,37 @@ async function outbound(
     const remote = GithubReviewComment.parse(
       await githubRequest(credentials.token, `${path}/pulls/comments/${mapping.remote_id}`)
     );
-    assertRemoteUnchanged(mapping, [
+    const remoteValue = [
       remote.body,
       remote.commit_id,
       remote.path,
       remote.side,
       remote.line,
       remote.in_reply_to_id,
-    ]);
+    ];
+    const intendedValue = [
+      body,
+      comment.commit_oid,
+      comment.path,
+      comment.side,
+      comment.line,
+      replyMapping ? Number(replyMapping.remote_id) : undefined,
+    ];
+    if (fingerprint(remoteValue) === fingerprint(intendedValue)) {
+      await saveMapping(
+        env,
+        connection,
+        kind,
+        comment.id,
+        String(remote.id),
+        null,
+        remoteValue,
+        millis(remote.updated_at),
+        localSnapshot
+      );
+      return;
+    }
+    assertRemoteUnchanged(mapping, remoteValue);
     if (mapping.local_fingerprint === localSnapshot) return;
     result = await githubRequest(
       credentials.token,
@@ -1647,7 +1896,7 @@ export async function syncGithubCollaboration(
       if ((await inboundPull(env, connection, credentials, job, pull)) === "ignored")
         return "ignored";
     }
-    await enqueueThreadBackfill(env, connection, snapshot.kind, snapshot.number);
+    await enqueueThreadBackfill(env, connection, snapshot.kind, snapshot.number, job.id);
     return "success";
   }
   const parsed = Webhook.safeParse(JSON.parse(job.payload));
