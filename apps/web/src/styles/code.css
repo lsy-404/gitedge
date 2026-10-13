@@ -401,7 +401,8 @@
 .file-finder {
   display: grid;
   gap: var(--space-3);
-  width: min(560px, calc(100vw - var(--space-8)));
+  width: 100%;
+  min-width: 0;
 }
 .file-finder .search-field {
   display: flex;

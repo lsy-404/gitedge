@@ -114,6 +114,8 @@ const mergeError = ref("");
 const mergeQueueRequired = ref(false);
 const mergeRequirementsReady = ref(false);
 const loading = ref(false);
+const listRefreshing = ref(false);
+const listReady = ref(false);
 const loadError = ref("");
 const actionError = ref("");
 const actionConflict = ref(false);
@@ -434,10 +436,17 @@ function startWikiPage() {
   showForm.value = true;
   void router.push(`/${props.repository.owner}/${props.repository.name}/wiki`);
 }
-async function load() {
+function load() {
+  return runLoad(false);
+}
+async function runLoad(soft: boolean) {
   const version = ++loadVersion;
   listLoadingMore.value = false;
-  loading.value = true;
+  if (soft) listRefreshing.value = true;
+  else {
+    loading.value = true;
+    listReady.value = false;
+  }
   loadError.value = "";
   actionError.value = "";
   actionConflict.value = false;
@@ -572,6 +581,9 @@ async function load() {
     } else {
       loadError.value = t("unknownSection");
     }
+    if (!detailNumber.value && ["issues", "pulls", "discussions"].includes(props.section)) {
+      listReady.value = true;
+    }
   } catch (cause) {
     if (version !== loadVersion) return;
     if (cause instanceof ApiError && cause.status === 404 && isDetail.value) {
@@ -582,9 +594,13 @@ async function load() {
         return;
       }
       notFound.value = true;
-    } else loadError.value = userMessage(cause);
+    } else if (soft) actionError.value = userMessage(cause);
+    else loadError.value = userMessage(cause);
   } finally {
-    if (version === loadVersion) loading.value = false;
+    if (version === loadVersion) {
+      loading.value = false;
+      listRefreshing.value = false;
+    }
   }
 }
 /** Issue and pull request numbers share one sequence, so #n links may point at a pull request. */
@@ -957,19 +973,22 @@ watch(
   },
   { immediate: true }
 );
+const SEARCH_DEBOUNCE_MS = 250;
+let searchTimer: ReturnType<typeof setTimeout> | undefined;
+function refreshList() {
+  clearTimeout(searchTimer);
+  if (detailNumber.value || !["issues", "pulls", "discussions"].includes(props.section)) return;
+  void runLoad(listReady.value);
+}
+watch(queryText, () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(refreshList, SEARCH_DEBOUNCE_MS);
+});
 watch(
-  () => [
-    queryText.value,
-    stateFilter.value,
-    attentionOnly.value,
-    issueView.value,
-    categoryFilter.value,
-  ],
-  () => {
-    if (detailNumber.value || !["issues", "pulls", "discussions"].includes(props.section)) return;
-    void load();
-  }
+  () => [stateFilter.value, attentionOnly.value, issueView.value, categoryFilter.value],
+  refreshList
 );
+onUnmounted(() => clearTimeout(searchTimer));
 async function loadMore() {
   const cursor = listNextCursor.value;
   if (cursor === null || listLoadingMore.value || loading.value) return;
@@ -1176,7 +1195,11 @@ async function loadMore() {
             :placeholder="t('searchItems')"
             :aria-label="t('searchItems')"
         /></label>
-        <div class="box list-box">
+        <div
+          class="box list-box"
+          :class="{ 'is-refreshing': listRefreshing }"
+          :aria-busy="listRefreshing"
+        >
           <div v-if="section !== 'wiki'" class="box-header list-toolbar">
             <div class="list-filters" role="group" :aria-label="t('filterItems')">
               <button
