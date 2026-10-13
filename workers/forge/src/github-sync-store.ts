@@ -34,6 +34,7 @@ export interface GithubJobRow {
   completed_at: number | null;
 }
 export interface GithubCredentials { token: string; secret: string }
+export class GithubSyncConflict extends Error {}
 export type GithubResourceKind = "issue" | "pull_request" | "comment" | "review" | "review_comment";
 export interface GithubMappingRow {
   connection_id: string;
