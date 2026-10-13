@@ -49,7 +49,8 @@ CREATE TABLE forge_github_mappings (
   UNIQUE(connection_id, kind, remote_id)
 );
 CREATE TABLE forge_github_inbound (
-  connection_id TEXT PRIMARY KEY NOT NULL REFERENCES forge_github_connections(id) ON DELETE CASCADE
+  connection_id TEXT PRIMARY KEY NOT NULL REFERENCES forge_github_connections(id) ON DELETE CASCADE,
+  guard INTEGER NOT NULL DEFAULT 1 CONSTRAINT github_sync_guard CHECK (guard=1)
 );
 
 CREATE TRIGGER github_push_accepted AFTER UPDATE OF accepted ON forge_push_event_refs

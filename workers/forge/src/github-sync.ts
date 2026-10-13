@@ -7,7 +7,7 @@ import { auditActor, recordAudit } from "../../../src/worker/common/audit";
 import { randomHex } from "../../../src/worker/common/encoding";
 import { dataResponse, errorResponse, requireRecentAuth } from "../../../src/worker/common/http";
 import { createLogger } from "../../../src/worker/common/logger";
-import { readJsonLimited, readTextLimited } from "../../../src/worker/common/readText";
+import { readTextLimited } from "../../../src/worker/common/readText";
 import { repositoryRole } from "../../../src/worker/common/repositories";
 import { importSealingKey, sealText } from "../../../src/worker/common/secret-box";
 import { parseJson, type ForgeEnv, type RepositoryRow } from "./common";
@@ -20,7 +20,6 @@ import { githubSyncRefs, syncGithubRef } from "./github-sync-git";
 import { syncGithubCollaboration } from "./github-sync-collaboration";
 
 const LEASE_MS = 180_000;
-const ZERO_OID = "0".repeat(40);
 const GithubHookSchema = z.object({ id: z.number().int().positive(), config: z.object({ url: z.string() }) });
 const PushSchema = z.object({ ref: z.string(), before: z.string().regex(/^[a-f0-9]{40}$/), after: z.string().regex(/^[a-f0-9]{40}$/) });
 const BootstrapSchema = z.object({
@@ -84,7 +83,7 @@ async function setupGithubSync(env: ForgeEnv, request: Request, repository: Repo
     }));
   await env.DB.prepare("UPDATE forge_github_connections SET hook_id=?,enabled=1 WHERE id=?")
     .bind(hook.id, id).run();
-  await recordAudit(env.DB, {
+  await recordAudit(env, {
     action: "github_sync.connected", actor: auditActor(user), target: { type: "github_sync", id },
     repositoryId: repository.id, metadata: { repository: remote.full_name, visibilityMismatchAccepted: input.allowVisibilityMismatch },
   });
@@ -134,7 +133,7 @@ export async function handleGithubSyncSettings(env: ForgeEnv, request: Request, 
         .bind(Date.now(), parts[4], connection.id).run();
       if (!changed.meta.changes) return errorResponse(409, "github_job_not_retryable", "The synchronization job cannot be retried.");
     } else return errorResponse(405, "method_not_allowed", "Method is not allowed.");
-    await recordAudit(env.DB, {
+    await recordAudit(env, {
       action: "github_sync.updated", actor: auditActor(user), target: { type: "github_sync", id: connection.id },
       repositoryId: repository.id, metadata: { operation: request.method, action: parts[3] ?? "settings" },
     });

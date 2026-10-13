@@ -1,6 +1,7 @@
 import type { GitHubSyncJob, GitHubSyncStatus } from "../../../packages/contracts/src/github-sync";
 import { importSealingKey, openText } from "../../../src/worker/common/secret-box";
 import type { ForgeEnv } from "./common";
+import type { StatementCondition } from "./webhook-events";
 
 export interface GithubConnectionRow {
   id: string;
@@ -87,10 +88,16 @@ export function githubMappingStatement(db: D1Database, mapping: GithubMappingRow
     .bind(mapping.connection_id, mapping.kind, mapping.local_id, mapping.remote_id, mapping.remote_number,
       mapping.remote_fingerprint, mapping.local_fingerprint, mapping.remote_updated_at);
 }
-export async function applyGithubInbound(db: D1Database, connectionId: string, statements: D1PreparedStatement[]): Promise<void> {
-  await db.batch([
-    db.prepare("INSERT INTO forge_github_inbound (connection_id) VALUES (?)").bind(connectionId),
-    ...statements,
-    db.prepare("DELETE FROM forge_github_inbound WHERE connection_id = ?").bind(connectionId),
-  ]);
+export async function applyGithubInbound(db: D1Database, connectionId: string, statements: D1PreparedStatement[], guard?: StatementCondition): Promise<void> {
+  try {
+    await db.batch([
+      db.prepare(`INSERT INTO forge_github_inbound (connection_id, guard) VALUES (?, ${guard ? `CASE WHEN (${guard.sql}) THEN 1 ELSE 0 END` : "1"})`).bind(connectionId, ...(guard?.binds ?? [])),
+      ...statements,
+      db.prepare("DELETE FROM forge_github_inbound WHERE connection_id = ?").bind(connectionId),
+    ]);
+  } catch (cause) {
+    if (cause instanceof Error && cause.message.includes("github_sync_guard"))
+      throw new GithubSyncConflict("concurrent_local_edit");
+    throw cause;
+  }
 }

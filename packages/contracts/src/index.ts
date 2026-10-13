@@ -35,6 +35,7 @@ export * from "./ai-summary";
 export * from "./pages";
 export * from "./dashboard";
 export * from "./github-sync";
+export * from "./ip-access";
 
 export const ErrorCodeSchema = z.enum([
   "bad_request",
