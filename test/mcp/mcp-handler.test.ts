@@ -129,7 +129,13 @@ function stack(): Stack {
           },
         });
       if (path === "/repositories/r1/issues" && request.method === "GET")
-        return Response.json({ data: [issue], truncated: false });
+        return Response.json({
+          data: [issue],
+          total: 1,
+          nextCursor: null,
+          limit: 30,
+          truncated: false,
+        });
       if (path === "/repositories/r1/issues" && request.method === "POST") {
         if (!user.token?.scopes.includes("issues:write"))
           return Response.json(
@@ -275,6 +281,7 @@ describe("MCP server through the Gateway", () => {
         "get_pull_request",
         "get_repository",
         "heartbeat_task",
+        "list_discussions",
         "list_issues",
         "list_pull_requests",
         "list_repositories",
@@ -283,6 +290,7 @@ describe("MCP server through the Gateway", () => {
         "poll_agent_events",
         "read_file",
         "release_task",
+        "search_code",
         "search_files",
         "set_auto_merge",
         "star_repository",
@@ -304,8 +312,8 @@ describe("MCP server through the Gateway", () => {
     expect(result.value).toMatchObject({
       items: [{ number: 1, title: "Broken build", labels: ["bug"] }],
       total: 1,
-      nextOffset: null,
-      upstreamTruncated: false,
+      nextCursor: null,
+      truncated: false,
     });
     expect(forgeCalls.map((request) => new URL(request.url).pathname)).toEqual([
       "/repositories/by-name/alice/site",

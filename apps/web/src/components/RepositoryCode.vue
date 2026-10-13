@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import { NavigationFailureType, isNavigationFailure, useRoute, useRouter } from "vue-router";
 import type {
   GitCommit,
+  GitCodeSearch,
   GitComparison,
   GitFile,
   GitGraph,
@@ -46,6 +47,7 @@ import {
 import { useLineSelection } from "../lib/lineSelection";
 import CodeLines from "./CodeLines.vue";
 import FileFinderDialog from "./FileFinderDialog.vue";
+import TextField from "./TextField.vue";
 import MarkdownContent from "./MarkdownContent.vue";
 import DiffViewer from "./DiffViewer.vue";
 import GitSignatureStatus from "./GitSignatureStatus.vue";
@@ -180,6 +182,12 @@ const markdownBase = computed(
     `/${props.repository.owner}/${props.repository.name}/blob/${filePath.value.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(refName.value)}`
 );
 const showFinder = ref(false);
+const showCodeSearch = ref(false);
+const codeSearchQuery = ref("");
+const codeSearchPath = ref("");
+const codeSearchResult = ref<GitCodeSearch | null>(null);
+const codeSearchBusy = ref(false);
+const codeSearchError = ref("");
 const showCloneMenu = ref(false);
 const cloneToggle = ref<HTMLElement | null>(null);
 const codeLines = ref<InstanceType<typeof CodeLines> | null>(null);
@@ -510,6 +518,30 @@ function openFile(path: string) {
     )
   );
 }
+async function searchCode(cursor?: string) {
+  const oid = selectedCommit.value?.oid ?? commitOid.value;
+  if (!oid || !codeSearchQuery.value.trim()) return;
+  codeSearchBusy.value = true;
+  codeSearchError.value = "";
+  try {
+    const result = await api.searchCode(
+      props.repository.id,
+      refName.value,
+      oid,
+      codeSearchQuery.value.trim(),
+      codeSearchPath.value.trim() || undefined,
+      cursor
+    );
+    codeSearchResult.value =
+      cursor && codeSearchResult.value
+        ? { ...result, matches: [...codeSearchResult.value.matches, ...result.matches] }
+        : result;
+  } catch (cause) {
+    codeSearchError.value = errorMessage(cause, t);
+  } finally {
+    codeSearchBusy.value = false;
+  }
+}
 function copyPermalink() {
   if (!permalink.value) return;
   const target = router.resolve(permalink.value);
@@ -720,6 +752,14 @@ onUnmounted(() => {
           ><AppIcon name="search" />{{ t("goToFile") }}</FluentButton
         >
         <FluentButton
+          type="button"
+          tone="secondary"
+          :disabled="!commitOid"
+          @click="showCodeSearch = !showCodeSearch"
+        >
+          <AppIcon name="search" />{{ t("codeSearch") }}
+        </FluentButton>
+        <FluentButton
           v-if="canManageCode && canEditCurrentRef"
           type="button"
           tone="secondary"
@@ -802,6 +842,45 @@ onUnmounted(() => {
         </div>
       </div>
     </div>
+    <form
+      v-if="showCodeSearch && section === 'code'"
+      class="box box-form form-stack"
+      @submit.prevent="searchCode()"
+    >
+      <TextField v-model="codeSearchQuery" required :placeholder="t('codeSearchPlaceholder')">{{
+        t("codeSearch")
+      }}</TextField>
+      <TextField v-model="codeSearchPath">{{ t("path") }}</TextField>
+      <FluentButton type="submit" tone="primary" :disabled="codeSearchBusy || !commitOid">{{
+        t("search")
+      }}</FluentButton>
+      <NoticeBar v-if="codeSearchError" intent="error">{{ codeSearchError }}</NoticeBar>
+      <NoticeBar v-if="codeSearchResult?.truncated" intent="warning">{{
+        t("codeSearchTruncated")
+      }}</NoticeBar>
+      <p v-if="codeSearchResult && !codeSearchResult.matches.length" class="state">
+        {{ t("codeSearchEmpty") }}
+      </p>
+      <RouterLink
+        v-for="match in codeSearchResult?.matches ?? []"
+        :key="`${match.path}:${match.line}`"
+        :to="match.permalink"
+        class="box-row item-link"
+      >
+        <span class="collab-row-content"
+          ><strong>{{ match.path }}:{{ match.line }}</strong
+          ><code>{{ match.text }}</code></span
+        >
+      </RouterLink>
+      <FluentButton
+        v-if="codeSearchResult?.nextCursor"
+        type="button"
+        tone="secondary"
+        :disabled="codeSearchBusy"
+        @click="searchCode(codeSearchResult.nextCursor)"
+        >{{ t("codeSearchMore") }}</FluentButton
+      >
+    </form>
     <span class="visually-hidden" role="status" aria-live="polite">{{
       copied ? t("copied") : ""
     }}</span>

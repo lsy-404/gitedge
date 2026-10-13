@@ -24,6 +24,11 @@ export const codeNavigationMessages = {
     commitNoChanges: "此提交没有修改任何文件。",
     commitAuthored: "{name} 提交于 {date}",
     viewCommit: "查看提交",
+    codeSearch: "搜索代码",
+    codeSearchPlaceholder: "搜索代码内容",
+    codeSearchEmpty: "没有匹配的代码行",
+    codeSearchTruncated: "搜索结果不完整，继续加载后续文件。",
+    codeSearchMore: "继续搜索",
   },
   en: {
     goToFileShortcut: "Go to file (shortcut t)",
@@ -52,5 +57,10 @@ export const codeNavigationMessages = {
     commitNoChanges: "This commit changes no files.",
     commitAuthored: "{name} committed on {date}",
     viewCommit: "View commit",
+    codeSearch: "Search code",
+    codeSearchPlaceholder: "Search code content",
+    codeSearchEmpty: "No matching code lines",
+    codeSearchTruncated: "Search results are partial. Continue to inspect more files.",
+    codeSearchMore: "Continue search",
   },
 };

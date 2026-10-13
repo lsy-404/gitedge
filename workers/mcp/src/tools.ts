@@ -14,7 +14,9 @@ import {
   RepositorySocialSchema,
   TASK_LEASE_MAX_SECONDS,
   CommentSchema,
+  DiscussionSchema,
   GitFileListSchema,
+  GitCodeSearchSchema,
   GitFileSchema,
   GitOidSchema,
   GitTreeSchema,
@@ -251,6 +253,27 @@ export function createGitEdgeMcpServer(api: GitEdgeApi, logger: Logger): McpServ
     );
   }
 
+  async function readCollaborationList<T>(
+    path: string,
+    schema: z.ZodType<T>,
+    query: Record<string, string | number | undefined>
+  ) {
+    return unwrap(
+      await api.call(
+        "GET",
+        path,
+        z.object({
+          data: z.array(schema),
+          total: z.number().int().nonnegative(),
+          nextCursor: z.number().int().positive().nullable(),
+          limit: z.number().int().positive(),
+          truncated: z.boolean(),
+        }),
+        { query }
+      )
+    );
+  }
+
   async function session(): Promise<TrustedUser> {
     return await readData("GET", apiPath("auth", "session"), TrustedUserSchema);
   }
@@ -476,27 +499,88 @@ export function createGitEdgeMcpServer(api: GitEdgeApi, logger: Logger): McpServ
   );
 
   server.registerTool(
+    "search_code",
+    {
+      description:
+        "Search literal text in bounded UTF-8 files at a fixed commit. Each result includes a line permalink; truncated and nextCursor report continuation.",
+      inputSchema: {
+        repository,
+        oid: GitOidSchema.describe("Fixed commit id to search."),
+        query: z
+          .string()
+          .min(1)
+          .max(100)
+          .describe("Literal, case-insensitive text; treated as text, not a regular expression."),
+        ref: ref,
+        path: z.string().max(2000).optional().describe("Optional file or directory path filter."),
+        cursor: z
+          .string()
+          .max(12_100)
+          .optional()
+          .describe("The nextCursor returned by the previous page."),
+      },
+      annotations: READ_ONLY,
+    },
+    async (input) =>
+      guarded("search_code", async () => {
+        const repo = await resolve(input.repository);
+        return await readData(
+          "GET",
+          apiPath("git", "repositories", repo.id, "search-code"),
+          GitCodeSearchSchema,
+          {
+            query: {
+              ref: input.ref,
+              oid: input.oid,
+              q: input.query,
+              path: input.path,
+              cursor: input.cursor,
+            },
+          }
+        );
+      })
+  );
+
+  server.registerTool(
     "list_issues",
     {
-      description: "List issues, newest first.",
+      description: "Filter and page issues on the server, newest first.",
       inputSchema: {
         repository,
         state: z.enum(["open", "closed", "all"]).optional(),
+        category: z.enum(["general", "ideas", "q-and-a", "announcements"]).optional(),
+        q: z.string().max(100).optional(),
+        label: z.string().max(100).optional(),
+        author: z.string().max(100).optional(),
+        assignee: z.string().max(100).optional(),
         limit,
-        offset,
+        cursor: itemNumber.optional().describe("The nextCursor returned by the previous page."),
       },
       annotations: READ_ONLY,
     },
     async (input) =>
       guarded("list_issues", async () => {
         const repo = await resolve(input.repository);
-        const list = await readList(
+        const list = await readCollaborationList(
           apiPath("forge", "repositories", repo.id, "issues"),
-          IssueSchema
+          IssueSchema,
+          {
+            state: input.state ?? "open",
+            category: input.category,
+            q: input.q,
+            label: input.label,
+            author: input.author,
+            assignee: input.assignee,
+            limit: input.limit ?? DEFAULT_PAGE,
+            cursor: input.cursor,
+          }
         );
-        const state = input.state ?? "open";
-        const rows = list.data.filter((issue) => state === "all" || issue.state === state);
-        return page(rows.map(issueSummary), input.offset, input.limit, list.truncated);
+        return {
+          items: list.data.map(issueSummary),
+          total: list.total,
+          nextCursor: list.nextCursor,
+          truncated: list.truncated,
+        };
       })
   );
 
@@ -590,22 +674,83 @@ export function createGitEdgeMcpServer(api: GitEdgeApi, logger: Logger): McpServ
         repository,
         state: z.enum(["open", "closed", "merged", "all"]).optional(),
         attention: z.literal("me").optional(),
+        q: z.string().max(100).optional(),
+        author: z.string().max(100).optional(),
+        assignee: z.string().max(100).optional(),
         limit,
-        offset,
+        cursor: itemNumber.optional().describe("The nextCursor returned by the previous page."),
       },
       annotations: READ_ONLY,
     },
     async (input) =>
       guarded("list_pull_requests", async () => {
         const repo = await resolve(input.repository);
-        const list = await readList(
+        const list = await readCollaborationList(
           apiPath("forge", "repositories", repo.id, "pull-requests"),
           PullRequestSchema,
-          { query: { attention: input.attention } }
+          {
+            state: input.state ?? "open",
+            attention: input.attention,
+            q: input.q,
+            author: input.author,
+            assignee: input.assignee,
+            limit: input.limit ?? DEFAULT_PAGE,
+            cursor: input.cursor,
+          }
         );
-        const state = input.state ?? "open";
-        const rows = list.data.filter((pull) => state === "all" || pull.state === state);
-        return page(rows.map(pullSummary), input.offset, input.limit, list.truncated);
+        return {
+          items: list.data.map(pullSummary),
+          total: list.total,
+          nextCursor: list.nextCursor,
+          truncated: list.truncated,
+        };
+      })
+  );
+
+  server.registerTool(
+    "list_discussions",
+    {
+      description: "Filter and page discussions on the server, newest first.",
+      inputSchema: {
+        repository,
+        state: z.enum(["open", "closed", "all"]).optional(),
+        q: z.string().max(100).optional(),
+        author: z.string().max(100).optional(),
+        limit,
+        cursor: itemNumber.optional().describe("The nextCursor returned by the previous page."),
+      },
+      annotations: READ_ONLY,
+    },
+    async (input) =>
+      guarded("list_discussions", async () => {
+        const repo = await resolve(input.repository);
+        const list = await readCollaborationList(
+          apiPath("forge", "repositories", repo.id, "discussions"),
+          DiscussionSchema,
+          {
+            state: input.state ?? "open",
+            q: input.q,
+            author: input.author,
+            limit: input.limit ?? DEFAULT_PAGE,
+            cursor: input.cursor,
+          }
+        );
+        return {
+          items: list.data.map(
+            ({ number, title, category, state, actor, answerCommentId, createdAt }) => ({
+              number,
+              title,
+              category,
+              state,
+              author: actor.name,
+              answered: answerCommentId !== null,
+              createdAt,
+            })
+          ),
+          total: list.total,
+          nextCursor: list.nextCursor,
+          truncated: list.truncated,
+        };
       })
   );
 

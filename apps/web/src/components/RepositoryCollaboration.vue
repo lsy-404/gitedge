@@ -80,6 +80,9 @@ const pages = ref<WikiPageSummary[]>([]);
 const item = ref<Issue | PullRequest | Discussion | WikiPage | null>(null);
 const comments = ref<Comment[]>([]);
 const listTruncated = ref(false);
+const listTotal = ref(0);
+const listNextCursor = ref<number | null>(null);
+const listLoadingMore = ref(false);
 const reviews = ref<Review[]>([]);
 const checks = ref<CheckRun[]>([]);
 const issueLinks = ref<IssueReferences | null>(null);
@@ -460,10 +463,18 @@ async function load() {
         comments.value = rows.items;
         listTruncated.value = rows.truncated;
       } else {
-        const page = await api.issues(props.repository.id);
+        const page = await api.issues(props.repository.id, {
+          state: stateFilter.value,
+          q: queryText.value.trim() || undefined,
+          author: issueView.value === "created" ? sessionState.user?.identifier : undefined,
+          assignee: issueView.value === "assigned" ? sessionState.user?.id : undefined,
+          limit: 30,
+        });
         if (version !== loadVersion) return;
         issues.value = page.items;
         listTruncated.value = page.truncated;
+        listTotal.value = page.total ?? page.items.length;
+        listNextCursor.value = page.nextCursor ?? null;
       }
     } else if (props.section === "pulls") {
       if (detailNumber.value) {
@@ -490,7 +501,12 @@ async function load() {
         diff.value = comparison;
       } else {
         const [pullRows, sessionRows] = await Promise.all([
-          api.pulls(props.repository.id),
+          api.pulls(props.repository.id, {
+            state: stateFilter.value,
+            q: queryText.value.trim() || undefined,
+            attention: attentionOnly.value ? "me" : undefined,
+            limit: 30,
+          }),
           props.repository.canWrite && props.repository.agentsEnabled
             ? api.repositorySessions(props.repository.id)
             : Promise.resolve([]),
@@ -498,6 +514,8 @@ async function load() {
         if (version !== loadVersion) return;
         pulls.value = pullRows.items;
         listTruncated.value = pullRows.truncated;
+        listTotal.value = pullRows.total ?? pullRows.items.length;
+        listNextCursor.value = pullRows.nextCursor ?? null;
         agentSessions.value = sessionRows;
       }
     } else if (props.section === "discussions") {
@@ -517,10 +535,17 @@ async function load() {
         comments.value = rows.items;
         listTruncated.value = rows.truncated;
       } else {
-        const page = await api.discussions(props.repository.id);
+        const page = await api.discussions(props.repository.id, {
+          state: stateFilter.value,
+          q: queryText.value.trim() || undefined,
+          category: categoryFilter.value === "all" ? undefined : categoryFilter.value,
+          limit: 30,
+        });
         if (version !== loadVersion) return;
         discussions.value = page.items;
         listTruncated.value = page.truncated;
+        listTotal.value = page.total ?? page.items.length;
+        listNextCursor.value = page.nextCursor ?? null;
       }
     } else if (props.section === "wiki") {
       if (wikiSlug.value) {
@@ -930,6 +955,63 @@ watch(
   },
   { immediate: true }
 );
+watch(
+  () => [
+    queryText.value,
+    stateFilter.value,
+    attentionOnly.value,
+    issueView.value,
+    categoryFilter.value,
+  ],
+  () => {
+    if (detailNumber.value || !["issues", "pulls", "discussions"].includes(props.section)) return;
+    void load();
+  }
+);
+async function loadMore() {
+  const cursor = listNextCursor.value;
+  if (cursor === null || listLoadingMore.value) return;
+  listLoadingMore.value = true;
+  try {
+    const query = {
+      state: stateFilter.value,
+      q: queryText.value.trim() || undefined,
+      category:
+        props.section === "discussions" && categoryFilter.value !== "all"
+          ? categoryFilter.value
+          : undefined,
+      author:
+        props.section === "issues" && issueView.value === "created"
+          ? sessionState.user?.identifier
+          : undefined,
+      assignee:
+        props.section === "issues" && issueView.value === "assigned"
+          ? sessionState.user?.id
+          : undefined,
+      attention: attentionOnly.value ? ("me" as const) : undefined,
+      cursor,
+      limit: 30,
+    };
+    if (props.section === "issues") {
+      const page = await api.issues(props.repository.id, query);
+      issues.value.push(...page.items);
+      listNextCursor.value = page.nextCursor ?? null;
+    } else if (props.section === "pulls") {
+      const page = await api.pulls(props.repository.id, query);
+      pulls.value.push(...page.items);
+      listNextCursor.value = page.nextCursor ?? null;
+    } else {
+      const page = await api.discussions(props.repository.id, query);
+      discussions.value.push(...page.items);
+      listNextCursor.value = page.nextCursor ?? null;
+    }
+    listTruncated.value = listNextCursor.value !== null;
+  } catch (cause) {
+    loadError.value = errorMessage(cause, t);
+  } finally {
+    listLoadingMore.value = false;
+  }
+}
 </script>
 
 <template>
@@ -1283,6 +1365,15 @@ watch(
               </button>
             </div>
           </template>
+          <button
+            v-if="listNextCursor !== null"
+            class="btn btn-secondary"
+            type="button"
+            :disabled="listLoadingMore"
+            @click="loadMore"
+          >
+            {{ listLoadingMore ? t("loading") : `${t("loadMore")} (${listTotal})` }}
+          </button>
         </div>
       </div>
     </div>

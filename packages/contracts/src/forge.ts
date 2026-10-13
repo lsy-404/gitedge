@@ -149,18 +149,19 @@ export const CommentSchema = z.object({
 });
 export type Comment = z.infer<typeof CommentSchema>;
 
-export interface Discussion {
-  id: string;
-  number: number;
-  title: string;
-  body: string;
-  category: "general" | "ideas" | "q-and-a" | "announcements";
-  state: "open" | "closed";
-  actor: Actor;
-  answerCommentId: string | null;
-  createdAt: number;
-  updatedAt: number;
-}
+export const DiscussionSchema = z.object({
+  id: z.string(),
+  number: z.number(),
+  title: z.string(),
+  body: z.string(),
+  category: z.enum(["general", "ideas", "q-and-a", "announcements"]),
+  state: z.enum(["open", "closed"]),
+  actor: ActorSchema,
+  answerCommentId: z.string().nullable(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+export type Discussion = z.infer<typeof DiscussionSchema>;
 
 export interface WikiPageSummary {
   slug: string;
@@ -177,6 +178,9 @@ export interface WikiPage extends WikiPageSummary {
 export interface ListPage<T> {
   items: T[];
   truncated: boolean;
+  total?: number;
+  nextCursor?: number | null;
+  limit?: number;
 }
 
 export interface IssueLinkedPullRequest {
@@ -328,6 +332,27 @@ export const GitFileListSchema = z
     "Every blob path of a commit tree; `truncated` when the entry or directory budget was reached."
   );
 export type GitFileList = z.infer<typeof GitFileListSchema>;
+export interface GitCodeSearch {
+  oid: string;
+  matches: { path: string; line: number; text: string; permalink: string }[];
+  inspected: number;
+  truncated: boolean;
+  nextCursor: string | null;
+}
+export const GitCodeSearchSchema = z.object({
+  oid: z.string(),
+  matches: z.array(
+    z.object({
+      path: z.string(),
+      line: z.number().int().positive(),
+      text: z.string(),
+      permalink: z.string(),
+    })
+  ),
+  inspected: z.number().int().nonnegative(),
+  truncated: z.boolean(),
+  nextCursor: z.string().nullable(),
+});
 export const GitPathHistorySchema = z
   .object({
     commits: z.array(GitCommitSchema),

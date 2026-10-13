@@ -14,7 +14,7 @@ import {
 } from "./ai-summary";
 import { authorizeMerge, blockerResponse } from "./merge-policy";
 import { readMergeRequirements } from "./merge-requirements-route";
-import { pullAttention, pullAttentionColumn, filterPullAttention } from "./pull-attention";
+import { pullAttention, pullAttentionColumn } from "./pull-attention";
 import { dashboardAttention } from "./dashboard";
 import { reconcileRepository, sweepMergeAutomation } from "./merge-automation";
 import { pullLockRoute } from "./pull-lock";
@@ -100,6 +100,7 @@ import {
   MergeAuthorizationInputSchema,
   MergePullRequestInputSchema,
   type Actor,
+  type Assignee,
   type Repository,
   type WikiPageSummary,
 } from "../../../packages/contracts/src/index";
@@ -269,6 +270,217 @@ async function publicRepositoryForOwnerAndSlug(
 }
 
 const MAX_LIST_ROWS = 500;
+
+type CollaborationResource = "issues" | "pull-requests" | "discussions";
+
+type CollaborationFilter = {
+  state: "open" | "closed" | "merged" | "all";
+  query: string;
+  label: string;
+  author: string;
+  assignee: string;
+  category: string;
+  attention: string | null;
+  limit: number;
+  cursor: number | null;
+};
+
+function pullAttentionFilterSql(viewer: Assignee): { sql: string; binds: string[] } {
+  const context = "resource.attention_json";
+  const authorKind = "COALESCE(json_extract(resource.actor_json, '$.kind'), 'user')";
+  const authorId = "COALESCE(json_extract(resource.actor_json, '$.id'), resource.author_id)";
+  const reviewerKind = "json_extract(attention_reviewer.value, '$.kind')";
+  const reviewerId = "json_extract(attention_reviewer.value, '$.id')";
+  const reviewerExcludeAuthor = `NOT (${reviewerKind} = ${authorKind} AND ${reviewerId} = ${authorId})`;
+  const reviewerIsViewer = `${reviewerKind} = ? AND ${reviewerId} = ?`;
+  const reviewerIsPending = `(json_type(attention_reviewer.value, '$.review') IS NULL OR json_type(attention_reviewer.value, '$.review') = 'null' OR json_extract(attention_reviewer.value, '$.review.at') < json_extract(attention_reviewer.value, '$.requestedAt'))`;
+  const reviewerExists = (pending: boolean) =>
+    `EXISTS (SELECT 1 FROM json_each(${context}, '$.reviewers') AS attention_reviewer WHERE ${reviewerExcludeAuthor} AND ${reviewerIsViewer}${pending ? ` AND ${reviewerIsPending}` : ""})`;
+  const pendingCount = `(SELECT COUNT(*) FROM json_each(${context}, '$.reviewers') AS pending_reviewer WHERE NOT (json_extract(pending_reviewer.value, '$.kind') = ${authorKind} AND json_extract(pending_reviewer.value, '$.id') = ${authorId}) AND (json_type(pending_reviewer.value, '$.review') IS NULL OR json_type(pending_reviewer.value, '$.review') = 'null' OR json_extract(pending_reviewer.value, '$.review.at') < json_extract(pending_reviewer.value, '$.requestedAt'))) `;
+  const reviewerCount = `(SELECT COUNT(*) FROM json_each(${context}, '$.reviewers') AS counted_reviewer WHERE NOT (json_extract(counted_reviewer.value, '$.kind') = ${authorKind} AND json_extract(counted_reviewer.value, '$.id') = ${authorId}))`;
+  const headAt = `COALESCE(json_extract(${context}, '$.head.at'), 0)`;
+  const commentAt = `json_extract(${context}, '$.comment.at')`;
+  const commentReviewAt = `COALESCE(json_extract(${context}, '$.review.at'), 0)`;
+  const commentIsCurrent = `COALESCE((json_type(${context}, '$.comment') = 'object' AND ${commentAt} > ${headAt} AND ${commentAt} >= ${commentReviewAt}), 0)`;
+  const commentAuthorKind = `json_extract(json_extract(${context}, '$.comment.actor'), '$.kind')`;
+  const commentAuthorId = `COALESCE(json_extract(json_extract(${context}, '$.comment.actor'), '$.id'), json_extract(${context}, '$.comment.authorId'))`;
+  const commentFromAuthor = `(${commentAuthorKind} = ${authorKind} AND ${commentAuthorId} = ${authorId})`;
+  const commentHandsToReviewers = `(${commentIsCurrent} AND ${commentFromAuthor} AND ${reviewerCount} > 0)`;
+  const reviewState = `json_extract(${context}, '$.review.state')`;
+  const changesRequested = `json_extract(${context}, '$.changesRequestedAt') IS NOT NULL`;
+  const incompleteContext = `(json_extract(${context}, '$.truncated') = 1 OR json_type(${context}, '$.head') IS NULL OR json_type(${context}, '$.head') = 'null' OR json_extract(${context}, '$.head.oid') = '${"0".repeat(40)}')`;
+  const authorReceivesAttention = `(${incompleteContext} OR (${commentIsCurrent} AND NOT ${commentHandsToReviewers}) OR (NOT ${commentIsCurrent} AND ${changesRequested}) OR (NOT ${commentIsCurrent} AND NOT ${changesRequested} AND (${reviewState} IN ('changes_requested', 'commented') OR (${reviewState} = 'approved' AND ${pendingCount} = 0) OR ${reviewerCount} = 0)))`;
+  const pendingReviewerReceivesAttention = `(NOT ${commentIsCurrent} AND NOT ${changesRequested} AND COALESCE(${reviewState}, '') NOT IN ('changes_requested', 'commented') AND NOT (${reviewState} = 'approved' AND ${pendingCount} = 0) AND ${reviewerCount} > 0 AND ${reviewerExists(true)})`;
+  const reviewerReceivesAttention = `(NOT ${incompleteContext} AND ((${commentHandsToReviewers} AND ${reviewerExists(false)}) OR ${pendingReviewerReceivesAttention}))`;
+  return {
+    sql: `(resource.state = 'open' AND resource.draft = 0 AND ${authorKind} IN ('user', 'agent') AND (((${authorKind} = ? AND ${authorId} = ?) AND ${authorReceivesAttention}) OR ${reviewerReceivesAttention}))`,
+    binds: [viewer.kind, viewer.id, viewer.kind, viewer.id, viewer.kind, viewer.id],
+  };
+}
+
+function collaborationFilter(request: Request): CollaborationFilter | Response {
+  const params = new URL(request.url).searchParams;
+  const state = params.get("state") ?? "all";
+  const query = params.get("q") ?? "";
+  const label = params.get("label") ?? "";
+  const author = params.get("author") ?? "";
+  const assignee = params.get("assignee") ?? "";
+  const category = params.get("category") ?? "";
+  const attention = params.get("attention");
+  const rawLimit = params.get("limit");
+  const rawCursor = params.get("cursor");
+  const limit = rawLimit === null ? 30 : Number(rawLimit);
+  const cursor = rawCursor === null ? null : Number(rawCursor);
+  if (state !== "open" && state !== "closed" && state !== "merged" && state !== "all")
+    return errorResponse(400, "bad_request", "Invalid collaboration state filter.");
+  if (
+    query.length > 100 ||
+    label.length > 100 ||
+    author.length > 100 ||
+    assignee.length > 100 ||
+    (category !== "" && !["general", "ideas", "q-and-a", "announcements"].includes(category)) ||
+    (attention !== null && attention !== "me") ||
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > 100 ||
+    (cursor !== null && (!Number.isSafeInteger(cursor) || cursor < 1))
+  )
+    return errorResponse(400, "bad_request", "Invalid collaboration list query.");
+  return { state, query, label, author, assignee, category, attention, limit, cursor };
+}
+
+async function listCollaboration(
+  env: ForgeEnv,
+  repository: RepositoryRow,
+  resource: CollaborationResource,
+  request: Request,
+  viewer: Assignee | null
+): Promise<Response> {
+  const filter = collaborationFilter(request);
+  if (filter instanceof Response) return filter;
+  if (filter.attention === "me" && resource !== "pull-requests")
+    return errorResponse(
+      400,
+      "bad_request",
+      "The attention filter is available only on pull request lists."
+    );
+  if (filter.attention === "me" && !viewer)
+    return jsonResponse({
+      data: [],
+      total: 0,
+      nextCursor: null,
+      limit: filter.limit,
+      truncated: false,
+    });
+  const table =
+    resource === "issues"
+      ? "forge_issues"
+      : resource === "pull-requests"
+        ? "forge_pull_requests"
+        : "forge_discussions";
+  const conditions = ["resource.repository_id = ?"];
+  const binds: (string | number)[] = [repository.id];
+  if (filter.state === "merged" && resource !== "pull-requests") conditions.push("0");
+  else if (filter.state === "merged") conditions.push("resource.state = 'merged'");
+  else if (filter.state === "closed")
+    conditions.push(
+      resource === "pull-requests"
+        ? "resource.state IN ('closed','merged')"
+        : "resource.state = 'closed'"
+    );
+  else if (filter.state === "open") {
+    conditions.push("resource.state = ?");
+    binds.push("open");
+  }
+  if (filter.query) {
+    const escaped = filter.query.replace(/[\\%_]/g, "\\$&");
+    const queryConditions = [
+      "resource.title LIKE ? ESCAPE '\\'",
+      "resource.body LIKE ? ESCAPE '\\'",
+      "CAST(resource.number AS TEXT) LIKE ? ESCAPE '\\'",
+      "users.identifier LIKE ? ESCAPE '\\'",
+    ];
+    binds.push(`%${escaped}%`, `%${escaped}%`, `%${escaped}%`, `%${escaped}%`);
+    if (resource === "issues") {
+      queryConditions.push(
+        "EXISTS (SELECT 1 FROM json_each(resource.labels_json) AS search_label WHERE search_label.value LIKE ? ESCAPE '\\')"
+      );
+      binds.push(`%${escaped}%`);
+    }
+    conditions.push(`(${queryConditions.join(" OR ")})`);
+  }
+  if (filter.author) {
+    conditions.push("users.identifier = ?");
+    binds.push(filter.author);
+  }
+  if (filter.label && resource === "issues") {
+    conditions.push(
+      "EXISTS (SELECT 1 FROM json_each(resource.labels_json) AS label WHERE label.value = ?)"
+    );
+    binds.push(filter.label);
+  } else if (filter.label) conditions.push("0");
+  if (filter.category && resource === "discussions") {
+    conditions.push("resource.category = ?");
+    binds.push(filter.category);
+  } else if (filter.category) conditions.push("0");
+  if (filter.assignee && (resource === "issues" || resource === "pull-requests")) {
+    conditions.push(
+      "EXISTS (SELECT 1 FROM forge_assignments a WHERE a.target_kind = ? AND a.target_id = resource.id AND a.role = 'assignee' AND a.assignee_id = ?)"
+    );
+    binds.push(resource === "issues" ? "issue" : "pull_request", filter.assignee);
+  } else if (filter.assignee) conditions.push("0");
+  if (filter.cursor !== null) {
+    conditions.push("resource.number < ?");
+    binds.push(filter.cursor);
+  }
+  const where = conditions.join(" AND ");
+  const countConditions = filter.cursor === null ? conditions : conditions.slice(0, -1);
+  const countBinds = filter.cursor === null ? binds : binds.slice(0, -1);
+  let count: { total: number } | null;
+  let listed: { results: Record<string, unknown>[] };
+  if (filter.attention === "me" && viewer) {
+    const attention = pullAttentionFilterSql(viewer);
+    const base = `SELECT resource.*, users.identifier AS author${assignmentsSelect(table, "resource")} FROM ${table} AS resource JOIN users ON users.id = resource.author_id`;
+    const cte = `WITH resource AS MATERIALIZED (${base} WHERE ${countConditions.join(" AND ")}), filtered AS MATERIALIZED (SELECT * FROM resource WHERE ${attention.sql})`;
+    const cursorCondition = filter.cursor === null ? "" : "WHERE number < ?";
+    listed = await env.DB.prepare(
+      `${cte} SELECT * FROM (SELECT filtered.*, COUNT(*) OVER() AS total FROM filtered) AS matches ${cursorCondition} ORDER BY number DESC LIMIT ?`
+    )
+      .bind(
+        ...countBinds,
+        ...attention.binds,
+        ...(filter.cursor === null ? [] : [filter.cursor]),
+        filter.limit + 1
+      )
+      .all<Record<string, unknown>>();
+    const firstRowTotal = listed.results[0]?.total;
+    count = typeof firstRowTotal === "number" ? { total: firstRowTotal } : null;
+    if (!count)
+      count = await env.DB.prepare(`${cte} SELECT COUNT(*) AS total FROM filtered`)
+        .bind(...countBinds, ...attention.binds)
+        .first<{ total: number }>();
+  } else {
+    count = await env.DB.prepare(
+      `SELECT COUNT(*) AS total FROM ${table} AS resource JOIN users ON users.id = resource.author_id WHERE ${countConditions.join(" AND ")}`
+    )
+      .bind(...countBinds)
+      .first<{ total: number }>();
+    listed = await env.DB.prepare(
+      `SELECT resource.*, users.identifier AS author${assignmentsSelect(table, "resource")} FROM ${table} AS resource JOIN users ON users.id = resource.author_id WHERE ${where} ORDER BY resource.number DESC LIMIT ?`
+    )
+      .bind(...binds, filter.limit + 1)
+      .all<Record<string, unknown>>();
+  }
+  const pageRows = listed.results.slice(0, filter.limit);
+  const nextCursor = listed.results.length > filter.limit ? Number(pageRows.at(-1)?.number) : null;
+  return jsonResponse({
+    data: pageRows.map((row) => presentForgeRow(resource, row)),
+    total: count?.total ?? 0,
+    nextCursor,
+    limit: filter.limit,
+    truncated: nextCursor !== null,
+  });
+}
 
 function boundedList<T>(
   rows: T[],
@@ -505,27 +717,13 @@ async function publicRepositoryRead(
   }
   const aiSummary = await aiSummaryRequest(env, request, repository, null, suffix);
   if (aiSummary) return aiSummary;
-  if (resource === "issues" && parts.length === 5) {
-    const rows = await env.DB.prepare(
-      `SELECT forge_issues.*, users.identifier AS author${assignmentsSelect("forge_issues", "forge_issues")} FROM forge_issues JOIN users ON users.id = forge_issues.author_id WHERE forge_issues.repository_id = ? ORDER BY forge_issues.number DESC LIMIT ?`
-    )
-      .bind(repository.id, MAX_LIST_ROWS + 1)
-      .all<Record<string, unknown>>();
-    return boundedList(rows.results, (row) => presentForgeRow("issues", row));
-  }
+  if (resource === "issues" && parts.length === 5)
+    return listCollaboration(env, repository, "issues", request, null);
   if (resource === "pull-requests" && parts.length === 5) {
-    const attention = new URL(request.url).searchParams.get("attention");
-    if (attention && attention !== "me")
-      return errorResponse(400, "bad_request", "Invalid attention filter.");
-    const rows = await env.DB.prepare(
-      `SELECT forge_pull_requests.*, users.identifier AS author${assignmentsSelect("forge_pull_requests", "forge_pull_requests")} FROM forge_pull_requests JOIN users ON users.id = forge_pull_requests.author_id WHERE forge_pull_requests.repository_id = ? ORDER BY forge_pull_requests.number DESC LIMIT ?`
-    )
-      .bind(repository.id, MAX_LIST_ROWS + 1)
-      .all<Record<string, unknown>>();
-    return boundedList(
-      new URL(request.url).searchParams.get("attention") === "me" ? [] : rows.results,
-      (row) => presentForgeRow("pull-requests", row)
-    );
+    return listCollaboration(env, repository, "pull-requests", request, null);
+  }
+  if (resource === "discussions" && parts.length === 5) {
+    return listCollaboration(env, repository, "discussions", request, null);
   }
   if (resource === "wiki" && parts.length === 5) {
     const rows = await env.DB.prepare(
@@ -754,33 +952,19 @@ async function featureRequest(
     resource === "issues" ? "issue" : resource === "pull-requests" ? "pull_request" : "discussion";
   if (targetTable && (request.method === "GET" || request.method === "POST") && !item) {
     if (request.method === "GET") {
-      const rows = await env.DB.prepare(
-        `SELECT resource.*, users.identifier AS author${assignmentsSelect(targetTable, "resource")} FROM ${targetTable} AS resource JOIN users ON users.id = resource.author_id WHERE resource.repository_id = ? ORDER BY resource.number DESC LIMIT ?`
-      )
-        .bind(repository.id, MAX_LIST_ROWS + 1)
-        .all<Record<string, unknown>>();
-      const attentionFilter = new URL(request.url).searchParams.get("attention");
-      if (resource === "pull-requests" && attentionFilter && attentionFilter !== "me")
-        return errorResponse(400, "bad_request", "Invalid attention filter.");
-      const listed =
-        resource === "pull-requests" && attentionFilter === "me"
-          ? filterPullAttention(
-              rows.results.slice(0, MAX_LIST_ROWS),
-              user.agentSession
-                ? {
-                    kind: "agent",
-                    id: user.agentSession.agentId,
-                    name: user.agentSession.agentName,
-                  }
-                : { kind: "user", id: user.id, name: user.identifier }
-            )
-          : rows.results;
-      return resource === "pull-requests" && attentionFilter === "me"
-        ? jsonResponse({
-            data: listed.map((row) => presentForgeRow(resource, row)),
-            truncated: rows.results.length > MAX_LIST_ROWS,
-          })
-        : boundedList(listed, (row) => presentForgeRow(resource, row));
+      return listCollaboration(
+        env,
+        repository,
+        resource === "issues"
+          ? "issues"
+          : resource === "pull-requests"
+            ? "pull-requests"
+            : "discussions",
+        request,
+        user.agentSession
+          ? { kind: "agent", id: user.agentSession.agentId, name: user.agentSession.agentName }
+          : { kind: "user", id: user.id, name: user.identifier }
+      );
     }
     const denied = requireWrite();
     if (denied) return denied;

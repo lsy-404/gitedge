@@ -84,6 +84,7 @@ import type {
   Discussion,
   GitBlame,
   GitCommit,
+  GitCodeSearch,
   GitCommitDetail,
   GitComparison,
   GitFile,
@@ -235,6 +236,7 @@ export type {
   Discussion,
   GitBlame,
   GitCommit,
+  GitCodeSearch,
   GitCommitDetail,
   GitComparison,
   GitFile,
@@ -391,6 +393,9 @@ export interface SsoLogoutResponse {
 interface ApiEnvelope<T> {
   data: T;
   truncated?: boolean;
+  total?: number;
+  nextCursor?: number | null;
+  limit?: number;
 }
 
 let expectedUserId: string | null = null;
@@ -429,7 +434,33 @@ async function requestPage<T>(path: string): Promise<ListPage<T>> {
   const envelope = await requestEnvelope<T[]>(path);
   if (!envelope || typeof envelope.truncated !== "boolean")
     throw new ApiError(200, "Invalid list response");
-  return { items: envelope.data, truncated: envelope.truncated };
+  const total = typeof envelope.total === "number" ? envelope.total : undefined;
+  const nextCursor =
+    typeof envelope.nextCursor === "number" || envelope.nextCursor === null
+      ? envelope.nextCursor
+      : undefined;
+  return { items: envelope.data, truncated: envelope.truncated, total, nextCursor };
+}
+
+export interface CollaborationListQuery {
+  state?: "open" | "closed" | "merged" | "all";
+  q?: string;
+  label?: string;
+  author?: string;
+  assignee?: string;
+  category?: Discussion["category"];
+  attention?: "me";
+  limit?: number;
+  cursor?: number;
+}
+
+function queryString(query: CollaborationListQuery | undefined): string {
+  if (!query) return "";
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query))
+    if (value !== undefined && value !== "") params.set(key, String(value));
+  const serialized = params.toString();
+  return serialized ? `?${serialized}` : "";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -993,6 +1024,17 @@ export const api = {
     request<GitTree>(gitPath(repositoryId, `tree${query({ ref, path })}`)),
   file: (repositoryId: string, ref: string, path: string) =>
     request<GitFile>(gitPath(repositoryId, `file${query({ ref, path })}`)),
+  searchCode: (
+    repositoryId: string,
+    ref: string,
+    oid: string,
+    q: string,
+    path?: string,
+    cursor?: string
+  ) =>
+    request<GitCodeSearch>(
+      gitPath(repositoryId, `search-code${query({ ref, oid, q, path, cursor })}`)
+    ),
   repositoryBranches: (repositoryId: string) =>
     request<RepositoryBranch[]>(gitPath(repositoryId, "branches")),
   createRepositoryBranch: (
@@ -1110,7 +1152,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  issues: (repositoryId: string) => requestPage<Issue>(repositoryPath(repositoryId, "issues")),
+  issues: (repositoryId: string, query?: CollaborationListQuery) =>
+    requestPage<Issue>(`${repositoryPath(repositoryId, "issues")}${queryString(query)}`),
   issue: (repositoryId: string, number: number) =>
     request<Issue>(repositoryPath(repositoryId, `issues/${number}`)),
   createIssue: (
@@ -1130,9 +1173,9 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
-  pulls: (repositoryId: string, attention?: "me") =>
+  pulls: (repositoryId: string, query?: CollaborationListQuery) =>
     requestPage<PullRequest>(
-      `${repositoryPath(repositoryId, "pull-requests")}${attention ? "?attention=me" : ""}`
+      `${repositoryPath(repositoryId, "pull-requests")}${queryString(query)}`
     ),
   pull: (repositoryId: string, number: number) =>
     request<PullRequest>(repositoryPath(repositoryId, `pull-requests/${number}`)),
@@ -1229,8 +1272,8 @@ export const api = {
       repositoryPath(repositoryId, `pull-requests/${number}/merge-queue`),
       { method: "DELETE" }
     ),
-  discussions: (repositoryId: string) =>
-    requestPage<Discussion>(repositoryPath(repositoryId, "discussions")),
+  discussions: (repositoryId: string, query?: CollaborationListQuery) =>
+    requestPage<Discussion>(`${repositoryPath(repositoryId, "discussions")}${queryString(query)}`),
   discussion: (repositoryId: string, number: number) =>
     request<Discussion>(repositoryPath(repositoryId, `discussions/${number}`)),
   createDiscussion: (

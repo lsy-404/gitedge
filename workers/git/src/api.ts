@@ -85,6 +85,7 @@ import { compareArtifacts } from "./compare";
 import { blameFile } from "./blame";
 import { commitDetail } from "./commit-diff";
 import { listFiles, pathHistory } from "./navigation";
+import { CODE_SEARCH_LIMITS, isCodeSearchCursor, searchCode } from "./code-search";
 import { mergeArtifacts } from "./merge";
 import { dataResponse, errorResponse, jsonResponse } from "../../../src/worker/common/http";
 
@@ -180,6 +181,7 @@ export async function handleGitApi(
     resource === "pull-head" ||
     (resource === "commit" && !committing) ||
     resource === "commit-diff" ||
+    resource === "search-code" ||
     resource === "signature" ||
     resource === "snapshot" ||
     resource === "fork-sync" ||
@@ -821,6 +823,38 @@ export async function handleGitApi(
       if (list.truncated)
         logger.warn("artifacts:file-list-truncated", { paths: list.paths.length });
       return dataResponse(list);
+    }
+    if (resource === "search-code") {
+      const oid = url.searchParams.get("oid") ?? "";
+      const query = url.searchParams.get("q") ?? "";
+      const cursor = url.searchParams.get("cursor");
+      if (
+        !GitOidSchema.safeParse(oid).success ||
+        !query.trim() ||
+        query.length > 100 ||
+        path.split("/").length > CODE_SEARCH_LIMITS.trees / 2 ||
+        (cursor !== null && (cursor.length > 12_100 || !isCodeSearchCursor(cursor)))
+      )
+        return errorResponse(400, "bad_request", "Invalid code search query.");
+      if (!(await refContainsCommit(repo, ref, oid)))
+        return errorResponse(404, "not_found", "Commit was not found in this repository ref.");
+      const result = await searchCode(
+        repo,
+        access.repository.owner,
+        access.repository.slug,
+        oid,
+        query,
+        path,
+        cursor
+      );
+      if (!result) return errorResponse(404, "not_found", "Commit was not found.");
+      logger.debug("artifacts:code-search", {
+        oid,
+        inspected: result.inspected,
+        matches: result.matches.length,
+        truncated: result.truncated,
+      });
+      return dataResponse(result);
     }
     if (resource === "history") {
       const cursor = url.searchParams.get("cursor");
