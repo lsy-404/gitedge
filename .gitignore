@@ -9,4 +9,8 @@ worker-configuration.d.ts
 .cloudflare/
 coverage/
 
+# Operator-specific deployment values
+/gitedge.config.json
+workers/*/wrangler.production.jsonc
+
 !/test/

@@ -4,13 +4,13 @@ GitEdge supports multiple OIDC and SAML 2.0 identity providers alongside passwor
 
 ## Configuration
 
-Set `SSO_PROVIDERS_JSON` to a JSON array in the Auth Worker's variables. Put credentials in a separate `SSO_SECRETS_JSON` Worker secret keyed by provider ID:
+List providers in the `ssoProviders` array of the ignored `gitedge.config.json`; deployment writes it to the Auth Worker's `SSO_PROVIDERS_JSON` variable (the committed default is `[]`, which disables SSO). Put credentials in a separate `SSO_SECRETS_JSON` Worker secret keyed by provider ID:
 
 ```sh
-pnpm exec wrangler secret put SSO_SECRETS_JSON --config workers/auth/wrangler.jsonc
+pnpm exec wrangler secret put SSO_SECRETS_JSON --config workers/auth/wrangler.production.jsonc
 ```
 
-For local development, put these values in ignored `workers/auth/.dev.vars`. Keep secrets out of `wrangler.jsonc`, Git remotes, source and logs. Use the canonical public Gateway origin when registering callback URLs at the provider. Issuers and provider endpoints require HTTPS; OIDC callback URLs also allow HTTP loopback for local development.
+For local development, put these values in ignored `workers/auth/.dev.vars`. Keep secrets out of the Wrangler configs, Git remotes, source and logs. Use the canonical public Gateway origin when registering callback URLs at the provider. Issuers and provider endpoints require HTTPS; OIDC callback URLs also allow HTTP loopback for local development.
 
 Example provider configuration:
 
@@ -35,16 +35,16 @@ The corresponding secret is an object such as `{"workforce":{"clientSecret":"<pr
 
 Provider IDs must remain stable. Changing an issuer does not silently transfer an existing identity to the replacement provider. GitEdge identifies accounts by provider ID, issuer and subject, never by matching email addresses. Linking requires both an existing GitEdge session and successful authentication with the new provider.
 
-## Voidcarve Access
+## Hosted OIDC issuer
 
-The `https://id.voidcarve.com` OIDC issuer is configured as an ordinary provider. In the Auth Worker variable `SSO_PROVIDERS_JSON` add:
+A hosted OIDC issuer is configured as an ordinary provider. Add an entry such as this to `ssoProviders` in `gitedge.config.json`:
 
 ```json
 {
-  "id": "voidcarve",
-  "label": "Voidcarve Access",
+  "id": "access",
+  "label": "Access",
   "protocol": "oidc",
-  "issuer": "https://id.voidcarve.com",
+  "issuer": "https://id.example.com",
   "clientId": "<client-id-registered-at-the-issuer>",
   "scopes": ["openid", "profile", "email"],
   "tokenAuthMethod": "client_secret_basic",
@@ -52,7 +52,7 @@ The `https://id.voidcarve.com` OIDC issuer is configured as an ordinary provider
 }
 ```
 
-Store the client secret in `SSO_SECRETS_JSON` as `{"voidcarve":{"clientSecret":"<secret>"}}` with `wrangler secret put SSO_SECRETS_JSON --config workers/auth/wrangler.jsonc`. At id.voidcarve.com register the redirect URI `https://gitedge.voidcarve.com/api/auth/sso/voidcarve/callback`. Client authentication defaults to `client_secret_basic`; the issuer advertises RS256 ID tokens, S256 PKCE and the `iss` response parameter, all of which are enforced by the standard code-flow library. Request `openid profile email` (not `offline_access`); the email claim is stored with the identity and is never used to match accounts. No picture claim is provided. Sign-in starts at `/api/auth/sso/voidcarve/start`. New accounts get an `sso-` identifier unrelated to profile claims; the issuer subject is the only identity key.
+Store the client secret in `SSO_SECRETS_JSON` as `{"access":{"clientSecret":"<secret>"}}` with `wrangler secret put SSO_SECRETS_JSON --config workers/auth/wrangler.production.jsonc`. At the issuer register the redirect URI `https://<your-domain>/api/auth/sso/access/callback`. Client authentication defaults to `client_secret_basic`; the issuer should advertise RS256 ID tokens, S256 PKCE and the `iss` response parameter, all of which are enforced by the standard code-flow library. Request `openid profile email` (not `offline_access`); the email claim is stored with the identity and is never used to match accounts. No picture claim is provided. Sign-in starts at `/api/auth/sso/access/start`. New accounts get an `sso-` identifier unrelated to profile claims; the issuer subject is the only identity key.
 
 ## OIDC
 

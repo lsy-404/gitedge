@@ -8,17 +8,10 @@ import { fileURLToPath } from "node:url";
 
 const exec = promisify(execFile);
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const gatewayConfig = JSON.parse(
-  await readFile(path.join(projectRoot, "workers/gateway/wrangler.jsonc"), "utf8")
-);
-const configuredHost = gatewayConfig.routes?.find(
-  (route) => route.custom_domain && typeof route.pattern === "string"
-)?.pattern;
-assert.ok(configuredHost, "Gateway wrangler.jsonc must define a custom HTTPS domain route.");
-
-const origin = new URL(process.env.GITEDGE_PRODUCTION_URL ?? `https://${configuredHost}`);
+const productionUrl = process.env.GITEDGE_PRODUCTION_URL;
+assert.ok(productionUrl, "Set GITEDGE_PRODUCTION_URL to the https origin of your Gateway.");
+const origin = new URL(productionUrl);
 assert.equal(origin.protocol, "https:", "Production smoke requires an HTTPS Gateway URL.");
-assert.equal(origin.hostname, configuredHost, "Target must match the Gateway custom domain.");
 assert.equal(origin.username, "");
 assert.equal(origin.password, "");
 assert.equal(origin.port, "");

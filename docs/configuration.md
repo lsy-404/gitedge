@@ -1,9 +1,9 @@
 # Configuration
 
-Each Worker reads its settings from `workers/<worker>/wrangler.jsonc` (variables) and Wrangler secrets. For local development, put secrets in that Worker's ignored `.dev.vars` file. Set a production secret with:
+Each Worker reads its settings from `workers/<worker>/wrangler.jsonc` (variables) and Wrangler secrets. Account-specific values and variable overrides for production belong in the ignored `gitedge.config.json` (see [deployment configuration](deploy.md#deploying-gitedge-itself)); `pnpm run config:production` renders them into `workers/<worker>/wrangler.production.jsonc`. For local development, put secrets in that Worker's ignored `.dev.vars` file. Set a production secret with:
 
 ```sh
-pnpm exec wrangler secret put <NAME> --config workers/<worker>/wrangler.jsonc
+pnpm exec wrangler secret put <NAME> --config workers/<worker>/wrangler.production.jsonc
 ```
 
 ## Auth

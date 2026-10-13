@@ -6,13 +6,18 @@ import { createReadStream, createWriteStream } from "node:fs";
 import { chmod, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
+import {
+  loadOperatorConfig,
+  productionConfigPath,
+  writeProductionConfigs,
+} from "./operator-config.mjs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sourceDb = "gitedge";
-const authConfig = resolve(root, "workers/auth/wrangler.jsonc");
-const forgeConfig = resolve(root, "workers/forge/wrangler.jsonc");
+const authConfig = productionConfigPath("auth");
+const forgeConfig = productionConfigPath("forge");
 const manifestName = "manifest.json";
 const queryPageSize = 500;
 const maximumRows = 50_000;
@@ -883,10 +888,14 @@ try {
   if (cliArgs[0] === "--") cliArgs.shift();
   const [command, ...args] = cliArgs;
   if (!command || command === "help" || command === "--help") usage();
-  else if (command === "backup") await backup(options(args));
-  else if (command === "verify") await verify(options(args));
-  else if (command === "rehearse") await rehearse(options(args));
-  else throw new Error(`Unknown command: ${command}`);
+  else if (command === "backup") {
+    writeProductionConfigs(loadOperatorConfig());
+    await backup(options(args));
+  } else if (command === "verify") await verify(options(args));
+  else if (command === "rehearse") {
+    writeProductionConfigs(loadOperatorConfig());
+    await rehearse(options(args));
+  } else throw new Error(`Unknown command: ${command}`);
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;

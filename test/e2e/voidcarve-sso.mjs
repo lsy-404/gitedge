@@ -8,10 +8,16 @@ assert.ok(
 );
 const credentials = JSON.parse(await readFile(credentialsPath, "utf8"));
 assert.match(credentials.username, /^gitedge_sso_[a-f0-9]+$/);
-const gitOrigin = "https://gitedge.voidcarve.com";
-const idOrigin = "https://id.voidcarve.com";
+const gitOrigin = process.env.GITEDGE_ORIGIN;
+const idOrigin = process.env.GITEDGE_SSO_ISSUER_ORIGIN;
+assert.ok(
+  gitOrigin && idOrigin,
+  "Set GITEDGE_ORIGIN and GITEDGE_SSO_ISSUER_ORIGIN to the stack and its OIDC issuer origins."
+);
 const cookies = new Map();
 const result = { startedAt: new Date().toISOString(), checks: {} };
+const providerId = process.env.GITEDGE_SSO_PROVIDER_ID;
+assert.ok(providerId, "Set GITEDGE_SSO_PROVIDER_ID to the configured provider id.");
 const stage = process.env.VOIDCARVE_TEST_STAGE ?? "full";
 assert.ok(["denied", "login", "full"].includes(stage));
 const resultPath = process.env.VOIDCARVE_TEST_RESULT;
@@ -52,7 +58,7 @@ async function request(url, body) {
 
 try {
   const providers = await (await request(`${gitOrigin}/api/auth/sso/providers`)).json();
-  assert.ok(providers.data.some((provider) => provider.id === "voidcarve"));
+  assert.ok(providers.data.some((provider) => provider.id === providerId));
   result.checks.providerVisible = true;
   const login = await request(`${idOrigin}/auth/password`, {
     username: credentials.username,
@@ -60,7 +66,7 @@ try {
   });
   assert.equal(login.status, 200);
   assert.equal((await login.json()).ok, true);
-  const start = await request(`${gitOrigin}/api/auth/sso/voidcarve/start`);
+  const start = await request(`${gitOrigin}/api/auth/sso/${providerId}/start`);
   assert.equal(start.status, 302);
   const authorization = new URL(start.headers.get("location"));
   assert.equal(authorization.origin, idOrigin);
@@ -70,7 +76,7 @@ try {
   assert.equal(authorization.searchParams.get("scope"), "openid profile email");
   assert.equal(
     authorization.searchParams.get("redirect_uri"),
-    `${gitOrigin}/api/auth/sso/voidcarve/callback`
+    `${gitOrigin}/api/auth/sso/${providerId}/callback`
   );
   result.checks.pkceAndExactCallback = true;
   const badRedirect = new URL(authorization);
@@ -91,7 +97,7 @@ try {
     assert.equal(authorized.status, 302);
     const callback = new URL(authorized.headers.get("location"));
     assert.equal(callback.origin, gitOrigin);
-    assert.equal(callback.pathname, "/api/auth/sso/voidcarve/callback");
+    assert.equal(callback.pathname, `/api/auth/sso/${providerId}/callback`);
     assert.ok(callback.searchParams.get("code"));
     const completed = await request(callback);
     assert.equal(completed.status, 303);
@@ -101,7 +107,7 @@ try {
     const account = (await session.json()).data;
     result.accountId = account.id;
     const identities = (await (await request(`${gitOrigin}/api/auth/sso/identities`)).json()).data;
-    const identity = identities.find((entry) => entry.providerId === "voidcarve");
+    const identity = identities.find((entry) => entry.providerId === providerId);
     assert.ok(identity);
     result.checks.productionLoginAndLinkedIdentity = true;
     const services = await request(`${idOrigin}/auth/services`);
@@ -110,7 +116,7 @@ try {
     assert.ok(JSON.stringify(catalog).includes("gitedge-production"));
     result.checks.identityServiceCatalog = true;
     if (stage === "full") {
-      const logoutResponse = await request(`${gitOrigin}/api/auth/sso/voidcarve/logout`, {
+      const logoutResponse = await request(`${gitOrigin}/api/auth/sso/${providerId}/logout`, {
         identityId: identity.id,
       });
       assert.equal(logoutResponse.status, 200);
@@ -124,7 +130,7 @@ try {
       assert.equal(confirmationUrl.searchParams.get("client_id"), "gitedge-production");
       assert.equal(
         confirmationUrl.searchParams.get("post_logout_redirect_uri"),
-        `${gitOrigin}/api/auth/sso/voidcarve/logout-callback`
+        `${gitOrigin}/api/auth/sso/${providerId}/logout-callback`
       );
       assert.equal(
         confirmationUrl.searchParams.get("state"),

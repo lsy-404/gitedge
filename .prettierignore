@@ -11,3 +11,5 @@ worker-configuration.d.ts
 
 .pnpm-store/
 agents/
+gitedge.config.json
+workers/*/wrangler.production.jsonc

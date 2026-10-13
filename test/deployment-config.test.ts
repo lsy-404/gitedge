@@ -7,7 +7,6 @@ const WorkerConfigSchema = z.object({
   workers_dev: z.boolean(),
   compatibility_date: z.string(),
   compatibility_flags: z.array(z.string()).default([]),
-  account_id: z.string(),
   artifacts: z.array(z.object({ binding: z.string(), namespace: z.string() })).optional(),
   services: z.array(z.object({ binding: z.string(), service: z.string() })).optional(),
   durable_objects: z

@@ -1,3 +1,23 @@
+# Deployment configuration
+
+## Deploying GitEdge itself
+
+The committed `workers/*/wrangler.jsonc` files hold only neutral values: no `account_id`, the `REPLACE_WITH_D1_DATABASE_ID` placeholder, the example domain `gitedge.example.com` and `SSO_PROVIDERS_JSON` set to `[]`. They are enough for `pnpm run build`, the test suites and `pnpm run dev` without any operator file; local `dev` takes the account from `CLOUDFLARE_ACCOUNT_ID`, the operator file or the Wrangler login.
+
+Production values come from `gitedge.config.json` at the repository root (ignored by Git; start from `gitedge.config.example.json`):
+
+| Field          | Applied to                                                                                               |
+| -------------- | -------------------------------------------------------------------------------------------------------- |
+| `accountId`    | `account_id` of every Worker, and `CLOUDFLARE_ACCOUNT_ID` for Wrangler calls.                            |
+| `databaseId`   | `database_id` of every D1 binding.                                                                       |
+| `domain`       | The Gateway's `custom_domain` route pattern.                                                             |
+| `ssoProviders` | The Auth Worker's `SSO_PROVIDERS_JSON` (serialized). See [SSO](sso.md).                                  |
+| `vars`         | Optional `{ "<worker>": { "<NAME>": "<value>" } }` overrides merged over each Worker's committed `vars`. |
+
+`pnpm run deploy` validates the file (a missing file or a placeholder value stops the deployment before any remote call), writes `workers/<worker>/wrangler.production.jsonc` beside each original so relative `main` and asset paths still resolve, and deploys with those files. `pnpm run config:production` only renders them, which is what you need before `wrangler secret put ... --config workers/<worker>/wrangler.production.jsonc`. `pnpm run db:migrate` applies the D1 migrations remotely using the same rendered configs. `pnpm run build` and `pnpm run deploy:dry-run` use the operator file when present and inert sample values otherwise. Generated files are ignored by Git; never edit them.
+
+To change a name that is not account-specific (R2 bucket, queue, Artifacts namespace), edit the committed Worker config and the tests that assert it.
+
 # Repository deployment manifest
 
 GitEdge can deploy a repository ref to a Cloudflare account through the repository page's deployment wizard. The Deploy Worker reads `gitedge.deploy.json` from that ref and interprets only the fixed schema below. It never executes repository supplied JavaScript.
@@ -33,7 +53,7 @@ GitEdge can deploy a repository ref to a Cloudflare account through the reposito
 
 All top-level and nested fields are schema checked. A manifest may declare up to eight resources and sixteen combined module/migration files. Resource names are lowercase Cloudflare names; binding names are JavaScript identifiers. Migration paths must be simple repository-relative `.sql` paths. The worker entrypoint is uploaded as a JavaScript module. Deployment succeeds only after workers.dev activation and readback of the actual enabled URL. If activation fails after upload, the encrypted session remains available for retry. Resource provisioning is idempotent by exact name, and successful resource IDs are retained in the encrypted short-lived browser session so users can retry after a partial failure.
 
-The manifest permission list is derived from its declared resources and displayed before token entry. Cloudflare token scopes must include Account Settings Read plus Workers Scripts Write/Read, and the relevant D1, Workers R2 Storage, or Workers KV Storage Write/Read scopes. A token that cannot list accounts is rejected. Tokens are encrypted in an HttpOnly, Secure, SameSite=Strict cookie, never returned to the browser JavaScript, logged, or persisted in D1. Set a random `DEPLOY_SESSION_KEY` secret of at least 32 characters with `pnpm exec wrangler secret put DEPLOY_SESSION_KEY --config workers/deploy/wrangler.jsonc`. Agent sessions cannot establish deployment sessions.
+The manifest permission list is derived from its declared resources and displayed before token entry. Cloudflare token scopes must include Account Settings Read plus Workers Scripts Write/Read, and the relevant D1, Workers R2 Storage, or Workers KV Storage Write/Read scopes. A token that cannot list accounts is rejected. Tokens are encrypted in an HttpOnly, Secure, SameSite=Strict cookie, never returned to the browser JavaScript, logged, or persisted in D1. Set a random `DEPLOY_SESSION_KEY` secret of at least 32 characters with `pnpm exec wrangler secret put DEPLOY_SESSION_KEY --config workers/deploy/wrangler.production.jsonc` after `pnpm run config:production`. Agent sessions cannot establish deployment sessions.
 
 Deploy API requests are only accepted through the trusted Gateway service binding, require same-origin requests and a per-session nonce on each mutation, re-check the user's repository ownership and a digest of the manifest plus every declared module/migration file on each operation, and bind the encrypted session to one user, repository, ref, and Cloudflare account. The Cloudflare token remains valid at Cloudflare until the user revokes it; clearing the GitEdge session cookie ends GitEdge's use of it. Migrations are identified by their declared path and should be immutable after they have been applied.
 
