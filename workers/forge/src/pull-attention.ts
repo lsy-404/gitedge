@@ -45,7 +45,8 @@ export function pullCurrentHeadOidExpression(alias: string): string {
 }
 
 function subject(actor: Actor): Assignee | null {
-  return actor.kind === "ci" ? null : { kind: actor.kind, id: actor.id, name: actor.name };
+  return actor.kind === "user" || actor.kind === "agent"
+    ? { kind: actor.kind, id: actor.id, name: actor.name } : null;
 }
 
 export function pullAttention(pull: Record<string, unknown>): PullAttention[] {

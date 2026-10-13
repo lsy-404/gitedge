@@ -34,7 +34,7 @@ export async function readTextLimited(
 }
 
 export async function readJsonLimited(
-  request: Request,
+  request: Request | Response,
   maximumBytes = 1_048_576
 ): Promise<unknown> {
   try {

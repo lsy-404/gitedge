@@ -10,6 +10,7 @@ import type { GitEnv } from "./access";
 import { purgeRepositoryArtifacts } from "./purge";
 import { serveSite } from "./site";
 import { handleInternalRefHeads } from "./internal-ref-heads";
+import { handleGithubGitSync } from "./github-sync";
 
 export default {
   async fetch(request: Request, env: GitEnv, ctx: ExecutionContext): Promise<Response> {
@@ -17,6 +18,8 @@ export default {
       return dataResponse({ ok: true });
     try {
       const url = new URL(request.url);
+      if (url.pathname === "/internal/github-sync" || url.pathname === "/internal/github-sync/refs")
+        return await handleGithubGitSync(request, env);
       if (url.hostname === "git.internal" && url.pathname === "/internal/ref-heads")
         return await handleInternalRefHeads(request, env);
       if (url.hostname === "git.internal" && url.pathname === "/internal/purge")
