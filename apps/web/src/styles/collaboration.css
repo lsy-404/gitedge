@@ -586,3 +586,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.list-rows.is-refreshing {
+  opacity: 0.6;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}

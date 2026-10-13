@@ -114,6 +114,8 @@ const mergeError = ref("");
 const mergeQueueRequired = ref(false);
 const mergeRequirementsReady = ref(false);
 const loading = ref(false);
+const listRefreshing = ref(false);
+const listReady = ref(false);
 const loadError = ref("");
 const actionError = ref("");
 const actionConflict = ref(false);
@@ -434,17 +436,24 @@ function startWikiPage() {
   showForm.value = true;
   void router.push(`/${props.repository.owner}/${props.repository.name}/wiki`);
 }
-async function load() {
+function load() {
+  return runLoad(false);
+}
+async function runLoad(soft: boolean) {
   const version = ++loadVersion;
   listLoadingMore.value = false;
-  loading.value = true;
+  if (soft) listRefreshing.value = true;
+  else {
+    loading.value = true;
+    listReady.value = false;
+  }
   loadError.value = "";
   actionError.value = "";
   actionConflict.value = false;
   viewedRevision.value = null;
   notFound.value = false;
   item.value = null;
-  listTruncated.value = false;
+  if (!soft) listTruncated.value = false;
   try {
     if (props.section === "issues") {
       if (detailNumber.value) {
@@ -572,6 +581,9 @@ async function load() {
     } else {
       loadError.value = t("unknownSection");
     }
+    if (!detailNumber.value && ["issues", "pulls", "discussions"].includes(props.section)) {
+      listReady.value = true;
+    }
   } catch (cause) {
     if (version !== loadVersion) return;
     if (cause instanceof ApiError && cause.status === 404 && isDetail.value) {
@@ -582,9 +594,13 @@ async function load() {
         return;
       }
       notFound.value = true;
-    } else loadError.value = userMessage(cause);
+    } else if (soft) actionError.value = userMessage(cause);
+    else loadError.value = userMessage(cause);
   } finally {
-    if (version === loadVersion) loading.value = false;
+    if (version === loadVersion) {
+      loading.value = false;
+      listRefreshing.value = false;
+    }
   }
 }
 /** Issue and pull request numbers share one sequence, so #n links may point at a pull request. */
@@ -957,22 +973,35 @@ watch(
   },
   { immediate: true }
 );
+const SEARCH_DEBOUNCE_MS = 250;
+let searchTimer: number | undefined;
+const searchPending = ref(false);
+function refreshList() {
+  window.clearTimeout(searchTimer);
+  searchPending.value = false;
+  if (detailNumber.value || !["issues", "pulls", "discussions"].includes(props.section)) return;
+  void runLoad(listReady.value);
+}
+watch(queryText, () => {
+  window.clearTimeout(searchTimer);
+  searchPending.value = true;
+  searchTimer = window.setTimeout(refreshList, SEARCH_DEBOUNCE_MS);
+});
 watch(
-  () => [
-    queryText.value,
-    stateFilter.value,
-    attentionOnly.value,
-    issueView.value,
-    categoryFilter.value,
-  ],
-  () => {
-    if (detailNumber.value || !["issues", "pulls", "discussions"].includes(props.section)) return;
-    void load();
-  }
+  () => [stateFilter.value, attentionOnly.value, issueView.value, categoryFilter.value],
+  refreshList
 );
+onUnmounted(() => window.clearTimeout(searchTimer));
 async function loadMore() {
   const cursor = listNextCursor.value;
-  if (cursor === null || listLoadingMore.value || loading.value) return;
+  if (
+    cursor === null ||
+    listLoadingMore.value ||
+    loading.value ||
+    listRefreshing.value ||
+    searchPending.value
+  )
+    return;
   const version = loadVersion;
   listLoadingMore.value = true;
   try {
@@ -1217,169 +1246,175 @@ async function loadMore() {
               <option value="announcements">{{ t("categoryAnnouncements") }}</option>
             </SelectField>
           </div>
-          <template v-if="section === 'issues'">
-            <RouterLink
-              v-for="row in filteredIssues"
-              :key="row.number"
-              class="box-row item-link"
-              :to="`/${repository.owner}/${repository.name}/issues/${row.number}`"
-              ><AppIcon
-                class="state-icon"
-                :class="`state-${stateMark(row).tone}`"
-                :name="stateMark(row).icon"
-              />
-              <span class="collab-row-content"
-                ><span class="collab-row-title"
-                  ><strong>{{ row.title }}</strong
-                  ><StatusBadge
-                    v-for="label in row.labels"
-                    :key="label"
-                    :tone="
-                      label === 'bug' ? 'danger' : label === 'enhancement' ? 'brand' : 'neutral'
-                    "
-                    >{{ label }}</StatusBadge
-                  ></span
-                ><span class="collab-row-meta"
-                  >#{{ row.number }} · {{ t("openedBy", { author: actorName(row) }) }} ·
-                  {{ d(row.createdAt, "short") }}</span
-                ></span
-              ></RouterLink
-            >
-            <div v-if="!issues.length" class="empty-onboarding">
-              <AppIcon name="issue" />
-              <h3>{{ t("noIssuesTitle") }}</h3>
-              <p>{{ t("noIssuesBody") }}</p>
-              <button
-                v-if="canCreate"
-                class="btn btn-primary"
-                type="button"
-                @click="showForm = true"
-              >
-                {{ t("createIssue") }}
-              </button>
-            </div>
-            <p v-else-if="!filteredIssues.length" class="state">{{ t("noMatchingItems") }}</p>
-          </template>
-          <template v-else-if="section === 'pulls'">
-            <RouterLink
-              v-for="row in filteredPulls"
-              :key="row.number"
-              class="box-row item-link"
-              :to="`/${repository.owner}/${repository.name}/pulls/${row.number}`"
-              ><AppIcon
-                class="state-icon"
-                :class="`state-${stateMark(row).tone}`"
-                :name="stateMark(row).icon"
-              />
-              <span class="collab-row-content"
-                ><span class="collab-row-title"
-                  ><strong>{{ row.title }}</strong
-                  ><StatusBadge v-if="awaitingMe(row)" tone="brand">{{
-                    t("pullAttentionMe")
-                  }}</StatusBadge
-                  ><StatusBadge v-if="row.lockedAt !== null">{{ t("pullLocked") }}</StatusBadge
-                  ><StatusBadge v-if="row.draft">{{ t("draftPull") }}</StatusBadge
-                  ><StatusBadge v-if="row.headSessionId" tone="brand">{{
-                    t("agentSession")
-                  }}</StatusBadge
-                  ><StatusBadge v-if="row.headRepository" tone="brand">{{
-                    t("pullFromFork", {
-                      name: `${row.headRepository.owner}/${row.headRepository.name}`,
-                    })
-                  }}</StatusBadge></span
-                ><span class="collab-row-meta"
-                  >#{{ row.number }} · {{ t("openedBy", { author: actorName(row) }) }} ·
-                  {{ row.headRef }} → {{ row.baseRef }}</span
-                ></span
-              ></RouterLink
-            >
-            <div v-if="!pulls.length" class="empty-onboarding">
-              <AppIcon name="pr" />
-              <h3>{{ t("noPullsTitle") }}</h3>
-              <p>{{ t("noPullsBody") }}</p>
-              <button
-                v-if="canCreate"
-                class="btn btn-primary"
-                type="button"
-                @click="showForm = true"
-              >
-                {{ t("createPull") }}
-              </button>
-            </div>
-            <p v-else-if="!filteredPulls.length" class="state">{{ t("noMatchingItems") }}</p>
-          </template>
-          <template v-else-if="section === 'discussions'">
-            <RouterLink
-              v-for="row in filteredDiscussions"
-              :key="row.number"
-              class="box-row item-link"
-              :to="`/${repository.owner}/${repository.name}/discussions/${row.number}`"
-              ><AppIcon
-                class="state-icon"
-                :class="`state-${stateMark(row).tone}`"
-                :name="stateMark(row).icon"
-              /><span class="collab-row-content"
-                ><span class="collab-row-title"
-                  ><strong>{{ row.title }}</strong
-                  ><StatusBadge v-if="row.answerCommentId" tone="success">{{
-                    t("answered")
-                  }}</StatusBadge></span
-                ><span class="collab-row-meta"
-                  >#{{ row.number }} · {{ actorName(row) }} · {{ t(`category${row.category}`) }} ·
-                  {{ d(row.createdAt, "short") }}</span
-                ></span
-              ></RouterLink
-            >
-            <div v-if="!discussions.length" class="empty-onboarding">
-              <AppIcon name="discussion" />
-              <h3>{{ t("noDiscussionsTitle") }}</h3>
-              <p>{{ t("noDiscussionsBody") }}</p>
-              <button
-                v-if="canCreate"
-                class="btn btn-primary"
-                type="button"
-                @click="showForm = true"
-              >
-                {{ t("createDiscussion") }}
-              </button>
-            </div>
-            <p v-else-if="!filteredDiscussions.length" class="state">
-              {{ t("noMatchingItems") }}
-            </p>
-          </template>
-          <template v-else-if="section === 'wiki'">
-            <RouterLink
-              v-for="page in pages"
-              :key="page.slug"
-              class="box-row item-link wiki-row"
-              :to="`/${repository.owner}/${repository.name}/wiki/${encodeURIComponent(page.slug)}`"
-              ><strong>{{ page.title }}</strong
-              ><code class="oid">{{ page.slug }}</code
-              ><small>r{{ page.revision }} · {{ page.updatedBy }}</small></RouterLink
-            >
-            <div v-if="!pages.length" class="empty-onboarding">
-              <AppIcon name="wiki" />
-              <h3>{{ t("noWikiTitle") }}</h3>
-              <p>{{ t("noWikiBody") }}</p>
-              <button
-                v-if="repository.canWrite"
-                class="btn btn-primary"
-                type="button"
-                @click="showForm = true"
-              >
-                {{ t("createWiki") }}
-              </button>
-            </div>
-          </template>
-          <button
-            v-if="listNextCursor !== null"
-            class="btn btn-secondary"
-            type="button"
-            :disabled="listLoadingMore"
-            @click="loadMore"
+          <div
+            class="list-rows"
+            :class="{ 'is-refreshing': listRefreshing }"
+            :aria-busy="listRefreshing"
           >
-            {{ listLoadingMore ? t("loading") : `${t("loadMore")} (${listTotal})` }}
-          </button>
+            <template v-if="section === 'issues'">
+              <RouterLink
+                v-for="row in filteredIssues"
+                :key="row.number"
+                class="box-row item-link"
+                :to="`/${repository.owner}/${repository.name}/issues/${row.number}`"
+                ><AppIcon
+                  class="state-icon"
+                  :class="`state-${stateMark(row).tone}`"
+                  :name="stateMark(row).icon"
+                />
+                <span class="collab-row-content"
+                  ><span class="collab-row-title"
+                    ><strong>{{ row.title }}</strong
+                    ><StatusBadge
+                      v-for="label in row.labels"
+                      :key="label"
+                      :tone="
+                        label === 'bug' ? 'danger' : label === 'enhancement' ? 'brand' : 'neutral'
+                      "
+                      >{{ label }}</StatusBadge
+                    ></span
+                  ><span class="collab-row-meta"
+                    >#{{ row.number }} · {{ t("openedBy", { author: actorName(row) }) }} ·
+                    {{ d(row.createdAt, "short") }}</span
+                  ></span
+                ></RouterLink
+              >
+              <div v-if="!issues.length" class="empty-onboarding">
+                <AppIcon name="issue" />
+                <h3>{{ t("noIssuesTitle") }}</h3>
+                <p>{{ t("noIssuesBody") }}</p>
+                <button
+                  v-if="canCreate"
+                  class="btn btn-primary"
+                  type="button"
+                  @click="showForm = true"
+                >
+                  {{ t("createIssue") }}
+                </button>
+              </div>
+              <p v-else-if="!filteredIssues.length" class="state">{{ t("noMatchingItems") }}</p>
+            </template>
+            <template v-else-if="section === 'pulls'">
+              <RouterLink
+                v-for="row in filteredPulls"
+                :key="row.number"
+                class="box-row item-link"
+                :to="`/${repository.owner}/${repository.name}/pulls/${row.number}`"
+                ><AppIcon
+                  class="state-icon"
+                  :class="`state-${stateMark(row).tone}`"
+                  :name="stateMark(row).icon"
+                />
+                <span class="collab-row-content"
+                  ><span class="collab-row-title"
+                    ><strong>{{ row.title }}</strong
+                    ><StatusBadge v-if="awaitingMe(row)" tone="brand">{{
+                      t("pullAttentionMe")
+                    }}</StatusBadge
+                    ><StatusBadge v-if="row.lockedAt !== null">{{ t("pullLocked") }}</StatusBadge
+                    ><StatusBadge v-if="row.draft">{{ t("draftPull") }}</StatusBadge
+                    ><StatusBadge v-if="row.headSessionId" tone="brand">{{
+                      t("agentSession")
+                    }}</StatusBadge
+                    ><StatusBadge v-if="row.headRepository" tone="brand">{{
+                      t("pullFromFork", {
+                        name: `${row.headRepository.owner}/${row.headRepository.name}`,
+                      })
+                    }}</StatusBadge></span
+                  ><span class="collab-row-meta"
+                    >#{{ row.number }} · {{ t("openedBy", { author: actorName(row) }) }} ·
+                    {{ row.headRef }} → {{ row.baseRef }}</span
+                  ></span
+                ></RouterLink
+              >
+              <div v-if="!pulls.length" class="empty-onboarding">
+                <AppIcon name="pr" />
+                <h3>{{ t("noPullsTitle") }}</h3>
+                <p>{{ t("noPullsBody") }}</p>
+                <button
+                  v-if="canCreate"
+                  class="btn btn-primary"
+                  type="button"
+                  @click="showForm = true"
+                >
+                  {{ t("createPull") }}
+                </button>
+              </div>
+              <p v-else-if="!filteredPulls.length" class="state">{{ t("noMatchingItems") }}</p>
+            </template>
+            <template v-else-if="section === 'discussions'">
+              <RouterLink
+                v-for="row in filteredDiscussions"
+                :key="row.number"
+                class="box-row item-link"
+                :to="`/${repository.owner}/${repository.name}/discussions/${row.number}`"
+                ><AppIcon
+                  class="state-icon"
+                  :class="`state-${stateMark(row).tone}`"
+                  :name="stateMark(row).icon"
+                /><span class="collab-row-content"
+                  ><span class="collab-row-title"
+                    ><strong>{{ row.title }}</strong
+                    ><StatusBadge v-if="row.answerCommentId" tone="success">{{
+                      t("answered")
+                    }}</StatusBadge></span
+                  ><span class="collab-row-meta"
+                    >#{{ row.number }} · {{ actorName(row) }} · {{ t(`category${row.category}`) }} ·
+                    {{ d(row.createdAt, "short") }}</span
+                  ></span
+                ></RouterLink
+              >
+              <div v-if="!discussions.length" class="empty-onboarding">
+                <AppIcon name="discussion" />
+                <h3>{{ t("noDiscussionsTitle") }}</h3>
+                <p>{{ t("noDiscussionsBody") }}</p>
+                <button
+                  v-if="canCreate"
+                  class="btn btn-primary"
+                  type="button"
+                  @click="showForm = true"
+                >
+                  {{ t("createDiscussion") }}
+                </button>
+              </div>
+              <p v-else-if="!filteredDiscussions.length" class="state">
+                {{ t("noMatchingItems") }}
+              </p>
+            </template>
+            <template v-else-if="section === 'wiki'">
+              <RouterLink
+                v-for="page in pages"
+                :key="page.slug"
+                class="box-row item-link wiki-row"
+                :to="`/${repository.owner}/${repository.name}/wiki/${encodeURIComponent(page.slug)}`"
+                ><strong>{{ page.title }}</strong
+                ><code class="oid">{{ page.slug }}</code
+                ><small>r{{ page.revision }} · {{ page.updatedBy }}</small></RouterLink
+              >
+              <div v-if="!pages.length" class="empty-onboarding">
+                <AppIcon name="wiki" />
+                <h3>{{ t("noWikiTitle") }}</h3>
+                <p>{{ t("noWikiBody") }}</p>
+                <button
+                  v-if="repository.canWrite"
+                  class="btn btn-primary"
+                  type="button"
+                  @click="showForm = true"
+                >
+                  {{ t("createWiki") }}
+                </button>
+              </div>
+            </template>
+            <button
+              v-if="listNextCursor !== null"
+              class="btn btn-secondary"
+              type="button"
+              :disabled="listLoadingMore || listRefreshing || searchPending"
+              @click="loadMore"
+            >
+              {{ listLoadingMore ? t("loading") : `${t("loadMore")} (${listTotal})` }}
+            </button>
+          </div>
         </div>
       </div>
     </div>
