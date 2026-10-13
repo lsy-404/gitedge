@@ -59,7 +59,7 @@ const groups = computed(() => {
 </script>
 
 <template>
-  <section class="api-docs-page">
+  <section class="workspace-page api-docs-page">
     <header class="workspace-page-heading">
       <div>
         <h1>{{ t("apiDocsTitle") }}</h1>

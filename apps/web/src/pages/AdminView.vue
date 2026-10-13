@@ -52,6 +52,10 @@ const allowed = computed(() => sessionState.user?.siteAdmin === true);
 </template>
 
 <style scoped>
+.admin-page {
+  width: min(1320px, calc(100% - 2 * var(--page-gutter)));
+  margin: var(--space-6) auto 0;
+}
 .admin-tabs {
   display: flex;
   flex-wrap: wrap;
