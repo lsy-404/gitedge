@@ -34,6 +34,7 @@ export * from "./merge-requirements";
 export * from "./ai-summary";
 export * from "./pages";
 export * from "./dashboard";
+export * from "./github-sync";
 
 export const ErrorCodeSchema = z.enum([
   "bad_request",

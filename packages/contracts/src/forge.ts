@@ -4,7 +4,7 @@ export const GitOidSchema = z.string().regex(/^[0-9a-f]{40}$/);
 export const PullLockInputSchema = z.object({ locked: z.boolean(), expectedHeadOid: GitOidSchema });
 
 export const ActorSchema = z.object({
-  kind: z.enum(["user", "agent", "ci"]),
+  kind: z.enum(["user", "agent", "ci", "external"]),
   id: z.string().min(1),
   name: z.string().min(1),
   sessionId: z.string().optional(),
