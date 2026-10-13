@@ -1,0 +1,136 @@
+/* Anonymous landing page: a left-aligned pitch beside the real request path, then the capability grid. */
+.landing {
+  --page-gutter: var(--space-6);
+  display: grid;
+  gap: var(--space-8);
+  width: min(1120px, calc(100% - 2 * var(--page-gutter)));
+  margin: 0 auto;
+  padding: var(--space-8) 0;
+  color: var(--fg-default);
+}
+.landing-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: var(--space-8);
+  align-items: center;
+}
+.landing-hero-copy {
+  display: grid;
+  gap: var(--space-5);
+  justify-items: start;
+}
+.landing-hero h1 {
+  max-width: 18ch;
+  font-size: clamp(calc(var(--font-size-title) * 1.25), 5vw, calc(var(--font-size-title) * 2));
+  line-height: 1.15;
+  text-wrap: balance;
+}
+.landing-lede {
+  max-width: 56ch;
+  color: var(--fg-secondary);
+  font-size: var(--font-size-lg);
+  line-height: var(--line-height-body);
+}
+.landing-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.landing-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+}
+.landing-links a {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.landing-path {
+  margin: 0;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  overflow: hidden;
+}
+.landing-path figcaption {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-default);
+  background: var(--bg-subtle);
+  color: var(--fg-secondary);
+  font-weight: var(--font-weight-semibold);
+}
+.landing-command {
+  display: block;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-muted);
+  background: var(--bg-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-body);
+  overflow-wrap: anywhere;
+}
+.landing-path ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.landing-path li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+}
+.landing-path li + li {
+  border-top: 1px solid var(--border-muted);
+}
+.landing-primitive {
+  color: var(--accent-fg);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-meta);
+  white-space: nowrap;
+}
+.landing-capabilities {
+  display: grid;
+  gap: var(--space-5);
+}
+.landing-capabilities ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.landing-capabilities li {
+  display: grid;
+  align-content: start;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+}
+.landing-capabilities li > svg {
+  color: var(--accent-fg);
+}
+.landing-capabilities h3 {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+}
+.landing-capabilities p {
+  color: var(--fg-secondary);
+}
+@media (max-width: 900px) {
+  .landing-hero {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-6);
+  }
+}
+@media (max-width: 700px) {
+  .landing {
+    --page-gutter: var(--space-4);
+    gap: var(--space-6);
+    padding: var(--space-6) 0;
+  }
+}

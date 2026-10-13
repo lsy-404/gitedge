@@ -28,6 +28,7 @@ import { socialMessages } from "./i18n/social";
 import { pagesMessages } from "./i18n/pages";
 import { apiDocsMessages } from "./i18n/apiDocs";
 import { githubSyncMessages } from "./i18n/githubSync";
+import { landingMessages } from "./i18n/landing";
 
 const messages = {
   "zh-CN": {
@@ -953,6 +954,7 @@ export const i18n = createI18n({
       ...pagesMessages["zh-CN"],
       ...apiDocsMessages["zh-CN"],
       ...githubSyncMessages["zh-CN"],
+      ...landingMessages["zh-CN"],
     },
     en: {
       ...messages.en,
@@ -985,6 +987,7 @@ export const i18n = createI18n({
       ...pagesMessages.en,
       ...apiDocsMessages.en,
       ...githubSyncMessages.en,
+      ...landingMessages.en,
     },
   },
 });

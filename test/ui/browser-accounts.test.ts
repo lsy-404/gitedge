@@ -222,6 +222,7 @@ describe("add-account sign-in and request identity", () => {
     vi.stubGlobal("location", { origin: "https://gitedge.test", assign });
     setSession(user);
     vi.spyOn(api, "ssoProviders").mockResolvedValue([]);
+    vi.spyOn(api, "githubOAuthStatus").mockResolvedValue({ enabled: true });
     const mounted = await mountAt("/_verify/github-add", "/_verify/github-add", () =>
       testH(AuthView)
     );

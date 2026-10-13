@@ -15,3 +15,7 @@ export interface SsoIdentity {
   createdAt: number;
   lastLoginAt: number;
 }
+
+export interface GithubOAuthStatus {
+  enabled: boolean;
+}

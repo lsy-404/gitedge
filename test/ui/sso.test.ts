@@ -262,7 +262,11 @@ describe("External sign-in options", () => {
     vi.stubGlobal("location", { origin: "https://gitedge.test", assign });
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response("Not signed in", { status: 401 }))
+      vi.fn(async (input: RequestInfo | URL) =>
+        String(input).endsWith("/api/auth/github/config")
+          ? new Response(JSON.stringify({ data: { enabled: true } }), { status: 200 })
+          : new Response("Not signed in", { status: 401 })
+      )
     );
     const mounted = await mountRoute("/login?redirect=%2Fsettings%2Faccount%3Ftab%3Dsecurity");
     await settle();
@@ -295,7 +299,9 @@ describe("External sign-in options", () => {
               }),
               { status: 200 }
             )
-          : new Response("Not signed in", { status: 401 })
+          : String(input).endsWith("/api/auth/github/config")
+            ? new Response(JSON.stringify({ data: { enabled: true } }), { status: 200 })
+            : new Response("Not signed in", { status: 401 })
       )
     );
     const mounted = await mountRoute("/login");

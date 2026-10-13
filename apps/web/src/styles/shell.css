@@ -648,3 +648,12 @@ details.user-menu {
     padding: var(--space-2);
   }
 }
+.header-context .landing-nav-link {
+  font-weight: var(--font-weight-regular);
+  color: var(--fg-secondary);
+}
+@media (max-width: 760px) {
+  .header-context .landing-nav-link {
+    display: none;
+  }
+}
