@@ -534,6 +534,9 @@
     align-items: flex-start;
   }
 }
+.dashboard-attention {
+  margin-bottom: var(--space-6);
+}
 .dashboard-attention-counts {
   display: flex;
   flex-wrap: wrap;
