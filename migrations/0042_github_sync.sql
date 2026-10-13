@@ -52,6 +52,18 @@ CREATE TABLE forge_github_inbound (
   connection_id TEXT PRIMARY KEY NOT NULL REFERENCES forge_github_connections(id) ON DELETE CASCADE
 );
 
+CREATE TRIGGER github_push_accepted AFTER UPDATE OF accepted ON forge_push_event_refs
+WHEN NEW.accepted=1 AND OLD.accepted=0 AND NEW.session_id='' AND (NEW.ref LIKE 'refs/heads/%' OR NEW.ref LIKE 'refs/tags/%')
+BEGIN
+  INSERT OR IGNORE INTO forge_github_jobs (id,connection_id,direction,event,payload,status,next_attempt_at,created_at)
+  SELECT 'push:'||NEW.event_id||':'||NEW.ref,c.id,'outbound','push',json_object('ref',NEW.ref,'before',NEW.before_oid,'after',NEW.after_oid),'pending',NEW.created_at,NEW.created_at FROM forge_github_connections c WHERE c.repository_id=NEW.repository_id AND c.enabled=1;
+END;
+CREATE TRIGGER github_published_head AFTER INSERT ON forge_pull_head_updates
+BEGIN
+  INSERT INTO forge_github_jobs (id,connection_id,direction,event,payload,status,next_attempt_at,created_at)
+  SELECT lower(hex(randomblob(16))),c.id,'outbound','pull_request',json_object('kind','pull_request','action','upsert','id',NEW.pull_request_id),'pending',NEW.created_at,NEW.created_at FROM forge_github_connections c WHERE c.repository_id=NEW.repository_id AND c.enabled=1;
+END;
+
 CREATE TRIGGER github_issue_insert AFTER INSERT ON forge_issues
 WHEN EXISTS (SELECT 1 FROM forge_github_connections c WHERE c.repository_id = NEW.repository_id AND c.enabled = 1 AND NOT EXISTS (SELECT 1 FROM forge_github_inbound i WHERE i.connection_id=c.id))
 BEGIN

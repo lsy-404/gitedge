@@ -1,5 +1,6 @@
 import { branchRules, matchingBranchRules } from "../../../src/worker/common/branch-protection";
 import { triggerPullActions } from "./pull-actions";
+import { drainGithubSync, handleGithubSyncSettings, purgeGithubSyncJobs, receiveGithubWebhook } from "./github-sync";
 import { candidateMergeAllowed, mergeCandidateRoute } from "./merge-candidates";
 import {
   repositoryAccessDenied,
@@ -2161,6 +2162,9 @@ const worker = {
     const url = new URL(request.url);
     const parts = url.pathname.split("/").filter(Boolean);
 
+    if (parts[0] === "github-sync" && parts[1] === "hooks" && parts.length === 3)
+      return receiveGithubWebhook(env, request, parts[2]);
+
     if (request.method === "GET" && url.pathname === "/internal/health")
       return dataResponse({ ok: true });
     if (request.method === "GET" && url.pathname === "/internal/health/d1")
@@ -2722,6 +2726,8 @@ const worker = {
     if (controls) return controls;
     const hooks = await handleRepositoryWebhooks(env, request, repository, user, parts);
     if (hooks) return hooks;
+    const githubSync = await handleGithubSyncSettings(env, request, repository, user, parts);
+    if (githubSync) return githubSync;
     const releases = await repositoryReleases(env, request, repository, user, parts);
     if (releases) return releases;
     const candidateResponse = await mergeCandidateRoute(env, request, repository, parts);
@@ -2743,6 +2749,7 @@ const worker = {
     if (controller.cron === WEBHOOK_CRON) {
       await sweepMergeAutomation(env);
       await drainWebhookDeliveries(env);
+      await drainGithubSync(env);
       await drainAiSummaries(env);
       return;
     }
@@ -2752,6 +2759,7 @@ const worker = {
     await releaseExpiredTaskLeases(env);
     await purgeReadNotifications(env);
     await purgeWebhookDeliveries(env);
+    await purgeGithubSyncJobs(env);
     await purgeAiSummaryRecords(env);
   },
 };
@@ -2791,6 +2799,7 @@ async function reconcileAfterWrite(
     });
   }
   await drainWebhookDeliveries(env);
+  await drainGithubSync(env);
 }
 
 export { MergeQueueDurableObject } from "./merge-queue";
@@ -2809,7 +2818,10 @@ export default {
     // Re-evaluate auto-merge and queues and deliver freshly queued webhooks right after a successful write instead of waiting for the next cron tick.
     if (ctx && response.ok && reconciling)
       ctx.waitUntil(reconcileAfterWrite(env, request, internalBody));
-    else if (ctx && response.ok && writing) ctx.waitUntil(drainWebhookDeliveries(env));
+    else if (ctx && response.ok && writing) {
+      ctx.waitUntil(drainWebhookDeliveries(env));
+      ctx.waitUntil(drainGithubSync(env));
+    }
     return response;
   },
   scheduled: worker.scheduled,

@@ -83,6 +83,7 @@ export const PushEventInputSchema = z.object({
   occurredAt: z.number().int().nonnegative(),
   repositoryId: z.string().min(1),
   pusherId: z.string().min(1),
+  externalPusher: z.object({ id: z.string().min(1).max(100), name: z.string().min(1).max(100) }).optional(),
   /** Set when the refs live in an agent session fork rather than in the repository itself. */
   agentSessionId: z.string().min(1).optional(),
   updates: z

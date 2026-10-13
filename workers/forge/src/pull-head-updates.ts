@@ -282,7 +282,7 @@ export async function dispatchPushHeadUpdates(
         ? [repository.id, snapshotSessionId, update.ref, input.occurredAt]
         : [repository.id, snapshotSessionId, update.ref, snapshotEventId, input.occurredAt];
     const pusherVerified =
-      !version || version.occurredAt !== input.occurredAt || version.oid !== update.after;
+      !input.externalPusher && (!version || version.occurredAt !== input.occurredAt || version.oid !== update.after);
     if (!pusherVerified) logger.warn("push-event:ambiguous-pusher", { ref: update.ref });
     const statements: D1PreparedStatement[] = [
       env.DB.prepare(

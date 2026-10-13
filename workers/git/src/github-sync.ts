@@ -19,6 +19,8 @@ import { gitHttpClient } from "./http";
 import { ZERO_OID, revokeWriteToken } from "./write";
 import { refContainsCommit } from "./read";
 import { GitBranchSchema, GitOidSchema } from "../../../packages/contracts/src/forge";
+import { sha256Hex, type PushEventInput } from "../../../packages/contracts/src/index";
+import { recordGitWrite } from "./events";
 
 interface SyncRepository {
   repository_id: string;
@@ -84,6 +86,34 @@ export async function handleGithubGitSync(request: Request, env: GitEnv): Promis
   if (url.hostname !== "git.internal" || request.method !== "POST")
     return errorResponse(404, "not_found", "Endpoint was not found.");
   const raw = await readJsonLimited(request, 16_384);
+  if (url.pathname === "/internal/github-sync/report") {
+    const parsed = CredentialsSchema.extend({ ref: GitHubSyncTransferSchema.shape.targetRef, before: GitOidSchema, after: GitOidSchema, status: z.enum(["synced", "unchanged"]) }).strict().safeParse(raw);
+    if (!parsed.success) return errorResponse(400, "bad_request", "Invalid synchronization report.");
+    const row = await authorizedSync(env, parsed.data);
+    if (!row || !env.FORGE) return errorResponse(403, "sync_ineligible", "Synchronization is not authorized.");
+    const owner = await env.DB.prepare("SELECT id,identifier,group_key AS groupKey FROM users WHERE id=? AND disabled_at IS NULL").bind(row.created_by)
+      .first<{ id: string; identifier: string; groupKey: string }>();
+    const job = await env.DB.prepare("SELECT payload FROM forge_github_jobs WHERE id=? AND direction='inbound'").bind(parsed.data.jobId).first<{ payload: string }>();
+    if (!owner || !job) return errorResponse(403, "sync_ineligible", "Synchronization report is unavailable.");
+    const hash = await sha256Hex(parsed.data.jobId);
+    const eventId = `${hash.slice(0,8)}-${hash.slice(8,12)}-4${hash.slice(13,16)}-8${hash.slice(17,20)}-${hash.slice(20,32)}`;
+    const update = { ref: parsed.data.ref, before: parsed.data.before, after: parsed.data.after };
+    const source = z.object({ sender: z.object({ id: z.number().int().positive(), login: z.string().max(80) }).optional(), before: GitOidSchema.nullable().optional() }).safeParse(JSON.parse(job.payload));
+    if (parsed.data.status === "unchanged") update.before = source.success ? source.data.before ?? ZERO_OID : ZERO_OID;
+    const input: PushEventInput = {
+      eventId, occurredAt: Date.now(), repositoryId: row.repository_id, pusherId: owner.id,
+      externalPusher: { id: source.success && source.data.sender ? `github:${source.data.sender.id}` : "github", name: source.success && source.data.sender ? `${source.data.sender.login} (GitHub)` : "GitHub" },
+      updates: [update],
+    };
+    const response = await env.FORGE.fetch(new Request("https://forge.internal/internal/push-event", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+    }));
+    if (!response.ok) { await response.body?.cancel(); return errorResponse(503, "github_push_report_failed", "Imported push could not be reported."); }
+    await response.body?.cancel();
+    if (update.after !== ZERO_OID && update.ref.startsWith("refs/heads/"))
+      await recordGitWrite(env, row.repository_id, row.artifact_name, owner, update.ref.slice(11), update.after);
+    return dataResponse({ reported: true });
+  }
   if (url.pathname === "/internal/github-sync/contains") {
     const parsed = CredentialsSchema.extend({ ref: GitBranchSchema, oid: GitOidSchema }).strict().safeParse(raw);
     if (!parsed.success) return errorResponse(400, "bad_request", "Invalid containment request.");

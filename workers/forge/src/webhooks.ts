@@ -641,7 +641,9 @@ export async function handlePushEvent(
       .bind(parsed.data.pusherId)
       .first<PushActorRow>();
     if (!pusher) return errorResponse(404, "not_found", "Pusher was not found.");
-    actorJson = JSON.stringify({ kind: "user", id: pusher.id, name: pusher.identifier });
+    actorJson = JSON.stringify(parsed.data.externalPusher
+      ? { kind: "external", ...parsed.data.externalPusher }
+      : { kind: "user", id: pusher.id, name: pusher.identifier });
   }
   if (!pusher) return errorResponse(404, "not_found", "Pusher was not found.");
 

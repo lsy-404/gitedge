@@ -33,6 +33,8 @@ export const AuditActions = [
   "webhook.updated",
   "repository_webhook.created",
   "repository_webhook.deleted",
+  "github_sync.connected",
+  "github_sync.updated",
   "release.published",
   "pages.updated",
   "access_token.created",
