@@ -22,6 +22,7 @@ import BranchProtectionSettings from "./BranchProtectionSettings.vue";
 import AuditLogList from "./AuditLogList.vue";
 import RepositoryCollaborators from "./RepositoryCollaborators.vue";
 import RepositoryWebhooks from "./RepositoryWebhooks.vue";
+import RepositoryGitHubSync from "./RepositoryGitHubSync.vue";
 import RepositoryPages from "./RepositoryPages.vue";
 import RepositoryDangerActions from "./RepositoryDangerActions.vue";
 import "../styles/settings.css";
@@ -35,6 +36,7 @@ type SettingsSection =
   | "collaborators"
   | "pages"
   | "webhooks"
+  | "githubSync"
   | "agents"
   | "audit"
   | "danger";
@@ -47,6 +49,7 @@ const sections = [
   ["collaborators", "repoSettingsCollaborators"],
   ["pages", "repoSettingsPages"],
   ["webhooks", "repoSettingsWebhooks"],
+  ["githubSync", "githubSyncSection"],
   ["agents", "repoSettingsAgentsMemory"],
   ["audit", "auditLogTitle"],
   ["danger", "repoSettingsDangerZone"],
@@ -580,6 +583,11 @@ watch(() => props.repository.id, load, { immediate: true });
           />
           <RepositoryWebhooks
             v-else-if="activeSection === 'webhooks'"
+            :repository-id="props.repository.id"
+            :can-manage="canManage"
+          />
+          <RepositoryGitHubSync
+            v-else-if="activeSection === 'githubSync'"
             :repository-id="props.repository.id"
             :can-manage="canManage"
           />

@@ -1870,6 +1870,11 @@ async function loadMore() {
                       name="checkCircle"
                       :size="12"
                     />{{ actorName(review) }}</StatusBadge
+                  ><StatusBadge
+                    v-if="review.actor.kind === 'external'"
+                    tone="neutral"
+                    :title="t('githubSyncExternalReview')"
+                    >{{ t("githubSyncExternalOrigin") }}</StatusBadge
                   ><code class="oid">{{ review.commitOid.slice(0, 8) }}</code
                   ><StatusBadge v-if="review.commitOid !== diff?.headOid" tone="warning">{{
                     t("outdatedReview")

@@ -51,6 +51,10 @@ import type {
   TotpEnrollment,
 } from "../../../../packages/contracts/src/security";
 import type { DeployPlan } from "../../../../packages/contracts/src/deploy";
+import type {
+  GitHubSyncInput,
+  GitHubSyncState,
+} from "../../../../packages/contracts/src/github-sync";
 import type { PagesSettings, UpdatePagesInput } from "../../../../packages/contracts/src/pages";
 import type {
   ListNotificationsQuery,
@@ -1702,6 +1706,29 @@ export const api = {
     }),
   repositoryWebhooks: (repositoryId: string) =>
     request<RepositoryWebhook[]>(repositoryPath(repositoryId, "webhooks")),
+  githubSyncState: (repositoryId: string) =>
+    request<GitHubSyncState>(repositoryPath(repositoryId, "github-sync")),
+  saveGitHubSync: (repositoryId: string, payload: GitHubSyncInput) =>
+    request<GitHubSyncState>(repositoryPath(repositoryId, "github-sync"), {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  setGitHubSyncEnabled: (repositoryId: string, enabled: boolean) =>
+    request<GitHubSyncState>(repositoryPath(repositoryId, "github-sync"), {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+    }),
+  disconnectGitHubSync: (repositoryId: string) =>
+    request<GitHubSyncState>(repositoryPath(repositoryId, "github-sync"), { method: "DELETE" }),
+  reconcileGitHubSync: (repositoryId: string) =>
+    request<GitHubSyncState>(repositoryPath(repositoryId, "github-sync/reconcile"), {
+      method: "POST",
+    }),
+  retryGitHubSyncJob: (repositoryId: string, jobId: string) =>
+    request<GitHubSyncState>(
+      repositoryPath(repositoryId, `github-sync/jobs/${encodeURIComponent(jobId)}/retry`),
+      { method: "POST" }
+    ),
   createRepositoryWebhook: (repositoryId: string, payload: CreateRepositoryWebhookInput) =>
     request<SavedRepositoryWebhook>(repositoryPath(repositoryId, "webhooks"), {
       method: "POST",
