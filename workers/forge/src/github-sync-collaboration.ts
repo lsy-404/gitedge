@@ -33,6 +33,7 @@ const GithubIssue = z
   })
   .passthrough();
 const GithubPull = GithubIssue.extend({
+  node_id: z.string().optional(),
   body: z.string().nullable(),
   draft: z.boolean(),
   merged: z.boolean().default(false),
@@ -508,6 +509,13 @@ async function inboundPull(
   if (current.merged && !mergeOid) conflict("github_merge_oid_missing");
   if (current.merged && prior?.state === "merged" && prior.merged_oid !== mergeOid)
     conflict("github_merged_oid_not_imported");
+  if (
+    prior?.locked_at !== null &&
+    prior?.locked_at !== undefined &&
+    !current.merged &&
+    current.state !== "open"
+  )
+    conflict("pull_locked");
   const nativeOrigin = Boolean(
     prior && parseActor(prior.actor_json, prior.author_id).kind !== "external"
   );
@@ -1200,7 +1208,34 @@ async function outbound(
         mappedRemote.head.sha,
         mappedRemote.merge_commit_sha ?? null,
       ]);
-      if (mappedRemote.draft !== Boolean(pull.draft)) conflict("github_draft_update_unsupported");
+      if (mappedRemote.draft !== Boolean(pull.draft)) {
+        if (!mappedRemote.node_id || mappedRemote.state !== "open")
+          conflict("github_draft_change_unavailable");
+        const mutation = pull.draft ? "convertPullRequestToDraft" : "markPullRequestReadyForReview";
+        const inputType = pull.draft
+          ? "ConvertPullRequestToDraftInput"
+          : "MarkPullRequestReadyForReviewInput";
+        const result = z
+          .object({
+            data: z
+              .object({ result: z.object({ pullRequest: z.object({ isDraft: z.boolean() }) }) })
+              .nullable()
+              .optional(),
+            errors: z.array(z.unknown()).optional(),
+          })
+          .parse(
+            await githubRequest(credentials.token, "/graphql", "POST", {
+              query: `mutation($input:${inputType}!){result:${mutation}(input:$input){pullRequest{isDraft}}}`,
+              variables: { input: { pullRequestId: mappedRemote.node_id } },
+            })
+          );
+        if (
+          result.errors?.length ||
+          result.data?.result.pullRequest.isDraft !== Boolean(pull.draft)
+        )
+          conflict("github_draft_change_failed");
+        mappedRemote.draft = Boolean(pull.draft);
+      }
     }
     if (pull.merged_oid) {
       if (!mapping?.remote_number) conflict("github_merged_pull_unmapped");

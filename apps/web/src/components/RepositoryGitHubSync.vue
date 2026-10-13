@@ -185,6 +185,9 @@ onBeforeUnmount(() => {
     />
     <template v-else>
       <div v-if="connection" class="github-sync-connection box-row">
+        <NoticeBar v-if="connection.errorCode" intent="error">{{
+          t("githubSyncConnectionError")
+        }}</NoticeBar>
         <div class="github-sync-summary">
           <div class="row-title">
             <a :href="connection.githubUrl" target="_blank" rel="noreferrer">

@@ -56,6 +56,7 @@ beforeAll(async () => {
 type Viewer = "anonymous" | "guest" | "outsider" | "owner";
 function gateway(policy: string | undefined, viewer: Viewer): GatewayEnv {
   return {
+    DB: env.DB,
     PRIVATE_REPOSITORY_RESPONSE: policy,
     AUTH: {
       fetch: async () =>

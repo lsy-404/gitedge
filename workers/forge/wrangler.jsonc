@@ -23,6 +23,18 @@
   "triggers": {
     "crons": ["*/15 * * * *", "* * * * *"]
   },
+  "queues": {
+    "producers": [{ "binding": "GITHUB_SYNC_QUEUE", "queue": "gitedge-github-sync" }],
+    "consumers": [
+      {
+        "queue": "gitedge-github-sync",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 3,
+        "max_concurrency": 5
+      }
+    ]
+  },
   "durable_objects": {
     "bindings": [
       {

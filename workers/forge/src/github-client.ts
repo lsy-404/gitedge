@@ -1,7 +1,10 @@
 import { z } from "zod";
 import { readTextLimited } from "../../../src/worker/common/readText";
 
-export const GithubUserSchema = z.object({ id: z.number().int().positive(), login: z.string().min(1) });
+export const GithubUserSchema = z.object({
+  id: z.number().int().positive(),
+  login: z.string().min(1),
+});
 export const GithubRepositorySchema = z.object({
   id: z.number().int().positive(),
   full_name: z.string(),
@@ -12,7 +15,10 @@ export const GithubRepositorySchema = z.object({
 export type GithubRepository = z.infer<typeof GithubRepositorySchema>;
 
 export class GithubApiError extends Error {
-  constructor(public readonly status: number, public readonly retryAfter: number = 0) {
+  constructor(
+    public readonly status: number,
+    public readonly retryAfter: number = 0
+  ) {
     super(`github_http_${status}`);
   }
 }
@@ -23,7 +29,11 @@ export async function githubRequest(
   method = "GET",
   body?: unknown
 ): Promise<unknown> {
-  if (!path.startsWith("/repos/") || path.includes("..") || path.includes("\\"))
+  if (
+    (!path.startsWith("/repos/") && !(path === "/graphql" && method === "POST")) ||
+    path.includes("..") ||
+    path.includes("\\")
+  )
     throw new Error("invalid_github_path");
   const response = await fetch(`https://api.github.com${path}`, {
     method,
@@ -39,7 +49,15 @@ export async function githubRequest(
     signal: AbortSignal.timeout(8_000),
   });
   if (!response.ok) {
-    const retry = Math.max(0, Number(response.headers.get("Retry-After") ?? 0));
+    const reset =
+      response.headers.get("X-RateLimit-Remaining") === "0"
+        ? Number(response.headers.get("X-RateLimit-Reset")) - Math.floor(Date.now() / 1000)
+        : 0;
+    const retry = Math.max(
+      0,
+      Number(response.headers.get("Retry-After") ?? 0),
+      Number.isFinite(reset) ? reset : 0
+    );
     await response.body?.cancel();
     throw new GithubApiError(response.status, Number.isFinite(retry) ? Math.min(retry, 3600) : 0);
   }
@@ -49,7 +67,11 @@ export async function githubRequest(
   }
   const text = await readTextLimited(response.body, 1_048_576);
   if (text === null) throw new Error("github_response_limit");
-  try { return JSON.parse(text); } catch { throw new Error("github_invalid_response"); }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error("github_invalid_response");
+  }
 }
 
 export function githubRepoPath(owner: string, repository: string): string {

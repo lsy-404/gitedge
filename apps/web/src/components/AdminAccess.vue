@@ -14,6 +14,10 @@ import StatusState from "./StatusState.vue";
 const { t, d } = useI18n();
 const reauth = useReauthRetry();
 const bans = ref<AccessBan[]>([]);
+const kindLabels: Record<AccessBan["kind"], string> = {
+  ip: "adminAccessKind_ip",
+  user: "adminAccessKind_user",
+};
 const rpm = ref("300");
 const kind = ref<"user" | "ip">("ip");
 const value = ref("");
@@ -136,7 +140,7 @@ onMounted(load);
         <li v-for="ban in bans" :key="ban.id" class="box-row settings-item">
           <div class="settings-item-copy">
             <div class="row-title">
-              {{ ban.value }} <span class="muted">{{ t(`adminAccessKind_${ban.kind}`) }}</span>
+              {{ ban.value }} <span class="muted">{{ t(kindLabels[ban.kind]) }}</span>
             </div>
             <div class="row-meta">
               <span>{{ ban.reason }}</span>

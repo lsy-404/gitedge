@@ -28,6 +28,7 @@ export type ForgeEnv = {
   readonly LOG_LEVEL?: string;
   readonly SITES_HOST?: string;
   readonly WEBHOOK_ENCRYPTION_KEY?: string;
+  readonly GITHUB_SYNC_QUEUE: Queue<{ connectionId: string }>;
   readonly USER_GROUP_LIMITS_JSON?: string;
   readonly AI?: TextGenerationBinding;
   readonly AI_SUMMARIES_DISABLED?: string;

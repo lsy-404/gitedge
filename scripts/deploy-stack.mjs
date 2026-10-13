@@ -145,6 +145,23 @@ function ensureReleaseAssetBucket() {
   });
 }
 
+function ensureGithubSyncQueue() {
+  const config = JSON.parse(readFileSync("workers/forge/wrangler.jsonc", "utf8"));
+  const queue = config.queues?.producers?.find(
+    (entry) => entry.binding === "GITHUB_SYNC_QUEUE"
+  )?.queue;
+  if (!queue) throw new Error("Forge must bind GITHUB_SYNC_QUEUE.");
+  const info = spawnSync("pnpm", ["exec", "wrangler", "queues", "info", queue], {
+    encoding: "utf8",
+    env: cloudflareEnvironment(),
+  });
+  if (info.status === 0) return true;
+  const output = `${info.stdout ?? ""}${info.stderr ?? ""}`;
+  if (!/does not exist|not found|10024/i.test(output))
+    throw new Error("Cannot inspect the GitHub synchronization queue.");
+  return run("pnpm", ["exec", "wrangler", "queues", "create", queue], { cloudflare: true });
+}
+
 export function deployStack({ dryRun = false } = {}) {
   if (!assertProductionResourceIds()) return false;
   if (!run("pnpm", ["--dir", "apps/web", "run", "build"])) return false;
@@ -172,6 +189,7 @@ export function deployStack({ dryRun = false } = {}) {
   }
 
   if (!dryRun && !ensureReleaseAssetBucket()) return false;
+  if (!dryRun && !ensureGithubSyncQueue()) return false;
   if (!dryRun && !bootstrapCyclicWorkers()) return false;
 
   for (const service of ["limits", "auth", "forge", "git", "actions", "deploy", "mcp", "gateway"]) {

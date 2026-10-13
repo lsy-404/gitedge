@@ -19,19 +19,21 @@ export const CreateAccessBanSchema = z
   .strict();
 export type CreateAccessBan = z.infer<typeof CreateAccessBanSchema>;
 
-export interface AccessBan {
-  id: string;
-  kind: "user" | "ip";
-  value: string;
-  reason: string;
-  expiresAt: number | null;
-  createdAt: number;
-  createdBy: string;
-}
+export const AccessBanSchema = z.object({
+  id: z.string(),
+  kind: z.enum(["user", "ip"]),
+  value: z.string(),
+  reason: z.string(),
+  expiresAt: z.number().nullable(),
+  createdAt: z.number(),
+  createdBy: z.string(),
+});
+export type AccessBan = z.infer<typeof AccessBanSchema>;
 
-export interface IpAccessSettings {
-  rpm: number;
-}
+export const IpAccessSettingsSchema = z.object({
+  rpm: z.number().int().min(IP_RPM_MIN).max(IP_RPM_MAX),
+});
+export type IpAccessSettings = z.infer<typeof IpAccessSettingsSchema>;
 
 export function canonicalIpRange(value: string): string {
   const [address, prefix] = ipaddr.parseCIDR(value);

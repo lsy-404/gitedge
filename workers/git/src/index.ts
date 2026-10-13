@@ -18,7 +18,10 @@ export default {
       return dataResponse({ ok: true });
     try {
       const url = new URL(request.url);
-      if (url.pathname === "/internal/github-sync" || url.pathname.startsWith("/internal/github-sync/"))
+      if (
+        url.pathname === "/internal/github-sync" ||
+        url.pathname.startsWith("/internal/github-sync/")
+      )
         return await handleGithubGitSync(request, env);
       if (url.hostname === "git.internal" && url.pathname === "/internal/ref-heads")
         return await handleInternalRefHeads(request, env);

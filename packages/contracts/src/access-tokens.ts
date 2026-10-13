@@ -104,6 +104,8 @@ export function requiredAccessTokenScope(
   if (service === "forge" && parts[0] === "notification-preferences")
     return reading ? "repo:read" : "admin";
   if (service === "forge" && parts[0] === "repositories" && parts[2] === "webhooks") return "admin";
+  if (service === "forge" && parts[0] === "repositories" && parts[2] === "github-sync")
+    return "admin";
   if (reading) return "repo:read";
   if (service === "git") return parts[2] === "merge" ? "pulls:write" : "repo:write";
   if (service === "actions") return "repo:write";

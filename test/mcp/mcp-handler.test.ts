@@ -11,6 +11,7 @@ import {
   type GatewayService,
 } from "../../workers/gateway/src/index";
 import { handleMcpRequest } from "../../workers/mcp/src/index";
+import { emptyGatewayDatabase } from "../support/gateway-database";
 
 const ORIGIN = "https://gitedge.example.com";
 const READ_TOKEN = `gep_${"r".repeat(64)}`;
@@ -90,6 +91,7 @@ function stack(): Stack {
   const authCalls: Request[] = [];
   const forgeCalls: Request[] = [];
   const env: GatewayEnv = {
+    DB: emptyGatewayDatabase(),
     AUTH: service((request) => {
       authCalls.push(request);
       const bearer = request.headers.get("Authorization")?.slice(7) ?? "";

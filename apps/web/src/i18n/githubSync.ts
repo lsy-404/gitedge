@@ -1,5 +1,8 @@
 export const githubSyncMessages = {
   "zh-CN": {
+    githubSyncConnectionError: "连接不可用，请检查 GitHub 权限、凭证和仓库可见性后重新连接。",
+    auditAction_github_sync_connected: "连接 GitHub 同步",
+    auditAction_github_sync_updated: "更新 GitHub 同步",
     githubSyncSection: "GitHub 同步",
     githubSyncTitle: "GitHub 双向同步",
     githubSyncIntro: "同步代码分支、标签、Issues、Pull Requests、评论与评审。",
@@ -47,6 +50,10 @@ export const githubSyncMessages = {
     githubSyncExternalOrigin: "GitHub · 不计批准",
   },
   en: {
+    githubSyncConnectionError:
+      "The connection is unavailable. Check GitHub permissions, credentials and repository visibility, then reconnect.",
+    auditAction_github_sync_connected: "Connected GitHub synchronization",
+    auditAction_github_sync_updated: "Updated GitHub synchronization",
     githubSyncSection: "GitHub sync",
     githubSyncTitle: "GitHub bidirectional sync",
     githubSyncIntro: "Sync code branches, tags, Issues, Pull Requests, comments, and reviews.",

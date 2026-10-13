@@ -4,6 +4,9 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
+  "queues": {
+    "producers": [{ "binding": "GITHUB_SYNC_QUEUE", "queue": "gitedge-github-sync-tests" }]
+  },
   "durable_objects": {
     "bindings": [{ "name": "MERGE_QUEUE", "class_name": "MergeQueueDurableObject" }]
   },

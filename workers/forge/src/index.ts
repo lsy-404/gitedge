@@ -1,6 +1,12 @@
 import { branchRules, matchingBranchRules } from "../../../src/worker/common/branch-protection";
 import { triggerPullActions } from "./pull-actions";
-import { drainGithubSync, handleGithubSyncSettings, purgeGithubSyncJobs, receiveGithubWebhook } from "./github-sync";
+import {
+  consumeGithubSync,
+  wakeGithubSync,
+  handleGithubSyncSettings,
+  purgeGithubSyncJobs,
+  receiveGithubWebhook,
+} from "./github-sync";
 import { candidateMergeAllowed, mergeCandidateRoute } from "./merge-candidates";
 import {
   repositoryAccessDenied,
@@ -2749,7 +2755,7 @@ const worker = {
     if (controller.cron === WEBHOOK_CRON) {
       await sweepMergeAutomation(env);
       await drainWebhookDeliveries(env);
-      await drainGithubSync(env);
+      await wakeGithubSync(env);
       await drainAiSummaries(env);
       return;
     }
@@ -2799,7 +2805,6 @@ async function reconcileAfterWrite(
     });
   }
   await drainWebhookDeliveries(env);
-  await drainGithubSync(env);
 }
 
 export { MergeQueueDurableObject } from "./merge-queue";
@@ -2820,9 +2825,13 @@ export default {
       ctx.waitUntil(reconcileAfterWrite(env, request, internalBody));
     else if (ctx && response.ok && writing) {
       ctx.waitUntil(drainWebhookDeliveries(env));
-      ctx.waitUntil(drainGithubSync(env));
+    }
+    if (ctx && response.ok && writing) {
+      const hook = /^\/github-sync\/hooks\/([^/]+)$/.exec(path);
+      ctx.waitUntil(wakeGithubSync(env, hook?.[1]));
     }
     return response;
   },
   scheduled: worker.scheduled,
+  queue: consumeGithubSync,
 };

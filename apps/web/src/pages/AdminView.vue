@@ -13,6 +13,12 @@ import "../styles/workspace.css";
 const { t } = useI18n();
 const route = useRoute();
 const tabs = ["overview", "users", "repositories", "access"] as const;
+const tabLabels: Record<(typeof tabs)[number], string> = {
+  overview: "adminTab_overview",
+  users: "adminTab_users",
+  repositories: "adminTab_repositories",
+  access: "adminTab_access",
+};
 const tab = computed(() => tabs.find((value) => value === route.query.tab) ?? "overview");
 const allowed = computed(() => sessionState.user?.siteAdmin === true);
 </script>
@@ -34,7 +40,7 @@ const allowed = computed(() => sessionState.user?.siteAdmin === true);
           class="btn btn-sm"
           :to="{ path: '/admin', query: { tab: value } }"
           :aria-current="tab === value ? 'page' : undefined"
-          >{{ t(`adminTab_${value}`) }}</RouterLink
+          >{{ t(tabLabels[value]) }}</RouterLink
         >
       </nav>
       <AdminOverview v-if="tab === 'overview'" />

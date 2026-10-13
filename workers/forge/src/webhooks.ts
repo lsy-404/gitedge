@@ -619,21 +619,29 @@ export async function handlePushEvent(
     pusher = {
       id: session.id,
       identifier: session.identifier,
-      agentSession: {
-        id: session.sessionId,
-        agentId: session.agentId,
-        agentName: session.agentName,
-        repositoryId: session.repositoryId,
-        workspaceName: session.workspaceName,
-        permission: session.permission,
-      },
+      ...(parsed.data.externalPusher
+        ? {}
+        : {
+            agentSession: {
+              id: session.sessionId,
+              agentId: session.agentId,
+              agentName: session.agentName,
+              repositoryId: session.repositoryId,
+              workspaceName: session.workspaceName,
+              permission: session.permission,
+            },
+          }),
     };
-    actorJson = JSON.stringify({
-      kind: "agent",
-      id: session.agentId,
-      name: session.agentName,
-      sessionId: session.sessionId,
-    });
+    actorJson = JSON.stringify(
+      parsed.data.externalPusher
+        ? { kind: "external", ...parsed.data.externalPusher }
+        : {
+            kind: "agent",
+            id: session.agentId,
+            name: session.agentName,
+            sessionId: session.sessionId,
+          }
+    );
   } else {
     pusher = await env.DB.prepare(
       "SELECT id, identifier FROM users WHERE id = ? AND disabled_at IS NULL"
@@ -641,9 +649,11 @@ export async function handlePushEvent(
       .bind(parsed.data.pusherId)
       .first<PushActorRow>();
     if (!pusher) return errorResponse(404, "not_found", "Pusher was not found.");
-    actorJson = JSON.stringify(parsed.data.externalPusher
-      ? { kind: "external", ...parsed.data.externalPusher }
-      : { kind: "user", id: pusher.id, name: pusher.identifier });
+    actorJson = JSON.stringify(
+      parsed.data.externalPusher
+        ? { kind: "external", ...parsed.data.externalPusher }
+        : { kind: "user", id: pusher.id, name: pusher.identifier }
+    );
   }
   if (!pusher) return errorResponse(404, "not_found", "Pusher was not found.");
 

@@ -20,6 +20,7 @@ import { unlimitedRateLimiter } from "../support/rate-limiter";
 
 /** Real Gateway, Auth, Forge and MCP; Git answers with empty data because no tool here reads files. */
 const gatewayEnv: GatewayEnv = {
+  DB: authEnv.DB,
   AUTH: { fetch: (request) => auth.fetch(request, authEnv) },
   FORGE: { fetch: (request) => forge.fetch(request, forgeEnv) },
   GIT: { fetch: async () => Response.json({ data: [] }) },

@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { emptyGatewayDatabase } from "../support/gateway-database";
 import { requiredAccessTokenScope } from "../../packages/contracts/src/access-tokens";
 import {
   API_OPERATIONS,
@@ -41,6 +42,7 @@ function routingEnvironment(received: Received[]): GatewayEnv {
     },
   });
   return {
+    DB: emptyGatewayDatabase(),
     AUTH: {
       fetch: async (request) => {
         const path = new URL(request.url).pathname;

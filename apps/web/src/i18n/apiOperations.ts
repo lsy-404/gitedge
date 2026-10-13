@@ -1,5 +1,16 @@
 /** Chinese summaries of the documented operations; English comes from the OpenAPI document. */
 export const zhOperationSummaries: Readonly<Record<string, string>> = {
+  getGitHubSync: "查看 GitHub 连接和同步状态。",
+  connectGitHubSync: "连接 GitHub 仓库并创建签名 Webhook。",
+  setGitHubSyncEnabled: "暂停或恢复双向同步。",
+  disconnectGitHubSync: "删除 GitHub Webhook 并断开连接。",
+  reconcileGitHubSync: "核对两侧记录并重试失败或冲突的同步。",
+  retryGitHubSyncJob: "重试单个同步任务，保留历史与并发检查。",
+  listAccessBans: "列出有效的用户和 IP 封禁。",
+  createAccessBan: "添加带原因和有效期的用户或 IP/CIDR 封禁。",
+  deleteAccessBan: "解除封禁；已撤销的凭证不会恢复。",
+  getIpRpm: "读取按 IP 的每分钟请求数限制。",
+  setIpRpm: "设置按 IP 的每分钟请求数限制。",
   setPullLock: "人工锁定或解锁 Pull Request 的来源分支",
   getDashboardAttention: "查看跨仓库的待处理事项与统计",
   searchCode: "搜索固定提交中的代码内容",
@@ -82,6 +93,8 @@ export const zhOperationSummaries: Readonly<Record<string, string>> = {
 };
 
 export const zhTagNames: Readonly<Record<string, string>> = {
+  "GitHub sync": "GitHub 同步",
+  "Site administration": "站点管理",
   Dashboard: "工作台",
   Discussions: "讨论",
   Service: "服务",

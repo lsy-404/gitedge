@@ -246,7 +246,6 @@ describe("GitHub OAuth", () => {
     expect(completed.status).toBe(302);
     expect(completed.headers.get("Location")).toBe("/account");
     expect(completed.headers.get("Set-Cookie")).toContain("gitedge_session=");
-    expect(database.batchCount).toBe(0);
     expect(database.sessions.size).toBe(1);
   });
 

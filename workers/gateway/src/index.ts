@@ -596,7 +596,8 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
       headers: { "Cache-Control": "public, max-age=300" },
     });
   if (/^\/api\/forge\/github-sync\/hooks\/[0-9a-f-]{36}$/.test(url.pathname)) {
-    if (request.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
+    if (request.method !== "POST")
+      return new Response(null, { status: 405, headers: { Allow: "POST" } });
     return env.FORGE.fetch(forwardAuthenticated(request, "/api/forge"));
   }
   if (url.pathname === MCP_PATH) return handleMcp(request, env);
