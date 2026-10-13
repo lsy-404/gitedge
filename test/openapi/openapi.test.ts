@@ -79,6 +79,7 @@ const UNDOCUMENTED_GIT_RESOURCES: Readonly<Record<string, string>> = {
   commit: "Commit lookup and multipart web commits used by the web client.",
   edit: "Single-file web edit used by the web client.",
   merge: "Called by Forge only; the Gateway refuses it.",
+  "merge-candidate": "Internal merge preparation; the Gateway refuses it.",
   graph: "Commit graph rendering for the web client.",
   community: "Community file discovery for the web client.",
   signature: "Signature verification detail for the web client.",
@@ -276,6 +277,8 @@ describe("OpenAPI document", () => {
       ...sourceLiterals("workers/forge/src/index.ts", /action === "([a-z-]+)"/g),
       ...sourceLiterals("workers/forge/src/tasks.ts", /action === "([a-z-]+)"/g),
       ...sourceLiterals("workers/forge/src/merge-routes.ts", /action [!=]== "([a-z-]+)"/g),
+      ...sourceLiterals("workers/forge/src/pull-lock.ts", /parts\[4\] [!=]== "([a-z-]+)"/g),
+      ...sourceLiterals("workers/forge/src/merge-candidates.ts", /parts\[4\] [!=]== "([a-z-]+)"/g),
       ...sourceLiterals("workers/forge/src/ai-summary.ts", /rest\[2\] [!=]== "([a-z-]+)"/g),
     ]);
     for (const action of actions)

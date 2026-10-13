@@ -53,7 +53,11 @@ describe("deployment isolation", () => {
       if (service !== "gateway") expect(config.routes ?? []).toEqual([]);
       if (["auth", "forge", "git"].includes(service))
         expect(config.artifacts).toEqual([{ binding: "ARTIFACTS", namespace: "gitedge" }]);
-      if (service !== "forge") expect(config.r2_buckets).toBeUndefined();
+      if (!["forge", "actions"].includes(service)) expect(config.r2_buckets).toBeUndefined();
+      if (service === "actions")
+        expect(config.r2_buckets).toEqual([
+          { binding: "RELEASE_ASSETS", bucket_name: "gitedge-release-assets" },
+        ]);
       if (service === "gateway") {
         expect(config.routes).toHaveLength(1);
         expect(config.assets?.html_handling).toBe("none");

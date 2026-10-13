@@ -23,6 +23,7 @@ describe("parseWorkflow", () => {
       path: ".github/workflows/verify.yml",
       name: "Verify",
       triggers: ["workflow_dispatch", "push"],
+      triggerFilters: { push: {} },
       jobs: [
         {
           id: "test",
@@ -51,7 +52,7 @@ describe("parseWorkflow", () => {
   it.each([
     ["unsupported action reference", source.replace("run: npm test", "uses: actions/checkout@v4")],
     ["dynamic expression", source.replace("run: npm test", "run: echo ${{ github.sha }}")],
-    ["push filters", source.replace("push: {}", "push:\n    branches: [main]")],
+    ["unsupported trigger option", source.replace("push: {}", "push:\n    schedule: daily")],
     ["unsupported shell", source.replace("shell: bash", "shell: powershell")],
     ["invalid workflow path", source],
   ])("rejects %s", (reason, yaml) => {
@@ -90,7 +91,7 @@ describe("parseWorkflow", () => {
   });
 
   it.each([
-    ["unsupported list entry", "on: [push, pull_request]"],
+    ["unsupported list entry", "on: [push, release]"],
     ["empty list", "on: []"],
     ["duplicate entries", "on: [push, push]"],
     ["scalar list entry", "on: [1]"],

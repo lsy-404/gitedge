@@ -1,5 +1,10 @@
 /** Chinese summaries of the documented operations; English comes from the OpenAPI document. */
 export const zhOperationSummaries: Readonly<Record<string, string>> = {
+  setPullLock: "人工锁定或解锁 Pull Request 的来源分支",
+  getDashboardAttention: "查看跨仓库的待处理事项与统计",
+  searchCode: "搜索固定提交中的代码内容",
+  listDiscussions: "按条件分页查询讨论及完整匹配数量",
+  getMergeCandidate: "查看合并候选提交及其 CI 状态",
   getHealth: "报告每个内部服务与 D1 的状态。",
   getOpenApiDocument: "本 OpenAPI 3.1 文档。",
   getSession: "解析当前凭证对应的身份。",
@@ -77,6 +82,8 @@ export const zhOperationSummaries: Readonly<Record<string, string>> = {
 };
 
 export const zhTagNames: Readonly<Record<string, string>> = {
+  Dashboard: "工作台",
+  Discussions: "讨论",
   Service: "服务",
   Identity: "身份",
   Repositories: "仓库",

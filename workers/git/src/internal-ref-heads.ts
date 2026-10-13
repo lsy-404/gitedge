@@ -61,7 +61,7 @@ export async function handleInternalRefHeads(request: Request, env: GitEnv): Pro
     const heads: PushEventRefHeads["heads"] = [];
     for (const update of input.updates) {
       if (update.ref.startsWith("refs/heads/")) {
-        const commit = await resolveCommit(repo, update.ref);
+        const commit = await resolveCommit(repo, update.ref.slice("refs/heads/".length));
         heads.push({ ref: update.ref, oid: commit?.hash ?? null });
       } else {
         heads.push({ ref: update.ref, oid: advertisedRefs.get(update.ref) ?? null });

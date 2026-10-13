@@ -311,7 +311,7 @@ onMounted(load);
               >
               <small v-if="item.kind === 'blocked_task' && item.detail">{{ item.detail }}</small>
               <small v-else-if="item.kind === 'expiring_session'">{{
-                t("sessionExpiresAt", { date: d(new Date(item.detail), "long") })
+                t("sessionExpiresAt", { date: d(new Date(Number(item.detail)), "long") })
               }}</small>
             </span>
             <StatusBadge

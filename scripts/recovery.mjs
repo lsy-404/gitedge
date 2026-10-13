@@ -192,15 +192,15 @@ async function queryAll(config, sql, database = sourceDb) {
 async function snapshotRows() {
   const repos = await queryAll(
     authConfig,
-    "SELECT r.id, n.slug AS namespace, r.slug, r.artifact_name, r.default_branch, r.updated_at FROM repositories r JOIN namespaces n ON n.id = r.namespace_id WHERE r.deleted_at IS NULL ORDER BY r.id"
+    "SELECT r.id, n.slug AS namespace, r.slug, r.artifact_name, r.default_branch, r.updated_at FROM repositories r JOIN namespaces n ON n.id = r.namespace_id WHERE r.artifact_name IS NOT NULL ORDER BY r.id"
   );
   const sessions = await queryAll(
     authConfig,
-    "SELECT s.id, s.repository_id, s.workspace_name, s.remote, s.status, s.expires_at FROM auth_agent_sessions s JOIN repositories r ON r.id = s.repository_id WHERE r.deleted_at IS NULL ORDER BY s.id"
+    "SELECT s.id, s.repository_id, s.workspace_name, s.remote, s.status, s.expires_at FROM auth_agent_sessions s JOIN repositories r ON r.id = s.repository_id WHERE r.artifact_name IS NOT NULL ORDER BY s.id"
   );
   const assets = await queryAll(
     authConfig,
-    "SELECT a.id, a.repository_id, a.size FROM forge_release_assets a ORDER BY a.id"
+    "SELECT id, repository_id, size, repository_id || '/' || id AS object_key, 'release-asset' AS kind FROM forge_release_assets UNION ALL SELECT run_id || ':' || name AS id, repository_id, size, object_key, 'action-artifact' AS kind FROM actions_run_artifacts UNION ALL SELECT cache_key AS id, repository_id, size, object_key, 'action-cache' AS kind FROM actions_cache_entries ORDER BY kind, id"
   );
   return { repositories: repos, sessions, assets };
 }
@@ -419,14 +419,14 @@ async function backup(opts) {
   }
 
   for (const asset of before.assets) {
-    const path = join(backupDir, "release-assets", asset.repository_id, asset.id);
+    const path = join(backupDir, "r2-objects", digest(asset.object_key));
     await mkdir(dirname(path), { recursive: true });
     try {
       await wrangler([
         "r2",
         "object",
         "get",
-        `gitedge-release-assets/${asset.repository_id}/${asset.id}`,
+        `gitedge-release-assets/${asset.object_key}`,
         "--remote",
         "--file",
         path,
@@ -436,13 +436,14 @@ async function backup(opts) {
       const info = await stat(path);
       if (info.size !== asset.size)
         throw new Error(`expected ${asset.size} bytes, received ${info.size}`);
-      await addFile(manifest, backupDir, path, "release-asset", {
+      await addFile(manifest, backupDir, path, asset.kind, {
+        objectKey: asset.object_key,
         repositoryId: asset.repository_id,
         assetId: asset.id,
       });
     } catch (error) {
       manifest.consistency.incomplete.push({
-        kind: "release-asset",
+        kind: asset.kind,
         id: asset.id,
         repositoryId: asset.repository_id,
         reason: sanitize(String(error.message)).slice(0, 500),
@@ -764,13 +765,15 @@ async function rehearse(opts) {
       destinationAccount
     );
   }
-  for (const file of manifest.files.filter((entry) => entry.kind === "release-asset")) {
+  for (const file of manifest.files.filter((entry) =>
+    ["release-asset", "action-artifact", "action-cache"].includes(entry.kind)
+  )) {
     await wrangler(
       [
         "r2",
         "object",
         "put",
-        `${destinationBucket}/${file.repositoryId}/${file.assetId}`,
+        `${destinationBucket}/${file.objectKey}`,
         "--remote",
         "--file",
         resolve(backupDir, file.path),
@@ -780,14 +783,14 @@ async function rehearse(opts) {
       undefined,
       destinationAccount
     );
-    const verificationPath = join(tmpdir(), `gitedge-asset-${file.assetId}`);
+    const verificationPath = join(tmpdir(), `gitedge-asset-${digest(file.objectKey)}`);
     try {
       await wrangler(
         [
           "r2",
           "object",
           "get",
-          `${destinationBucket}/${file.repositoryId}/${file.assetId}`,
+          `${destinationBucket}/${file.objectKey}`,
           "--remote",
           "--file",
           verificationPath,
@@ -805,7 +808,7 @@ async function rehearse(opts) {
   }
   const restoredRepositories = await queryAll(
     destinationConfig,
-    "SELECT id, artifact_name FROM repositories WHERE deleted_at IS NULL ORDER BY id",
+    "SELECT id, artifact_name FROM repositories WHERE artifact_name IS NOT NULL ORDER BY id",
     destinationDb
   );
   const restoredSessions = await queryAll(

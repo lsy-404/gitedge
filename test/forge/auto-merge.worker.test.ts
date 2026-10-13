@@ -23,6 +23,8 @@ const heads = new Map<string, string>();
 const mergeBodies: Array<Record<string, unknown>> = [];
 const mergeUsers: string[] = [];
 const mergeFailures = new Map<string, { status: number; code: string }>();
+const candidateOids = new Map<string, string>();
+let candidateChecksReady = true;
 let mergeCounter = 0;
 let mergeGate: Promise<void> | null = null;
 let onMergeStarted: (() => void) | null = null;
@@ -31,6 +33,39 @@ const forgeEnv: Parameters<typeof forge.fetch>[1] = {
   DB: env.DB,
   ARTIFACTS: artifacts,
   MERGE_QUEUE: env.MERGE_QUEUE,
+  ACTIONS: {
+    async fetch(request: Request) {
+      if (new URL(request.url).pathname !== "/internal/merge-group")
+        return Response.json({ data: { runs: [], failures: [] } }, { status: 202 });
+      const input = z
+        .object({ candidateId: z.string(), repositoryId: z.string() })
+        .parse(await request.json());
+      const oid = candidateOids.get(input.candidateId);
+      if (!oid) throw new Error("Candidate must exist before CI starts.");
+      await env.DB.prepare(
+        "UPDATE forge_merge_candidates SET expected_workflows = '[\"CI\"]' WHERE id = ?"
+      )
+        .bind(input.candidateId)
+        .run();
+      await env.DB.prepare(
+        "INSERT OR IGNORE INTO actions_runs (id, repository_id, commit_oid, workflow, path, source_ref, created_by, created_at, candidate_id, check_status, check_conclusion) VALUES (?, ?, ?, 'CI', 'CI', 'candidate', 'u2', ?, ?, ?, ?)"
+      )
+        .bind(
+          input.candidateId,
+          input.repositoryId,
+          oid,
+          Date.now(),
+          input.candidateId,
+          candidateChecksReady ? "completed" : "queued",
+          candidateChecksReady ? "success" : null
+        )
+        .run();
+      return Response.json(
+        { data: { runs: [{ id: input.candidateId }], failures: [] } },
+        { status: 202 }
+      );
+    },
+  },
   GIT: {
     async fetch(request: Request) {
       const url = new URL(request.url);
@@ -66,6 +101,16 @@ const forgeEnv: Parameters<typeof forge.fetch>[1] = {
         return Response.json({ data: { commits: [] } });
       if (request.method !== "POST") return Response.json({ data: {} });
       const body = (await request.json()) as Record<string, unknown>;
+      if (url.pathname.endsWith("/merge-candidate")) {
+        const failure = mergeFailures.get(String(body.headRef));
+        if (failure)
+          return Response.json({ error: { code: failure.code } }, { status: failure.status });
+        const oid =
+          candidateOids.get(String(body.candidateId)) ??
+          (candidateOids.size + 1).toString(16).padStart(40, "c");
+        candidateOids.set(String(body.candidateId), oid);
+        return Response.json({ data: { oid } });
+      }
       mergeBodies.push(body);
       mergeUsers.push(request.headers.get("X-GitEdge-User-Id") ?? "");
       if (mergeGate) {
@@ -83,7 +128,10 @@ const forgeEnv: Parameters<typeof forge.fetch>[1] = {
           { error: { code: "refs_changed", message: "Moved." } },
           { status: 409 }
         );
-      const oid = (++mergeCounter).toString(16).padStart(40, "e");
+      const oid = body.candidateId
+        ? candidateOids.get(String(body.candidateId))
+        : (++mergeCounter).toString(16).padStart(40, "e");
+      if (!oid) throw new Error("Cannot merge without a prepared candidate.");
       heads.set(String(body.baseRef), oid);
       return Response.json({ data: { oid } });
     },
@@ -251,6 +299,7 @@ beforeAll(async () => {
 INSERT INTO namespaces (id, slug, created_by, created_at, kind, display_name, description) VALUES ('n1','alice','u1',1,'personal','Alice','');
 INSERT INTO namespace_memberships (namespace_id,user_id,created_at,role) VALUES ('n1','u1',1,'owner');
 INSERT INTO repositories (id,namespace_id,created_by,slug,do_name,visibility,description,created_at,updated_at,artifact_name,remote,default_branch) VALUES ('r1','n1','u1','demo','repo:r1','public','',1,1,'${source.name}','${source.remote}','main');
+UPDATE repositories SET actions_enabled = 1 WHERE id = 'r1';
 INSERT INTO repository_collaborators (repository_id, user_id, role, created_at) VALUES ('r1','u2','write',1);
 INSERT INTO forge_webhooks (id,repository_id,url,events_json,secret_ciphertext,secret_iv,created_by,created_at,updated_at) VALUES ('hook1','r1','https://hooks.example.test/in','["pull_request"]','x','x','u1',1,1);
 INSERT INTO auth_agents (id,user_id,name,description,created_at) VALUES ('a1','u2','helper','',1);
@@ -263,6 +312,7 @@ INSERT INTO repositories (id,namespace_id,created_by,slug,do_name,visibility,des
 });
 
 beforeEach(() => {
+  candidateChecksReady = true;
   mergeBodies.length = 0;
   mergeUsers.length = 0;
   mergeFailures.clear();
@@ -607,12 +657,24 @@ describe("Merge queue", () => {
       pulls.map((pull) => pull.number)
     );
 
+    candidateChecksReady = false;
+    await processMergeQueue(forgeEnv, "r1", "mq-order", { merges: 10 });
+    expect(mergeBodies).toHaveLength(0);
+    expect(await state(pulls[0])).toBe("open");
+    await env.DB.prepare(
+      "UPDATE actions_runs SET check_status = 'completed', check_conclusion = 'success' WHERE candidate_id IS NOT NULL"
+    ).run();
+    candidateChecksReady = true;
     await processMergeQueue(forgeEnv, "r1", "mq-order", { merges: 10 });
 
     expect(mergedHeads()).toEqual(pulls.map((pull) => pull.headRef));
     const bases = mergeBodies.map((body) => body.expectedBaseOid);
     expect(bases[0]).toBe(BASE);
     expect(new Set(bases).size).toBe(3);
+    for (const body of mergeBodies) {
+      expect(body.candidateOid).toBe(candidateOids.get(String(body.candidateId)));
+      expect(body.candidateOid).not.toBe(body.expectedHeadOid);
+    }
     expect(await Promise.all(pulls.map(state))).toEqual(["merged", "merged", "merged"]);
     const status = await json(
       await call(`/repositories/r1/pull-requests/${pulls[0].number}/merge-queue`, "GET", bob)
@@ -632,7 +694,7 @@ describe("Merge queue", () => {
 
     await processMergeQueue(forgeEnv, "r1", "mq-conflict", { merges: 10 });
 
-    expect(mergedHeads()).toEqual([one.headRef, two.headRef, three.headRef]);
+    expect(mergedHeads()).toEqual([one.headRef, three.headRef]);
     expect(await state(one)).toBe("merged");
     expect(await state(two)).toBe("open");
     expect(await state(three)).toBe("merged");

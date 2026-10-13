@@ -52,21 +52,41 @@ jobs:
         paths:
           - public
 `,
-  gitedgeSelfValidation: `name: GitEdge self-validation
+  gitedgeSelfValidation: `name: GitEdge verification
 on:
   push:
+  pull_request:
+  merge_group:
   workflow_dispatch:
+cache:
+  keyFiles:
+    - pnpm-lock.yaml
+    - apps/web/pnpm-lock.yaml
+  paths:
+    - .pnpm-store
 jobs:
-  validate:
+  verify:
     steps:
-      - name: Check installed runtimes
-        run: node --version && pnpm --version && python3 --version && git --version
+      - name: Install dependencies
+        run: pnpm --store-dir /workspace/.pnpm-store install --frozen-lockfile && pnpm --dir apps/web --store-dir /workspace/.pnpm-store install --frozen-lockfile
       - name: Check migrations
         run: pnpm run check:migrations
-      - name: Check migration utility syntax
-        run: node --check scripts/check-migrations.mjs
-      - name: Check the runtime image definition
-        run: test -f workers/actions/Dockerfile
+      - name: Check types
+        run: pnpm run typecheck
+      - name: Unit tests
+        run: pnpm run test
+      - name: Worker tests
+        run: pnpm run test:workers
+      - name: Web tests
+        run: pnpm run test:web
+      - name: Build web application
+        run: pnpm run build:web
+      - name: Check formatting
+        run: pnpm run format:check
+    artifacts:
+      - name: web-build
+        paths:
+          - apps/web/dist
 `,
 } as const;
 

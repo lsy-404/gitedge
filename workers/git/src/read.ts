@@ -1,3 +1,4 @@
+import { GitResourceLimitError } from "./http";
 import * as git from "isomorphic-git";
 import { createLogger } from "../../../src/worker/common/logger";
 import type {
@@ -56,11 +57,7 @@ export async function resolveCommit(
 const CONTAINMENT_PAGE_SIZE = 100;
 const CONTAINMENT_MAX_PAGES = 10;
 
-/**
- * Whether a commit appears in the history of a ref. Scans at most
- * CONTAINMENT_PAGE_SIZE * CONTAINMENT_MAX_PAGES commits from the tip, so very old commits on a
- * long branch are reported as not contained.
- */
+// Artifacts follows first-parent history; exhaustion is an explicit resource limit.
 export async function refContainsCommit(
   repo: ArtifactsRepo,
   ref: string,
@@ -75,7 +72,9 @@ export async function refContainsCommit(
     if (commits.some((commit) => commit.hash === oid)) return true;
     if (commits.length < CONTAINMENT_PAGE_SIZE) return false;
   }
-  return false;
+  throw new GitResourceLimitError(
+    "Commit reachability exceeds the supported history limit. Use a commit-addressed ref or a closer branch."
+  );
 }
 export async function readArtifactTree(
   repo: Pick<ArtifactsRepo, "info" | "log" | "readTree">,

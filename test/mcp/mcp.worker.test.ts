@@ -205,6 +205,7 @@ describe("MCP tools against the real services", () => {
       repository: "alice-mcp/site",
       number: 1,
       status: "done",
+      accepted: true,
     });
     expect(updated.value).toMatchObject({ status: "done" });
     const tasks = await callTool(readToken, "list_tasks", {
@@ -239,6 +240,10 @@ describe("MCP tools against the real services", () => {
         new Request(`${origin}${path}`, { headers: { Authorization: `Bearer ${readToken}` } }),
         gatewayEnv
       );
+      if (operation.browserSessionOnly) {
+        expect(response.status, operation.operationId).toBe(403);
+        continue;
+      }
       expect(response.status, operation.operationId).toBe(operation.status);
       const body: unknown = await response.json();
       const parsed = operation.response.safeParse(body);

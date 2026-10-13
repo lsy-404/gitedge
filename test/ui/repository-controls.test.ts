@@ -80,6 +80,18 @@ const repositorySettings: Settings = {
 
 beforeEach(() => {
   i18n.global.locale.value = "en";
+  vi.spyOn(api, "dashboardAttention").mockResolvedValue({
+    items: [],
+    counts: {
+      review_requested: 0,
+      changes_requested: 0,
+      failed_check: 0,
+      blocked_task: 0,
+      expiring_session: 0,
+    },
+    nextCursor: null,
+    truncated: false,
+  });
 });
 
 beforeAll(() => {

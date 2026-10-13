@@ -1,3 +1,4 @@
+import { MergeCandidateSchema } from "./merge-candidates";
 import { z } from "zod";
 import type { AccessTokenScope } from "./access-tokens";
 import {
@@ -101,6 +102,7 @@ export interface ApiOperation {
   readonly scope: AccessTokenScope | null;
   /** Public repositories (or the whole endpoint) can be read without credentials. */
   readonly anonymous: boolean;
+  readonly browserSessionOnly?: boolean;
   readonly query?: readonly ApiQueryParameter[];
   readonly body?: z.ZodType;
   readonly status: 200 | 201 | 202;
@@ -135,14 +137,27 @@ const gitRepository = "/api/git/repositories/{repositoryId}";
 
 export const API_OPERATIONS: readonly ApiOperation[] = [
   {
+    operationId: "getMergeCandidate",
+    method: "GET",
+    path: `${forgePullRequest}/merge-candidate`,
+    service: "forge",
+    tag: "Pull requests",
+    summary: "Read checks for the combined base and head that the merge queue will publish.",
+    scope: "repo:read",
+    anonymous: false,
+    status: 200,
+    response: dataOf(MergeCandidateSchema.nullable()),
+  },
+  {
     operationId: "setPullLock",
+    browserSessionOnly: true,
     method: "PUT",
     path: `${forgePullRequest}/lock`,
     service: "forge",
     tag: "Pull requests",
     summary:
       "Manually freeze or unlock all source commits; reviews and checks remain available. Browser session required.",
-    scope: null,
+    scope: "pulls:write",
     anonymous: false,
     body: PullLockInputSchema,
     status: 200,
@@ -152,13 +167,14 @@ export const API_OPERATIONS: readonly ApiOperation[] = [
   },
   {
     operationId: "getDashboardAttention",
+    browserSessionOnly: true,
     method: "GET",
     path: "/api/forge/dashboard/attention",
     service: "forge",
     tag: "Dashboard",
     summary:
       "List the current user's cross-repository pending reviews, requested changes, failed checks, blocked tasks and expiring sessions.",
-    scope: null,
+    scope: "repo:read",
     anonymous: false,
     query: [
       { name: "cursor", schema: z.string().max(512), description: "Opaque continuation cursor." },
@@ -1357,7 +1373,11 @@ export interface OpenApiDocument {
   info: { title: string; version: string; description: string };
   servers: { url: string }[];
   components: {
-    securitySchemes: Record<string, { type: "http"; scheme: "bearer"; description: string }>;
+    securitySchemes: Record<
+      string,
+      | { type: "http"; scheme: "bearer"; description: string }
+      | { type: "apiKey"; in: "cookie"; name: string; description: string }
+    >;
     schemas: Record<string, JsonSchema>;
   };
   paths: Record<string, Partial<Record<Lowercase<ApiMethod>, OpenApiOperationObject>>>;
@@ -1416,7 +1436,11 @@ export function buildOpenApiDocument(origin: string): OpenApiDocument {
       operationId: operation.operationId,
       summary: operation.summary,
       tags: [operation.tag],
-      security: operation.anonymous ? [{}, { bearerAuth: [] }] : [{ bearerAuth: [] }],
+      security: operation.browserSessionOnly
+        ? [{ browserSession: [] }]
+        : operation.anonymous
+          ? [{}, { bearerAuth: [] }]
+          : [{ bearerAuth: [] }],
       parameters,
       responses: {
         [String(operation.status)]: {
@@ -1450,6 +1474,12 @@ export function buildOpenApiDocument(origin: string): OpenApiDocument {
     servers: [{ url: origin }],
     components: {
       securitySchemes: {
+        browserSession: {
+          type: "apiKey",
+          in: "cookie",
+          name: "gitedge_session",
+          description: "Human browser session; mutations also require a same-origin request.",
+        },
         bearerAuth: {
           type: "http",
           scheme: "bearer",

@@ -105,7 +105,8 @@ const groups = computed(() => {
         </div>
         <p>{{ item.summary }}</p>
         <p class="muted api-operation-meta">
-          <span v-if="item.operation.scope">{{
+          <span v-if="item.operation.browserSessionOnly">{{ t("apiDocsBrowserOnly") }}</span>
+          <span v-else-if="item.operation.scope">{{
             t("apiDocsScope", { scope: item.operation.scope })
           }}</span>
           <span v-else>{{ t("apiDocsNoScope") }}</span>

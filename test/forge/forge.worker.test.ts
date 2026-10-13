@@ -809,13 +809,36 @@ INSERT INTO forge_counters (repository_id, conversation_number) VALUES ('r9', 0)
 WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 501)
 INSERT INTO forge_issues (id,repository_id,number,author_id,title,body,state,created_at,updated_at) SELECT 'bulk-' || n,'r9',n,'u1','Bulk ' || n,'','open',n,n FROM seq;`
     );
-    const bulk = (await (await call("/repositories/r9/issues", "GET", "u1", "alice")).json()) as {
+    const bulk = (await (
+      await call("/repositories/r9/issues?limit=100", "GET", "u1", "alice")
+    ).json()) as {
       data: Array<{ number: number }>;
       truncated: boolean;
+      total: number;
+      nextCursor: string | null;
     };
     expect(bulk.truncated).toBe(true);
-    expect(bulk.data).toHaveLength(500);
+    expect(bulk.data).toHaveLength(100);
+    expect(bulk.total).toBe(501);
     expect(bulk.data[0]?.number).toBe(501);
+    const numbers = bulk.data.map((item) => item.number);
+    let cursor = bulk.nextCursor;
+    while (cursor) {
+      const page = (await (
+        await call(
+          `/repositories/r9/issues?limit=100&cursor=${encodeURIComponent(cursor)}`,
+          "GET",
+          "u1",
+          "alice"
+        )
+      ).json()) as typeof bulk;
+      numbers.push(...page.data.map((item) => item.number));
+      expect(page.total).toBe(501);
+      cursor = page.nextCursor;
+    }
+    expect(numbers).toHaveLength(501);
+    expect(new Set(numbers).size).toBe(501);
+    expect(numbers.at(-1)).toBe(1);
     const small = (await (await call("/repositories/r1/issues", "GET", "u1", "alice")).json()) as {
       truncated: boolean;
     };

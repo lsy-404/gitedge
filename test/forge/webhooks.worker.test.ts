@@ -1345,7 +1345,7 @@ describe("push events", () => {
           updates: [{ ...unpublished, ref: `refs/heads/${invalid}` }],
         })
       );
-      expect(rejected.status).toBe(403);
+      expect(rejected.status).toBe(invalid.startsWith("session-token-") ? 200 : 403);
     }
     expect(
       (

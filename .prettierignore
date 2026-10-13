@@ -8,3 +8,6 @@ build/
 *.log
 coverage/
 worker-configuration.d.ts
+
+.pnpm-store/
+agents/

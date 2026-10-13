@@ -32,6 +32,7 @@ import {
   TaskDetailSchema,
   TaskSchema,
   TaskStatusSchema,
+  UpdateTaskInputSchema,
   TrustedUserSchema,
   actorForUser,
   type Issue,
@@ -154,6 +155,9 @@ function pullSummary(pull: PullRequest) {
     author: pull.author,
     baseRef: pull.baseRef,
     headRef: pull.headRef,
+    lockedAt: pull.lockedAt,
+    lockedBy: pull.lockedBy,
+    lockedHeadOid: pull.lockedHeadOid,
     attention: pull.attention,
     headSessionId: pull.headSessionId,
     headRepository: pull.headRepository
@@ -170,6 +174,8 @@ function taskSummary(task: Task) {
     type: task.type,
     title: task.title,
     status: task.status,
+    acceptanceCriteria: task.acceptanceCriteria,
+    blockedReason: task.blockedReason,
     assignee: task.assignee,
     lease: task.lease,
     progress: task.progress,
@@ -992,7 +998,11 @@ export function createGitEdgeMcpServer(api: GitEdgeApi, logger: Logger): McpServ
     {
       description:
         "Claim a pending task. Agent sessions take a time-boxed lease (renew it with heartbeat_task) that expires unless extended; people assign the task to themselves. Refused when someone else holds it. Needs the issues:write scope.",
-      inputSchema: { repository, number: itemNumber, ttlSeconds: leaseSeconds },
+      inputSchema: {
+        repository,
+        number: itemNumber,
+        ttlSeconds: leaseSeconds,
+      },
       annotations: WRITE,
     },
     async (input) =>
@@ -1041,14 +1051,22 @@ export function createGitEdgeMcpServer(api: GitEdgeApi, logger: Logger): McpServ
     [
       "complete_task",
       "complete",
-      "Mark a claimed task done and clear the lease (the claiming agent or a human writer).",
+      "Accept a claimed task after verifying its acceptance criteria, mark it done and clear the lease. Pass accepted: true explicitly.",
     ],
   ] as const)
     server.registerTool(
       name,
       {
         description: `${description} Needs the issues:write scope.`,
-        inputSchema: { repository, number: itemNumber, ttlSeconds: leaseSeconds },
+        inputSchema: {
+          repository,
+          number: itemNumber,
+          ttlSeconds: leaseSeconds,
+          accepted: z
+            .boolean()
+            .optional()
+            .describe("Explicit acceptance of the task criteria; complete_task requires true."),
+        },
         annotations: WRITE,
       },
       async (input) =>
@@ -1059,7 +1077,7 @@ export function createGitEdgeMcpServer(api: GitEdgeApi, logger: Logger): McpServ
               "POST",
               apiPath("forge", "repositories", repo.id, "tasks", input.number, action),
               TaskDetailSchema,
-              { body: { ttlSeconds: input.ttlSeconds } }
+              { body: { ttlSeconds: input.ttlSeconds, accepted: input.accepted } }
             )
           );
         })
@@ -1069,14 +1087,11 @@ export function createGitEdgeMcpServer(api: GitEdgeApi, logger: Logger): McpServ
     "update_task",
     {
       description:
-        "Change a task's status, title, motivation or description. Needs the issues:write scope.",
+        "Change a task's status, content or acceptance criteria. A blocked task needs a reason; done needs accepted: true. Needs the issues:write scope.",
       inputSchema: {
         repository,
         number: itemNumber,
-        status: TaskStatusSchema.optional(),
-        title: z.string().min(1).max(200).optional(),
-        motivation: z.string().max(5_000).optional(),
-        description: z.string().max(20_000).optional(),
+        ...UpdateTaskInputSchema.shape,
       },
       annotations: WRITE,
     },

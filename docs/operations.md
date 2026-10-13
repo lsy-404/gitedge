@@ -8,7 +8,7 @@ Runbook for backup, restore, migration and incident response. Run commands from 
 | ------------------------------------------------------------------------- | ---------------------------------- | ------------------------------------ |
 | Accounts, sessions, credential hashes, Issues, PRs, reviews, checks, wiki | D1 database `gitedge`              | D1 Time Travel, SQL export           |
 | Git objects and refs                                                      | Cloudflare Artifacts               | Git mirrors you keep (see below)     |
-| Release assets                                                            | R2 bucket `gitedge-release-assets` | Not versioned; re-upload from builds |
+| Release assets and Actions output                                         | R2 bucket `gitedge-release-assets` | Not versioned; re-upload from builds |
 | Rate-limit windows                                                        | `gitedge-limits` Durable Objects   | Disposable; resets after one minute  |
 | Action run state                                                          | `gitedge-actions` Durable Objects  | Disposable; rerun the workflow       |
 | Worker secrets                                                            | Cloudflare secrets                 | Re-enter from your secret store      |
@@ -47,7 +47,7 @@ To restore from a file into a new database, create the database, then run `pnpm 
 
 ## Verified backup and isolated rehearsal
 
-Use the repository CLI to capture D1 SQL and its Time Travel bookmark, mirror every D1-mapped Artifacts repository and agent session fork, and copy every release asset. It records SHA-256 hashes, mirror refs, repository mappings, start/end timestamps, and a before/after inventory fingerprint. D1, Artifacts, and R2 do not share an atomic snapshot; if inventory changes or any component fails, the command exits with status 2 and marks the manifest incomplete. Treat the SQL and release files as sensitive data. Keep the backup directory encrypted and access-controlled.
+Use the repository CLI to capture D1 SQL and its Time Travel bookmark, mirror every D1-mapped Artifacts repository and agent session fork, and copy every tracked release asset, Actions artifact and dependency cache. It records SHA-256 hashes, mirror refs, repository mappings, start/end timestamps, and a before/after inventory fingerprint. D1, Artifacts, and R2 do not share an atomic snapshot; if inventory changes or any component fails, the command exits with status 2 and marks the manifest incomplete. Treat the SQL and release files as sensitive data. Keep the backup directory encrypted and access-controlled.
 
 Set `CLOUDFLARE_ACCOUNT_ID` for the source account, `CLOUDFLARE_API_TOKEN` with Artifacts token creation/read access, and authenticate Wrangler for the same account. The CLI creates a 10-minute read token for each Artifacts repository and session fork, passes it only in the Git child process environment, then revokes it. It does not depend on agent-session plaintext credentials. A token revocation failure is surfaced as a backup failure. Prepare a brand-new empty destination D1 database, a destination Wrangler config whose account and D1 IDs point to it, an empty Artifacts namespace, and a distinct empty R2 bucket before a rehearsal.
 

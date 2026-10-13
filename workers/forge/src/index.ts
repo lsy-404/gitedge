@@ -1505,6 +1505,12 @@ async function featureRequest(
         const p = parsed.data;
         const now = Date.now();
         const stateChanged = p.state !== undefined && p.state !== current.state;
+        if (stateChanged && current.locked_at != null)
+          return errorResponse(
+            409,
+            "pull_locked",
+            "Manually unlock the pull request before changing its state."
+          );
         const updateApplied = {
           sql: "EXISTS (SELECT 1 FROM forge_pull_requests WHERE id = ? AND updated_at = ?)",
           binds: [current.id, now],
@@ -1601,6 +1607,9 @@ async function featureRequest(
           number,
           state: p.state ?? current.state,
         });
+        if (p.state === "open" || p.draft === false) {
+          await triggerPullActions(env, String(current.id));
+        }
       } else {
         const denied = requireMember();
         if (denied) return denied;

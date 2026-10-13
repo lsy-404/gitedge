@@ -103,8 +103,12 @@ export async function searchCode(
     }
     const file = await repo.readFile({ ref: oid, path: filePath });
     if (!file) return;
-    if (file.size > CODE_SEARCH_LIMITS.fileBytes || bytes + file.size > CODE_SEARCH_LIMITS.bytes) {
+    if (file.size > CODE_SEARCH_LIMITS.fileBytes) {
       nextCursor = cursorFor(filePath, "skip-file");
+      return;
+    }
+    if (bytes + file.size > CODE_SEARCH_LIMITS.bytes) {
+      nextCursor = cursorFor(filePath, 0);
       return;
     }
     inspected += 1;

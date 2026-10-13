@@ -610,9 +610,9 @@ export async function handlePushEvent(
   let actorJson: string;
   if (sessionId) {
     const session = await env.DB.prepare(
-      "SELECT s.id AS sessionId, s.user_id AS id, u.identifier, s.agent_id AS agentId, a.name AS agentName, s.repository_id AS repositoryId, s.workspace_name AS workspaceName, s.permission FROM auth_agent_sessions s JOIN auth_agents a ON a.id = s.agent_id AND a.user_id = s.user_id JOIN users u ON u.id = s.user_id AND u.disabled_at IS NULL JOIN auth_git_tokens t ON t.id = s.git_token_id AND t.user_id = s.user_id AND t.repository_id = s.repository_id AND t.permission = s.permission JOIN repositories r ON r.id = s.repository_id AND r.deleted_at IS NULL AND r.agents_enabled = 1 WHERE s.id = ? AND s.repository_id = ? AND s.user_id = ? AND s.permission = 'write' AND s.status = 'active' AND s.expires_at > ? AND a.disabled_at IS NULL AND t.revoked_at IS NULL AND t.expires_at > ?"
+      "SELECT s.id AS sessionId, s.user_id AS id, u.identifier, s.agent_id AS agentId, a.name AS agentName, s.repository_id AS repositoryId, s.workspace_name AS workspaceName, s.permission FROM auth_agent_sessions s JOIN auth_agents a ON a.id = s.agent_id AND a.user_id = s.user_id JOIN users u ON u.id = s.user_id AND u.disabled_at IS NULL JOIN repositories r ON r.id = s.repository_id AND r.deleted_at IS NULL AND r.agents_enabled = 1 WHERE s.id = ? AND s.repository_id = ? AND s.user_id = ? AND s.permission = 'write' AND s.status = 'active' AND s.expires_at > ? AND a.disabled_at IS NULL"
     )
-      .bind(sessionId, repository.id, parsed.data.pusherId, now, now)
+      .bind(sessionId, repository.id, parsed.data.pusherId, now)
       .first<SessionPushActorRow>();
     if (!session || !(await isMember(env, repository.id, session.id)))
       return errorResponse(403, "forbidden", "Invalid agent session push.");

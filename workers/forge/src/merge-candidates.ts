@@ -188,6 +188,13 @@ export async function ensureMergeCandidate(
         "merge_ci_unavailable",
         "Add a supported merge_group workflow to the target branch."
       );
+    const refreshed = await env.DB.prepare(
+      "SELECT expected_workflows FROM forge_merge_candidates WHERE id = ?"
+    )
+      .bind(row.id)
+      .first<{ expected_workflows: string }>();
+    if (!refreshed) throw new Error("Candidate record disappeared while starting CI.");
+    row.expected_workflows = refreshed.expected_workflows;
     state = await candidateState(env, row);
   }
   const rules = matchingBranchRules(

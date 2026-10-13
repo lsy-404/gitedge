@@ -1,0 +1,35 @@
+name: GitEdge verification
+on:
+  push:
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+cache:
+  keyFiles:
+    - pnpm-lock.yaml
+    - apps/web/pnpm-lock.yaml
+  paths:
+    - .pnpm-store
+jobs:
+  verify:
+    steps:
+      - name: Install dependencies
+        run: pnpm --store-dir /workspace/.pnpm-store install --frozen-lockfile && pnpm --dir apps/web --store-dir /workspace/.pnpm-store install --frozen-lockfile
+      - name: Check migrations
+        run: pnpm run check:migrations
+      - name: Check types
+        run: pnpm run typecheck
+      - name: Unit tests
+        run: pnpm run test
+      - name: Worker tests
+        run: pnpm run test:workers
+      - name: Web tests
+        run: pnpm run test:web
+      - name: Build web application
+        run: pnpm run build:web
+      - name: Check formatting
+        run: pnpm run format:check
+    artifacts:
+      - name: web-build
+        paths:
+          - apps/web/dist

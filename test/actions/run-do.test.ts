@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ActionJob } from "../../packages/contracts/src/actions";
-import { ActionRun } from "../../workers/actions/src/run";
+import { ActionRun, type ActionRunInput } from "../../workers/actions/src/run";
 
 class MemoryStorage {
   private readonly values = new Map<string, unknown>();
@@ -55,7 +55,7 @@ function workflowJobs(run = "printf action-ok"): ActionJob[] {
   ];
 }
 
-function actionInput(jobs = workflowJobs()) {
+function actionInput(jobs = workflowJobs()): ActionRunInput {
   return {
     id: "run-1",
     repositoryId: "repo-1",
@@ -66,6 +66,12 @@ function actionInput(jobs = workflowJobs()) {
     createdBy: "user-1",
     createdAt: Date.now(),
     enableInternet: false,
+    eventType: "workflow_dispatch",
+    cacheKey: null,
+    cacheOutcome: "disabled",
+    cachePaths: [],
+    cachedArchiveSha256: null,
+    artifactsToCapture: [],
     jobs,
     fileCount: 1,
   };
@@ -99,6 +105,7 @@ function makeAction(
   };
   const starts: Array<Record<string, unknown>> = [];
   const container = {
+    images: { runtime: "gitedge-runtime-fixture" },
     get running() {
       return running;
     },
@@ -167,7 +174,7 @@ describe("ActionRun Durable Object lifecycle", () => {
     const fixture = makeAction();
     const files = [{ path: "package.json", contentBase64: "e30=", mode: "100644" }];
     const chunks = [JSON.stringify(files)];
-    await fixture.action.initialize(actionInput(), chunks.length);
+    await fixture.action.initialize(actionInput(), chunks.length, 0);
     await fixture.action.writeInputChunk(0, chunks[0] ?? "");
     await fixture.action.schedule();
     await fixture.action.alarm();
@@ -178,7 +185,7 @@ describe("ActionRun Durable Object lifecycle", () => {
     expect(run?.jobs[0]?.steps[0]?.log).toContain("action-ok");
     expect(JSON.parse(fixture.getInput())).toEqual(files);
     expect(fixture.starts[0]).toMatchObject({
-      image: "cloudflare/debian-trixie",
+      image: "gitedge-runtime-fixture",
       instance: "lite",
       enableInternet: false,
     });
@@ -187,7 +194,7 @@ describe("ActionRun Durable Object lifecycle", () => {
   it("cancels the active command and records a cancelled run", async () => {
     const fixture = makeAction({ blockStep: true });
     const chunks = [JSON.stringify([{ path: "entry.js", contentBase64: "", mode: "100644" }])];
-    await fixture.action.initialize(actionInput(workflowJobs("sleep 600")), chunks.length);
+    await fixture.action.initialize(actionInput(workflowJobs("sleep 600")), chunks.length, 0);
     await fixture.action.writeInputChunk(0, chunks[0] ?? "");
     await fixture.action.schedule();
 
@@ -214,7 +221,7 @@ describe("ActionRun Durable Object lifecycle", () => {
       stdoutChunks: [bytes.slice(0, emojiStart + 2), bytes.slice(emojiStart + 2)],
     });
     const chunks = [JSON.stringify([{ path: "entry.js", contentBase64: "", mode: "100644" }])];
-    await fixture.action.initialize(actionInput(), chunks.length);
+    await fixture.action.initialize(actionInput(), chunks.length, 0);
     await fixture.action.writeInputChunk(0, chunks[0] ?? "");
     await fixture.action.schedule();
     await fixture.action.alarm();
@@ -240,7 +247,7 @@ describe("ActionRun Durable Object lifecycle", () => {
     ];
     const fixture = makeAction({ stderr: "e".repeat(20 * 1024), exitCode: 1 });
     const chunks = [JSON.stringify([{ path: "entry.js", contentBase64: "", mode: "100644" }])];
-    await fixture.action.initialize(actionInput(jobs), chunks.length);
+    await fixture.action.initialize(actionInput(jobs), chunks.length, 0);
     await fixture.action.writeInputChunk(0, chunks[0] ?? "");
     await fixture.action.schedule();
     await fixture.action.alarm();
@@ -264,14 +271,14 @@ describe("ActionRun Durable Object lifecycle", () => {
   it("finishes a run whose alarm state outlives the hard timeout", async () => {
     const fixture = makeAction();
     const chunks = [JSON.stringify([{ path: "entry.js", contentBase64: "", mode: "100644" }])];
-    await fixture.action.initialize(actionInput(), chunks.length);
+    await fixture.action.initialize(actionInput(), chunks.length, 0);
     await fixture.action.writeInputChunk(0, chunks[0] ?? "");
     const queued = await fixture.action.getRun();
     if (!queued) throw new Error("Expected a queued run.");
     await fixture.storage.put("run", {
       ...queued,
       status: "running",
-      startedAt: Date.now() - 150_001,
+      startedAt: Date.now() - 630_001,
       jobs: queued.jobs.map((job) => ({
         ...job,
         status: "running",
@@ -283,15 +290,16 @@ describe("ActionRun Durable Object lifecycle", () => {
 
     expect(run?.status).toBe("completed");
     expect(run?.conclusion).toBe("failure");
-    expect(run?.jobs[0]?.steps[0]?.log).toContain("120 seconds");
+    expect(run?.jobs[0]?.steps[0]?.log).toContain("10 minutes");
   });
 
   it("terminates a queued run that never starts", async () => {
     const fixture = makeAction();
     const chunks = [JSON.stringify([{ path: "entry.js", contentBase64: "", mode: "100644" }])];
     await fixture.action.initialize(
-      { ...actionInput(), createdAt: Date.now() - 150_001 },
-      chunks.length
+      { ...actionInput(), createdAt: Date.now() - 630_001 },
+      chunks.length,
+      0
     );
     await fixture.action.writeInputChunk(0, chunks[0] ?? "");
 

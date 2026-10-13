@@ -6,7 +6,7 @@
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "lib": ["ES2022", "WebWorker"],
+    "lib": ["ES2022", "WebWorker", "ESNext.Disposable"],
     "types": ["@cloudflare/workers-types"],
     "verbatimModuleSyntax": true,
     "noUnusedLocals": true,

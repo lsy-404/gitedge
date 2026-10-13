@@ -44,6 +44,7 @@ const MAX_SNAPSHOT_FILES = 2048;
 const MAX_SNAPSHOT_BYTES = 24 * 1024 * 1024;
 const MAX_ARCHIVE_BYTES = 24 * 1024 * 1024;
 const TRANSFER_CHUNK_BYTES = 48 * 1024;
+const MAX_TRANSFER_CHUNKS = 768;
 const MAX_CACHE_ENTRIES_PER_REPOSITORY = 5;
 const MAX_RUN_LIST = 20;
 const CHECK_SCAN_LIMIT = 20;
@@ -563,14 +564,21 @@ async function publishActionOutputs(
       continue;
     }
     try {
-      await env.RELEASE_ASSETS.put(objectKey, outputBody(stub, output), {
-        httpMetadata: {
-          contentType: "application/gzip",
-          contentDisposition:
-            output.kind === "artifact" ? `attachment; filename="${output.name}.tar.gz"` : undefined,
-        },
-        customMetadata: { sha256: output.sha256, runId },
-      });
+      const transfer = new FixedLengthStream(output.size);
+      const copying = outputBody(stub, output).pipeTo(transfer.writable);
+      await Promise.all([
+        copying,
+        env.RELEASE_ASSETS.put(objectKey, transfer.readable, {
+          httpMetadata: {
+            contentType: "application/gzip",
+            contentDisposition:
+              output.kind === "artifact"
+                ? `attachment; filename="${output.name}.tar.gz"`
+                : undefined,
+          },
+          customMetadata: { sha256: output.sha256, runId },
+        }),
+      ]);
       if (output.kind === "cache") {
         if (!row.lockfile_hash || !row.cache_event_type || !row.cache_key) {
           await stub.markCacheFailed();
@@ -900,7 +908,8 @@ async function queueActionRun(
     eventType: ActionEventType;
     pullRequestId?: string;
     candidateId?: string;
-  } = { eventType: "push" }
+  } = { eventType: "push" },
+  transferBudget = { remaining: MAX_TRANSFER_CHUNKS }
 ): Promise<QueueActionResult> {
   ref = ref.replace(/^refs\/heads\//, "");
   if (context.candidateId) {
@@ -915,11 +924,21 @@ async function queueActionRun(
       return {
         ok: false,
         status: 503,
-        code: "candidate_run_pending",
+        code: "internal_error",
         message: "Candidate run initialization is pending.",
       };
     }
   }
+  const inputChunks = Math.ceil(snapshotJsonLength(snapshot.files) / TRANSFER_CHUNK_BYTES);
+  if (inputChunks > transferBudget.remaining)
+    return {
+      ok: false,
+      status: 413,
+      code: "conflict",
+      message:
+        "Workflow source transfers exceed this event's limit. Reduce the source size or workflow count.",
+    };
+  transferBudget.remaining -= inputChunks;
   const eventType = context.eventType;
   const cacheIdentity = await cacheKeyFor(repositoryId, ref, eventType, workflow, snapshot);
   const cacheOutcome: ActionCacheOutcome = workflow.cache ? "miss" : "disabled";
@@ -987,7 +1006,13 @@ async function queueActionRun(
 
   let cachedObject: R2ObjectBody | null = null;
   let resolvedCacheOutcome: ActionCacheOutcome = cacheOutcome;
-  if (cacheEntry && cacheEntry.size > 0 && cacheEntry.size <= MAX_ARCHIVE_BYTES) {
+  if (cacheEntry && Math.ceil(cacheEntry.size / TRANSFER_CHUNK_BYTES) > transferBudget.remaining) {
+    resolvedCacheOutcome = "failed";
+    createLogger(env.LOG_LEVEL, { service: "actions", repoId: repositoryId, doId: id }).warn(
+      "actions:cache-transfer-limited",
+      { size: cacheEntry.size }
+    );
+  } else if (cacheEntry && cacheEntry.size > 0 && cacheEntry.size <= MAX_ARCHIVE_BYTES) {
     try {
       cachedObject = await env.RELEASE_ASSETS.get(cacheEntry.object_key);
       if (!cachedObject || cachedObject.size !== cacheEntry.size) {
@@ -1022,9 +1047,9 @@ async function queueActionRun(
       .run();
   }
   const cacheChunks = cachedObject ? Math.ceil(cachedObject.size / TRANSFER_CHUNK_BYTES) : 0;
+  transferBudget.remaining -= cacheChunks;
   const artifactsToCapture = workflow.jobs.flatMap((job) => job.artifacts ?? []);
 
-  const inputChunks = Math.ceil(snapshotJsonLength(snapshot.files) / TRANSFER_CHUNK_BYTES);
   const input: ActionRunInput = {
     id,
     repositoryId,
@@ -1034,8 +1059,7 @@ async function queueActionRun(
     ref,
     createdBy: user.id,
     createdAt: now,
-    enableInternet:
-      context.eventType === "pull_request" ? false : repo.actions_network_enabled === 1,
+    enableInternet: repo.actions_network_enabled === 1,
     eventType,
     cacheKey: cacheIdentity?.cacheKey ?? null,
     cacheOutcome: cachedObject ? "hit" : resolvedCacheOutcome,
@@ -1217,6 +1241,7 @@ async function handleInternalPush(request: Request, env: ActionsEnv): Promise<Re
   }
   const runs: ActionRunSummary[] = [];
   const failures: Array<{ path: string; message: string }> = [];
+  const transferBudget = { remaining: MAX_TRANSFER_CHUNKS };
   for (const workflow of triggered) {
     const result = await queueActionRun(
       env,
@@ -1226,7 +1251,8 @@ async function handleInternalPush(request: Request, env: ActionsEnv): Promise<Re
       body.ref,
       snapshot,
       workflow,
-      { eventType: "push" }
+      { eventType: "push" },
+      transferBudget
     );
     if (result.ok) runs.push(result.summary);
     else failures.push({ path: workflow.path, message: result.message });
@@ -1284,7 +1310,7 @@ async function handleInternalProposal(
   const snapshot = await repositorySnapshot(
     env,
     repo.id,
-    ref,
+    candidate?.result_oid ?? ref,
     candidate?.result_oid ?? undefined,
     user,
     candidate ? null : pull.head_session_id
@@ -1296,7 +1322,7 @@ async function handleInternalProposal(
     candidate?.base_oid,
     user
   );
-  const files = workflowFiles(definitions);
+  const files = workflowFiles(definitions.files);
   const triggered: ActionWorkflow[] = [];
   for (const file of files) {
     const source = snapshotFile(definitions, file.path);
@@ -1312,12 +1338,23 @@ async function handleInternalProposal(
       .run();
   const runs: ActionRunSummary[] = [];
   const failures: Array<{ path: string; message: string }> = [];
+  const transferBudget = { remaining: MAX_TRANSFER_CHUNKS };
   for (const workflow of triggered) {
-    const result = await queueActionRun(env, repo, user, repo.id, ref, snapshot, workflow, {
-      eventType,
-      pullRequestId: pull.id,
-      candidateId: candidate?.id,
-    });
+    const result = await queueActionRun(
+      env,
+      repo,
+      user,
+      repo.id,
+      ref,
+      snapshot,
+      workflow,
+      {
+        eventType,
+        pullRequestId: pull.id,
+        candidateId: candidate?.id,
+      },
+      transferBudget
+    );
     if (result.ok) runs.push(result.summary);
     else failures.push({ path: workflow.path, message: result.message });
   }
