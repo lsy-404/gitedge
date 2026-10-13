@@ -45,6 +45,28 @@ An export blocks other queries on the database while it runs, so schedule it in 
 
 To restore from a file into a new database, create the database, then run `pnpm exec wrangler d1 execute <name> --remote --file backups/<file>.sql`, update `database_id` in the Worker configs, and redeploy.
 
+## Verified backup and isolated rehearsal
+
+Use the repository CLI to capture D1 SQL and its Time Travel bookmark, mirror every D1-mapped Artifacts repository and agent session fork, and copy every release asset. It records SHA-256 hashes, mirror refs, repository mappings, start/end timestamps, and a before/after inventory fingerprint. D1, Artifacts, and R2 do not share an atomic snapshot; if inventory changes or any component fails, the command exits with status 2 and marks the manifest incomplete. Treat the SQL and release files as sensitive data. Keep the backup directory encrypted and access-controlled.
+
+Set `CLOUDFLARE_ACCOUNT_ID` for the source account, `CLOUDFLARE_API_TOKEN` with Artifacts token creation/read access, and authenticate Wrangler for the same account. The CLI creates a 10-minute read token for each Artifacts repository and session fork, passes it only in the Git child process environment, then revokes it. It does not depend on agent-session plaintext credentials. A token revocation failure is surfaced as a backup failure. Prepare a brand-new empty destination D1 database, a destination Wrangler config whose account and D1 IDs point to it, an empty Artifacts namespace, and a distinct empty R2 bucket before a rehearsal.
+
+```sh
+pnpm run recovery -- backup --output /secure/backups/gitedge-20261012 --base-url https://gitedge.example
+pnpm run recovery -- verify --backup /secure/backups/gitedge-20261012
+pnpm run recovery -- rehearse --backup /secure/backups/gitedge-20261012 \
+  --destination-db gitedge-rehearsal \
+  --destination-config workers/auth/wrangler-rehearsal.jsonc \
+  --destination-base-url https://gitedge-rehearsal.example \
+  --destination-release-bucket gitedge-rehearsal-release-assets \
+  --destination-account-id "$CLOUDFLARE_ACCOUNT_ID" \
+  --destination-artifacts-namespace gitedge-rehearsal
+```
+
+The rehearsal refuses the source D1 ID/name, source GitEdge host, source R2 bucket, and source Artifacts namespace. It restores only to the named resources, creates repository and session-fork mirrors in the empty destination namespace, and revokes temporary Git tokens. Do not point destination config at production. After the command succeeds, verify the D1 `repositories` IDs and `artifact_name` values against destination mirrors, inspect refs, check release asset counts and hashes, deploy the rehearsal workers against destination bindings, then exercise sign-in, repository listing, clone/push, session fork access, release downloads, and a representative collaboration flow. Destroy the rehearsal resources only after recording those results.
+
+`verify` checks every file size/hash and runs `git fsck --full` plus ref comparison for every mirror. A successful verification proves the local backup bytes are intact; it does not prove a real Cloudflare restore or application recovery. No account-backed backup or recovery rehearsal is run as part of build or CI.
+
 ## Artifacts repositories
 
 The Artifacts binding exposes repositories only through Git: there is no bulk export or snapshot API. Protect Git data with mirrors that you control.
