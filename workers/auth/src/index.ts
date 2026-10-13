@@ -477,7 +477,9 @@ async function createGithubUser(
   return user;
 }
 
-function githubOAuthConfigured(env: AuthEnv): boolean {
+type GithubOAuthEnv = AuthEnv & { GITHUB_CLIENT_ID: string; GITHUB_CLIENT_SECRET: string };
+
+function githubOAuthConfigured(env: AuthEnv): env is GithubOAuthEnv {
   return Boolean(
     env.GITHUB_CLIENT_ID &&
     env.GITHUB_CLIENT_ID !== "set-with-wrangler-secret-or-vars" &&
@@ -487,8 +489,8 @@ function githubOAuthConfigured(env: AuthEnv): boolean {
 
 export async function startGithubOAuth(request: Request, env: AuthEnv): Promise<Response> {
   const logger = createLogger(env.LOG_LEVEL, { service: "auth" });
-  if (!env.GITHUB_CLIENT_ID || env.GITHUB_CLIENT_ID === "set-with-wrangler-secret-or-vars") {
-    logger.error("github-oauth:missing-client-id");
+  if (!githubOAuthConfigured(env)) {
+    logger.error("github-oauth:missing-client-config");
     return errorResponse(503, "bad_request", "GitHub sign-in is not configured.");
   }
   const url = new URL(request.url);
@@ -534,11 +536,7 @@ export async function startGithubOAuth(request: Request, env: AuthEnv): Promise<
 
 export async function completeGithubOAuth(request: Request, env: AuthEnv): Promise<Response> {
   const logger = createLogger(env.LOG_LEVEL, { service: "auth" });
-  if (
-    !env.GITHUB_CLIENT_ID ||
-    env.GITHUB_CLIENT_ID === "set-with-wrangler-secret-or-vars" ||
-    !env.GITHUB_CLIENT_SECRET
-  ) {
+  if (!githubOAuthConfigured(env)) {
     logger.error("github-oauth:missing-client-config");
     return errorResponse(503, "bad_request", "GitHub sign-in is not configured.");
   }

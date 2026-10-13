@@ -324,12 +324,9 @@ if (!sessionState.checked) void refreshSession();
             <AppIcon name="search" />
           </button>
           <div class="global-actions">
-            <RouterLink
-              v-if="landingPage && !sessionState.user"
-              class="btn btn-primary landing-signin"
-              to="/login"
-              >{{ t("signIn") }}</RouterLink
-            >
+            <RouterLink v-if="landingPage && !sessionState.user" class="btn" to="/login">{{
+              t("signIn")
+            }}</RouterLink>
             <template v-if="sessionState.user && !guestView && !authPage">
               <RouterLink
                 class="btn icon-button notification-bell"

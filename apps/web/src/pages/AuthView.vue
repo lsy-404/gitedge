@@ -192,7 +192,10 @@ async function cancelAddingAccount() {
     </div>
     <div v-else class="auth-card">
       <NoticeBar v-if="callbackError" intent="error">{{ callbackError }}</NoticeBar>
-      <div class="auth-provider-list">
+      <div
+        v-if="githubEnabled || federationProviders.length || providersError || samlProviders.length"
+        class="auth-provider-list"
+      >
         <FluentButton
           v-if="githubEnabled"
           type="button"
