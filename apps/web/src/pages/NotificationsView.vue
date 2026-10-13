@@ -158,7 +158,7 @@ onMounted(load);
 </script>
 
 <template>
-  <section class="notifications-page">
+  <section class="workspace-page notifications-page">
     <header class="workspace-page-heading">
       <div>
         <h1>{{ t("notifications") }}</h1>

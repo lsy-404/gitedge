@@ -781,7 +781,8 @@ sessionClockTimer = window.setInterval(() => {
 .credential-card {
   display: grid;
   gap: var(--space-3);
-  min-width: min(560px, 80vw);
+  min-width: 0;
+  width: 100%;
 }
 .credential-field {
   display: grid;
@@ -794,6 +795,8 @@ sessionClockTimer = window.setInterval(() => {
 .credential-card code,
 .credential-card pre {
   display: block;
+  max-width: 100%;
+  overflow-x: auto;
   margin: 0;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
