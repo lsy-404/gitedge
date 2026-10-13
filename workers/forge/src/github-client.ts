@@ -29,13 +29,14 @@ export async function githubRequest(
   method = "GET",
   body?: unknown
 ): Promise<unknown> {
+  const url = new URL(path, "https://api.github.com");
   if (
     (!path.startsWith("/repos/") && !(path === "/graphql" && method === "POST")) ||
-    path.includes("..") ||
+    url.pathname !== path.split("?")[0] ||
     path.includes("\\")
   )
     throw new Error("invalid_github_path");
-  const response = await fetch(`https://api.github.com${path}`, {
+  const response = await fetch(url, {
     method,
     headers: {
       Accept: "application/vnd.github+json",
