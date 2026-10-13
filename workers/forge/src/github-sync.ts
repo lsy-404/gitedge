@@ -264,16 +264,12 @@ export async function drainGithubSync(env: ForgeEnv): Promise<void> {
             const input = PushSchema.extend({ before: PushSchema.shape.before.nullable() }).parse(JSON.parse(job.payload));
             if (!/^refs\/(heads|tags)\//.test(input.ref)) status = "ignored";
             else {
-              const result = await syncGithubRef(env, claimed, credentials, job, { ...input, targetRef: input.ref });
+              const linked = job.direction === "inbound"
+                ? await env.DB.prepare("SELECT p.id,p.head_ref FROM forge_pull_requests p JOIN forge_github_mappings m ON m.local_id=p.id AND m.kind='pull_request' AND m.connection_id=? WHERE p.repository_id=? AND 'refs/heads/gitedge/pr/'||p.number=? AND p.state='open'")
+                    .bind(claimed.id,claimed.repository_id,input.ref).first<{id:string;head_ref:string}>()
+                : null;
+              const result = await syncGithubRef(env, claimed, credentials, job, { ...input, targetRef: linked ? `refs/heads/${linked.head_ref}` : input.ref, ...(linked ? {pullRequestId:linked.id} : {}) });
               if (result.status === "stale") status = "ignored";
-              else if (job.direction === "inbound") {
-                const response = await env.GIT.fetch(new Request("https://git.internal/internal/github-sync/report", {
-                  method: "POST", headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ connectionId: claimed.id, jobId: job.id, lease, token: credentials.token, ...result }),
-                }));
-                if (!response.ok) { await response.body?.cancel(); throw new Error("github_push_report_failed"); }
-                await response.body?.cancel();
-              }
             }
           } else status = await syncGithubCollaboration(env, claimed, credentials, job);
           await env.DB.batch([

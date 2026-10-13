@@ -27,10 +27,17 @@ export async function syncGithubRef(
   input: { ref: string; targetRef: string; before: string | null; after: string; pullRequestId?: string }
 ): Promise<GitHubSyncTransferResult> {
   if (!job.lease) throw new Error("github_job_unclaimed");
-  return ResultSchema.parse(await gitRequest(env, "", {
+  const result = ResultSchema.parse(await gitRequest(env, "", {
     connectionId: connection.id, jobId: job.id, lease: job.lease, token: credentials.token,
     direction: job.direction, ...input,
   })).data;
+  if (job.direction === "inbound" && result.status !== "stale") {
+    await gitRequest(env,"/report",{
+      connectionId:connection.id,jobId:job.id,lease:job.lease,token:credentials.token,
+      ...result,...(input.pullRequestId ? {pullRequestId:input.pullRequestId} : {}),
+    });
+  }
+  return result;
 }
 export async function githubSyncRefs(env: ForgeEnv, connection: GithubConnectionRow, credentials: GithubCredentials, job: GithubJobRow) {
   return RefListSchema.parse(await gitRequest(env, "/refs", {

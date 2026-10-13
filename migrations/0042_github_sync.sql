@@ -36,6 +36,17 @@ CREATE TABLE forge_github_jobs (
 );
 CREATE INDEX idx_github_jobs_due ON forge_github_jobs(status, next_attempt_at);
 CREATE INDEX idx_github_jobs_connection ON forge_github_jobs(connection_id, created_at DESC);
+CREATE TABLE forge_github_ref_transfers (
+  job_id TEXT NOT NULL REFERENCES forge_github_jobs(id) ON DELETE CASCADE,
+  artifact_name TEXT NOT NULL,
+  repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+  session_id TEXT,
+  ref TEXT NOT NULL,
+  before_oid TEXT NOT NULL,
+  after_oid TEXT NOT NULL,
+  reported_at INTEGER,
+  PRIMARY KEY (job_id, artifact_name, ref, after_oid)
+);
 CREATE TABLE forge_github_mappings (
   connection_id TEXT NOT NULL REFERENCES forge_github_connections(id) ON DELETE CASCADE,
   kind TEXT NOT NULL CHECK (kind IN ('issue', 'pull_request', 'comment', 'review', 'review_comment')),
