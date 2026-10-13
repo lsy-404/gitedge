@@ -9,6 +9,9 @@ import {
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
 import type {
+  ActionRunArtifact,
+  ActionEventType,
+  ActionCacheOutcome,
   ActionRun as ActionRunDetails,
   ActionRunSummary,
   ActionWorkflow,
@@ -20,15 +23,28 @@ import type {
 } from "../../../packages/contracts/src/repository-controls";
 import { createLogger } from "../../../src/worker/common/logger";
 import { repositoryRole, writableRole } from "../../../src/worker/common/repositories";
-import { parseWorkflow, WorkflowValidationError } from "./workflow";
-import { ActionRun as ActionRunDurableObject, type ActionRunInput } from "./run";
-import { base64ToBytes } from "../../../src/worker/common/encoding";
+import {
+  isActionWorkflowPath,
+  parseWorkflow,
+  WorkflowValidationError,
+  workflowFiles,
+  workflowMatchesEvent,
+} from "./workflow";
+import {
+  ActionRun as ActionRunDurableObject,
+  type ActionOutputMetadata,
+  type ActionRunInput,
+} from "./run";
+import { base64ToBytes, bytesToBase64 } from "../../../src/worker/common/encoding";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 
 export { ActionRunDurableObject as ActionRun };
 
-const MAX_SNAPSHOT_FILES = 128;
-const MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024;
+const MAX_SNAPSHOT_FILES = 2048;
+const MAX_SNAPSHOT_BYTES = 24 * 1024 * 1024;
+const MAX_ARCHIVE_BYTES = 24 * 1024 * 1024;
+const TRANSFER_CHUNK_BYTES = 48 * 1024;
+const MAX_CACHE_ENTRIES_PER_REPOSITORY = 5;
 const MAX_RUN_LIST = 20;
 const CHECK_SCAN_LIMIT = 20;
 const CHECK_RETRY_MS = 60_000;
@@ -38,6 +54,7 @@ interface ActionsEnv extends Cloudflare.Env {
   readonly DB: D1Database;
   readonly GIT: Fetcher;
   readonly FORGE: Fetcher;
+  readonly RELEASE_ASSETS: R2Bucket;
   readonly LOG_LEVEL?: string;
 }
 
@@ -59,12 +76,36 @@ interface PendingCheckRow {
   readonly check_conclusion: "success" | "failure" | "cancelled" | null;
 }
 
+interface CacheEntryRow {
+  readonly object_key: string;
+  readonly size: number;
+  readonly sha256: string;
+}
+
+interface ArtifactRow {
+  readonly name: string;
+  readonly object_key: string;
+  readonly size: number;
+  readonly sha256: string;
+  readonly created_at: number;
+}
+
 interface ActionRunStub {
   isContainerConfigured(): Promise<boolean>;
-  initialize(input: ActionRunInput, chunks: number): Promise<void>;
+  initialize(input: ActionRunInput, chunks: number, cacheChunks: number): Promise<void>;
   writeInputChunk(index: number, chunk: string): Promise<void>;
+  writeCacheChunk(index: number, chunk: string): Promise<void>;
+  discardCacheInput(): Promise<void>;
   schedule(): Promise<void>;
   getRun(): Promise<ActionRunDetails | null>;
+  getOutputMetadata(): Promise<readonly ActionOutputMetadata[]>;
+  readOutputChunk(name: string, index: number): Promise<string | null>;
+  markOutputPublished(name: string, artifact: ActionRunArtifact | null): Promise<void>;
+  markArtifactFailed(name: string, message: string): Promise<void>;
+  markArtifactSkipped(name: string): Promise<void>;
+  markCacheSaved(): Promise<void>;
+  markCacheFailed(): Promise<void>;
+  setCacheOutcome(outcome: ActionCacheOutcome): Promise<void>;
   cancel(): Promise<ActionRunDetails | null>;
   failStaleRun(): Promise<ActionRunDetails | null>;
 }
@@ -158,7 +199,7 @@ function validateSnapshot(value: unknown): RepositorySnapshot {
     data.totalBytes < 0 ||
     data.totalBytes > MAX_SNAPSHOT_BYTES
   )
-    throw new Error("Repository snapshot exceeds supported limits.");
+    throw new Error("Repository snapshot exceeds 2,048 files or 24 MiB.");
   let actualBytes = 0;
   const seen = new Set<string>();
   const files: RepositorySnapshotFile[] = [];
@@ -185,7 +226,7 @@ function validateSnapshot(value: unknown): RepositorySnapshot {
     }
     const encoded = atob(entry.contentBase64);
     actualBytes += encoded.length;
-    if (actualBytes > MAX_SNAPSHOT_BYTES) throw new Error("Repository snapshot exceeds 4 MiB.");
+    if (actualBytes > MAX_SNAPSHOT_BYTES) throw new Error("Repository snapshot exceeds 24 MiB.");
     files.push({ path: entry.path, contentBase64: entry.contentBase64, mode: entry.mode });
   }
   if (actualBytes !== data.totalBytes)
@@ -216,7 +257,45 @@ async function repositorySnapshot(
         ? "Commit was not found in this repository."
         : "Unable to load repository source."
     );
-  return validateSnapshot(await response.json());
+  return validateSnapshot(await readResponseJsonLimited(response, 40 * 1024 * 1024));
+}
+
+async function readResponseJsonLimited(response: Response, maximumBytes: number): Promise<unknown> {
+  const contentLength = Number(response.headers.get("Content-Length"));
+  if (Number.isFinite(contentLength) && contentLength > maximumBytes) {
+    await response.body?.cancel();
+    throw new Error("Repository snapshot response exceeds the Actions transfer limit.");
+  }
+  if (!response.body) throw new Error("Git service returned an empty repository snapshot.");
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maximumBytes) {
+        await reader.cancel();
+        throw new Error("Repository snapshot response exceeds the Actions transfer limit.");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    throw new Error("Git service returned invalid snapshot JSON.");
+  }
 }
 
 function snapshotFile(snapshot: RepositorySnapshot, path: string): string | null {
@@ -228,6 +307,147 @@ function snapshotFile(snapshot: RepositorySnapshot, path: string): string | null
   } catch {
     return null;
   }
+}
+
+async function sha256(bytes: Uint8Array): Promise<string> {
+  const input = new Uint8Array(bytes.byteLength);
+  input.set(bytes);
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", input.buffer));
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function cacheKeyFor(
+  repositoryId: string,
+  ref: string,
+  eventType: ActionEventType,
+  workflow: ActionWorkflow,
+  snapshot: RepositorySnapshot
+): Promise<{ readonly cacheKey: string; readonly lockfileHash: string } | null> {
+  if (!workflow.cache) return null;
+  const keyParts: string[] = [];
+  for (const path of workflow.cache.keyFiles) {
+    const file = snapshot.files.find((entry) => entry.path === path);
+    if (!file) return null;
+    keyParts.push(`${path}\0${await sha256(base64ToBytes(file.contentBase64))}`);
+  }
+  const lockfileHash = await sha256(new TextEncoder().encode(keyParts.join("\n")));
+  const identity = [repositoryId, eventType, ref, workflow.path, lockfileHash].join("\0");
+  return { cacheKey: await sha256(new TextEncoder().encode(identity)), lockfileHash };
+}
+
+function cacheObjectKey(repositoryId: string, cacheKey: string): string {
+  return `actions/cache/${repositoryId}/${cacheKey}.tar.gz`;
+}
+
+async function writeCacheObjectToRun(
+  stub: ActionRunStub,
+  body: ReadableStream<Uint8Array>,
+  expectedSize: number
+): Promise<number> {
+  const reader = body.getReader();
+  let buffer = new Uint8Array(0);
+  let total = 0;
+  let index = 0;
+  const writeChunk = async (bytes: Uint8Array): Promise<void> => {
+    if (!bytes.length) return;
+    await stub.writeCacheChunk(index, bytesToBase64(bytes));
+    index += 1;
+    total += bytes.length;
+  };
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      let offset = 0;
+      if (buffer.length) {
+        const take = Math.min(TRANSFER_CHUNK_BYTES - buffer.length, value.length);
+        const joined = new Uint8Array(buffer.length + take);
+        joined.set(buffer);
+        joined.set(value.subarray(0, take), buffer.length);
+        offset = take;
+        buffer = new Uint8Array(0);
+        if (joined.length === TRANSFER_CHUNK_BYTES) await writeChunk(joined);
+        else buffer = joined;
+      }
+      while (offset + TRANSFER_CHUNK_BYTES <= value.length) {
+        await writeChunk(value.subarray(offset, offset + TRANSFER_CHUNK_BYTES));
+        offset += TRANSFER_CHUNK_BYTES;
+      }
+      if (offset < value.length) buffer = value.slice(offset);
+      if (total > expectedSize) throw new Error("Cache object exceeded its recorded size.");
+    }
+    if (buffer.length) await writeChunk(buffer);
+  } catch (cause) {
+    await reader.cancel();
+    throw cause;
+  } finally {
+    reader.releaseLock();
+  }
+  if (total !== expectedSize) throw new Error("Cache object size did not match its metadata.");
+  return index;
+}
+
+function fileJsonParts(file: RepositorySnapshotFile): {
+  prefix: string;
+  content: string;
+  suffix: string;
+} {
+  return {
+    prefix: `{"path":${JSON.stringify(file.path)},"contentBase64":"`,
+    content: file.contentBase64,
+    suffix: `","mode":${JSON.stringify(file.mode)}}`,
+  };
+}
+
+function snapshotJsonLength(files: readonly RepositorySnapshotFile[]): number {
+  return (
+    2 +
+    files.reduce((length, file, index) => {
+      const parts = fileJsonParts(file);
+      return (
+        length + (index ? 1 : 0) + parts.prefix.length + parts.content.length + parts.suffix.length
+      );
+    }, 0)
+  );
+}
+
+async function writeSnapshotChunks(
+  stub: ActionRunStub,
+  files: readonly RepositorySnapshotFile[],
+  expectedChunks: number
+): Promise<void> {
+  let pending = "[";
+  let index = 0;
+  const append = async (text: string): Promise<void> => {
+    let offset = 0;
+    while (offset < text.length) {
+      const piece = text.slice(offset, offset + TRANSFER_CHUNK_BYTES - pending.length);
+      pending += piece;
+      offset += piece.length;
+      if (pending.length === TRANSFER_CHUNK_BYTES) {
+        await stub.writeInputChunk(index, pending);
+        index += 1;
+        pending = "";
+      }
+    }
+  };
+  for (let fileIndex = 0; fileIndex < files.length; fileIndex += 1) {
+    const file = files[fileIndex];
+    if (!file) continue;
+    if (fileIndex) await append(",");
+    const parts = fileJsonParts(file);
+    await append(parts.prefix);
+    await append(parts.content);
+    await append(parts.suffix);
+  }
+  await append("]");
+  if (pending.length) {
+    await stub.writeInputChunk(index, pending);
+    index += 1;
+  }
+  if (index !== expectedChunks)
+    throw new Error("Serialized repository snapshot chunk count changed.");
 }
 
 function actionStub(env: ActionsEnv, id: string): ActionRunStub {
@@ -247,7 +467,182 @@ function toSummary(run: ActionRunDetails): ActionRunSummary {
     createdAt: run.createdAt,
     status: run.status,
     conclusion: run.conclusion,
+    cacheOutcome: run.cacheOutcome,
+    artifactCount: run.artifacts.length,
   };
+}
+
+function outputBody(stub: ActionRunStub, output: ActionOutputMetadata): ReadableStream<Uint8Array> {
+  let index = 0;
+  let total = 0;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (index === output.chunks) {
+        if (total !== output.size)
+          controller.error(new Error("Action output size did not match its manifest."));
+        else controller.close();
+        return;
+      }
+      const encoded = await stub.readOutputChunk(output.name, index);
+      if (encoded === null) {
+        controller.error(new Error("Action output transfer chunk is missing."));
+        return;
+      }
+      const bytes = base64ToBytes(encoded);
+      index += 1;
+      total += bytes.byteLength;
+      if (total > output.size) {
+        controller.error(new Error("Action output exceeded its manifest size."));
+        return;
+      }
+      controller.enqueue(bytes);
+    },
+  });
+}
+
+async function evictOldCaches(
+  env: ActionsEnv,
+  repositoryId: string,
+  keepCacheKey: string
+): Promise<void> {
+  const count = await env.DB.prepare(
+    "SELECT COUNT(*) AS count FROM actions_cache_entries WHERE repository_id = ?"
+  )
+    .bind(repositoryId)
+    .first<{ count: number }>();
+  let remaining = count?.count ?? 0;
+  while (remaining > MAX_CACHE_ENTRIES_PER_REPOSITORY) {
+    const oldest = await env.DB.prepare(
+      "SELECT cache_key, object_key FROM actions_cache_entries WHERE repository_id = ? AND cache_key != ? ORDER BY last_used_at ASC, created_at ASC LIMIT 1"
+    )
+      .bind(repositoryId, keepCacheKey)
+      .first<{ cache_key: string; object_key: string }>();
+    if (!oldest) return;
+    await env.RELEASE_ASSETS.delete(oldest.object_key);
+    await env.DB.prepare(
+      "DELETE FROM actions_cache_entries WHERE repository_id = ? AND cache_key = ?"
+    )
+      .bind(repositoryId, oldest.cache_key)
+      .run();
+    remaining -= 1;
+  }
+}
+
+async function publishActionOutputs(
+  env: ActionsEnv,
+  runId: string,
+  stub: ActionRunStub
+): Promise<void> {
+  const run = await stub.getRun();
+  if (!run || run.status !== "completed") return;
+  const outputs = await stub.getOutputMetadata();
+  if (!outputs.length) return;
+  const row = await env.DB.prepare(
+    "SELECT repository_id, cache_key, lockfile_hash, cache_event_type, source_ref, path FROM actions_runs WHERE id = ?"
+  )
+    .bind(runId)
+    .first<{
+      repository_id: string;
+      cache_key: string | null;
+      lockfile_hash: string | null;
+      cache_event_type: ActionEventType | null;
+      source_ref: string;
+      path: string;
+    }>();
+  if (!row) return;
+  for (const output of outputs) {
+    const objectKey =
+      output.kind === "cache"
+        ? row.cache_key
+          ? cacheObjectKey(row.repository_id, row.cache_key)
+          : null
+        : `actions/artifacts/${row.repository_id}/${runId}/${output.name}.tar.gz`;
+    if (!objectKey) {
+      if (output.kind === "cache") await stub.markCacheFailed();
+      else await stub.markArtifactFailed(output.name, "Artifact metadata is missing.");
+      continue;
+    }
+    try {
+      await env.RELEASE_ASSETS.put(objectKey, outputBody(stub, output), {
+        httpMetadata: {
+          contentType: "application/gzip",
+          contentDisposition:
+            output.kind === "artifact" ? `attachment; filename="${output.name}.tar.gz"` : undefined,
+        },
+        customMetadata: { sha256: output.sha256, runId },
+      });
+      if (output.kind === "cache") {
+        if (!row.lockfile_hash || !row.cache_event_type || !row.cache_key) {
+          await stub.markCacheFailed();
+          continue;
+        }
+        const now = Date.now();
+        await env.DB.prepare(
+          "INSERT INTO actions_cache_entries (repository_id, cache_key, source_ref, workflow_path, lockfile_hash, event_type, object_key, size, sha256, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(repository_id, cache_key) DO UPDATE SET source_ref = excluded.source_ref, workflow_path = excluded.workflow_path, lockfile_hash = excluded.lockfile_hash, event_type = excluded.event_type, object_key = excluded.object_key, size = excluded.size, sha256 = excluded.sha256, created_at = excluded.created_at, last_used_at = excluded.last_used_at"
+        )
+          .bind(
+            row.repository_id,
+            row.cache_key,
+            row.source_ref,
+            row.path,
+            row.lockfile_hash,
+            row.cache_event_type,
+            objectKey,
+            output.size,
+            output.sha256,
+            now,
+            now
+          )
+          .run();
+        await env.DB.prepare("UPDATE actions_runs SET cache_status = 'saved' WHERE id = ?")
+          .bind(runId)
+          .run();
+        await evictOldCaches(env, row.repository_id, row.cache_key);
+        await stub.markCacheSaved();
+      } else {
+        const now = Date.now();
+        const artifact: ActionRunArtifact = {
+          name: output.name,
+          size: output.size,
+          sha256: output.sha256,
+          downloadUrl: `/api/actions/runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(output.name)}`,
+          createdAt: now,
+        };
+        await env.DB.prepare(
+          "INSERT INTO actions_run_artifacts (repository_id, run_id, name, object_key, size, sha256, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(run_id, name) DO UPDATE SET object_key = excluded.object_key, size = excluded.size, sha256 = excluded.sha256, created_at = excluded.created_at"
+        )
+          .bind(row.repository_id, runId, output.name, objectKey, output.size, output.sha256, now)
+          .run();
+        await stub.markOutputPublished(output.name, artifact);
+      }
+    } catch (cause) {
+      const logger = createLogger(env.LOG_LEVEL, {
+        service: "actions",
+        repoId: row.repository_id,
+        doId: runId,
+      });
+      logger.warn("actions:output-publish-failed", {
+        kind: output.kind,
+        name: output.name,
+        reason: cause instanceof Error ? cause.message : "unknown",
+      });
+    }
+  }
+}
+
+async function publishPendingOutputs(env: ActionsEnv): Promise<void> {
+  const rows = await env.DB.prepare("SELECT id FROM actions_runs ORDER BY created_at DESC LIMIT ?")
+    .bind(MAX_RUN_LIST)
+    .all<{ id: string }>();
+  let transferred = 0;
+  for (const row of rows.results) {
+    const stub = actionStub(env, row.id);
+    const outputs = await stub.getOutputMetadata();
+    const pendingBytes = outputs.reduce((total, item) => total + item.size, 0);
+    if (pendingBytes > MAX_ARCHIVE_BYTES - transferred) continue;
+    await publishActionOutputs(env, row.id, stub);
+    transferred += pendingBytes;
+  }
 }
 
 async function deliverCheck(
@@ -423,9 +818,7 @@ async function listWorkflows(
   try {
     const snapshot = await repositorySnapshot(env, repositoryId, ref, oid, user);
     const workflows: ActionWorkflowFile[] = [];
-    for (const file of snapshot.files) {
-      if (!file.path.startsWith(".github/workflows/") || !/\.(?:yml|yaml)$/.test(file.path))
-        continue;
+    for (const file of workflowFiles(snapshot.files)) {
       const source = snapshotFile(snapshot, file.path);
       if (source === null) {
         workflows.push({
@@ -504,7 +897,7 @@ async function queueActionRun(
   snapshot: RepositorySnapshot,
   workflow: ActionWorkflow,
   context: {
-    eventType: "push" | "workflow_dispatch" | "pull_request" | "merge_group";
+    eventType: ActionEventType;
     pullRequestId?: string;
     candidateId?: string;
   } = { eventType: "push" }
@@ -527,6 +920,16 @@ async function queueActionRun(
       };
     }
   }
+  const eventType = context.eventType;
+  const cacheIdentity = await cacheKeyFor(repositoryId, ref, eventType, workflow, snapshot);
+  const cacheOutcome: ActionCacheOutcome = workflow.cache ? "miss" : "disabled";
+  const cacheEntry = cacheIdentity
+    ? await env.DB.prepare(
+        "SELECT object_key, size, sha256 FROM actions_cache_entries WHERE repository_id = ? AND cache_key = ?"
+      )
+        .bind(repositoryId, cacheIdentity.cacheKey)
+        .first<CacheEntryRow>()
+    : null;
   const id = crypto.randomUUID();
   let stub: ActionRunStub;
   try {
@@ -549,7 +952,7 @@ async function queueActionRun(
   }
   const now = Date.now();
   const created = await env.DB.prepare(
-    "INSERT INTO actions_runs (id, repository_id, commit_oid, workflow, path, source_ref, created_by, created_at, pull_request_id, candidate_id, trigger_kind) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM actions_runs WHERE repository_id = ? AND created_at > ?) < ?"
+    "INSERT INTO actions_runs (id, repository_id, commit_oid, workflow, path, source_ref, created_by, created_at, pull_request_id, candidate_id, trigger_kind, cache_key, lockfile_hash, cache_event_type, cache_status) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM actions_runs WHERE repository_id = ? AND created_at > ?) < ?"
   )
     .bind(
       id,
@@ -563,6 +966,10 @@ async function queueActionRun(
       context.pullRequestId ?? null,
       context.candidateId ?? null,
       context.eventType,
+      cacheIdentity?.cacheKey ?? null,
+      cacheIdentity?.lockfileHash ?? null,
+      workflow.cache ? eventType : null,
+      cacheOutcome,
       repositoryId,
       now - RUN_LIMIT_WINDOW_MS,
       RUN_LIMIT_PER_HOUR
@@ -578,11 +985,46 @@ async function queueActionRun(
     };
   }
 
-  const serialized = JSON.stringify(snapshot.files);
-  const chunks: string[] = [];
-  for (let offset = 0; offset < serialized.length; offset += 48 * 1024) {
-    chunks.push(serialized.slice(offset, offset + 48 * 1024));
+  let cachedObject: R2ObjectBody | null = null;
+  let resolvedCacheOutcome: ActionCacheOutcome = cacheOutcome;
+  if (cacheEntry && cacheEntry.size > 0 && cacheEntry.size <= MAX_ARCHIVE_BYTES) {
+    try {
+      cachedObject = await env.RELEASE_ASSETS.get(cacheEntry.object_key);
+      if (!cachedObject || cachedObject.size !== cacheEntry.size) {
+        await env.DB.prepare(
+          "DELETE FROM actions_cache_entries WHERE repository_id = ? AND cache_key = ?"
+        )
+          .bind(repositoryId, cacheIdentity?.cacheKey ?? "")
+          .run();
+        cachedObject = null;
+      } else resolvedCacheOutcome = "hit";
+    } catch (cause) {
+      resolvedCacheOutcome = "failed";
+      const logger = createLogger(env.LOG_LEVEL, {
+        service: "actions",
+        repoId: repositoryId,
+        doId: id,
+      });
+      logger.warn("actions:cache-read-failed", {
+        reason: cause instanceof Error ? cause.message : "unknown",
+      });
+    }
   }
+  if (cachedObject && !cachedObject.body) {
+    cachedObject = null;
+    resolvedCacheOutcome = "failed";
+  }
+  if (cachedObject && cacheIdentity) {
+    await env.DB.prepare(
+      "UPDATE actions_cache_entries SET last_used_at = ? WHERE repository_id = ? AND cache_key = ?"
+    )
+      .bind(now, repositoryId, cacheIdentity.cacheKey)
+      .run();
+  }
+  const cacheChunks = cachedObject ? Math.ceil(cachedObject.size / TRANSFER_CHUNK_BYTES) : 0;
+  const artifactsToCapture = workflow.jobs.flatMap((job) => job.artifacts ?? []);
+
+  const inputChunks = Math.ceil(snapshotJsonLength(snapshot.files) / TRANSFER_CHUNK_BYTES);
   const input: ActionRunInput = {
     id,
     repositoryId,
@@ -594,6 +1036,12 @@ async function queueActionRun(
     createdAt: now,
     enableInternet:
       context.eventType === "pull_request" ? false : repo.actions_network_enabled === 1,
+    eventType,
+    cacheKey: cacheIdentity?.cacheKey ?? null,
+    cacheOutcome: cachedObject ? "hit" : resolvedCacheOutcome,
+    cachePaths: workflow.cache?.paths ?? [],
+    cachedArchiveSha256: cachedObject ? (cacheEntry?.sha256 ?? null) : null,
+    artifactsToCapture,
     jobs: workflow.jobs,
     fileCount: snapshot.files.length,
   };
@@ -607,13 +1055,34 @@ async function queueActionRun(
     createdAt: now,
     status: "queued",
     conclusion: null,
+    cacheOutcome: cachedObject ? "hit" : resolvedCacheOutcome,
+    artifactCount: 0,
   };
   let scheduleAttempted = false;
   try {
-    await stub.initialize(input, chunks.length);
-    for (let index = 0; index < chunks.length; index += 1) {
-      const chunk = chunks[index];
-      if (chunk !== undefined) await stub.writeInputChunk(index, chunk);
+    await stub.initialize(input, inputChunks, cacheChunks);
+    await writeSnapshotChunks(stub, snapshot.files, inputChunks);
+    if (cachedObject?.body) {
+      try {
+        await writeCacheObjectToRun(stub, cachedObject.body, cachedObject.size);
+      } catch (cause) {
+        await stub.discardCacheInput();
+        resolvedCacheOutcome = "failed";
+        await stub.setCacheOutcome("failed");
+        const logger = createLogger(env.LOG_LEVEL, {
+          service: "actions",
+          repoId: repositoryId,
+          doId: id,
+        });
+        logger.warn("actions:cache-transfer-failed", {
+          reason: cause instanceof Error ? cause.message : "unknown",
+        });
+      }
+    }
+    if (resolvedCacheOutcome !== cacheOutcome) {
+      await env.DB.prepare("UPDATE actions_runs SET cache_status = ? WHERE id = ?")
+        .bind(resolvedCacheOutcome, id)
+        .run();
     }
     scheduleAttempted = true;
     await stub.schedule();
@@ -717,9 +1186,7 @@ async function handleInternalPush(request: Request, env: ActionsEnv): Promise<Re
         "The pushed ref no longer points to the expected commit."
       );
     }
-    const files = snapshot.files.filter(
-      (file) => file.path.startsWith(".github/workflows/") && /\.(?:yml|yaml)$/.test(file.path)
-    );
+    const files = workflowFiles(snapshot.files);
     for (const file of files) {
       const source = snapshotFile(snapshot, file.path);
       if (source === null) {
@@ -741,7 +1208,10 @@ async function handleInternalPush(request: Request, env: ActionsEnv): Promise<Re
     );
   }
 
-  const triggered = workflows.filter((workflow) => workflow.triggers.includes("push"));
+  const pushBranch = body.ref.replace(/^refs\/heads\//, "");
+  const triggered = workflows.filter((workflow) =>
+    workflowMatchesEvent(workflow, "push", pushBranch)
+  );
   if (triggered.length > 3) {
     return errorResponse(422, "bad_request", "A push may start at most three workflows.");
   }
@@ -755,7 +1225,8 @@ async function handleInternalPush(request: Request, env: ActionsEnv): Promise<Re
       repositoryId,
       body.ref,
       snapshot,
-      workflow
+      workflow,
+      { eventType: "push" }
     );
     if (result.ok) runs.push(result.summary);
     else failures.push({ path: workflow.path, message: result.message });
@@ -825,18 +1296,13 @@ async function handleInternalProposal(
     candidate?.base_oid,
     user
   );
-  const native = definitions.files.some((file) => file.path.startsWith(".gitedge/workflows/"));
-  const prefix = native ? ".gitedge/workflows/" : ".github/workflows/";
-  const files = definitions.files.filter(
-    (file) => file.path.startsWith(prefix) && /\.(?:yml|yaml)$/.test(file.path)
-  );
+  const files = workflowFiles(definitions);
   const triggered: ActionWorkflow[] = [];
   for (const file of files) {
     const source = snapshotFile(definitions, file.path);
     if (source === null) return errorResponse(422, "bad_request", "Workflow is not UTF-8.");
     const workflow = parseWorkflow(file.path, source);
-    if (workflow.triggers.some((trigger) => String(trigger) === eventType))
-      triggered.push(workflow);
+    if (workflowMatchesEvent(workflow, eventType, pull.base_ref)) triggered.push(workflow);
   }
   if (triggered.length > 3)
     return errorResponse(422, "workflow_limit", "At most three workflows may run per event.");
@@ -891,6 +1357,8 @@ async function startRun(
   ) {
     return errorResponse(400, "bad_request", "Invalid ref or expected commit OID.");
   }
+  if (!isActionWorkflowPath(body.workflowPath))
+    return errorResponse(404, "not_found", "Workflow file was not found at the selected commit.");
   let snapshot: RepositorySnapshot;
   let workflow: ActionWorkflow;
   try {
@@ -947,7 +1415,47 @@ async function getRun(env: ActionsEnv, id: string): Promise<ActionRunDetails | n
   const row = await env.DB.prepare("SELECT id FROM actions_runs WHERE id = ?")
     .bind(id)
     .first<{ id: string }>();
-  return row ? actionStub(env, row.id).getRun() : null;
+  if (!row) return null;
+  const stub = actionStub(env, row.id);
+  await publishActionOutputs(env, row.id, stub);
+  const run = await stub.getRun();
+  if (run) {
+    await env.DB.prepare("UPDATE actions_runs SET cache_status = ? WHERE id = ?")
+      .bind(run.cacheOutcome, row.id)
+      .run();
+  }
+  return run;
+}
+
+async function downloadActionArtifact(
+  env: ActionsEnv,
+  user: TrustedUser | null,
+  runId: string,
+  name: string
+): Promise<Response> {
+  if (!/^[A-Za-z0-9._-]{1,64}$/.test(name))
+    return errorResponse(404, "not_found", "Action artifact was not found.");
+  const row = await env.DB.prepare(
+    "SELECT a.repository_id, a.object_key, a.size, a.sha256, a.name FROM actions_run_artifacts a JOIN actions_runs r ON r.id = a.run_id WHERE a.run_id = ? AND a.name = ? AND r.id = ?"
+  )
+    .bind(runId, name, runId)
+    .first<ArtifactRow & { readonly repository_id: string }>();
+  if (!row) return errorResponse(404, "not_found", "Action artifact was not found.");
+  const repository = await repositoryFor(env, row.repository_id);
+  if (!repository || !(await canReadRepository(env, repository, user)))
+    return errorResponse(404, "not_found", "Action artifact was not found.");
+  const object = await env.RELEASE_ASSETS.get(row.object_key);
+  if (!object || object.size !== row.size || object.customMetadata?.sha256 !== row.sha256)
+    return errorResponse(404, "not_found", "Action artifact content was not found.");
+  return new Response(object.body, {
+    headers: {
+      "Content-Type": "application/gzip",
+      "Content-Length": String(row.size),
+      "Content-Disposition": `attachment; filename="${row.name}.tar.gz"`,
+      "Cache-Control": "private, no-store",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
 }
 
 async function handleRepositoryRoute(
@@ -1046,6 +1554,9 @@ export default {
       if (parts.length === 3 && parts[0] === "runs" && parts[2] === "cancel") {
         return handleRunRoute(request, env, user, parts[1] ?? "", true);
       }
+      if (parts.length === 4 && parts[0] === "runs" && parts[2] === "artifacts") {
+        return downloadActionArtifact(env, user, parts[1] ?? "", parts[3] ?? "");
+      }
       return errorResponse(404, "not_found", "Actions endpoint was not found.");
     } catch (cause) {
       logger.error("actions:request-failed", {
@@ -1063,6 +1574,14 @@ export default {
       publishPendingChecks(env).catch((cause: unknown) => {
         const logger = createLogger(env.LOG_LEVEL, { service: "actions" });
         logger.error("actions:check-scan-failed", {
+          reason: cause instanceof Error ? cause.message : "unknown",
+        });
+      })
+    );
+    context.waitUntil(
+      publishPendingOutputs(env).catch((cause: unknown) => {
+        const logger = createLogger(env.LOG_LEVEL, { service: "actions" });
+        logger.error("actions:output-scan-failed", {
           reason: cause instanceof Error ? cause.message : "unknown",
         });
       })

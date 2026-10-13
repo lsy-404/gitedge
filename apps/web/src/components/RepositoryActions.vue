@@ -3,6 +3,10 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { FluentButton } from "@platform-kit/fluent/vue";
 import type { ActionRun, ActionRunSummary, ActionWorkflowFile, GitRef } from "../lib/api";
 import { ApiError, api, errorMessage } from "../lib/api";
+import {
+  ACTION_WORKFLOW_TEMPLATES,
+  type ActionWorkflowTemplate,
+} from "../../../../packages/contracts/src/action-templates";
 import NoticeBar from "./NoticeBar.vue";
 import ConfirmButton from "./ConfirmButton.vue";
 import SelectField from "./SelectField.vue";
@@ -37,6 +41,21 @@ const selectedWorkflowPath = ref("");
 const runs = ref<ActionRunSummary[]>([]);
 const selectedRun = ref<ActionRun | null>(null);
 const selectedRunId = ref("");
+const selectedTemplate = ref<ActionWorkflowTemplate>("gitedgeSelfValidation");
+const cacheOutcomeLabels = {
+  disabled: "actionsCache_disabled",
+  miss: "actionsCache_miss",
+  hit: "actionsCache_hit",
+  saved: "actionsCache_saved",
+  failed: "actionsCache_failed",
+} as const;
+const artifactOutcomeLabels = {
+  pending: "actionsArtifact_pending",
+  ready: "actionsArtifact_ready",
+  failed: "actionsArtifact_failed",
+  skipped: "actionsArtifact_skipped",
+} as const;
+const templateMessage = ref("");
 let pollingTimer: number | undefined;
 let pollPending = false;
 let workflowEpoch = 0;
@@ -212,6 +231,16 @@ async function startRun(): Promise<void> {
   }
 }
 
+async function copyTemplate(): Promise<void> {
+  templateMessage.value = "";
+  try {
+    await navigator.clipboard.writeText(ACTION_WORKFLOW_TEMPLATES[selectedTemplate.value]);
+    templateMessage.value = t("actionsTemplateCopied");
+  } catch {
+    templateMessage.value = t("actionsTemplateCopyError");
+  }
+}
+
 async function openRun(runId: string): Promise<void> {
   selectedRunId.value = runId;
   selectedRun.value = null;
@@ -335,6 +364,22 @@ onUnmounted(() => clearInterval(pollingTimer));
               >{{ saving ? t("loading") : t("actionsDispatch") }}</FluentButton
             >
           </div>
+          <details v-if="canWrite" class="actions-templates">
+            <summary>{{ t("actionsTemplateTitle") }}</summary>
+            <p class="actions-muted">{{ t("actionsTemplateHint") }}</p>
+            <div class="actions-toolbar">
+              <SelectField v-model="selectedTemplate" :label="t('actionsTemplateSelect')">
+                <option value="gitedgeSelfValidation">{{ t("actionsTemplateSelf") }}</option>
+                <option value="nodePnpm">{{ t("actionsTemplateNode") }}</option>
+                <option value="python">{{ t("actionsTemplatePython") }}</option>
+                <option value="staticSite">{{ t("actionsTemplateStatic") }}</option>
+              </SelectField>
+              <FluentButton type="button" @click="copyTemplate">{{
+                t("actionsTemplateCopy")
+              }}</FluentButton>
+            </div>
+            <p v-if="templateMessage" class="actions-muted" role="status">{{ templateMessage }}</p>
+          </details>
           <p v-if="!selectableRefs.length" class="actions-empty">{{ t("actionsNoBranches") }}</p>
           <p
             v-else-if="!workflows.length && !loading && !workflowLoading && !error"
@@ -432,6 +477,32 @@ onUnmounted(() => clearInterval(pollingTimer));
             }}</NoticeBar>
           </article>
         </div>
+        <div class="actions-output-summary">
+          <p class="actions-muted">
+            {{
+              t("actionsCacheOutcome", {
+                outcome: t(cacheOutcomeLabels[selectedRun.cacheOutcome ?? "disabled"]),
+              })
+            }}
+          </p>
+          <p
+            v-for="outcome in selectedRun.artifactOutcomes ?? []"
+            :key="outcome.name"
+            class="actions-muted"
+          >
+            {{ outcome.name }} · {{ t(artifactOutcomeLabels[outcome.status]) }}
+            <span v-if="outcome.message"> · {{ outcome.message }}</span>
+          </p>
+          <a
+            v-for="artifact in selectedRun.artifacts ?? []"
+            :key="artifact.name"
+            class="actions-artifact-link"
+            :href="artifact.downloadUrl"
+            download
+          >
+            {{ t("actionsDownloadArtifact", { name: artifact.name, size: artifact.size }) }}
+          </a>
+        </div>
       </section>
     </div>
   </section>
@@ -488,6 +559,22 @@ onUnmounted(() => clearInterval(pollingTimer));
 .actions-panel-body {
   display: grid;
   gap: var(--space-3);
+  padding: var(--space-4);
+}
+.actions-templates {
+  border-bottom: 1px solid var(--border-muted);
+  padding-bottom: var(--space-3);
+}
+.actions-templates summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.actions-artifact-link {
+  display: block;
+  margin-top: var(--space-2);
+  overflow-wrap: anywhere;
+}
+.actions-output-summary {
   padding: var(--space-4);
 }
 .actions-toolbar {

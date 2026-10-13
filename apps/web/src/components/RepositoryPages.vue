@@ -28,6 +28,8 @@ const props = defineProps<{
 const { t, d } = useI18n();
 const settings = ref<PagesSettings | null>(null);
 const branches = ref<string[]>([]);
+const branchOids = ref<Record<string, string>>({});
+const refsAvailable = ref(false);
 const branch = ref("");
 const folder = ref("/");
 const notFoundPath = ref("");
@@ -61,6 +63,23 @@ const pathUrl = computed(() =>
   settings.value ? new URL(settings.value.pathUrl, window.location.origin).href : ""
 );
 const lastPublished = computed(() => settings.value?.lastPublishedOid ?? "");
+const currentSourceOid = computed(() =>
+  settings.value ? (branchOids.value[settings.value.branch] ?? "") : ""
+);
+const currentSourceCommitPath = computed(() =>
+  currentSourceOid.value ? `/${props.owner}/${props.name}/commit/${currentSourceOid.value}` : ""
+);
+const publicationStatus = computed(() => {
+  if (!refsAvailable.value) return "unknown";
+  if (!settings.value?.enabled || !settings.value.available) return "off";
+  return currentSourceOid.value ? "live" : "missing_branch";
+});
+const publicationStatusLabels = {
+  live: "pagesStatus_live",
+  off: "pagesStatus_off",
+  missing_branch: "pagesStatus_missing_branch",
+  unknown: "pagesStatus_unknown",
+} as const;
 const commitPath = computed(() =>
   lastPublished.value ? `/${props.owner}/${props.name}/commit/${lastPublished.value}` : ""
 );
@@ -78,15 +97,25 @@ async function load(): Promise<void> {
   loading.value = true;
   error.value = "";
   try {
-    const [result, refs] = await Promise.all([
+    const [result, refsResult] = await Promise.all([
       api.pagesSettings(props.repositoryId),
-      api.refs(props.repositoryId).catch(() => []),
+      api
+        .refs(props.repositoryId)
+        .then((refs) => ({ refs, available: true }))
+        .catch(() => ({ refs: [], available: false })),
     ]);
     if (version !== loadVersion) return;
+    refsAvailable.value = refsResult.available;
+    const refs = refsResult.refs;
     branches.value = refs
       .filter((ref) => ref.name.startsWith("refs/heads/"))
       .map((ref) => ref.name.slice("refs/heads/".length))
       .sort((a, b) => a.localeCompare(b));
+    branchOids.value = Object.fromEntries(
+      refs
+        .filter((ref) => ref.name.startsWith("refs/heads/"))
+        .map((ref) => [ref.name.slice("refs/heads/".length), ref.oid])
+    );
     apply(result);
   } catch (cause) {
     if (version === loadVersion) error.value = errorMessage(cause, t);
@@ -136,6 +165,12 @@ watch(() => props.repositoryId, load, { immediate: true });
           t("pagesPrivateUnavailable")
         }}</NoticeBar>
         <NoticeBar v-else-if="!pagesEnabled" intent="info">{{ t("pagesEnableHint") }}</NoticeBar>
+        <NoticeBar v-else-if="publicationStatus === 'missing_branch'" intent="warning">{{
+          t("pagesBranchMissing")
+        }}</NoticeBar>
+        <NoticeBar v-else-if="publicationStatus === 'unknown'" intent="info">{{
+          t("pagesStatus_unknown")
+        }}</NoticeBar>
       </div>
       <div class="box-row settings-row">
         <div class="row-copy">
@@ -143,13 +178,35 @@ watch(() => props.repositoryId, load, { immediate: true });
           <p>{{ t("pagesLiveUrlHint") }}</p>
         </div>
         <div class="pages-links">
-          <StatusBadge :tone="settings.enabled && settings.available ? 'success' : 'neutral'">{{
-            settings.enabled && settings.available ? t("pagesPublished") : t("pagesOff")
-          }}</StatusBadge>
+          <StatusBadge
+            :tone="
+              publicationStatus === 'live'
+                ? 'success'
+                : publicationStatus === 'missing_branch'
+                  ? 'danger'
+                  : 'neutral'
+            "
+            >{{ t(publicationStatusLabels[publicationStatus]) }}</StatusBadge
+          >
           <a :href="liveUrl" target="_blank" rel="noreferrer">{{ liveUrl }}</a>
           <a v-if="settings.hostUrl" :href="pathUrl" target="_blank" rel="noreferrer">{{
             pathUrl
           }}</a>
+        </div>
+      </div>
+      <div class="box-row settings-row">
+        <div class="row-copy">
+          <span>{{ t("pagesCurrentCommit") }}</span>
+          <p>{{ t("pagesCurrentCommitHint") }}</p>
+        </div>
+        <div class="pages-links">
+          <template v-if="currentSourceOid">
+            <code>{{ currentSourceOid.slice(0, 12) }}</code>
+            <RouterLink :to="currentSourceCommitPath">{{ t("pagesOpenCommit") }}</RouterLink>
+          </template>
+          <small v-else>{{
+            t(publicationStatus === "unknown" ? "pagesStatus_unknown" : "pagesBranchMissing")
+          }}</small>
         </div>
       </div>
       <div class="box-row settings-row">

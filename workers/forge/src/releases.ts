@@ -699,10 +699,17 @@ const PURGE_PAGES = 5;
 export async function purgeReleaseAssets(env: ForgeEnv, repositoryId: string): Promise<boolean> {
   const bucket = env.RELEASE_ASSETS;
   if (!bucket) return true;
-  for (let page = 0; page < PURGE_PAGES; page += 1) {
-    const listing = await bucket.list({ prefix: `${repositoryId}/`, limit: PURGE_PAGE });
-    if (listing.objects.length) await bucket.delete(listing.objects.map((object) => object.key));
-    if (!listing.truncated) return true;
+  for (const prefix of [
+    `${repositoryId}/`,
+    `actions/artifacts/${repositoryId}/`,
+    `actions/cache/${repositoryId}/`,
+  ]) {
+    for (let page = 0; page < PURGE_PAGES; page += 1) {
+      const listing = await bucket.list({ prefix, limit: PURGE_PAGE });
+      if (listing.objects.length) await bucket.delete(listing.objects.map((object) => object.key));
+      if (!listing.truncated) break;
+      if (page === PURGE_PAGES - 1) return false;
+    }
   }
-  return false;
+  return true;
 }

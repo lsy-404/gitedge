@@ -1,5 +1,63 @@
 import { z } from "zod";
 
+const actionPath = z
+  .string()
+  .min(1)
+  .max(256)
+  .refine(
+    (value) =>
+      !value.startsWith("/") &&
+      !value.includes("\\") &&
+      !value.includes("\0") &&
+      value.split("/").every((part) => part !== "" && part !== "." && part !== ".."),
+    "Path must stay inside the workspace."
+  );
+
+export const ActionCacheSchema = z
+  .object({
+    keyFiles: z.array(actionPath).min(1).max(16),
+    paths: z.array(actionPath).min(1).max(16),
+  })
+  .strict();
+export type ActionCache = z.infer<typeof ActionCacheSchema>;
+
+export const ActionArtifactSchema = z
+  .object({
+    name: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[A-Za-z0-9._-]+$/)
+      .refine((name) => name !== "cache"),
+    paths: z.array(actionPath).min(1).max(16),
+  })
+  .strict();
+export type ActionArtifact = z.infer<typeof ActionArtifactSchema>;
+
+export const ActionEventTypeSchema = z.enum([
+  "push",
+  "workflow_dispatch",
+  "pull_request",
+  "merge_group",
+]);
+export type ActionEventType = z.infer<typeof ActionEventTypeSchema>;
+
+const branchPattern = z
+  .string()
+  .min(1)
+  .max(256)
+  .refine((pattern) => pattern !== "!", "Branch exclusion needs a pattern.");
+
+export const ActionTriggerFilterSchema = z
+  .object({
+    branches: z.array(branchPattern).max(32).optional(),
+    branchesIgnore: z.array(branchPattern).max(32).optional(),
+  })
+  .strict();
+export type ActionTriggerFilters = Partial<
+  Record<ActionEventType, z.infer<typeof ActionTriggerFilterSchema>>
+>;
+
 export const ActionStepSchema = z.object({
   name: z.string().min(1).max(100),
   run: z.string().min(1).max(16_384),
@@ -13,14 +71,17 @@ export const ActionJobSchema = z.object({
   id: z.string().min(1).max(64),
   name: z.string().min(1).max(100),
   steps: z.array(ActionStepSchema).min(1).max(10),
+  artifacts: z.array(ActionArtifactSchema).max(10).optional(),
 });
 export type ActionJob = z.infer<typeof ActionJobSchema>;
 
 export const ActionWorkflowSchema = z.object({
   path: z.string().min(1),
   name: z.string().min(1).max(100),
-  triggers: z.array(z.enum(["workflow_dispatch", "push"])).min(1),
+  triggers: z.array(z.enum(["workflow_dispatch", "push", "pull_request", "merge_group"])).min(1),
+  triggerFilters: z.partialRecord(ActionEventTypeSchema, ActionTriggerFilterSchema).optional(),
   jobs: z.array(ActionJobSchema).min(1).max(3),
+  cache: ActionCacheSchema.optional(),
   supported: z.boolean().optional(),
   unsupportedReason: z.string().optional(),
 });
@@ -64,7 +125,27 @@ export interface ActionRun {
   readonly status: ActionRunStatus;
   readonly conclusion: ActionRunConclusion;
   readonly outputTruncated: boolean;
+  readonly eventType: ActionEventType;
+  readonly cacheOutcome: ActionCacheOutcome;
+  readonly artifacts: readonly ActionRunArtifact[];
+  readonly artifactOutcomes: readonly ActionArtifactOutcome[];
   readonly jobs: readonly ActionRunJob[];
+}
+
+export type ActionCacheOutcome = "disabled" | "miss" | "hit" | "saved" | "failed";
+
+export interface ActionRunArtifact {
+  readonly name: string;
+  readonly size: number;
+  readonly sha256: string;
+  readonly downloadUrl: string;
+  readonly createdAt: number;
+}
+
+export interface ActionArtifactOutcome {
+  readonly name: string;
+  readonly status: "pending" | "ready" | "failed" | "skipped";
+  readonly message: string | null;
 }
 
 export interface CreateActionRunInput {
@@ -83,4 +164,6 @@ export interface ActionRunSummary {
   readonly createdAt: number;
   readonly status: ActionRunStatus;
   readonly conclusion: ActionRunConclusion;
+  readonly cacheOutcome: ActionCacheOutcome;
+  readonly artifactCount: number;
 }

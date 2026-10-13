@@ -5,6 +5,10 @@ import {
   type RepositorySnapshotFile,
 } from "../../../packages/contracts/src/repository-controls";
 import { GitResourceLimitError } from "./http";
+
+const ACTION_SNAPSHOT_MAX_FILES = 2048;
+const ACTION_SNAPSHOT_MAX_TREES = 2048;
+const ACTION_SNAPSHOT_MAX_BYTES = 24 * 1024 * 1024;
 export async function repositorySnapshot(
   repo: ArtifactsRepo,
   oid: string
@@ -18,7 +22,7 @@ export async function repositorySnapshot(
   while (queue.length) {
     const item = queue.shift();
     if (!item) break;
-    if (++trees > 128 || item.depth > 24)
+    if (++trees > ACTION_SNAPSHOT_MAX_TREES || item.depth > 32)
       throw new GitResourceLimitError("Repository directory count exceeds the snapshot limit.");
     const entries = await repo.readTree(item.oid);
     if (!entries) throw new Error("Repository tree is unavailable.");
@@ -32,13 +36,13 @@ export async function repositorySnapshot(
       }
       if (entry.type !== "blob")
         throw new GitResourceLimitError("Actions snapshots support regular files only.");
-      if (files.length >= 128)
-        throw new GitResourceLimitError("Actions snapshots allow at most 128 files.");
+      if (files.length >= ACTION_SNAPSHOT_MAX_FILES)
+        throw new GitResourceLimitError("Actions snapshots allow at most 2,048 files.");
       const blob = await repo.readBlob(entry.hash);
       if (!blob) throw new Error("Repository blob is unavailable.");
       totalBytes += blob.size;
-      if (totalBytes > 4 * 1024 * 1024)
-        throw new GitResourceLimitError("Actions snapshot exceeds 4 MiB.");
+      if (totalBytes > ACTION_SNAPSHOT_MAX_BYTES)
+        throw new GitResourceLimitError("Actions snapshot exceeds 24 MiB.");
       files.push({
         path,
         mode: entry.mode,

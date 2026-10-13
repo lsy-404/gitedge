@@ -8,7 +8,12 @@
   "containers": [
     {
       "class_name": "ActionRun",
-      "scheduling_policy": "durable_object"
+      "scheduling_policy": "durable_object",
+      "images": {
+        "runtime": {
+          "dockerfile": "./Dockerfile"
+        }
+      }
     }
   ],
   "durable_objects": {
@@ -30,6 +35,12 @@
       "binding": "DB",
       "database_name": "gitedge",
       "database_id": "c9a00d9d-db41-494e-b096-55b8b6bfe3a9"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "RELEASE_ASSETS",
+      "bucket_name": "gitedge-release-assets"
     }
   ],
   "services": [
