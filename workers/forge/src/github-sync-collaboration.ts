@@ -1353,7 +1353,7 @@ async function outbound(
         pull.state,
         Boolean(pull.draft),
         pull.base_ref,
-        `gitedge/pr/${pull.number}`,
+        mappedRemote.head.ref,
       ];
       const draftAdjustedBaseline = [...mappedRemoteBaseline];
       draftAdjustedBaseline[3] = Boolean(pull.draft);
@@ -1480,34 +1480,52 @@ async function outbound(
     if (pull.state === "closed" && !mapping) conflict("closed_pull_without_remote_mapping");
     const headRef = `refs/heads/${pull.head_ref}`;
     let published: { oid: string } | null = null;
+    const remoteHeadRepository = mappedRemote?.head.repo?.full_name.toLowerCase();
+    const isMappedExternalFork = Boolean(
+      mappedRemote &&
+      remoteHeadRepository !== `${connection.owner}/${connection.name}`.toLowerCase()
+    );
     if (pull.state === "open") {
-      const headRepositoryId = pull.head_repository_id ?? connection.repository_id;
-      const head = await env.DB.prepare(
-        "SELECT new_oid AS oid FROM forge_pull_head_updates WHERE pull_request_id=? ORDER BY created_at DESC,id DESC LIMIT 1"
-      )
-        .bind(pull.id)
-        .first<{ oid: string }>();
-      published =
-        head ??
-        (await env.DB.prepare(
-          "SELECT oid FROM forge_ref_pushers WHERE repository_id=? AND session_id=? AND ref=?"
+      if (isMappedExternalFork && mappedRemote) {
+        published = refs.local.find((ref) => ref.ref === headRef) ?? null;
+        if (!published || published.oid !== mappedRemote.head.sha)
+          conflict("github_external_head_readonly");
+      } else {
+        const headRepositoryId = pull.head_repository_id ?? connection.repository_id;
+        const head = await env.DB.prepare(
+          "SELECT new_oid AS oid FROM forge_pull_head_updates WHERE pull_request_id=? ORDER BY created_at DESC,id DESC LIMIT 1"
         )
-          .bind(headRepositoryId, pull.head_session_id ?? "", headRef)
-          .first<{ oid: string }>());
+          .bind(pull.id)
+          .first<{ oid: string }>();
+        published =
+          head ??
+          (await env.DB.prepare(
+            "SELECT oid FROM forge_ref_pushers WHERE repository_id=? AND session_id=? AND ref=?"
+          )
+            .bind(headRepositoryId, pull.head_session_id ?? "", headRef)
+            .first<{ oid: string }>()) ??
+          refs.local.find((ref) => ref.ref === headRef) ??
+          null;
+      }
       if (!published) conflict("pull_head_unavailable");
     }
     if (published && pull.locked_at !== null && pull.locked_head_oid !== published.oid)
       conflict("locked_pull_source_changed");
     if (pull.state === "open") {
       const publishedOid = published?.oid ?? conflict("pull_head_unavailable");
-      const headSync = await syncGithubRef(env, connection, credentials, job, {
-        ref: headRef,
-        targetRef: `refs/heads/gitedge/pr/${pull.number}`,
-        before: null,
-        after: publishedOid,
-        pullRequestId: pull.id,
-      });
-      if (headSync.status === "stale") conflict("pull_head_changed_during_publish");
+      if (!isMappedExternalFork) {
+        const targetHeadRef = mappedRemote
+          ? `refs/heads/${mappedRemote.head.ref}`
+          : `refs/heads/gitedge/pr/${pull.number}`;
+        const headSync = await syncGithubRef(env, connection, credentials, job, {
+          ref: headRef,
+          targetRef: targetHeadRef,
+          before: mappedRemote?.head.sha ?? null,
+          after: publishedOid,
+          pullRequestId: pull.id,
+        });
+        if (headSync.status === "stale") conflict("pull_head_changed_during_publish");
+      }
     }
     const createInput = {
       title: pull.title,
@@ -1529,7 +1547,7 @@ async function outbound(
         pull.state,
         Boolean(pull.draft),
         pull.base_ref,
-        `gitedge/pr/${pull.number}`,
+        mappedRemote.head.ref,
       ];
       const intendedRemoteMatches =
         fingerprint(currentRemoteValue) === fingerprint(intendedRemoteValue) &&
