@@ -21,13 +21,13 @@ Time Travel keeps point-in-time history of the database automatically (30 days o
 
 ```sh
 # Inspect the current bookmark and the oldest restorable point
-pnpm exec wrangler d1 time-travel info gitedge --config workers/auth/wrangler.jsonc
+pnpm exec wrangler d1 time-travel info gitedge --config workers/auth/wrangler.production.jsonc
 
 # Find the bookmark for a moment before the incident
-pnpm exec wrangler d1 time-travel info gitedge --config workers/auth/wrangler.jsonc --timestamp=2026-10-09T08:00:00Z
+pnpm exec wrangler d1 time-travel info gitedge --config workers/auth/wrangler.production.jsonc --timestamp=2026-10-09T08:00:00Z
 
 # Restore in place (irreversible except by restoring again from the printed previous bookmark)
-pnpm exec wrangler d1 time-travel restore gitedge --config workers/auth/wrangler.jsonc --timestamp=2026-10-09T08:00:00Z
+pnpm exec wrangler d1 time-travel restore gitedge --config workers/auth/wrangler.production.jsonc --timestamp=2026-10-09T08:00:00Z
 ```
 
 Restoring replaces the whole database, including accounts and sessions created after the timestamp. Write down the bookmark that `restore` prints as the previous state so the restore itself can be undone. Pause traffic first when possible: deploy nothing, and expect users to be signed out if their session rows are older or newer than the restore point.
@@ -37,13 +37,13 @@ Restoring replaces the whole database, including accounts and sessions created a
 Time Travel is not an offsite copy. Export the database on a schedule and keep the files outside Cloudflare.
 
 ```sh
-pnpm exec wrangler d1 export gitedge --remote --config workers/auth/wrangler.jsonc \
+pnpm exec wrangler d1 export gitedge --remote --config workers/auth/wrangler.production.jsonc \
   --output "backups/gitedge-$(date -u +%Y%m%dT%H%M%SZ).sql"
 ```
 
 An export blocks other queries on the database while it runs, so schedule it in a quiet window (for example daily at 03:00 UTC from a CI schedule or a cron host). Use `--no-data` for a schema-only export and `--table <name>` for a single table. Exported files contain credential hashes and personal data: encrypt them at rest, restrict access and expire old copies.
 
-To restore from a file into a new database, create the database, then run `pnpm exec wrangler d1 execute <name> --remote --file backups/<file>.sql`, update `database_id` in the Worker configs, and redeploy.
+To restore from a file into a new database, create the database, then run `pnpm exec wrangler d1 execute <name> --remote --file backups/<file>.sql`, update `databaseId` in `gitedge.config.json`, and redeploy.
 
 ## Verified backup and isolated rehearsal
 
@@ -97,7 +97,7 @@ CI runs `check:migrations` on every push.
 
 ## Deploy order
 
-`pnpm run deploy` (`scripts/deploy-stack.mjs`) is the supported path. It builds the web app, applies D1 migrations, and deploys the Workers in dependency order:
+`pnpm run deploy` (`scripts/deploy-stack.mjs`) is the supported path. It requires the ignored `gitedge.config.json` operator file and stops when it is missing or still holds placeholders. It renders the per-worker production configs, builds the web app, applies D1 migrations, and deploys the Workers in dependency order:
 
 1. `limits`
 2. `auth`
@@ -117,7 +117,7 @@ The Gateway goes last because it is the only public entrypoint and binds every o
 ## Incident checklist
 
 1. Check `GET /api/health` and note which probes fail.
-2. Check Cloudflare status and recent deployments (`pnpm exec wrangler deployments list --config workers/<service>/wrangler.jsonc`).
+2. Check Cloudflare status and recent deployments (`pnpm exec wrangler deployments list --config workers/<service>/wrangler.production.jsonc`).
 3. Read Worker logs for the failing service; events are scoped kebab-case names such as `gateway:health-probe-unhealthy`.
 4. If a deploy caused it, redeploy the last good commit in the order above.
 5. If data is damaged, stop writes if possible, take an export of the current state for forensics, then restore with Time Travel and record the timestamp.

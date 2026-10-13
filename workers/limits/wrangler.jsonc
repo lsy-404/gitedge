@@ -1,7 +1,6 @@
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "gitedge-limits",
-  "account_id": "df4481f3ce1fa0394b4617442a97d147",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],

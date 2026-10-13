@@ -4,6 +4,8 @@ GitEdge is an MIT-licensed Git forge on Cloudflare Workers and Artifacts. The Vu
 
 Existing public repositories can be imported from an https Git URL with full history from the dashboard or an organization page; the import runs through Artifacts, shows progress and can be retried after a failure. Private source repositories are not supported.
 
+Live instance: <https://gitedge.voidcarve.com>. Source: <https://github.com/lsy-404/gitedge>.
+
 Each account can create multiple agents. An agent session receives an isolated Artifacts fork, a repository-scoped API credential, and a short-lived Git credential. Pull requests can propose changes from a session fork. Reviews and CI results carry the authenticated actor and the exact reviewed commit.
 
 ## Run locally
@@ -38,9 +40,30 @@ With the local stack running, `node test/e2e/api-git.mjs` verifies account creat
 
 Run `node test/e2e/git-boundaries.mjs <fixture-directory>` after that Git check to verify private repositories, Basic authentication, binary files, tags, read-only credentials and access isolation. `GITEDGE_API=http://localhost:8877 node test/e2e/deploy.mjs` exercises actual Cloudflare provisioning, migration, upload and live binding readback using the current Wrangler account; it creates uniquely named test resources. See [SSO configuration](docs/sso.md#live-acceptance-with-keycloak) for the real Keycloak acceptance fixture.
 
-The remaining e2e scripts need these inputs. `test/e2e/browser-accounts.mjs` runs against the local stack (`GITEDGE_API`, loopback only) and creates two accounts to check browser identity switching. `test/e2e/seed-ui.mjs` and `test/e2e/settings-signatures.mjs` run against the local stack and require `GITEDGE_FIXTURE` pointing at an `api-git.mjs` fixture directory and `GITEDGE_API=http://localhost:8877`. `test/e2e/production-smoke.mjs` runs against the production Gateway (`GITEDGE_PRODUCTION_URL`, defaulting to the configured custom domain; optional `GITEDGE_REPOSITORY_VISIBILITY`). `test/e2e/production-actions.mjs` runs against production and requires `GITEDGE_WEBHOOK_RECEIVER` and `GITEDGE_WEBHOOK_RECEIVER_NAME` for an owned verification receiver.
+The remaining e2e scripts need these inputs. `test/e2e/browser-accounts.mjs` runs against the local stack (`GITEDGE_API`, loopback only) and creates two accounts to check browser identity switching. `test/e2e/seed-ui.mjs` and `test/e2e/settings-signatures.mjs` run against the local stack and require `GITEDGE_FIXTURE` pointing at an `api-git.mjs` fixture directory and `GITEDGE_API=http://localhost:8877`. `test/e2e/production-smoke.mjs` runs against your production Gateway (`GITEDGE_PRODUCTION_URL`, an https origin; optional `GITEDGE_REPOSITORY_VISIBILITY`). `test/e2e/production-actions.mjs` runs against your production stack and requires `GITEDGE_ORIGIN`, `CLOUDFLARE_ACCOUNT_ID`, `GITEDGE_WEBHOOK_RECEIVER` and `GITEDGE_WEBHOOK_RECEIVER_NAME` for an owned verification receiver (`test/production-receiver`). `test/e2e/voidcarve-sso.mjs` verifies a live OIDC provider and requires `GITEDGE_ORIGIN`, `GITEDGE_SSO_ISSUER_ORIGIN`, `GITEDGE_SSO_PROVIDER_ID`, `VOIDCARVE_TEST_CREDENTIALS` and `VOIDCARVE_TEST_RESULT`.
 
-`build` builds the Vue interface and bundles every Worker with Wrangler's dry-run mode. Dry-run builds do not check that service binding targets exist. Production deployment is a separate `pnpm run deploy` operation that applies D1 migrations and deploys internal services before the Gateway. The first deploy into an empty account creates placeholder Workers for the cyclic bindings (Git, Forge, Actions and the Gateway that MCP binds) and then replaces them with the real deploys.
+`build` builds the Vue interface and bundles every Worker with Wrangler's dry-run mode; it needs no operator file. Dry-run builds do not check that service binding targets exist. Production deployment is a separate `pnpm run deploy` operation that applies D1 migrations and deploys internal services before the Gateway. The first deploy into an empty account creates placeholder Workers for the cyclic bindings (Git, Forge, Actions and the Gateway that MCP binds) and then replaces them with the real deploys.
+
+## Deploy your own
+
+The committed `workers/*/wrangler.jsonc` files carry no account-specific values, so a fork builds and tests as is. Values that belong to your Cloudflare account live in one ignored operator file, `gitedge.config.json` at the repository root. `pnpm run deploy` renders it into ignored per-worker configs (`workers/<name>/wrangler.production.jsonc`) and deploys from those; the committed files are never edited.
+
+1. Requirements: a Cloudflare Workers Paid account with Artifacts access, a domain on Cloudflare for the Gateway, Node.js 24+, and `pnpm install --frozen-lockfile` in the root and in `apps/web`. Authenticate Wrangler (`wrangler login` or `CLOUDFLARE_API_TOKEN`).
+2. Create the D1 database once with `pnpm exec wrangler d1 create gitedge` and note its UUID.
+3. Copy `gitedge.config.example.json` to `gitedge.config.json` and replace every value:
+
+| Field          | Value to replace                                                                                                                                       |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `accountId`    | Your 32-character Cloudflare account ID, applied to every Worker.                                                                                      |
+| `databaseId`   | UUID of the `gitedge` D1 database, applied to every D1 binding.                                                                                        |
+| `domain`       | Hostname the Gateway serves as a Workers custom domain (the zone must be on your account). Example domains are rejected.                               |
+| `ssoProviders` | Array of OIDC or SAML provider definitions written to the Auth Worker's `SSO_PROVIDERS_JSON`; `[]` disables SSO. See [SSO configuration](docs/sso.md). |
+| `vars`         | Optional per-Worker variable overrides keyed by Worker name (`auth`, `gateway`, and so on). See [configuration](docs/configuration.md).                |
+
+4. Render the generated configs with `pnpm run config:production`, then set the required secrets against them, for example `pnpm exec wrangler secret put DEPLOY_SESSION_KEY --config workers/deploy/wrangler.production.jsonc`. All secrets are listed in [configuration](docs/configuration.md).
+5. Run `pnpm run deploy`. It refuses to start when the operator file is missing or still holds placeholders, applies D1 migrations, creates the R2 bucket and queue, and deploys the Workers in dependency order. `pnpm run db:migrate` applies migrations alone.
+
+Resource names that do not identify an account (the R2 bucket `gitedge-release-assets`, the queue `gitedge-github-sync` and the Artifacts namespace `gitedge`) are defaults in the committed configs. Full details are in [deployment configuration](docs/deploy.md).
 
 ## Forks, stars and Explore
 
@@ -107,14 +130,13 @@ Accounts can add an authenticator app (TOTP), passkeys and ten single-use recove
 
 ## Single sign-on
 
-Sign in with identity-only GitHub OAuth or configure multiple OIDC or SAML 2.0 providers (including `https://id.voidcarve.com`), link identities to existing accounts, and use provider-aware single sign-out from Account settings. Standard code-flow and SAML signature validation use maintained MIT libraries. See [SSO configuration](docs/sso.md) for provider settings, callback URLs, secrets and supported flows.
+Sign in with identity-only GitHub OAuth or configure multiple OIDC or SAML 2.0 providers, link identities to existing accounts, and use provider-aware single sign-out from Account settings. Standard code-flow and SAML signature validation use maintained MIT libraries. See [SSO configuration](docs/sso.md) for provider settings, callback URLs, secrets and supported flows.
 
 ## Architecture
 
 The public Gateway serves Vue assets and authenticates requests before forwarding to internal Auth, Forge, Git, Actions and Deploy Workers. Auth owns credentials, agent subaccounts, webhook delivery and sessions. Forge owns collaboration records, in-app notifications and repository webhook delivery in D1. Git owns Artifacts operations and forwards Smart HTTP streams. Actions runs bounded source snapshots in isolated Containers. Deploy interprets a reviewed deployment manifest and relays a fixed set of Cloudflare operations.
 
-Artifacts owns repository contents, refs and Git protocol behavior. Older repositories without an Artifacts mapping must be imported before use. Preserve the prior deployment and its storage until their data has been transferred and verified; deploying the new application does not transfer existing Git data.
-
+Artifacts owns repository contents, refs and Git protocol behavior.
 Code view shortcuts: `t` opens a fuzzy file finder (20,000 paths per commit, truncation is reported) and `y` rewrites the address to a permalink pinned to the full commit id. Blob URLs accept `#L10` and `#L10-L20` anchors; click or shift-click a line number to set them, and use "Copy permalink" to share a stable link. Files and directories have a History view (first-parent commits that changed the path, loaded in bounded pages) and files have a Blame view that reports partial results when the walk budget ends. Every commit has a page at `/:owner/:repo/commit/:oid` with its message, parents and diff.
 
 Browser previews support text files up to 2 MiB. Diffs show up to 200 changed files and report truncation. In-Worker comparisons inspect up to 250 commits per side; in-Worker merge transfer is limited to 24 MiB per remote. Larger histories and merges can be handled with a regular Git client, while transport streams remain unbuffered.
@@ -186,7 +208,7 @@ Transferring a repository moves it to your own account or an organization you ow
 
 ## Private repository access responses
 
-Configure `PRIVATE_REPOSITORY_RESPONSE` in `workers/gateway/wrangler.jsonc` and redeploy the Gateway:
+Set `PRIVATE_REPOSITORY_RESPONSE` under `vars.gateway` in `gitedge.config.json` and redeploy the Gateway:
 
 - `not_found` (default): unauthorized private repositories return the same 404 response as missing repositories.
 - `forbidden`: unauthorized private repositories return 403 with an explicit access-denied message. This discloses repository existence, but never its contents.
@@ -197,8 +219,10 @@ Unset or invalid values use `not_found`. The policy covers browser repository ro
 
 Public repository reads are cached close to readers and never shared for private data. Commit-addressed responses are immutable; branch and tag reads are resolved to their commit on each request, so a push is visible immediately and conditional requests answer 304. Visibility changes, transfers, renames and deletion take effect at once: access is checked before any cache lookup, and each of those changes moves the repository to a new cache generation. Inspect the `X-GitEdge-Cache` response header (`hit`, `miss`, `revalidated`, `bypass`) to verify behavior; the classes and limits are described in [docs/architecture.md](docs/architecture.md#edge-caching).
 
-## License
-
-[MIT](LICENSE). The retained upstream logger attribution is in [LICENSES/MIT-git-on-cloudflare.txt](LICENSES/MIT-git-on-cloudflare.txt).
+## Backup and recovery
 
 Operator backup, integrity verification and isolated recovery rehearsal are available through `pnpm run recovery`; see [operations](docs/operations.md). Backups include D1, repository/session refs and R2 release assets, with explicit consistency and source/destination isolation checks.
+
+## License
+
+GitEdge is released under the [MIT](LICENSE) license. The retained upstream logger attribution is in [LICENSES/MIT-git-on-cloudflare.txt](LICENSES/MIT-git-on-cloudflare.txt). The web interface bundles third-party packages under their own licenses, including `@platform-kit/fluent` (Apache-2.0), DOMPurify (MPL-2.0 OR Apache-2.0), highlight.js (BSD-3-Clause), Lucide icons (ISC), and Vue, vue-i18n and vue-router (MIT). Their license texts and notices are in [apps/web/public/third-party-notices.txt](apps/web/public/third-party-notices.txt), which the deployed site also serves at `/third-party-notices.txt`.

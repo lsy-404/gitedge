@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdtemp, mkdir, rm, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { tmpdir } from "node:os";
@@ -7,11 +7,10 @@ import path from "node:path";
 
 const exec = promisify(execFile);
 const origin = process.env.GITEDGE_API || "http://localhost:8879";
-const gatewayConfig = JSON.parse(await readFile("workers/gateway/wrangler.jsonc", "utf8"));
-const cloudflareAccountId = gatewayConfig.account_id;
+const cloudflareAccountId = process.env.CLOUDFLARE_ACCOUNT_ID;
 check(
   typeof cloudflareAccountId === "string" && /^[a-f0-9]{32}$/.test(cloudflareAccountId),
-  "Gateway account_id is required for isolated verification."
+  "Set CLOUDFLARE_ACCOUNT_ID for isolated verification."
 );
 const cloudflareApi = "https://api.cloudflare.com/client/v4";
 const runId = randomBytes(10).toString("hex");

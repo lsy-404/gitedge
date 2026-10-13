@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
-const origin = "https://gitedge.voidcarve.com";
+const origin = process.env.GITEDGE_ORIGIN;
+const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+assert.ok(
+  origin && accountId,
+  "Set GITEDGE_ORIGIN and CLOUDFLARE_ACCOUNT_ID for the target stack."
+);
 const receiver = process.env.GITEDGE_WEBHOOK_RECEIVER;
 const receiverWorker = process.env.GITEDGE_WEBHOOK_RECEIVER_NAME;
 assert.ok(
@@ -55,7 +60,7 @@ async function putReceiverSecret(secret) {
         "test/production-receiver/wrangler.jsonc",
       ],
       {
-        env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: "df4481f3ce1fa0394b4617442a97d147" },
+        env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: accountId },
         stdio: ["pipe", "ignore", "pipe"],
       }
     );

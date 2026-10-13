@@ -1,3 +1,23 @@
+# Deployment configuration
+
+## Deploying GitEdge itself
+
+The committed `workers/*/wrangler.jsonc` files hold only neutral values: no `account_id`, the `REPLACE_WITH_D1_DATABASE_ID` placeholder, the example domain `gitedge.example.com` and `SSO_PROVIDERS_JSON` set to `[]`. They are enough for `pnpm run build`, the test suites and `pnpm run dev` without any operator file; local `dev` takes the account from `CLOUDFLARE_ACCOUNT_ID`, the operator file or the Wrangler login.
+
+Production values come from `gitedge.config.json` at the repository root (ignored by Git; start from `gitedge.config.example.json`):
+
+| Field          | Applied to                                                                                               |
+| -------------- | -------------------------------------------------------------------------------------------------------- |
+| `accountId`    | `account_id` of every Worker, and `CLOUDFLARE_ACCOUNT_ID` for Wrangler calls.                            |
+| `databaseId`   | `database_id` of every D1 binding.                                                                       |
+| `domain`       | The Gateway's `custom_domain` route pattern.                                                             |
+| `ssoProviders` | The Auth Worker's `SSO_PROVIDERS_JSON` (serialized). See [SSO](sso.md).                                  |
+| `vars`         | Optional `{ "<worker>": { "<NAME>": "<value>" } }` overrides merged over each Worker's committed `vars`. |
+
+`pnpm run deploy` validates the file (a missing file or a placeholder value stops the deployment before any remote call), writes `workers/<worker>/wrangler.production.jsonc` beside each original so relative `main` and asset paths still resolve, and deploys with those files. `pnpm run config:production` only renders them, which is what you need before `wrangler secret put ... --config workers/<worker>/wrangler.production.jsonc`. `pnpm run db:migrate` applies the D1 migrations remotely using the same rendered configs. `pnpm run build` and `pnpm run deploy:dry-run` use the operator file when present and inert sample values otherwise. Generated files are ignored by Git; never edit them.
+
+To change a name that is not account-specific (R2 bucket, queue, Artifacts namespace), edit the committed Worker config and the tests that assert it.
+
 # Repository deployment manifest
 
 GitEdge can deploy a repository ref to a Cloudflare account through the repository page's deployment wizard. The Deploy Worker reads `gitedge.deploy.json` from that ref and interprets only the fixed schema below. It never executes repository supplied JavaScript.

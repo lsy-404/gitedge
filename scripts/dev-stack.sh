@@ -3,8 +3,15 @@ set -euo pipefail
 
 root_dir="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root_dir"
-CLOUDFLARE_ACCOUNT_ID="$(node --input-type=module -e "import { accountId } from './scripts/deploy-stack.mjs'; console.log(accountId())")"
-export CLOUDFLARE_ACCOUNT_ID
+# Remote Artifacts bindings need an account: the environment wins, then the operator file, then the Wrangler login.
+if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+  CLOUDFLARE_ACCOUNT_ID="$(node scripts/operator-config.mjs account-id)"
+fi
+if [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
+  export CLOUDFLARE_ACCOUNT_ID
+else
+  unset CLOUDFLARE_ACCOUNT_ID
+fi
 pnpm --dir apps/web run build
 pnpm run db:migrate:local
 

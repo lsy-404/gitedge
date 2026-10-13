@@ -1,7 +1,6 @@
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "gitedge-gateway",
-  "account_id": "df4481f3ce1fa0394b4617442a97d147",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
   "workers_dev": false,
@@ -15,7 +14,7 @@
     {
       "binding": "DB",
       "database_name": "gitedge",
-      "database_id": "c9a00d9d-db41-494e-b096-55b8b6bfe3a9"
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID"
     }
   ],
   "services": [
@@ -69,7 +68,7 @@
   },
   "routes": [
     {
-      "pattern": "gitedge.voidcarve.com",
+      "pattern": "gitedge.example.com",
       "custom_domain": true
     }
   ],
