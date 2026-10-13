@@ -230,11 +230,16 @@ export async function mergeCandidateRoute(
 ): Promise<Response | null> {
   if (parts[2] !== "pull-requests" || parts[4] !== "merge-candidate" || parts.length !== 5)
     return null;
+  if (repository.pulls_enabled === 0)
+    return errorResponse(404, "feature_disabled", "Repository pull requests are disabled.");
   if (request.method !== "GET") return errorResponse(405, "method_not_allowed", "Use GET.");
+  const number = Number(parts[3]);
+  if (!Number.isSafeInteger(number) || number < 1)
+    return errorResponse(400, "bad_request", "A positive pull request number is required.");
   const row = await env.DB.prepare(
     "SELECT c.* FROM forge_merge_candidates c JOIN forge_pull_requests p ON p.id = c.pull_request_id WHERE p.repository_id = ? AND p.number = ? ORDER BY c.created_at DESC LIMIT 1"
   )
-    .bind(repository.id, Number(parts[3]))
+    .bind(repository.id, number)
     .first<MergeCandidateRecord>();
   return dataResponse(row ? await candidateState(env, row) : null);
 }

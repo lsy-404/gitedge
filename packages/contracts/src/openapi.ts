@@ -144,7 +144,7 @@ export const API_OPERATIONS: readonly ApiOperation[] = [
     tag: "Pull requests",
     summary: "Read checks for the combined base and head that the merge queue will publish.",
     scope: "repo:read",
-    anonymous: false,
+    anonymous: true,
     status: 200,
     response: dataOf(MergeCandidateSchema.nullable()),
   },

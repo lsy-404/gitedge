@@ -709,6 +709,12 @@ async function publicRepositoryRead(
             : null;
   if (disabled)
     return errorResponse(404, "feature_disabled", `Repository ${disabled} are disabled.`);
+  const candidate = await mergeCandidateRoute(env, request, repository, [
+    "repositories",
+    repository.id,
+    ...suffix,
+  ]);
+  if (candidate) return candidate;
   if (repository.archived === 1 && request.method !== "GET")
     return errorResponse(409, "repository_archived", "Archived repositories are read-only.");
   if (resource === "releases") {
