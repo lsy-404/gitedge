@@ -97,10 +97,11 @@ async function save(): Promise<void> {
     repository.value = result.connection?.repository ?? repository.value.trim();
     notice.value = t("githubSyncSaved");
   } catch (cause) {
+    if (currentVersion !== version) return;
     if (reauth.intercept(cause, save)) return;
     actionError.value = errorMessage(cause, t, {}, "githubSyncActionError");
   } finally {
-    busy.value = false;
+    if (currentVersion === version) busy.value = false;
   }
 }
 
@@ -116,10 +117,11 @@ async function updateState(action: () => Promise<GitHubSyncState>): Promise<void
     state.value = result;
     if (!result.connection) notice.value = t("githubSyncDisconnected");
   } catch (cause) {
+    if (currentVersion !== version) return;
     if (reauth.intercept(cause, () => updateState(action))) return;
     actionError.value = errorMessage(cause, t, {}, "githubSyncActionError");
   } finally {
-    busy.value = false;
+    if (currentVersion === version) busy.value = false;
   }
 }
 
@@ -149,6 +151,7 @@ watch(
     actionError.value = "";
     notice.value = "";
     reauth.pending.value = null;
+    busy.value = false;
     token.value = "";
     owner.value = "";
     repository.value = "";

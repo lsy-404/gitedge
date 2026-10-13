@@ -68,11 +68,11 @@ Create a GitHub OAuth application and register the callback URL `https://<gatewa
 
 ## Gateway
 
-| Name                          | Kind | Default                        | Purpose                                                                                                                        |
-| ----------------------------- | ---- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
-| `IP_RPM_LIMIT`                | var  | `300`                          | Requests per minute per client address (IPv6 clients are keyed by /64 prefix).                                                 |
-| `PRIVATE_REPOSITORY_RESPONSE` | var  | `not_found`                    | `not_found` or `forbidden`; see the README.                                                                                    |
-| `USER_GROUP_LIMITS_JSON`      | var  | built-in `free`/`team`/`admin` | Optional per-group overrides. Set the same value on Forge, because Gateway enforces `rpm` and Forge enforces the other limits. |
+| Name                          | Kind | Default                        | Purpose                                                                                                                                |
+| ----------------------------- | ---- | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `IP_RPM_LIMIT`                | var  | `300`                          | Fallback requests per minute per client address (IPv6 clients are keyed by /64 prefix); the site-admin setting in D1 takes precedence. |
+| `PRIVATE_REPOSITORY_RESPONSE` | var  | `not_found`                    | `not_found` or `forbidden`; see the README.                                                                                            |
+| `USER_GROUP_LIMITS_JSON`      | var  | built-in `free`/`team`/`admin` | Optional per-group overrides. Set the same value on Forge, because Gateway enforces `rpm` and Forge enforces the other limits.         |
 
 ## Pages
 
@@ -92,10 +92,11 @@ Pages serve public repositories only: serving private repositories would need cr
 | `USER_GROUP_LIMITS_JSON` | var                    | built-in `free`/`team`/`admin`  | Same value as on the Gateway; see the Gateway table.                                                                                                                                                      |
 | `RELEASE_ASSETS`         | R2 binding             | bucket `gitedge-release-assets` | Stores release assets under `<repositoryId>/<assetId>`. `pnpm run deploy` creates the bucket when it is missing; create it manually before a manual `wrangler deploy`. Local `wrangler dev` simulates it. |
 | `MERGE_QUEUE`            | Durable Object binding | class `MergeQueueDurableObject` | SQLite-backed merge queue, one object per repository and target branch. Declared with its migration in `workers/forge/wrangler.jsonc`; no setup is needed.                                                |
-| `WEBHOOK_ENCRYPTION_KEY` | secret                 | none                            | Same key as on Auth; encrypts repository webhook secrets. Webhooks need it.                                                                                                                               |
+| `WEBHOOK_ENCRYPTION_KEY` | secret                 | none                            | Same Base64-encoded 32-byte key as on Auth; encrypts repository webhook secrets plus the GitHub sync token and signing secret. Required for either feature.                                               |
+| `GITHUB_SYNC_QUEUE`      | Queue binding          | `gitedge-github-sync`           | Durable GitHub synchronization jobs. `pnpm run deploy` creates the queue when missing; create it before manual Forge deployment.                                                                          |
 | `LOG_LEVEL`              | var                    | logger default                  | Minimum structured log level.                                                                                                                                                                             |
 
-Forge runs two cron triggers: every 15 minutes for repository purges and retention, and every minute to re-evaluate auto-merge settings and merge queues (at most two merges per run) and retry webhook deliveries. Use the same `WEBHOOK_ENCRYPTION_KEY` on Auth and Forge; replacing it makes existing webhook secrets undecryptable until they are rotated. Forge sets `global_fetch_strictly_public` so webhook requests can never reach private addresses.
+Forge runs two cron triggers: every 15 minutes for repository purges and retention, and every minute to re-evaluate auto-merge settings and merge queues (at most two merges per run) and retry webhook deliveries. Use the same `WEBHOOK_ENCRYPTION_KEY` on Auth and Forge; replacing it makes existing webhook and GitHub synchronization credentials undecryptable until they are rotated or reconnected. Forge sets `global_fetch_strictly_public` so webhook requests can never reach private addresses.
 
 ### AI pull request summaries
 
