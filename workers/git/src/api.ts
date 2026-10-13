@@ -225,6 +225,9 @@ export async function handleGitApi(
           beforeWrite,
           env.LOG_LEVEL
         );
+        await reportPushEvent(env, repositoryId, access.user, [
+          { ref: `refs/tags/${tag.name}`, before: ZERO_OID, after: tag.oid },
+        ]);
         return dataResponse(tag, 201);
       }
       const input = DeleteTagInputSchema.safeParse(value);
@@ -246,6 +249,9 @@ export async function handleGitApi(
         },
         env.LOG_LEVEL
       );
+      await reportPushEvent(env, repositoryId, access.user, [
+        { ref: `refs/tags/${input.data.name}`, before: input.data.expectedOid, after: ZERO_OID },
+      ]);
       return dataResponse({ deleted: true });
     } catch (cause) {
       if (cause instanceof GitTagExists) return errorResponse(409, "tag_exists", cause.message);

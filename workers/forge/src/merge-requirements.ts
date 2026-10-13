@@ -283,6 +283,7 @@ export async function evaluateMergeRequirements(
       seen.add(review.actor_key);
       if (review.member !== 1) continue;
       const reviewer = parseActor(review.actor_json, review.author_id);
+      if (reviewer.kind === "external") continue;
       if (review.state === "changes_requested") changesBy.push(reviewer.name);
       if (review.state !== "approved" || reviewer.kind !== "user") continue;
       const reason = barred.get(review.author_id);

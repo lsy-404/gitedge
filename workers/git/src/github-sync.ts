@@ -62,7 +62,7 @@ async function advertised(remote: string, headers: Record<string, string>, prefi
   return git.listServerRefs({
     http: gitHttpClient(remote, 1_048_576),
     url: remote,
-    headers,
+    headers: { ...headers },
     prefix,
   });
 }
@@ -415,8 +415,14 @@ export async function handleGithubGitSync(request: Request, env: GitEnv): Promis
         ? await git.resolveRef({ fs, dir, ref: input.ref })
         : fetched.fetchHead;
       if (fetchedOid !== input.after) return result("stale");
-      await git.writeRef({ fs, dir, ref: input.targetRef, value: input.after, force: true });
     }
+    await git.writeRef({
+      fs,
+      dir,
+      ref: input.targetRef,
+      value: input.after === ZERO_OID ? before : input.after,
+      force: true,
+    });
     if (
       !(await authorizedSync(env, input)) ||
       (inbound && !(await importAllowed(env, row, input, selected, before)))

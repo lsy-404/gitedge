@@ -341,7 +341,7 @@ export async function dispatchPushHeadUpdates(
       headHistoryIndexes.set(pull.id, statements.length);
       statements.push(
         env.DB.prepare(
-          `INSERT OR IGNORE INTO forge_pull_head_updates (id, pull_request_id, repository_id, source, previous_oid, new_oid, pusher_id, actor_json, agent_session_id, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${pullCondition.sql}`
+          `INSERT OR IGNORE INTO forge_pull_head_updates (id, pull_request_id, repository_id, source, previous_oid, new_oid, pusher_id, actor_json, agent_session_id, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${pullCondition.sql} RETURNING id`
         ).bind(
           historyId,
           pull.id,
@@ -431,7 +431,7 @@ export async function dispatchPushHeadUpdates(
     if (!sessionId) queued += 1;
     for (const pull of selectedPulls) {
       const historyIndex = headHistoryIndexes.get(pull.id);
-      if (historyIndex === undefined || results[historyIndex]?.meta.changes !== 1) continue;
+      if (historyIndex === undefined || results[historyIndex]?.results.length !== 1) continue;
       const pullRepository = pullRepositories.get(pull.id);
       if (!pullRepository) continue;
       await triggerPullActions(env, pull.id);

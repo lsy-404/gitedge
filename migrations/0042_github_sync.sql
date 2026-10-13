@@ -20,8 +20,7 @@ CREATE TABLE forge_github_connections (
   failure_count INTEGER NOT NULL DEFAULT 0,
   error_code TEXT,
   last_synced_at INTEGER,
-  created_at INTEGER NOT NULL,
-  UNIQUE(github_repository_id, callback_url)
+  created_at INTEGER NOT NULL
 );
 CREATE TABLE forge_github_jobs (
   id TEXT PRIMARY KEY NOT NULL,
@@ -72,76 +71,76 @@ CREATE TRIGGER github_push_accepted AFTER UPDATE OF accepted ON forge_push_event
 WHEN NEW.accepted=1 AND OLD.accepted=0 AND NEW.session_id='' AND (NEW.ref LIKE 'refs/heads/%' OR NEW.ref LIKE 'refs/tags/%')
 BEGIN
   INSERT OR IGNORE INTO forge_github_jobs (id,connection_id,direction,event,payload,status,next_attempt_at,created_at)
-  SELECT 'push:'||NEW.event_id||':'||NEW.ref,c.id,'outbound','push',json_object('ref',NEW.ref,'before',NEW.before_oid,'after',NEW.after_oid),'pending',NEW.created_at,NEW.created_at FROM forge_github_connections c WHERE c.repository_id=NEW.repository_id AND c.enabled=1;
+  SELECT 'push:'||NEW.event_id||':'||NEW.ref,c.id,'outbound','push',json_object('ref',NEW.ref,'before',NEW.before_oid,'after',NEW.after_oid),'pending',NEW.created_at,NEW.created_at FROM forge_github_connections c WHERE c.repository_id=NEW.repository_id;
 END;
 CREATE TRIGGER github_published_head AFTER INSERT ON forge_pull_head_updates
 BEGIN
   INSERT INTO forge_github_jobs (id,connection_id,direction,event,payload,status,next_attempt_at,created_at)
-  SELECT lower(hex(randomblob(16))),c.id,'outbound','pull_request',json_object('kind','pull_request','action','upsert','id',NEW.pull_request_id),'pending',NEW.created_at,NEW.created_at FROM forge_github_connections c WHERE c.repository_id=NEW.repository_id AND c.enabled=1;
+  SELECT lower(hex(randomblob(16))),c.id,'outbound','pull_request',json_object('kind','pull_request','action','upsert','id',NEW.pull_request_id),'pending',NEW.created_at,NEW.created_at FROM forge_github_connections c WHERE c.repository_id=NEW.repository_id;
 END;
 
 CREATE TRIGGER github_issue_insert AFTER INSERT ON forge_issues
-WHEN EXISTS (SELECT 1 FROM forge_github_connections c WHERE c.repository_id = NEW.repository_id AND c.enabled = 1 AND NOT EXISTS (SELECT 1 FROM forge_github_inbound i WHERE i.connection_id=c.id))
+WHEN EXISTS (SELECT 1 FROM forge_github_connections c WHERE c.repository_id = NEW.repository_id AND NOT EXISTS (SELECT 1 FROM forge_github_inbound i WHERE i.connection_id=c.id))
 BEGIN
   INSERT INTO forge_github_jobs (id, connection_id, direction, event, payload, status, next_attempt_at, created_at)
   SELECT lower(hex(randomblob(16))), c.id, 'outbound', 'issue', json_object('kind','issue','action','upsert','id',NEW.id), 'pending', NEW.updated_at, NEW.updated_at FROM forge_github_connections c WHERE c.repository_id=NEW.repository_id;
 END;
 CREATE TRIGGER github_issue_update AFTER UPDATE OF title, body, state, labels_json ON forge_issues
-WHEN EXISTS (SELECT 1 FROM forge_github_connections c WHERE c.repository_id = NEW.repository_id AND c.enabled = 1 AND NOT EXISTS (SELECT 1 FROM forge_github_inbound i WHERE i.connection_id=c.id))
+WHEN EXISTS (SELECT 1 FROM forge_github_connections c WHERE c.repository_id = NEW.repository_id AND NOT EXISTS (SELECT 1 FROM forge_github_inbound i WHERE i.connection_id=c.id))
 BEGIN
   INSERT INTO forge_github_jobs (id, connection_id, direction, event, payload, status, next_attempt_at, created_at)
   SELECT lower(hex(randomblob(16))), c.id, 'outbound', 'issue', json_object('kind','issue','action','upsert','id',NEW.id), 'pending', NEW.updated_at, NEW.updated_at FROM forge_github_connections c WHERE c.repository_id=NEW.repository_id;
 END;
 CREATE TRIGGER github_pull_insert AFTER INSERT ON forge_pull_requests
-WHEN EXISTS (SELECT 1 FROM forge_github_connections c WHERE c.repository_id = NEW.repository_id AND c.enabled = 1 AND NOT EXISTS (SELECT 1 FROM forge_github_inbound i WHERE i.connection_id=c.id))
+WHEN EXISTS (SELECT 1 FROM forge_github_connections c WHERE c.repository_id = NEW.repository_id AND NOT EXISTS (SELECT 1 FROM forge_github_inbound i WHERE i.connection_id=c.id))
 BEGIN
   INSERT INTO forge_github_jobs (id, connection_id, direction, event, payload, status, next_attempt_at, created_at)
   SELECT lower(hex(randomblob(16))), c.id, 'outbound', 'pull_request', json_object('kind','pull_request','action','upsert','id',NEW.id), 'pending', NEW.updated_at, NEW.updated_at FROM forge_github_connections c WHERE c.repository_id=NEW.repository_id;
 END;
 CREATE TRIGGER github_pull_update AFTER UPDATE OF title, body, state, draft, head_ref, base_ref ON forge_pull_requests
-WHEN EXISTS (SELECT 1 FROM forge_github_connections c WHERE c.repository_id = NEW.repository_id AND c.enabled = 1 AND NOT EXISTS (SELECT 1 FROM forge_github_inbound i WHERE i.connection_id=c.id))
+WHEN EXISTS (SELECT 1 FROM forge_github_connections c WHERE c.repository_id = NEW.repository_id AND NOT EXISTS (SELECT 1 FROM forge_github_inbound i WHERE i.connection_id=c.id))
 BEGIN
   INSERT INTO forge_github_jobs (id, connection_id, direction, event, payload, status, next_attempt_at, created_at)
   SELECT lower(hex(randomblob(16))), c.id, 'outbound', 'pull_request', json_object('kind','pull_request','action','upsert','id',NEW.id), 'pending', NEW.updated_at, NEW.updated_at FROM forge_github_connections c WHERE c.repository_id=NEW.repository_id;
 END;
 CREATE TRIGGER github_comment_insert AFTER INSERT ON forge_comments
-WHEN NEW.target_kind IN ('issue','pull_request') AND EXISTS (SELECT 1 FROM forge_github_connections c WHERE c.repository_id = NEW.repository_id AND c.enabled = 1 AND NOT EXISTS (SELECT 1 FROM forge_github_inbound i WHERE i.connection_id=c.id))
+WHEN NEW.target_kind IN ('issue','pull_request') AND EXISTS (SELECT 1 FROM forge_github_connections c WHERE c.repository_id = NEW.repository_id AND NOT EXISTS (SELECT 1 FROM forge_github_inbound i WHERE i.connection_id=c.id))
 BEGIN
   INSERT INTO forge_github_jobs (id, connection_id, direction, event, payload, status, next_attempt_at, created_at)
   SELECT lower(hex(randomblob(16))), c.id, 'outbound', 'comment', json_object('kind','comment','action','upsert','id',NEW.id), 'pending', NEW.updated_at, NEW.updated_at FROM forge_github_connections c WHERE c.repository_id=NEW.repository_id;
 END;
 CREATE TRIGGER github_comment_update AFTER UPDATE OF body ON forge_comments
-WHEN NEW.target_kind IN ('issue','pull_request') AND EXISTS (SELECT 1 FROM forge_github_connections c WHERE c.repository_id = NEW.repository_id AND c.enabled = 1 AND NOT EXISTS (SELECT 1 FROM forge_github_inbound i WHERE i.connection_id=c.id))
+WHEN NEW.target_kind IN ('issue','pull_request') AND EXISTS (SELECT 1 FROM forge_github_connections c WHERE c.repository_id = NEW.repository_id AND NOT EXISTS (SELECT 1 FROM forge_github_inbound i WHERE i.connection_id=c.id))
 BEGIN
   INSERT INTO forge_github_jobs (id, connection_id, direction, event, payload, status, next_attempt_at, created_at)
   SELECT lower(hex(randomblob(16))), c.id, 'outbound', 'comment', json_object('kind','comment','action','upsert','id',NEW.id), 'pending', NEW.updated_at, NEW.updated_at FROM forge_github_connections c WHERE c.repository_id=NEW.repository_id;
 END;
 CREATE TRIGGER github_comment_delete AFTER DELETE ON forge_comments
-WHEN OLD.target_kind IN ('issue','pull_request') AND EXISTS (SELECT 1 FROM forge_github_connections c WHERE c.repository_id = OLD.repository_id AND c.enabled = 1 AND NOT EXISTS (SELECT 1 FROM forge_github_inbound i WHERE i.connection_id=c.id))
+WHEN OLD.target_kind IN ('issue','pull_request') AND EXISTS (SELECT 1 FROM forge_github_connections c WHERE c.repository_id = OLD.repository_id AND NOT EXISTS (SELECT 1 FROM forge_github_inbound i WHERE i.connection_id=c.id))
 BEGIN
   INSERT INTO forge_github_jobs (id, connection_id, direction, event, payload, status, next_attempt_at, created_at)
   SELECT lower(hex(randomblob(16))), c.id, 'outbound', 'comment', json_object('kind','comment','action','delete','id',OLD.id), 'pending', CAST(unixepoch('subsec')*1000 AS INTEGER), CAST(unixepoch('subsec')*1000 AS INTEGER) FROM forge_github_connections c WHERE c.repository_id=OLD.repository_id;
 END;
 CREATE TRIGGER github_review_insert AFTER INSERT ON forge_reviews
-WHEN EXISTS (SELECT 1 FROM forge_github_connections c WHERE c.repository_id = NEW.repository_id AND c.enabled = 1 AND NOT EXISTS (SELECT 1 FROM forge_github_inbound i WHERE i.connection_id=c.id))
+WHEN EXISTS (SELECT 1 FROM forge_github_connections c WHERE c.repository_id = NEW.repository_id AND NOT EXISTS (SELECT 1 FROM forge_github_inbound i WHERE i.connection_id=c.id))
 BEGIN
   INSERT INTO forge_github_jobs (id, connection_id, direction, event, payload, status, next_attempt_at, created_at)
   SELECT lower(hex(randomblob(16))), c.id, 'outbound', 'review', json_object('kind','review','action','upsert','id',NEW.id), 'pending', NEW.created_at, NEW.created_at FROM forge_github_connections c WHERE c.repository_id=NEW.repository_id;
 END;
 CREATE TRIGGER github_review_comment_insert AFTER INSERT ON forge_review_comments
-WHEN NEW.pending=0 AND EXISTS (SELECT 1 FROM forge_github_connections c WHERE c.repository_id = NEW.repository_id AND c.enabled = 1 AND NOT EXISTS (SELECT 1 FROM forge_github_inbound i WHERE i.connection_id=c.id))
+WHEN NEW.pending=0 AND EXISTS (SELECT 1 FROM forge_github_connections c WHERE c.repository_id = NEW.repository_id AND NOT EXISTS (SELECT 1 FROM forge_github_inbound i WHERE i.connection_id=c.id))
 BEGIN
   INSERT INTO forge_github_jobs (id, connection_id, direction, event, payload, status, next_attempt_at, created_at)
   SELECT lower(hex(randomblob(16))), c.id, 'outbound', 'review_comment', json_object('kind','review_comment','action','upsert','id',NEW.id), 'pending', NEW.updated_at, NEW.updated_at FROM forge_github_connections c WHERE c.repository_id=NEW.repository_id;
 END;
 CREATE TRIGGER github_review_comment_update AFTER UPDATE OF body, pending ON forge_review_comments
-WHEN NEW.pending=0 AND EXISTS (SELECT 1 FROM forge_github_connections c WHERE c.repository_id = NEW.repository_id AND c.enabled = 1 AND NOT EXISTS (SELECT 1 FROM forge_github_inbound i WHERE i.connection_id=c.id))
+WHEN NEW.pending=0 AND EXISTS (SELECT 1 FROM forge_github_connections c WHERE c.repository_id = NEW.repository_id AND NOT EXISTS (SELECT 1 FROM forge_github_inbound i WHERE i.connection_id=c.id))
 BEGIN
   INSERT INTO forge_github_jobs (id, connection_id, direction, event, payload, status, next_attempt_at, created_at)
   SELECT lower(hex(randomblob(16))), c.id, 'outbound', 'review_comment', json_object('kind','review_comment','action','upsert','id',NEW.id), 'pending', NEW.updated_at, NEW.updated_at FROM forge_github_connections c WHERE c.repository_id=NEW.repository_id;
 END;
 CREATE TRIGGER github_review_comment_delete AFTER DELETE ON forge_review_comments
-WHEN OLD.pending=0 AND EXISTS (SELECT 1 FROM forge_github_connections c WHERE c.repository_id = OLD.repository_id AND c.enabled = 1 AND NOT EXISTS (SELECT 1 FROM forge_github_inbound i WHERE i.connection_id=c.id))
+WHEN OLD.pending=0 AND EXISTS (SELECT 1 FROM forge_github_connections c WHERE c.repository_id = OLD.repository_id AND NOT EXISTS (SELECT 1 FROM forge_github_inbound i WHERE i.connection_id=c.id))
 BEGIN
   INSERT INTO forge_github_jobs (id, connection_id, direction, event, payload, status, next_attempt_at, created_at)
   SELECT lower(hex(randomblob(16))), c.id, 'outbound', 'review_comment', json_object('kind','review_comment','action','delete','id',OLD.id), 'pending', CAST(unixepoch('subsec')*1000 AS INTEGER), CAST(unixepoch('subsec')*1000 AS INTEGER) FROM forge_github_connections c WHERE c.repository_id=OLD.repository_id;

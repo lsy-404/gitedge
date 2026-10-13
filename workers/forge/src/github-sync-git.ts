@@ -29,6 +29,7 @@ async function gitRequest(env: ForgeEnv, path: string, body: unknown): Promise<u
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(90_000),
     })
   );
   const payload = await readJsonLimited(response, 1_048_576);

@@ -661,8 +661,17 @@ export default {
         ACCOUNT_SECURITY_PATH.test(path)) &&
       request.method !== "GET" &&
       request.headers.get("Origin") !== new URL(request.url).origin
-    )
+    ) {
+      let origin: string | null = null;
+      try {
+        origin = new URL(request.headers.get("Origin") ?? "").origin;
+      } catch {}
+      createLogger(env.LOG_LEVEL, { service: "auth" }).warn("auth:origin-rejected", {
+        origin,
+        expectedOrigin: new URL(request.url).origin,
+      });
       return errorResponse(403, "forbidden", "Same-origin authentication is required.");
+    }
     const expectedUser = request.headers.get("X-GitEdge-Expected-User");
     if (expectedUser && !["/session", "/browser-session"].includes(path)) {
       const expectedSession = await getHumanSession();

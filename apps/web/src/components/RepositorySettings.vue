@@ -690,7 +690,7 @@ watch(() => props.repository.id, load, { immediate: true });
           <NoticeBar v-if="revocationIncomplete" intent="warning">{{
             t("revocationIncomplete")
           }}</NoticeBar>
-          <div class="form-actions">
+          <div v-if="activeSection !== 'githubSync'" class="form-actions">
             <ConfirmButton
               v-if="archivingNow"
               ref="archiveConfirm"

@@ -1457,7 +1457,7 @@ async function featureRequest(
         // Non-member authors never write into task progress, which is members-only memory.
         const [changed] = await env.DB.batch([
           env.DB.prepare(
-            "UPDATE forge_issues SET title = COALESCE(?, title), body = COALESCE(?, body), state = COALESCE(?, state), labels_json = COALESCE(?, labels_json), updated_at = ? WHERE id = ?"
+            "UPDATE forge_issues SET title = COALESCE(?, title), body = COALESCE(?, body), state = COALESCE(?, state), labels_json = COALESCE(?, labels_json), updated_at = ? WHERE id = ? RETURNING id"
           ).bind(
             p.title ?? null,
             p.body ?? null,
@@ -1501,7 +1501,7 @@ async function featureRequest(
             )
           ),
         ]);
-        if (changed.meta.changes !== 1)
+        if (changed.results.length !== 1)
           return errorResponse(409, "conflict", "Issue changed while it was being updated.");
       } else if (targetTable === "forge_pull_requests") {
         const denied = requireMember();
@@ -1530,7 +1530,7 @@ async function featureRequest(
         };
         const [changed] = await env.DB.batch([
           env.DB.prepare(
-            "UPDATE forge_pull_requests SET title = COALESCE(?, title), body = COALESCE(?, body), state = COALESCE(?, state), draft = COALESCE(?, draft), locked_at = CASE WHEN ?3 IS NULL THEN locked_at ELSE NULL END, locked_by = CASE WHEN ?3 IS NULL THEN locked_by ELSE NULL END, locked_head_oid = CASE WHEN ?3 IS NULL THEN locked_head_oid ELSE NULL END, updated_at = ?, merge_started_at = NULL, merge_base_oid = NULL, merge_head_oid = NULL WHERE id = ? AND state != 'merged' AND (?3 IS NULL OR locked_at IS NULL) AND (merge_started_at IS NULL OR merge_started_at < ?)"
+            "UPDATE forge_pull_requests SET title = COALESCE(?, title), body = COALESCE(?, body), state = COALESCE(?, state), draft = COALESCE(?, draft), locked_at = CASE WHEN ?3 IS NULL THEN locked_at ELSE NULL END, locked_by = CASE WHEN ?3 IS NULL THEN locked_by ELSE NULL END, locked_head_oid = CASE WHEN ?3 IS NULL THEN locked_head_oid ELSE NULL END, updated_at = ?, merge_started_at = NULL, merge_base_oid = NULL, merge_head_oid = NULL WHERE id = ? AND state != 'merged' AND (?3 IS NULL OR locked_at IS NULL) AND (merge_started_at IS NULL OR merge_started_at < ?) RETURNING id"
           ).bind(
             p.title ?? null,
             p.body ?? null,
@@ -1610,7 +1610,7 @@ async function featureRequest(
               )
             : []),
         ]);
-        if (changed.meta.changes !== 1)
+        if (changed.results.length !== 1)
           return errorResponse(
             409,
             "conflict",

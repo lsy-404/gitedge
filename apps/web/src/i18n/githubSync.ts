@@ -11,8 +11,8 @@ export const githubSyncMessages = {
     githubSyncToken: "GitHub token",
     githubSyncTokenHint:
       "需要目标仓库 Contents、Issues、Pull requests 与 Webhooks 的读写权限；保存后不会再次显示。",
-    githubSyncVisibilityMismatch: "允许私有仓库同步到公开 GitHub 仓库",
-    githubSyncVisibilityHint: "这会把此私有仓库的数据分享给任何人可访问的公开目标。",
+    githubSyncVisibilityMismatch: "允许公开与私有仓库之间的同步",
+    githubSyncVisibilityHint: "私有仓库中的代码与协作数据会同步到公开仓库，任何人均可访问。",
     githubSyncConnect: "连接并同步",
     githubSyncUpdate: "更新 GitHub 连接",
     githubSyncEnabled: "同步已启用",
@@ -27,7 +27,7 @@ export const githubSyncMessages = {
     githubSyncJobs: "最近同步任务",
     githubSyncNoJobs: "暂无同步任务",
     githubSyncRefresh: "刷新",
-    githubSyncReconcile: "重新校准分支与标签",
+    githubSyncReconcile: "重新校准同步数据",
     githubSyncRetry: "重试",
     githubSyncPause: "暂停同步",
     githubSyncResume: "恢复同步",
@@ -62,10 +62,9 @@ export const githubSyncMessages = {
     githubSyncToken: "GitHub token",
     githubSyncTokenHint:
       "Needs read and write access to Contents, Issues, Pull requests, and Webhooks in the destination repository. It is never shown again after saving.",
-    githubSyncVisibilityMismatch:
-      "Allow syncing a private repository to a public GitHub repository",
+    githubSyncVisibilityMismatch: "Allow synchronization between public and private repositories",
     githubSyncVisibilityHint:
-      "This shares data from this private repository with anyone who can access the public destination.",
+      "Private repository code and collaboration data will be shared with everyone through the public repository.",
     githubSyncConnect: "Connect and sync",
     githubSyncUpdate: "Update GitHub connection",
     githubSyncEnabled: "Sync enabled",
@@ -80,7 +79,7 @@ export const githubSyncMessages = {
     githubSyncJobs: "Latest sync jobs",
     githubSyncNoJobs: "No sync jobs yet",
     githubSyncRefresh: "Refresh",
-    githubSyncReconcile: "Reconcile branches and tags",
+    githubSyncReconcile: "Reconcile synchronization data",
     githubSyncRetry: "Retry",
     githubSyncPause: "Pause sync",
     githubSyncResume: "Resume sync",

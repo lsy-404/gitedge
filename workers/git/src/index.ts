@@ -45,7 +45,23 @@ export default {
         logger.warn("artifacts:operation-limit", {});
         return errorResponse(413, "operation_limit", error.message);
       }
-      logger.error("artifacts:operation-failed", {});
+      logger.error("artifacts:operation-failed", {
+        code:
+          error instanceof Error &&
+          "code" in error &&
+          typeof error.code === "string" &&
+          /^[A-Za-z][A-Za-z0-9_]{0,80}$/.test(error.code)
+            ? error.code
+            : null,
+        errorType: error instanceof Error ? error.name : "unknown",
+        location:
+          error instanceof Error
+            ? error.stack
+                ?.split("\n")[1]
+                ?.match(/\/([A-Za-z0-9_.-]+):([0-9]+):([0-9]+)\)?$/)
+                ?.slice(1)
+            : null,
+      });
       return errorResponse(503, "service_unavailable", "Artifacts operation failed.");
     }
   },

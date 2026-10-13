@@ -697,6 +697,11 @@ export async function drainGithubSync(env: ForgeEnv, connectionId?: string): Pro
         .bind(claimed.id, lease)
         .run();
       claimed.failure_count = 0;
+      await env.DB.prepare(
+        "UPDATE forge_github_jobs SET status='failed',error_code='github_retry_exhausted',completed_at=?,lease=NULL,lease_expires_at=0 WHERE id IN (SELECT id FROM forge_github_jobs WHERE connection_id=? AND status='running' AND attempts>=5 AND lease_expires_at<? LIMIT 5)"
+      )
+        .bind(Date.now(), claimed.id, Date.now())
+        .run();
       for (let count = 0; count < 5 && Date.now() - started < 20_000; count++) {
         const job = await env.DB.prepare(
           "UPDATE forge_github_jobs SET status='running',attempts=attempts+1,lease=?,lease_expires_at=? WHERE id=(SELECT id FROM forge_github_jobs WHERE connection_id=? AND ((status='pending' AND next_attempt_at<=?) OR (status='running' AND lease_expires_at<?)) ORDER BY created_at,id LIMIT 1) RETURNING *"
