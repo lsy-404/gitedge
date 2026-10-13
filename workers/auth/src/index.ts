@@ -10,6 +10,7 @@ import { expireAccessBans, expireUserAccessBan } from "./access-bans";
 import { handleSso } from "./sso/routes";
 import {
   consumeRateLimit,
+  type GithubOAuthStatus,
   LoginInputSchema,
   type LoginSecondFactorChallenge,
   type RateLimitNamespace,
@@ -476,10 +477,20 @@ async function createGithubUser(
   return user;
 }
 
+type GithubOAuthEnv = AuthEnv & { GITHUB_CLIENT_ID: string; GITHUB_CLIENT_SECRET: string };
+
+function githubOAuthConfigured(env: AuthEnv): env is GithubOAuthEnv {
+  return Boolean(
+    env.GITHUB_CLIENT_ID &&
+    env.GITHUB_CLIENT_ID !== "set-with-wrangler-secret-or-vars" &&
+    env.GITHUB_CLIENT_SECRET
+  );
+}
+
 export async function startGithubOAuth(request: Request, env: AuthEnv): Promise<Response> {
   const logger = createLogger(env.LOG_LEVEL, { service: "auth" });
-  if (!env.GITHUB_CLIENT_ID || env.GITHUB_CLIENT_ID === "set-with-wrangler-secret-or-vars") {
-    logger.error("github-oauth:missing-client-id");
+  if (!githubOAuthConfigured(env)) {
+    logger.error("github-oauth:missing-client-config");
     return errorResponse(503, "bad_request", "GitHub sign-in is not configured.");
   }
   const url = new URL(request.url);
@@ -525,11 +536,7 @@ export async function startGithubOAuth(request: Request, env: AuthEnv): Promise<
 
 export async function completeGithubOAuth(request: Request, env: AuthEnv): Promise<Response> {
   const logger = createLogger(env.LOG_LEVEL, { service: "auth" });
-  if (
-    !env.GITHUB_CLIENT_ID ||
-    env.GITHUB_CLIENT_ID === "set-with-wrangler-secret-or-vars" ||
-    !env.GITHUB_CLIENT_SECRET
-  ) {
+  if (!githubOAuthConfigured(env)) {
     logger.error("github-oauth:missing-client-config");
     return errorResponse(503, "bad_request", "GitHub sign-in is not configured.");
   }
@@ -644,6 +651,7 @@ export default {
         "/register",
         "/github/start",
         "/github/callback",
+        "/github/config",
         "/sso/providers",
       ].includes(path) &&
       !PUBLIC_SECURITY_PATH.test(path) &&
@@ -723,6 +731,10 @@ export default {
           "Access token does not grant access to this repository."
         );
       return errorResponse(401, "unauthorized", "Invalid Git credential.");
+    }
+    if (request.method === "GET" && path === "/github/config") {
+      const status: GithubOAuthStatus = { enabled: githubOAuthConfigured(env) };
+      return dataResponse(status);
     }
     if (request.method === "GET" && path === "/github/start") return startGithubOAuth(request, env);
     if (request.method === "GET" && path === "/github/callback")

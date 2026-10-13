@@ -40,24 +40,17 @@ const authPage = computed(() =>
 const repositoryPath = computed(() =>
   route.params.owner && route.params.repo ? `/${route.params.owner}/${route.params.repo}` : ""
 );
+const landingPage = computed(() => route.meta.landing === true);
 const pageName = computed(() => {
-  if (authPage.value) {
-    if (route.path === "/register") return t("registerTitle");
-    return route.path === "/login" ? t("signIn") : t("forgotPasswordTitle");
-  }
+  if (route.meta.title) return t(route.meta.title);
   if (route.params.owner && route.params.repo) return `${route.params.owner}/${route.params.repo}`;
   if (route.params.handle) return t("agentProfile");
-  if (route.params.owner && !route.params.repo) return String(route.params.owner);
-  if (route.path.startsWith("/settings/agents")) return t("agents");
-  if (route.path.startsWith("/settings")) return t("account");
-  if (route.path.startsWith("/organizations")) return t("organizations");
-  if (route.path === "/explore") return t("exploreNav");
-  if (route.path === "/stars") return t("starredNav");
-  return t("dashboard");
+  if (route.params.owner) return String(route.params.owner);
+  return "GitEdge";
 });
 const mainRegion = ref<HTMLElement | null>(null);
 watchEffect(() => {
-  document.title = `${pageName.value} · GitEdge`;
+  document.title = landingPage.value ? t("landingDocumentTitle") : `${pageName.value} · GitEdge`;
 });
 watch(
   () => route.path,
@@ -129,8 +122,13 @@ function onSearchFocusOut(event: FocusEvent) {
 }
 function submitSearch() {
   const query = search.value.trim();
+  const signedIn = Boolean(sessionState.user) && !guestView.value;
   if (/^[a-z\d_-]+\/[a-z\d_.-]+$/i.test(query)) void router.push(`/${query}`);
-  else void router.push({ path: "/dashboard", query: query ? { q: query } : {} });
+  else
+    void router.push({
+      path: signedIn ? "/dashboard" : "/explore",
+      query: query ? { q: query } : {},
+    });
   searchInput.value?.blur();
 }
 function keyboard(event: KeyboardEvent) {
@@ -281,14 +279,21 @@ if (!sessionState.checked) void refreshSession();
           </button>
           <RouterLink
             class="brand"
-            :to="guestView ? route.fullPath : '/dashboard'"
+            :to="guestView ? route.fullPath : sessionState.user ? '/dashboard' : '/'"
             :aria-label="t('brand')"
-            ><img src="/logo.svg" alt="" width="32" height="32" /><span v-if="authPage"
+            ><img src="/logo.svg" alt="" width="32" height="32" /><span
+              v-if="authPage || landingPage"
               >GitEdge</span
             ></RouterLink
           >
           <nav v-if="!authPage" class="header-context" :aria-label="t('ghBreadcrumbs')">
-            <template v-if="repositoryPath"
+            <template v-if="landingPage">
+              <RouterLink class="landing-nav-link" to="/explore">{{ t("exploreNav") }}</RouterLink>
+              <RouterLink class="landing-nav-link" to="/docs/api">{{
+                t("apiDocsTitle")
+              }}</RouterLink>
+            </template>
+            <template v-else-if="repositoryPath"
               ><RouterLink :to="`/${route.params.owner}`">{{ route.params.owner }}</RouterLink
               ><span class="muted">/</span
               ><RouterLink :to="repositoryPath">{{ route.params.repo }}</RouterLink></template
@@ -319,6 +324,9 @@ if (!sessionState.checked) void refreshSession();
             <AppIcon name="search" />
           </button>
           <div class="global-actions">
+            <RouterLink v-if="landingPage && !sessionState.user" class="btn" to="/login">{{
+              t("signIn")
+            }}</RouterLink>
             <template v-if="sessionState.user && !guestView && !authPage">
               <RouterLink
                 class="btn icon-button notification-bell"
@@ -493,7 +501,7 @@ if (!sessionState.checked) void refreshSession();
           </div>
         </div>
         <nav
-          v-if="!authPage && !repositoryPath && !guestView"
+          v-if="!authPage && !landingPage && !repositoryPath && !guestView"
           class="global-nav"
           :aria-label="t('mainNav')"
         >

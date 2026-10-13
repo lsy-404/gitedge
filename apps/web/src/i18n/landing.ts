@@ -1,0 +1,86 @@
+export const landingMessages = {
+  "zh-CN": {
+    landingTitle: "首页",
+    landingDocumentTitle: "GitEdge · 运行在 Cloudflare 上的 Git 代码托管",
+    landingHeadline: "完全运行在 Cloudflare 上的 Git 代码托管",
+    landingLede:
+      "仓库存放在 Artifacts，协作记录在 D1，限流由 Durable Objects 承担，CI 运行在 Containers。使用标准 Git 与公开 REST API 即可克隆、评审和合并。",
+    landingCtaStart: "注册 GitEdge 账户",
+    landingCtaExplore: "浏览公开仓库",
+    landingCtaDocs: "API 文档",
+    landingPathTitle: "一次推送经过的服务",
+    landingService_gateway: "Gateway：唯一公开入口",
+    landingService_auth: "Auth：账户与凭证",
+    landingService_forge: "Forge：Issue、PR 与发布",
+    landingService_git: "Git：对象与引用",
+    landingService_limits: "Limits：请求限流",
+    landingService_actions: "Actions：工作流执行",
+    landingCapabilitiesTitle: "已经可以使用的能力",
+    landingCap_git_title: "基于 Artifacts 的 Git",
+    landingCap_git_text: "标准的 clone、push 与 fetch。Git 对象和引用只存放在 Artifacts 中。",
+    landingCap_review_title: "绑定提交的评审",
+    landingCap_review_text: "评审与检查对应具体的 commit OID，旧提交上的批准不会延续到新提交。",
+    landingCap_agents_title: "智能体子账号",
+    landingCap_agents_text:
+      "为智能体创建独立身份。每个 session 拥有隔离的 Artifacts fork 和有期限的受限凭证。",
+    landingCap_actions_title: "容器中的 Actions",
+    landingCap_actions_text: "每次执行使用独立容器，默认关闭网络，并提供依赖缓存与可下载产物。",
+    landingCap_sync_title: "GitHub 双向同步",
+    landingCap_sync_text:
+      "绑定 GitHub 仓库后，通过签名 Webhook 与持久队列同步分支、标签、Issue、PR 和评审。",
+    landingCap_mcp_title: "MCP 与 OpenAPI",
+    landingCap_mcp_text: "REST、OpenAPI 与 MCP 共用同一套权限检查，智能体和脚本无需另一套接口。",
+    landingCap_cache_title: "边缘缓存",
+    landingCap_cache_text: "公开仓库的读取按 commit OID 在边缘缓存，私有内容不会进入共享缓存。",
+    notFoundTitle: "找不到页面",
+    notFoundText: "这个地址不存在，或者你没有权限查看。请检查地址是否正确。",
+    notFoundHome: "返回首页",
+    authBackToHome: "返回首页",
+    authExplorePublic: "浏览公开仓库",
+  },
+  en: {
+    landingTitle: "Home",
+    landingDocumentTitle: "GitEdge · A Git forge on Cloudflare",
+    landingHeadline: "A Git forge that runs entirely on Cloudflare",
+    landingLede:
+      "Repositories live in Artifacts, collaboration records in D1, rate limits in Durable Objects and CI in Containers. Clone, review and merge over standard Git and a public REST API.",
+    landingCtaStart: "Create a GitEdge account",
+    landingCtaExplore: "Explore public repositories",
+    landingCtaDocs: "API documentation",
+    landingPathTitle: "Services a push passes through",
+    landingService_gateway: "Gateway: the only public entrypoint",
+    landingService_auth: "Auth: accounts and credentials",
+    landingService_forge: "Forge: issues, pull requests, releases",
+    landingService_git: "Git: objects and refs",
+    landingService_limits: "Limits: request limiting",
+    landingService_actions: "Actions: workflow runs",
+    landingCapabilitiesTitle: "What works today",
+    landingCap_git_title: "Git over Artifacts",
+    landingCap_git_text:
+      "Standard clone, push and fetch. Artifacts is the only store for Git objects and refs.",
+    landingCap_review_title: "Reviews bound to commits",
+    landingCap_review_text:
+      "Reviews and checks apply to an exact commit OID, so an approval never carries over to newer commits.",
+    landingCap_agents_title: "Agent sub-accounts",
+    landingCap_agents_text:
+      "Give each agent its own identity. Every session gets an isolated Artifacts fork and a scoped, expiring credential.",
+    landingCap_actions_title: "Actions in Containers",
+    landingCap_actions_text:
+      "Each run gets its own container with networking off by default, plus dependency caching and downloadable artifacts.",
+    landingCap_sync_title: "GitHub two-way sync",
+    landingCap_sync_text:
+      "Bind a GitHub repository to sync branches, tags, issues, pull requests and reviews through signed webhooks and a durable queue.",
+    landingCap_mcp_title: "MCP and OpenAPI",
+    landingCap_mcp_text:
+      "REST, OpenAPI and MCP share the same permission checks, so agents and scripts need no separate interface.",
+    landingCap_cache_title: "Edge caching",
+    landingCap_cache_text:
+      "Public repository reads are cached at the edge by commit OID. Private content never enters a shared cache.",
+    notFoundTitle: "Page not found",
+    notFoundText:
+      "This address does not exist, or you do not have access to it. Check that it is correct.",
+    notFoundHome: "Back to home",
+    authBackToHome: "Back to home",
+    authExplorePublic: "Explore public repositories",
+  },
+};

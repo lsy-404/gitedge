@@ -36,6 +36,7 @@ const challenge = ref<LoginSecondFactorChallenge | null>(null);
 const passkeysSupported = browserSupportsWebAuthn();
 const providers = ref<SsoProviderSummary[]>([]);
 const providersError = ref(false);
+const githubEnabled = ref(false);
 const returnTo = computed(() => safeReturnTo(route.query.redirect));
 /** The built-in GitHub OAuth button below owns GitHub; never list it a second time as a federation provider. */
 const federationProviders = computed(() =>
@@ -86,11 +87,13 @@ function metadataHref(url: string | undefined): string | null {
 }
 
 onMounted(async () => {
-  try {
-    providers.value = await api.ssoProviders();
-  } catch {
-    providersError.value = true;
-  }
+  const [providerResult, githubResult] = await Promise.allSettled([
+    api.ssoProviders(),
+    api.githubOAuthStatus(),
+  ]);
+  if (providerResult.status === "fulfilled") providers.value = providerResult.value;
+  else providersError.value = true;
+  githubEnabled.value = githubResult.status === "fulfilled" && githubResult.value.enabled;
 });
 
 async function finishSignIn(user: User): Promise<void> {
@@ -189,8 +192,12 @@ async function cancelAddingAccount() {
     </div>
     <div v-else class="auth-card">
       <NoticeBar v-if="callbackError" intent="error">{{ callbackError }}</NoticeBar>
-      <div class="auth-provider-list">
+      <div
+        v-if="githubEnabled || federationProviders.length || providersError || samlProviders.length"
+        class="auth-provider-list"
+      >
         <FluentButton
+          v-if="githubEnabled"
           type="button"
           class="btn auth-provider-choice github-auth-choice"
           @click="githubLogin"
@@ -219,7 +226,7 @@ async function cancelAddingAccount() {
           >{{ provider.label }} · {{ t("ssoMetadata") }}</a
         >
       </div>
-      <div class="auth-divider">
+      <div v-if="githubEnabled || federationProviders.length" class="auth-divider">
         <span>{{ t("orContinueWithPassword") }}</span>
       </div>
       <form class="form-stack" @submit.prevent="submit">
@@ -260,6 +267,10 @@ async function cancelAddingAccount() {
         <strong>{{ t("passkeySignIn") }}</strong>
       </button>
     </div>
+    <p v-if="!addingAccount" class="auth-page-footer auth-page-links">
+      <AppLink to="/">{{ t("authBackToHome") }}</AppLink>
+      <AppLink to="/explore">{{ t("authExplorePublic") }}</AppLink>
+    </p>
     <p v-if="addingAccount && sessionState.user && !challenge" class="auth-page-footer">
       <button class="btn btn-subtle" @click="cancelAddingAccount">
         {{ t("cancelAddingAccount") }}

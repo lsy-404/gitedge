@@ -146,7 +146,11 @@ import type {
   WatchLevel,
 } from "../../../../packages/contracts/src/social";
 import type { CommitPayload } from "./repositoryCommit";
-import type { SsoIdentity, SsoProviderSummary } from "../../../../packages/contracts/src/sso";
+import type {
+  GithubOAuthStatus,
+  SsoIdentity,
+  SsoProviderSummary,
+} from "../../../../packages/contracts/src/sso";
 import type {
   BrowserAccounts,
   BrowserIdentity,
@@ -835,6 +839,7 @@ export const api = {
   logout: () => request("/api/auth/logout", { method: "POST" }, true),
   session: () => request<User>("/api/auth/session"),
   browserSession: () => request<BrowserIdentity>("/api/auth/browser-session"),
+  githubOAuthStatus: () => request<GithubOAuthStatus>("/api/auth/github/config"),
   ssoProviders: () => request<SsoProviderSummary[]>("/api/auth/sso/providers"),
   ssoIdentities: () => request<SsoIdentity[]>("/api/auth/sso/identities"),
   linkSsoIdentity: (providerId: string, returnTo: string) =>
