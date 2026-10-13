@@ -436,6 +436,7 @@ function startWikiPage() {
 }
 async function load() {
   const version = ++loadVersion;
+  listLoadingMore.value = false;
   loading.value = true;
   loadError.value = "";
   actionError.value = "";
@@ -971,7 +972,8 @@ watch(
 );
 async function loadMore() {
   const cursor = listNextCursor.value;
-  if (cursor === null || listLoadingMore.value) return;
+  if (cursor === null || listLoadingMore.value || loading.value) return;
+  const version = loadVersion;
   listLoadingMore.value = true;
   try {
     const query: CollaborationListQuery = {
@@ -995,22 +997,25 @@ async function loadMore() {
     };
     if (props.section === "issues") {
       const page = await api.issues(props.repository.id, query);
+      if (version !== loadVersion) return;
       issues.value.push(...page.items);
       listNextCursor.value = page.nextCursor ?? null;
     } else if (props.section === "pulls") {
       const page = await api.pulls(props.repository.id, query);
+      if (version !== loadVersion) return;
       pulls.value.push(...page.items);
       listNextCursor.value = page.nextCursor ?? null;
     } else {
       const page = await api.discussions(props.repository.id, query);
+      if (version !== loadVersion) return;
       discussions.value.push(...page.items);
       listNextCursor.value = page.nextCursor ?? null;
     }
     listTruncated.value = listNextCursor.value !== null;
   } catch (cause) {
-    loadError.value = errorMessage(cause, t);
+    if (version === loadVersion) loadError.value = errorMessage(cause, t);
   } finally {
-    listLoadingMore.value = false;
+    if (version === loadVersion) listLoadingMore.value = false;
   }
 }
 </script>

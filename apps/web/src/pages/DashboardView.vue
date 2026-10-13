@@ -73,6 +73,7 @@ const attentionError = ref("");
 const attentionLoading = ref(false);
 const attentionCursor = ref<string | null>(null);
 const attentionLoadingMore = ref(false);
+let attentionVersion = 0;
 const owner = ref("");
 const filter = ref(typeof route.query.q === "string" ? route.query.q : "");
 const visibleRepos = computed(() => {
@@ -107,11 +108,14 @@ async function load() {
 }
 
 async function loadAttention(cursor?: string) {
+  if (cursor && (attentionLoading.value || attentionLoadingMore.value)) return;
+  const version = cursor ? attentionVersion : ++attentionVersion;
   attentionLoading.value = !cursor;
   attentionLoadingMore.value = Boolean(cursor);
   attentionError.value = "";
   try {
     const page = await api.dashboardAttention(cursor);
+    if (version !== attentionVersion) return;
     attention.value =
       cursor && attention.value
         ? {
@@ -125,10 +129,12 @@ async function loadAttention(cursor?: string) {
         : page;
     attentionCursor.value = page.nextCursor;
   } catch (cause) {
-    attentionError.value = errorMessage(cause, t);
+    if (version === attentionVersion) attentionError.value = errorMessage(cause, t);
   } finally {
-    attentionLoading.value = false;
-    attentionLoadingMore.value = false;
+    if (version === attentionVersion) {
+      attentionLoading.value = false;
+      attentionLoadingMore.value = false;
+    }
   }
 }
 

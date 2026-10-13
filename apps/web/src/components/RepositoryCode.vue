@@ -188,6 +188,22 @@ const codeSearchPath = ref("");
 const codeSearchResult = ref<GitCodeSearch | null>(null);
 const codeSearchBusy = ref(false);
 const codeSearchError = ref("");
+let codeSearchVersion = 0;
+watch(
+  () => [
+    props.repository.id,
+    refName.value,
+    codeSearchQuery.value,
+    codeSearchPath.value,
+    selectedCommit.value?.oid,
+  ],
+  () => {
+    codeSearchVersion++;
+    codeSearchResult.value = null;
+    codeSearchBusy.value = false;
+    codeSearchError.value = "";
+  }
+);
 const showCloneMenu = ref(false);
 const cloneToggle = ref<HTMLElement | null>(null);
 const codeLines = ref<InstanceType<typeof CodeLines> | null>(null);
@@ -519,8 +535,9 @@ function openFile(path: string) {
   );
 }
 async function searchCode(cursor?: string) {
-  const oid = selectedCommit.value?.oid ?? commitOid.value;
+  const oid = cursor ? codeSearchResult.value?.oid : (selectedCommit.value?.oid ?? commitOid.value);
   if (!oid || !codeSearchQuery.value.trim()) return;
+  const version = ++codeSearchVersion;
   codeSearchBusy.value = true;
   codeSearchError.value = "";
   try {
@@ -532,14 +549,15 @@ async function searchCode(cursor?: string) {
       codeSearchPath.value.trim() || undefined,
       cursor
     );
+    if (version !== codeSearchVersion) return;
     codeSearchResult.value =
       cursor && codeSearchResult.value
         ? { ...result, matches: [...codeSearchResult.value.matches, ...result.matches] }
         : result;
   } catch (cause) {
-    codeSearchError.value = errorMessage(cause, t);
+    if (version === codeSearchVersion) codeSearchError.value = errorMessage(cause, t);
   } finally {
-    codeSearchBusy.value = false;
+    if (version === codeSearchVersion) codeSearchBusy.value = false;
   }
 }
 function copyPermalink() {
