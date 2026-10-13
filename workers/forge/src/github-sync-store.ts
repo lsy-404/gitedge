@@ -1,7 +1,7 @@
 import type { GitHubSyncJob, GitHubSyncStatus } from "../../../packages/contracts/src/github-sync";
 import { importSealingKey, openText } from "../../../src/worker/common/secret-box";
 import type { ForgeEnv } from "./common";
-import type { StatementCondition } from "./webhook-events";
+import type { StatementCondition } from "./notifications";
 
 export interface GithubConnectionRow {
   id: string;
