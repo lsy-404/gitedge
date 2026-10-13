@@ -4,6 +4,7 @@ import {
   type GatewayEnv,
   type GatewayService,
 } from "../../workers/gateway/src/index";
+import { emptyGatewayDatabase } from "../support/gateway-database";
 
 function service(handler: (request: Request) => Response | Promise<Response>): GatewayService {
   return { fetch: async (request) => handler(request) };
@@ -13,6 +14,7 @@ const healthy = () => service(() => Response.json({ data: { ok: true } }));
 
 function environment(overrides: Partial<GatewayEnv> = {}): GatewayEnv {
   return {
+    DB: emptyGatewayDatabase(),
     ASSETS: service(() => new Response("asset")),
     AUTH: healthy(),
     FORGE: healthy(),

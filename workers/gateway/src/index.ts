@@ -18,6 +18,7 @@ import {
   type RateLimitNamespace,
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
+import { ipMatchesRange, IP_RPM_MAX, IP_RPM_MIN } from "../../../packages/contracts/src/ip-access";
 import {
   MCP_PATH,
   OPENAPI_PATH,
@@ -39,6 +40,7 @@ export interface GatewayService {
 }
 
 export interface GatewayEnv {
+  DB: D1Database;
   ASSETS: GatewayService;
   AUTH: GatewayService;
   FORGE: GatewayService;
@@ -306,12 +308,52 @@ export function rateLimitIpKey(ip: string): string {
 
 async function enforceIpLimit(request: Request, env: GatewayEnv): Promise<Response | null> {
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
-  const decision = await consumeRateLimit(
-    env.RATE_LIMITER,
-    `ip:${rateLimitIpKey(ip)}`,
-    parsePositiveLimit(env.IP_RPM_LIMIT, 300)
-  );
+  let limit = parsePositiveLimit(env.IP_RPM_LIMIT, 300);
+  try {
+    const setting = await env.DB.prepare(
+      "SELECT value FROM admin_settings WHERE key = 'ip_rpm_limit'"
+    ).first<{ value: string }>();
+    const configured = Number(setting?.value);
+    if (
+      setting &&
+      Number.isSafeInteger(configured) &&
+      configured >= IP_RPM_MIN &&
+      configured <= IP_RPM_MAX
+    )
+      limit = configured;
+  } catch (cause) {
+    createLogger(undefined, { service: "gateway" }).error("gateway:ip-limit-setting-read-failed", {
+      error: cause instanceof Error ? cause.message : "unknown",
+    });
+    return Response.json({ error: "Request policy is temporarily unavailable" }, { status: 503 });
+  }
+  const decision = await consumeRateLimit(env.RATE_LIMITER, `ip:${rateLimitIpKey(ip)}`, limit);
   return rateLimitedResponse(decision);
+}
+
+async function enforceIpBan(request: Request, env: GatewayEnv): Promise<Response | null> {
+  const ip = request.headers.get("CF-Connecting-IP");
+  if (!ip) return null;
+  try {
+    const rows = await env.DB.prepare(
+      "SELECT subject_value AS subjectValue FROM access_bans WHERE kind = 'ip' AND (expires_at IS NULL OR expires_at > ?) LIMIT 101"
+    )
+      .bind(Date.now())
+      .all<{ subjectValue: string }>();
+    if (rows.results.length > 100)
+      return Response.json({ error: "Request policy is temporarily unavailable" }, { status: 503 });
+    if (rows.results.some((row) => ipMatchesRange(ip, row.subjectValue)))
+      return Response.json(
+        { error: "Access denied", code: "ip_banned" },
+        { status: 403, headers: { "Cache-Control": "no-store" } }
+      );
+  } catch (cause) {
+    createLogger(undefined, { service: "gateway" }).error("gateway:ip-ban-read-failed", {
+      error: cause instanceof Error ? cause.message : "unknown",
+    });
+    return Response.json({ error: "Request policy is temporarily unavailable" }, { status: 503 });
+  }
+  return null;
 }
 
 async function enforceUserLimit(
@@ -516,6 +558,9 @@ async function handleSite(request: Request, env: GatewayEnv, match: SiteMatch): 
 
 export async function handleGatewayRequest(request: Request, env: GatewayEnv): Promise<Response> {
   const url = new URL(request.url);
+
+  const ipBanResponse = await enforceIpBan(request, env);
+  if (ipBanResponse) return ipBanResponse;
 
   if (isSitesHost(url.hostname, env.SITES_HOST)) {
     const owner = sitesHostOwner(url.hostname, env.SITES_HOST);

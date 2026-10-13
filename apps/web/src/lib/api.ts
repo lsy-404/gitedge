@@ -35,6 +35,12 @@ import type {
   AdminUser,
   UpdateAdminUserInput,
 } from "../../../../packages/contracts/src/admin";
+import type {
+  AccessBan,
+  CreateAccessBan,
+  IpAccessSettings,
+  UpdateIpRpm,
+} from "../../../../packages/contracts/src/ip-access";
 import type { DeletedRepository } from "../../../../packages/contracts/src/lifecycle";
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from "@simplewebauthn/browser";
 import type {
@@ -217,6 +223,7 @@ export type {
   Invitation,
   OrganizationRole,
 };
+export type { AccessBan, IpAccessSettings } from "../../../../packages/contracts/src/ip-access";
 export type { AuditEvent } from "../../../../packages/contracts/src/audit";
 export type {
   CommitRepositoryChangesResult,
@@ -978,6 +985,25 @@ export const api = {
     request<AdminPage<AdminRepository>>(`/api/auth/admin/repositories${query(params)}`),
   adminGroups: () => request<AdminGroup[]>("/api/auth/admin/groups"),
   adminStats: () => request<AdminStats>("/api/auth/admin/stats"),
+  adminAccessBans: () => request<AccessBan[]>("/api/auth/admin/access-bans"),
+  createAdminAccessBan: (payload: CreateAccessBan) =>
+    request<AccessBan>("/api/auth/admin/access-bans", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  removeAdminAccessBan: (id: string) =>
+    request<{ id: string; removed: boolean }>(
+      `/api/auth/admin/access-bans/${encodeURIComponent(id)}`,
+      {
+        method: "DELETE",
+      }
+    ),
+  adminIpRpm: () => request<IpAccessSettings>("/api/auth/admin/ip-rpm"),
+  updateAdminIpRpm: (payload: UpdateIpRpm) =>
+    request<IpAccessSettings>("/api/auth/admin/ip-rpm", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
   setAdminUserDisabled: (id: string, disabled: boolean) =>
     request<{ id: string; disabled: boolean; revocationIncomplete: boolean }>(
       `/api/auth/admin/users/${encodeURIComponent(id)}/${disabled ? "disable" : "enable"}`,

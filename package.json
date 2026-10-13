@@ -44,6 +44,7 @@
     "@xmldom/xmldom": "^0.8.15",
     "diff": "^9.0.0",
     "fflate": "^0.8.3",
+    "ipaddr.js": "^2.5.0",
     "isomorphic-git": "^1.42.6",
     "memfs": "^4.80.0",
     "mime": "^4.1.0",

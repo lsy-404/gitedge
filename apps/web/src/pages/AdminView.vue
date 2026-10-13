@@ -6,12 +6,13 @@ import { sessionState } from "../lib/session";
 import AdminOverview from "../components/AdminOverview.vue";
 import AdminRepositories from "../components/AdminRepositories.vue";
 import AdminUsers from "../components/AdminUsers.vue";
+import AdminAccess from "../components/AdminAccess.vue";
 import NoticeBar from "../components/NoticeBar.vue";
 import "../styles/workspace.css";
 
 const { t } = useI18n();
 const route = useRoute();
-const tabs = ["overview", "users", "repositories"] as const;
+const tabs = ["overview", "users", "repositories", "access"] as const;
 const tab = computed(() => tabs.find((value) => value === route.query.tab) ?? "overview");
 const allowed = computed(() => sessionState.user?.siteAdmin === true);
 </script>
@@ -38,7 +39,8 @@ const allowed = computed(() => sessionState.user?.siteAdmin === true);
       </nav>
       <AdminOverview v-if="tab === 'overview'" />
       <AdminUsers v-else-if="tab === 'users'" />
-      <AdminRepositories v-else />
+      <AdminRepositories v-else-if="tab === 'repositories'" />
+      <AdminAccess v-else />
     </template>
   </section>
 </template>

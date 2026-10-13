@@ -4,6 +4,7 @@ import {
   type GatewayEnv,
   type GatewayService,
 } from "../../workers/gateway/src/index";
+import { emptyGatewayDatabase } from "../support/gateway-database";
 import {
   AccessTokenIdentitySchema,
   REPOSITORY_ACCESS_DENIED_HEADER,
@@ -21,6 +22,7 @@ function service(handler: (request: Request) => Response | Promise<Response>): G
 
 function environment(overrides: Partial<Record<"auth" | "forge" | "git", GatewayService>> = {}) {
   const env: GatewayEnv = {
+    DB: emptyGatewayDatabase(),
     AUTH:
       overrides.auth ??
       service((request) =>

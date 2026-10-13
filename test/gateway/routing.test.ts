@@ -4,6 +4,7 @@ import {
   type GatewayEnv,
   type GatewayService,
 } from "../../workers/gateway/src/index";
+import { emptyGatewayDatabase } from "../support/gateway-database";
 
 function service(handler: (request: Request) => Response | Promise<Response>): GatewayService {
   return { fetch: async (request) => handler(request) };
@@ -17,6 +18,7 @@ function environment(
   overrides: Partial<Record<"auth" | "forge" | "git" | "assets", GatewayService>> = {}
 ): GatewayEnv {
   return {
+    DB: emptyGatewayDatabase(),
     AUTH:
       overrides.auth ??
       service(
@@ -449,6 +451,7 @@ describe("Gateway routing", () => {
       };
       let gitCalls = 0;
       const env: GatewayEnv = {
+        DB: emptyGatewayDatabase(),
         ...environment({
           forge: resolvedForge,
           git: service(() => {

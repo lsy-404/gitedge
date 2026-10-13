@@ -14,10 +14,210 @@ import { dataResponse, errorResponse, requireRecentAuth } from "../../../src/wor
 import { createLogger } from "../../../src/worker/common/logger";
 import { readJsonLimited, SMALL_JSON_BYTES } from "../../../src/worker/common/readText";
 import { revokeUserAgentSessions, type AgentAuthEnv } from "./agents";
+import { expireAccessBans } from "./access-bans";
+import { ipMatchesRange } from "../../../packages/contracts/src/ip-access";
+import {
+  CreateAccessBanSchema,
+  UpdateIpRpmSchema,
+  IP_RPM_MAX,
+  IP_RPM_MIN,
+  parseIpRange,
+  type AccessBan,
+} from "../../../packages/contracts/src/ip-access";
 
 export interface AdminEnv extends AgentAuthEnv {
   SITE_ADMINS?: string;
   USER_GROUP_LIMITS_JSON?: string;
+}
+
+interface AccessBanRow {
+  id: string;
+  kind: "user" | "ip";
+  subjectValue: string;
+  reason: string;
+  expiresAt: number | null;
+  createdAt: number;
+  createdBy: string;
+}
+
+async function activeAccessBans(env: AdminEnv, now = Date.now()): Promise<AccessBan[]> {
+  const rows = await env.DB.prepare(
+    "SELECT b.id, b.kind, CASE WHEN b.kind = 'user' THEN u.identifier ELSE b.subject_value END AS subjectValue, b.reason, b.expires_at AS expiresAt, b.created_at AS createdAt, actor.identifier AS createdBy FROM access_bans b LEFT JOIN users u ON b.kind = 'user' AND u.id = b.subject_value JOIN users actor ON actor.id = b.created_by WHERE b.expires_at IS NULL OR b.expires_at > ? ORDER BY b.created_at DESC LIMIT 101"
+  )
+    .bind(now)
+    .all<AccessBanRow>();
+  if (rows.results.length > 100) throw new Error("Access ban list exceeds its limit.");
+  return rows.results.map((row) => ({
+    id: row.id,
+    kind: row.kind,
+    value: row.subjectValue,
+    reason: row.reason,
+    expiresAt: row.expiresAt,
+    createdAt: row.createdAt,
+    createdBy: row.createdBy,
+  }));
+}
+
+async function listAccessBans(env: AdminEnv): Promise<Response> {
+  try {
+    return dataResponse(await activeAccessBans(env));
+  } catch {
+    return errorResponse(503, "internal_error", "Access bans could not be loaded.");
+  }
+}
+
+async function createAccessBan(
+  request: Request,
+  env: AdminEnv,
+  admin: TrustedUser
+): Promise<Response> {
+  const parsed = CreateAccessBanSchema.safeParse(await readJsonLimited(request, SMALL_JSON_BYTES));
+  if (!parsed.success) return errorResponse(400, "bad_request", "Invalid access ban.");
+  const input = parsed.data;
+  const now = Date.now();
+  if (input.expiresAt !== null && input.expiresAt <= now)
+    return errorResponse(400, "bad_request", "The expiry must be in the future.");
+
+  let value: string;
+  if (input.kind === "ip") {
+    try {
+      value = parseIpRange(input.value);
+    } catch {
+      return errorResponse(400, "bad_request", "Enter a valid IP address or CIDR range.");
+    }
+    const clientIp = request.headers.get("CF-Connecting-IP");
+    if (clientIp && ipMatchesRange(clientIp, value))
+      return errorResponse(409, "conflict", "This range includes your current address.");
+  } else {
+    const user = await env.DB.prepare(
+      "SELECT id, identifier, is_site_admin AS flagged, disabled_at AS disabledAt FROM users WHERE lower(identifier) = lower(?) AND deleted_at IS NULL"
+    )
+      .bind(input.value)
+      .first<{ id: string; identifier: string; flagged: number; disabledAt: number | null }>();
+    if (!user) return errorResponse(404, "not_found", "No matching user was found.");
+    if (user.id === admin.id || isSiteAdmin(env, user.identifier, user.flagged === 1))
+      return errorResponse(409, "conflict", "Administrator accounts cannot be banned.");
+    if (user.disabledAt !== null)
+      return errorResponse(409, "conflict", "Enable the account before adding a temporary ban.");
+    value = user.id;
+  }
+
+  const activeCount = await env.DB.prepare(
+    "SELECT COUNT(*) AS count FROM access_bans WHERE expires_at IS NULL OR expires_at > ?"
+  )
+    .bind(now)
+    .first<{ count: number }>();
+  if ((activeCount?.count ?? 0) >= 100)
+    return errorResponse(409, "conflict", "At most 100 active access bans are allowed.");
+
+  const id = crypto.randomUUID();
+  try {
+    await env.DB.prepare(
+      "INSERT INTO access_bans (id, kind, subject_value, reason, expires_at, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    )
+      .bind(id, input.kind, value, input.reason, input.expiresAt, now, admin.id)
+      .run();
+  } catch {
+    return errorResponse(409, "conflict", "A matching active ban already exists.");
+  }
+
+  if (input.kind === "user") {
+    const changed = await env.DB.prepare(
+      "UPDATE users SET disabled_at = ? WHERE id = ? AND disabled_at IS NULL AND deleted_at IS NULL AND is_site_admin = 0"
+    )
+      .bind(now, value)
+      .run();
+    if (changed.meta.changes !== 1) {
+      await env.DB.prepare("DELETE FROM access_bans WHERE id = ?").bind(id).run();
+      return errorResponse(409, "conflict", "The account could not be banned.");
+    }
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM auth_sessions WHERE user_id = ?").bind(value),
+      env.DB.prepare(
+        "UPDATE auth_access_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL"
+      ).bind(now, value),
+    ]);
+    const revoked = await revokeUserAgentSessions(env, value, false);
+    if (!revoked)
+      createLogger(env.LOG_LEVEL, { service: "admin" }).warn(
+        "admin:access-ban-agent-revoke-incomplete",
+        {
+          userId: value,
+        }
+      );
+  }
+
+  await recordAudit(env, {
+    action: "admin.access_ban_added",
+    actor: auditActor(admin),
+    target: {
+      type: input.kind,
+      id: input.kind === "user" ? value : id,
+      label: input.kind === "user" ? input.value : "IP address range",
+    },
+    subjectUserId: input.kind === "user" ? value : null,
+    metadata: { reason: input.reason, expiresAt: input.expiresAt, kind: input.kind },
+  });
+  return dataResponse(
+    {
+      id,
+      kind: input.kind,
+      value: input.kind === "ip" ? value : input.value,
+      reason: input.reason,
+      expiresAt: input.expiresAt,
+      createdAt: now,
+      createdBy: admin.identifier,
+    },
+    201
+  );
+}
+
+async function removeAccessBan(env: AdminEnv, admin: TrustedUser, id: string): Promise<Response> {
+  const row = await env.DB.prepare(
+    "DELETE FROM access_bans WHERE id = ? RETURNING id, kind, subject_value AS subjectValue, reason, expires_at AS expiresAt, created_at AS createdAt"
+  )
+    .bind(id)
+    .first<Omit<AccessBanRow, "createdBy">>();
+  if (!row) return errorResponse(404, "not_found", "Access ban was not found.");
+  if (row.kind === "user")
+    await env.DB.prepare("UPDATE users SET disabled_at = NULL WHERE id = ? AND disabled_at = ?")
+      .bind(row.subjectValue, row.createdAt)
+      .run();
+  await recordAudit(env, {
+    action: "admin.access_ban_removed",
+    actor: auditActor(admin),
+    target: { type: row.kind, id: row.kind === "ip" ? id : row.subjectValue, label: row.kind },
+    subjectUserId: row.kind === "user" ? row.subjectValue : null,
+  });
+  return dataResponse({ id, removed: true });
+}
+
+async function readIpRpm(env: AdminEnv): Promise<Response> {
+  const row = await env.DB.prepare(
+    "SELECT value FROM admin_settings WHERE key = 'ip_rpm_limit'"
+  ).first<{ value: string }>();
+  const rpm = Number(row?.value);
+  if (!Number.isSafeInteger(rpm) || rpm < IP_RPM_MIN || rpm > IP_RPM_MAX)
+    return errorResponse(500, "internal_error", "The IP request limit is invalid.");
+  return dataResponse({ rpm });
+}
+
+async function updateIpRpm(request: Request, env: AdminEnv, admin: TrustedUser): Promise<Response> {
+  const parsed = UpdateIpRpmSchema.safeParse(await readJsonLimited(request, SMALL_JSON_BYTES));
+  if (!parsed.success) return errorResponse(400, "bad_request", "Invalid IP request limit.");
+  const now = Date.now();
+  await env.DB.prepare(
+    "INSERT INTO admin_settings (key, value, updated_at) VALUES ('ip_rpm_limit', ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
+  )
+    .bind(String(parsed.data.rpm), now)
+    .run();
+  await recordAudit(env, {
+    action: "admin.ip_rpm_changed",
+    actor: auditActor(admin),
+    target: { type: "setting", id: "ip_rpm_limit", label: "IP requests per minute" },
+    metadata: { rpm: parsed.data.rpm },
+  });
+  return dataResponse({ rpm: parsed.data.rpm });
 }
 
 function configuredAdmins(env: Pick<AdminEnv, "SITE_ADMINS">): Set<string> {
@@ -169,6 +369,19 @@ async function setDisabled(
         "Remove administrator access before disabling this account."
       );
   }
+  if (!disable) {
+    const activeBan = await env.DB.prepare(
+      "SELECT id FROM access_bans WHERE kind = 'user' AND subject_value = ? AND (expires_at IS NULL OR expires_at > ?) LIMIT 1"
+    )
+      .bind(target, Date.now())
+      .first<{ id: string }>();
+    if (activeBan)
+      return errorResponse(
+        409,
+        "conflict",
+        "Remove the active access ban before enabling this account."
+      );
+  }
   const now = Date.now();
   const row = disable
     ? await env.DB.prepare(
@@ -218,6 +431,19 @@ async function updateUser(
     return errorResponse(400, "bad_request", "Unknown user group.");
   if (siteAdmin !== undefined && target === admin.id)
     return errorResponse(409, "conflict", "You cannot change your own administrator flag.");
+  if (siteAdmin === true) {
+    const activeBan = await env.DB.prepare(
+      "SELECT id FROM access_bans WHERE kind = 'user' AND subject_value = ? AND (expires_at IS NULL OR expires_at > ?) LIMIT 1"
+    )
+      .bind(target, Date.now())
+      .first<{ id: string }>();
+    if (activeBan)
+      return errorResponse(
+        409,
+        "conflict",
+        "Remove the active access ban before granting administrator access."
+      );
+  }
   const row = await env.DB.prepare(
     "UPDATE users SET group_key = COALESCE(?, group_key), is_site_admin = COALESCE(?, is_site_admin) WHERE id = ? AND deleted_at IS NULL RETURNING identifier, group_key AS groupKey, is_site_admin AS flagged"
   )
@@ -262,6 +488,7 @@ export async function handleAdmin(
     const reauth = requireRecentAuth(admin);
     if (reauth) return reauth;
   }
+  await expireAccessBans(env);
   if (method === "GET" && parts.length === 2) {
     if (parts[1] === "users") return listUsers(env, url);
     if (parts[1] === "repositories") return listRepositories(env, url);
@@ -276,6 +503,15 @@ export async function handleAdmin(
         .sort((a, b) => a.key.localeCompare(b.key));
       return dataResponse(groups);
     }
+  }
+  if (parts[1] === "access-bans") {
+    if (method === "GET" && parts.length === 2) return listAccessBans(env);
+    if (method === "POST" && parts.length === 2) return createAccessBan(request, env, admin);
+    if (method === "DELETE" && parts.length === 3) return removeAccessBan(env, admin, parts[2]);
+  }
+  if (parts[1] === "ip-rpm") {
+    if (method === "GET" && parts.length === 2) return readIpRpm(env);
+    if (method === "PUT" && parts.length === 2) return updateIpRpm(request, env, admin);
   }
   if (parts[1] === "users" && parts[2]) {
     if (method === "PATCH" && parts.length === 3) return updateUser(request, env, admin, parts[2]);

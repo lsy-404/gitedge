@@ -5,6 +5,7 @@ import {
   type GatewayEnv,
   type GatewayService,
 } from "../../workers/gateway/src/index";
+import { emptyGatewayDatabase } from "../support/gateway-database";
 import { parseSitePath, siteContentType } from "../../workers/git/src/site";
 import {
   pagesHostUrl,
@@ -25,6 +26,7 @@ const untouched: GatewayService = {
 
 function environment(sitesHost?: string): GatewayEnv {
   return {
+    DB: emptyGatewayDatabase(),
     AUTH: untouched,
     FORGE: untouched,
     ASSETS: untouched,

@@ -6,6 +6,7 @@ import {
 } from "../../workers/gateway/src/index";
 import { SharedRateLimitDurableObject } from "../../workers/limits/src/index";
 import { sha256Hex } from "../../packages/contracts/src/index";
+import { emptyGatewayDatabase } from "../support/gateway-database";
 
 function service(handler: (request: Request) => Response | Promise<Response>): GatewayService {
   return { fetch: async (request) => handler(request) };
@@ -77,6 +78,7 @@ describe("Gateway strict rate limits", () => {
 
   it("returns JSON 429 and Retry-After when an IP window is full", async () => {
     const env: GatewayEnv = {
+      DB: emptyGatewayDatabase(),
       ASSETS: service(() => new Response("asset")),
       AUTH: service(() => new Response(JSON.stringify({ data: null }))),
       FORGE: service(() => new Response("forge")),
@@ -103,6 +105,7 @@ describe("Gateway strict rate limits", () => {
     const consumed: string[] = [];
     let forwarded = 0;
     const env: GatewayEnv = {
+      DB: emptyGatewayDatabase(),
       ASSETS: service(() => new Response("asset")),
       AUTH: service(() =>
         Response.json({ data: { id: "user-1", identifier: "owner", groupKey: "free" } })

@@ -51,6 +51,9 @@ export const AuditActions = [
   "admin.user_enabled",
   "admin.user_group_changed",
   "admin.user_site_admin_changed",
+  "admin.access_ban_added",
+  "admin.access_ban_removed",
+  "admin.ip_rpm_changed",
 ] as const;
 export type AuditAction = (typeof AuditActions)[number];
 

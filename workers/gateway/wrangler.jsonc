@@ -11,6 +11,13 @@
     "html_handling": "none",
     "not_found_handling": "none"
   },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "gitedge",
+      "database_id": "c9a00d9d-db41-494e-b096-55b8b6bfe3a9"
+    }
+  ],
   "services": [
     {
       "binding": "AUTH",

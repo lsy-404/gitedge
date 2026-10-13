@@ -6,6 +6,7 @@ import {
 } from "./browser-accounts";
 import { ReservedAccountIdentifiers } from "../../../packages/contracts/src/account";
 import { handleSigningKeys } from "./signing-keys";
+import { expireAccessBans } from "./access-bans";
 import { handleSso } from "./sso/routes";
 import {
   consumeRateLimit,
@@ -898,6 +899,7 @@ export default {
       : errorResponse(405, "method_not_allowed", "Method is not allowed.");
   },
   async scheduled(_controller: ScheduledController, env: AuthEnv): Promise<void> {
+    await expireAccessBans(env);
     await drainAgentEventOutbox(env);
   },
 };
