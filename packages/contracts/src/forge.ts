@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+export const GitOidSchema = z.string().regex(/^[0-9a-f]{40}$/);
+export const PullLockInputSchema = z.object({ locked: z.boolean(), expectedHeadOid: GitOidSchema });
+
 export const ActorSchema = z.object({
   kind: z.enum(["user", "agent", "ci"]),
   id: z.string().min(1),
@@ -123,6 +126,9 @@ export const PullRequestSchema = z.object({
   headRepositoryId: z.string().nullable(),
   headRepository: z.object({ owner: z.string(), name: z.string() }).nullable(),
   draft: z.boolean(),
+  lockedAt: z.number().nullable(),
+  lockedBy: z.string().nullable(),
+  lockedHeadOid: GitOidSchema.nullable(),
   mergedOid: z.string().nullable(),
   assignees: z.array(AssigneeSchema),
   reviewers: z.array(AssigneeSchema),
@@ -361,7 +367,6 @@ export type GitCommitDetail = z.infer<typeof GitCommitDetailSchema>;
 
 const title = z.string().trim().min(1).max(200);
 const body = z.string().max(50_000);
-export const GitOidSchema = z.string().regex(/^[0-9a-f]{40}$/);
 export const GitRefNameSchema = z
   .string()
   .trim()
@@ -430,6 +435,9 @@ export const RenewAgentSessionInputSchema = z.object({
 });
 export const GitMergeInputSchema = z.object({
   pullRequestId: z.string().optional(),
+  candidateId: z.string().uuid().optional(),
+  candidateOid: GitOidSchema.optional(),
+  commitTimestamp: z.number().int().nonnegative().optional(),
   leaseAt: z.number().optional(),
   method: z.enum(["merge", "squash", "rebase"]).default("merge"),
   baseRef: GitBranchSchema,

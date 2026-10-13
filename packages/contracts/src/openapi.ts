@@ -17,6 +17,7 @@ import {
   GitTreeSchema,
   IssueSchema,
   PullRequestSchema,
+  PullLockInputSchema,
   RepositorySchema,
   RenewAgentSessionInputSchema,
   RenewedAgentSessionSchema,
@@ -129,6 +130,22 @@ const forgePullRequest = `${forgeRepository}/pull-requests/{number}`;
 const gitRepository = "/api/git/repositories/{repositoryId}";
 
 export const API_OPERATIONS: readonly ApiOperation[] = [
+  {
+    operationId: "setPullLock",
+    method: "PUT",
+    path: `${forgePullRequest}/lock`,
+    service: "forge",
+    tag: "Pull requests",
+    summary:
+      "Manually freeze or unlock all source commits; reviews and checks remain available. Browser session required.",
+    scope: null,
+    anonymous: false,
+    body: PullLockInputSchema,
+    status: 200,
+    response: dataOf(
+      PullRequestSchema.pick({ lockedAt: true, lockedBy: true, lockedHeadOid: true })
+    ),
+  },
   {
     operationId: "getHealth",
     method: "GET",

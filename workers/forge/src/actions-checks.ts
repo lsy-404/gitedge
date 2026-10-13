@@ -16,6 +16,8 @@ const CheckInput = z
   .refine((input) => (input.status === "completed") === (input.conclusion !== null));
 type RunRow = {
   id: string;
+  pull_request_id: string | null;
+  candidate_id: string | null;
   repository_id: string;
   commit_oid: string;
   path: string;
@@ -80,9 +82,11 @@ export async function actionsCheck(
     .first<{ id: string }>();
   if (latest?.id !== run.id) return dataResponse({ superseded: true });
   const pulls = await env.DB.prepare(
-    "SELECT id, number, merge_started_at FROM forge_pull_requests WHERE repository_id=? AND head_ref=? AND head_session_id IS NULL AND head_repository_id IS NULL AND state='open' LIMIT 101"
+    run.pull_request_id
+      ? "SELECT id, number, merge_started_at FROM forge_pull_requests WHERE repository_id = ? AND id = ? AND state = 'open'"
+      : "SELECT id, number, merge_started_at FROM forge_pull_requests WHERE repository_id=? AND head_ref=? AND head_session_id IS NULL AND head_repository_id IS NULL AND state='open' LIMIT 101"
   )
-    .bind(run.repository_id, run.source_ref)
+    .bind(run.repository_id, run.pull_request_id ?? run.source_ref)
     .all<{ id: string; number: number; merge_started_at: number | null }>();
   if (pulls.results.length > 100)
     return errorResponse(413, "pull_limit", "Too many pull requests for this head.");

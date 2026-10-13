@@ -1,3 +1,4 @@
+import type { MergeCandidate } from "../../../../packages/contracts/src/merge-candidates";
 import type { MergeRequirements } from "../../../../packages/contracts/src/merge-requirements";
 import type {
   AccountProfile,
@@ -1149,6 +1150,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  mergeCandidate: (repositoryId: string, number: number) =>
+    request<MergeCandidate | null>(
+      repositoryPath(repositoryId, `pull-requests/${number}/merge-candidate`)
+    ),
+  setPullLock: (repositoryId: string, number: number, locked: boolean, expectedHeadOid: string) =>
+    request<Pick<PullRequest, "lockedAt" | "lockedBy" | "lockedHeadOid">>(
+      repositoryPath(repositoryId, `pull-requests/${number}/lock`),
+      { method: "PUT", body: JSON.stringify({ locked, expectedHeadOid }) }
+    ),
   updatePullRequest: (
     repositoryId: string,
     number: number,

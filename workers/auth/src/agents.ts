@@ -74,6 +74,11 @@ const sessionSelect = `SELECT s.id, s.agent_id AS agentId, a.name AS agentName, 
 function newToken(prefix: string): string {
   return prefix + randomHex(32);
 }
+function sessionRemote(origin: string, owner: string, slug: string, sessionId: string): string {
+  const remote = new URL(`/${owner}/${slug}.git`, origin);
+  remote.username = sessionId;
+  return remote.toString();
+}
 function sessionResponse(row: AgentSessionRow): AgentSession {
   return {
     id: row.id,
@@ -220,11 +225,20 @@ async function authenticateRepositoryCredential(
 ): Promise<GitAuthentication | null> {
   const path = await resolveRepositoryPath(env.DB, owner, slug);
   if (!path) return null;
-  const agent = await authenticateAgentSession(env, token);
+  const agent = /^ge_session_git_[0-9a-f]{64}$/.test(token)
+    ? trustedAgentSession(
+        await env.DB.prepare(activeSessionSelect + " AND s.git_token_hash=?")
+          .bind(Date.now(), await sha256Hex(token))
+          .first<AgentSessionRow>()
+      )
+    : await authenticateAgentSession(env, token);
   if (agent?.agentSession) {
     if (
       agent.agentSession.repositoryId !== path.id ||
-      (username !== null && username !== owner && username !== agent.identifier)
+      (username !== null &&
+        username !== owner &&
+        username !== agent.identifier &&
+        username !== agent.agentSession.id)
     )
       return null;
     return { user: agent, repositoryId: path.id, permission: agent.agentSession.permission };
@@ -288,14 +302,14 @@ async function loadManagedAgent(
 
 /** Revokes an Artifacts token; an already revoked token counts as success. */
 async function revokeArtifactsToken(workspace: ArtifactsRepo, tokenId: string): Promise<void> {
-  if (await workspace.revokeToken(tokenId)) return;
+  if (!tokenId || (await workspace.revokeToken(tokenId))) return;
   const { tokens } = await workspace.listTokens();
   const alreadyRevoked = tokens.some((token) => token.id === tokenId && token.state === "revoked");
   if (!alreadyRevoked) throw new Error("token_not_revoked");
 }
 
 async function revokeSession(env: AgentAuthEnv, row: AgentSessionRow): Promise<void> {
-  {
+  if (row.gitTokenId) {
     using workspace = await env.ARTIFACTS.get(row.workspaceName);
     await revokeArtifactsToken(workspace, row.gitTokenId);
   }
@@ -321,6 +335,7 @@ export async function renewAgentSession(
   env: AgentAuthEnv,
   row: AgentSessionRow,
   ttlSeconds: number,
+  origin: string,
   now = Date.now()
 ): Promise<RenewalOutcome> {
   const logger = createLogger(env.LOG_LEVEL, { service: "agent-auth" });
@@ -342,22 +357,25 @@ export async function renewAgentSession(
     logger.info("agent:session-renewal-ineligible", { sessionId: row.id, agentId: row.agentId });
     return { kind: "ineligible" };
   }
-  using workspace = await env.ARTIFACTS.get(row.workspaceName);
-  const next = await workspace.createToken(row.permission, Math.floor((expiresAt - now) / 1000));
+  const location = await repositoryForOwner(env, row.userId, row.repositoryId);
+  if (!location) return { kind: "ineligible" };
+  const remote = sessionRemote(origin, location.owner, location.slug, row.id);
+  const next = newToken("ge_session_git_");
   let moved: D1Result;
   try {
-    await revokeArtifactsToken(workspace, row.gitTokenId);
+    if (row.gitTokenId) {
+      using workspace = await env.ARTIFACTS.get(row.workspaceName);
+      await revokeArtifactsToken(workspace, row.gitTokenId);
+    }
     moved = await env.DB.prepare(
-      "UPDATE auth_agent_sessions SET git_token_id = ?, expires_at = ?, renewal_count = renewal_count + 1, renewed_at = ? WHERE id = ? AND status = 'active' AND git_token_id = ?"
+      "UPDATE auth_agent_sessions SET git_token_id = '', git_token_hash = ?, remote = ?, expires_at = ?, renewal_count = renewal_count + 1, renewed_at = ? WHERE id = ? AND status = 'active' AND renewal_count = ?"
     )
-      .bind(next.id, Date.parse(next.expiresAt), now, row.id, row.gitTokenId)
+      .bind(await sha256Hex(next), remote, expiresAt, now, row.id, row.renewalCount)
       .run();
   } catch (error) {
-    await workspace.revokeToken(next.id);
     throw error;
   }
   if (moved.meta.changes !== 1) {
-    await workspace.revokeToken(next.id);
     return { kind: "conflict" };
   }
   logger.info("agent:session-renewed", {
@@ -369,9 +387,10 @@ export async function renewAgentSession(
     kind: "renewed",
     session: {
       ...sessionResponse(row),
-      expiresAt: Date.parse(next.expiresAt),
+      remote,
+      expiresAt,
       renewalCount: row.renewalCount + 1,
-      gitToken: next.plaintext,
+      gitToken: next,
     },
   };
 }
@@ -423,7 +442,7 @@ export async function handleAgentSessionRenewal(
   if (row.expiresAt <= Date.now() || row.status !== "active")
     return errorResponse(401, "session_expired", SESSION_EXPIRED_MESSAGE);
   try {
-    const outcome = await renewAgentSession(env, row, parsed.data.ttlSeconds);
+    const outcome = await renewAgentSession(env, row, parsed.data.ttlSeconds, request.url);
     if (outcome.kind === "renewed") return dataResponse(outcome.session);
     // An ineligible session can no longer authenticate either, so answer like a revoked one.
     return outcome.kind === "ineligible"
@@ -688,7 +707,7 @@ export async function handleAgentManagement(
         .bind(parts[3], agent.id)
         .first<AgentSessionRow>();
       if (!row) return errorResponse(404, "not_found", "Session was not found.");
-      const outcome = await renewAgentSession(env, row, parsed.data.ttlSeconds);
+      const outcome = await renewAgentSession(env, row, parsed.data.ttlSeconds, request.url);
       return outcome.kind === "renewed" ? dataResponse(outcome.session) : renewalFailure(outcome);
     }
     if (parts.length === 4 && request.method === "DELETE") {
@@ -747,7 +766,7 @@ export async function handleAgentManagement(
     using workspace = await env.ARTIFACTS.get(workspaceName);
     // The fork's initial write token must not outlive the scoped session credential.
     await workspace.revokeToken(forked.token);
-    const gitToken = await workspace.createToken(parsed.data.permission, parsed.data.ttlSeconds);
+    const gitToken = newToken("ge_session_git_");
     const token = newToken("ge_session_");
     const createdAt = Date.now();
     const created: CreatedAgentSession = {
@@ -756,22 +775,22 @@ export async function handleAgentManagement(
       agentName: agent.name,
       repositoryId: repository.id,
       workspaceName,
-      remote: forked.remote,
+      remote: sessionRemote(request.url, repository.owner, repository.slug, id),
       baseRef: parsed.data.baseRef,
       baseOid: base[0]?.hash ?? null,
       permission: parsed.data.permission,
       status: "active",
       createdAt,
-      expiresAt: Date.parse(gitToken.expiresAt),
+      expiresAt: createdAt + parsed.data.ttlSeconds * 1000,
       maxExpiresAt: createdAt + AGENT_SESSION_MAX_LIFETIME_MS,
       renewalCount: 0,
       token,
-      gitToken: gitToken.plaintext,
+      gitToken,
       instructions: null,
     };
     try {
       await env.DB.prepare(
-        "INSERT INTO auth_agent_sessions (id,agent_id,user_id,repository_id,token_hash,git_token_id,workspace_name,remote,base_ref,base_oid,permission,status,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,'active',?,?)"
+        "INSERT INTO auth_agent_sessions (id,agent_id,user_id,repository_id,token_hash,git_token_id,git_token_hash,workspace_name,remote,base_ref,base_oid,permission,status,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?)"
       )
         .bind(
           id,
@@ -779,9 +798,10 @@ export async function handleAgentManagement(
           user.id,
           repository.id,
           await sha256Hex(token),
-          gitToken.id,
+          "",
+          await sha256Hex(gitToken),
           workspaceName,
-          forked.remote,
+          created.remote,
           created.baseRef,
           created.baseOid,
           created.permission,
@@ -790,7 +810,6 @@ export async function handleAgentManagement(
         )
         .run();
     } catch {
-      await workspace.revokeToken(gitToken.id);
       throw new Error("Session metadata write failed");
     }
     const instructions = await workspace.readFile({ ref: created.baseRef, path: "AGENTS.md" });

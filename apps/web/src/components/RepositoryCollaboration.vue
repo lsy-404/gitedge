@@ -36,6 +36,8 @@ import StatusBadge from "./StatusBadge.vue";
 import StatusState from "./StatusState.vue";
 import TextField from "./TextField.vue";
 import TextAreaField from "./TextAreaField.vue";
+import MergeCandidatePanel from "./MergeCandidatePanel.vue";
+import PullLockPanel from "./PullLockPanel.vue";
 import PullRequestAiSummary from "./PullRequestAiSummary.vue";
 import MarkdownContent from "./MarkdownContent.vue";
 import DiffViewer from "./DiffViewer.vue";
@@ -1187,6 +1189,7 @@ watch(
                   ><StatusBadge v-if="awaitingMe(row)" tone="brand">{{
                     t("pullAttentionMe")
                   }}</StatusBadge
+                  ><StatusBadge v-if="row.lockedAt !== null">{{ t("pullLocked") }}</StatusBadge
                   ><StatusBadge v-if="row.draft">{{ t("draftPull") }}</StatusBadge
                   ><StatusBadge v-if="row.headSessionId" tone="brand">{{
                     t("agentSession")
@@ -1554,6 +1557,21 @@ watch(
             </div>
           </article>
 
+          <MergeCandidatePanel
+            v-if="section === 'pulls' && item && 'headRef' in item && diff"
+            :repository-id="repository.id"
+            :number="item.number"
+            :base-oid="diff.baseOid"
+            :head-oid="diff.headOid"
+          />
+          <PullLockPanel
+            v-if="section === 'pulls' && item && 'headRef' in item"
+            :repository-id="repository.id"
+            :pull="item"
+            :head-oid="diff?.headOid ?? ''"
+            :can-write="showEditActions"
+            @changed="load"
+          />
           <PullRequestAiSummary
             v-if="section === 'pulls' && detailTab === 'conversation' && item && detailNumber"
             :repository="repository"

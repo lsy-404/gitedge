@@ -1,3 +1,4 @@
+import { ensureMergeCandidate } from "./merge-candidates";
 import {
   type AutoMergeDisabledReason,
   type MergeMethod,
@@ -375,7 +376,7 @@ function retriable(blocker: MergeBlocker): boolean {
   );
 }
 
-type EntryResult = "merged" | "ejected" | "retry" | "dropped";
+type EntryResult = "merged" | "ejected" | "retry" | "waiting" | "dropped";
 
 async function runQueueEntry(
   env: ForgeEnv,
@@ -410,9 +411,40 @@ async function runQueueEntry(
     await base.body?.cancel();
     return { result: "retry" };
   }
+  const candidate = await ensureMergeCandidate(
+    env,
+    repository,
+    pull,
+    user,
+    entry.method,
+    base,
+    head,
+    entry.enqueuedAt
+  );
+  if (candidate instanceof Response) {
+    await candidate.body?.cancel();
+    if (candidate.status >= 500 || candidate.status === 429) return { result: "retry" };
+    return eject(
+      "merge_ci_unavailable",
+      "The candidate could not be prepared or checked. Inspect Actions and requeue after correcting it."
+    );
+  }
+  if (candidate.state.status === "failed")
+    return eject(
+      "merge_checks_failed",
+      "Checks on the combined base and source failed or timed out."
+    );
+  if (candidate.state.status !== "passed" || !candidate.row.result_oid)
+    return { result: "waiting" };
   const outcome = await executeMerge(
     { env, repository, user, pull, requestUrl: INTERNAL_GIT_ORIGIN, trigger: "queue" },
-    { method: entry.method, expectedBaseOid: base, expectedHeadOid: head }
+    {
+      method: entry.method,
+      expectedBaseOid: base,
+      expectedHeadOid: head,
+      candidateId: candidate.row.id,
+      candidateOid: candidate.row.result_oid,
+    }
   );
   if (outcome.ok) return { result: "merged" };
   if (retriable(outcome.blocker)) return { result: "retry" };
@@ -462,6 +494,10 @@ export async function processMergeQueue(
         error: cause instanceof Error ? cause.message : "unknown",
       });
       outcome = { result: "retry" };
+    }
+    if (outcome.result === "waiting") {
+      await stub.wait(entry.pullRequestId, token);
+      return;
     }
     if (outcome.result === "retry") {
       const retry = await stub.retry(entry.pullRequestId, token);

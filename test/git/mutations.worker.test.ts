@@ -459,7 +459,7 @@ describe("Agent session workspace access", () => {
     expect(await response.json()).toMatchObject({ error: { code: "refs_changed" } });
   });
 
-  it("reads the session workspace only while its owner and Git token remain active", async () => {
+  it("reads the session workspace only while its owner and session remain active", async () => {
     const makeRequest = () =>
       gitWorker.fetch(
         new Request("https://git.internal/internal/ref-heads", {
@@ -479,11 +479,13 @@ describe("Agent session workspace access", () => {
     expect(
       z.object({ data: PushEventRefHeadsSchema }).parse(await response.json()).data.heads
     ).toEqual([{ ref: "refs/heads/main", oid: oid("a") }]);
-    await env.DB.prepare("UPDATE auth_git_tokens SET revoked_at=? WHERE id='tok'")
-      .bind(Date.now())
+    await env.DB.prepare("UPDATE auth_agent_sessions SET status='revoked' WHERE id=?")
+      .bind(sessionId)
       .run();
     expect((await makeRequest()).status).toBe(403);
-    await env.DB.prepare("UPDATE auth_git_tokens SET revoked_at=NULL WHERE id='tok'").run();
+    await env.DB.prepare("UPDATE auth_agent_sessions SET status='active' WHERE id=?")
+      .bind(sessionId)
+      .run();
   });
 
   it("commits multi-file changes into the session workspace, not the repository", async () => {

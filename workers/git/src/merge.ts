@@ -24,6 +24,8 @@ export interface GitMergePolicy {
   /** Receives the raw commit object; true when its signature satisfies the branch rule. */
   verifySignature(raw: Uint8Array): Promise<boolean>;
   beforePush(oid: string): Promise<void>;
+  destinationRef?: string;
+  expectedResultOid?: string;
 }
 type GitMergeFailure = Extract<GitMergeResult, { ok: false }>;
 
@@ -62,6 +64,10 @@ export async function mergeArtifacts(
   policy: GitMergePolicy,
   level?: string
 ): Promise<GitMergeResult> {
+  const identity =
+    input.commitTimestamp === undefined
+      ? input.author
+      : { ...input.author, timestamp: input.commitTimestamp, timezoneOffset: 0 };
   const base = await resolveCommit(baseRepo, input.baseRef);
   const head = await resolveCommit(headRepo, input.headRef);
   if (head?.hash !== input.expectedHeadOid) return { ok: false, reason: "refs_changed" };
@@ -130,7 +136,7 @@ export async function mergeArtifacts(
             fs,
             dir,
             oid: commit.oid,
-            committer: input.author,
+            committer: identity,
             noUpdateBranch: true,
             abortOnConflict: true,
           });
@@ -154,11 +160,14 @@ export async function mergeArtifacts(
             policy.requireSignedCommits ||
             (input.method === "merge" && policy.requireLinearHistory),
           message: input.message,
-          author: input.author,
-          committer: input.author,
+          author: identity,
+          committer: identity,
         });
         if (!result.oid) return { ok: false, reason: "already_merged" };
-        if (result.alreadyMerged) return { ok: true, oid: result.oid };
+        if (result.alreadyMerged)
+          return policy.destinationRef
+            ? { ok: false, reason: "already_merged" }
+            : { ok: true, oid: result.oid };
         mergedOid = result.oid;
         if (input.method === "squash") {
           const resultCommit = await git.readCommit({ fs, dir, oid: mergedOid });
@@ -168,8 +177,8 @@ export async function mergeArtifacts(
             tree: resultCommit.commit.tree,
             parent: [input.expectedBaseOid],
             message: input.message,
-            author: input.author,
-            committer: input.author,
+            author: identity,
+            committer: identity,
             noUpdateBranch: true,
           });
         }
@@ -190,6 +199,10 @@ export async function mergeArtifacts(
     }
     const latestHead = await resolveCommit(headRepo, input.headRef);
     if (latestHead?.hash !== input.expectedHeadOid) return { ok: false, reason: "refs_changed" };
+    if (policy.expectedResultOid && mergedOid !== policy.expectedResultOid)
+      return { ok: false, reason: "refs_changed" };
+    if (policy.destinationRef)
+      await git.writeRef({ fs, dir, ref: policy.destinationRef, value: mergedOid, force: true });
     await policy.beforePush(mergedOid);
     try {
       // The receive-pack server atomically compares the advertised old OID before updating the ref.
@@ -198,11 +211,14 @@ export async function mergeArtifacts(
         http,
         dir,
         url: baseInfo.remote,
-        ref: input.baseRef,
-        remoteRef: input.baseRef,
+        ref: policy.destinationRef ?? input.baseRef,
+        remoteRef: policy.destinationRef ?? input.baseRef,
         force: false,
         headers: { Authorization: `Bearer ${baseToken.plaintext}` },
-        onPrePush: (refs) => refs.remoteRef.oid === input.expectedBaseOid,
+        onPrePush: (refs) =>
+          policy.destinationRef
+            ? ["0".repeat(40), mergedOid].includes(refs.remoteRef.oid)
+            : refs.remoteRef.oid === input.expectedBaseOid,
       });
       if (!pushed.ok) return { ok: false, reason: "refs_changed" };
     } catch (error) {

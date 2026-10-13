@@ -1,3 +1,6 @@
+import { branchRules, matchingBranchRules } from "../../../src/worker/common/branch-protection";
+import { triggerPullActions } from "./pull-actions";
+import { candidateMergeAllowed, mergeCandidateRoute } from "./merge-candidates";
 import {
   repositoryAccessDenied,
   repositoryNotFound,
@@ -13,6 +16,7 @@ import { authorizeMerge, blockerResponse } from "./merge-policy";
 import { readMergeRequirements } from "./merge-requirements-route";
 import { pullAttention, pullAttentionColumn, filterPullAttention } from "./pull-attention";
 import { reconcileRepository, sweepMergeAutomation } from "./merge-automation";
+import { pullLockRoute } from "./pull-lock";
 import { mergeAutomationRoutes } from "./merge-routes";
 import { executeMerge, hasActiveMergeLease } from "./merge-execution";
 import { compareRequest, pullHead, pullRequestHeadOid, setHeadParams } from "./pull-git";
@@ -374,6 +378,9 @@ function presentForgeRow(resource: string, row: Record<string, unknown>): Record
           ? { owner: row.head_owner, name: row.head_name }
           : null,
       draft: row.draft === 1 || row.draft === true,
+      lockedAt: row.locked_at ?? null,
+      lockedBy: row.locked_by ?? null,
+      lockedHeadOid: row.locked_head_oid ?? null,
       attention: pullAttention(row),
       mergedOid: row.merged_oid ?? row.mergedOid ?? null,
       ...parseAssignments(row.assignments_json),
@@ -971,6 +978,7 @@ async function featureRequest(
         number,
       });
       await pullRequestEvent(env, repository, user, id, { number, state: "open" });
+      await triggerPullActions(env, id);
       await enqueueAiSummary(env, repository, id, user.id, false);
       logger.info("forge:pull-request-created", {
         repositoryId: repository.id,
@@ -1318,7 +1326,7 @@ async function featureRequest(
         };
         const [changed] = await env.DB.batch([
           env.DB.prepare(
-            "UPDATE forge_pull_requests SET title = COALESCE(?, title), body = COALESCE(?, body), state = COALESCE(?, state), draft = COALESCE(?, draft), updated_at = ?, merge_started_at = NULL, merge_base_oid = NULL, merge_head_oid = NULL WHERE id = ? AND state != 'merged' AND (merge_started_at IS NULL OR merge_started_at < ?)"
+            "UPDATE forge_pull_requests SET title = COALESCE(?, title), body = COALESCE(?, body), state = COALESCE(?, state), draft = COALESCE(?, draft), locked_at = CASE WHEN ?3 IS NULL THEN locked_at ELSE NULL END, locked_by = CASE WHEN ?3 IS NULL THEN locked_by ELSE NULL END, locked_head_oid = CASE WHEN ?3 IS NULL THEN locked_head_oid ELSE NULL END, updated_at = ?, merge_started_at = NULL, merge_base_oid = NULL, merge_head_oid = NULL WHERE id = ? AND state != 'merged' AND (merge_started_at IS NULL OR merge_started_at < ?)"
           ).bind(
             p.title ?? null,
             p.body ?? null,
@@ -1984,6 +1992,19 @@ const worker = {
         return errorResponse(409, "merge_changed", "Merge authorization expired or changed.");
       const repository = await repositoryById(env, String(pull.repository_id));
       if (!repository) return repositoryNotFound();
+      const rules = matchingBranchRules(
+        await branchRules(env.DB, repository.id),
+        input.data.baseRef
+      );
+      if (
+        (input.data.candidateId || rules.some((rule) => rule.requireMergeQueue)) &&
+        !(await candidateMergeAllowed(env, repository, pull, input.data))
+      )
+        return errorResponse(
+          409,
+          "merge_checks_changed",
+          "Checks for this merge result are not passing."
+        );
       const blocker = await authorizeMerge(env, repository, user, pull, input.data);
       return blocker ? blockerResponse(blocker) : dataResponse({ authorized: true });
     }
@@ -2488,6 +2509,10 @@ const worker = {
     if (hooks) return hooks;
     const releases = await repositoryReleases(env, request, repository, user, parts);
     if (releases) return releases;
+    const candidateResponse = await mergeCandidateRoute(env, request, repository, parts);
+    if (candidateResponse) return candidateResponse;
+    const lockResponse = await pullLockRoute(env, request, repository, user, parts);
+    if (lockResponse) return lockResponse;
     const mergeAutomation = await mergeAutomationRoutes(env, request, repository, user, parts);
     if (mergeAutomation) return mergeAutomation;
     const aiSummary = await aiSummaryRequest(env, request, repository, user, parts.slice(2));

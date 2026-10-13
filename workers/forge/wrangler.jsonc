@@ -48,6 +48,7 @@
     }
   ],
   "services": [
+    { "binding": "ACTIONS", "service": "gitedge-actions" },
     {
       "binding": "GIT",
       "service": "gitedge-git-artifacts"

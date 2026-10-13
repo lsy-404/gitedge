@@ -1,3 +1,4 @@
+import { RefWriteBlocked } from "../../../src/worker/common/ref-writes";
 import { GitWriteConflict } from "./write";
 import { createLogger } from "../../../src/worker/common/logger";
 import { handleGitApi } from "./api";
@@ -31,6 +32,7 @@ export default {
         : await handleGitApi(request, env, ctx);
     } catch (error) {
       const logger = createLogger(env.LOG_LEVEL, { service: "artifacts-git" });
+      if (error instanceof RefWriteBlocked) return errorResponse(409, error.code, error.message);
       if (error instanceof GitWriteConflict)
         return errorResponse(409, "merge_changed", error.message);
       if (error instanceof GitResourceLimitError) {

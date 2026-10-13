@@ -816,24 +816,23 @@ describe("Auth agents, Artifact sessions, and Git credentials", () => {
     for (const session of [firstSession, secondSession]) {
       const snapshot = artifacts.snapshot(session.workspaceName);
       expect(snapshot.info.source).toBe(`artifacts:${source.name}`);
-      expect(snapshot.tokens).toHaveLength(2);
-      expect(snapshot.tokens[0]?.state).toBe("revoked");
-      const activeToken = snapshot.tokens.find((token) => token.state === "active");
-      expect(activeToken?.scope).toBe(session.permission);
-      expect(Date.parse(activeToken?.expiresAt ?? "") - Date.now()).toBeGreaterThan(0);
-      expect(session.expiresAt).toBe(Date.parse(activeToken?.expiresAt ?? ""));
+      expect(snapshot.tokens.every((token) => token.state === "revoked")).toBe(true);
+      expect(session.gitToken).toMatch(/^ge_session_git_[0-9a-f]{64}$/);
+      expect(new URL(session.remote).username).toBe(session.id);
+      expect(session.expiresAt).toBeGreaterThan(Date.now());
     }
     expect(artifacts.snapshot(firstSession.workspaceName).info.readOnly).toBe(true);
     expect(artifacts.snapshot(secondSession.workspaceName).info.readOnly).toBe(false);
 
     const sessionRows = await env.DB.prepare(
-      "SELECT id, token_hash, git_token_id, workspace_name, permission, status FROM auth_agent_sessions WHERE user_id = ? ORDER BY created_at"
+      "SELECT id, token_hash, git_token_id, git_token_hash, workspace_name, permission, status FROM auth_agent_sessions WHERE user_id = ? ORDER BY created_at"
     )
       .bind(user.id)
       .all<{
         id: string;
         token_hash: string;
         git_token_id: string;
+        git_token_hash: string;
         workspace_name: string;
         permission: string;
         status: string;
@@ -843,7 +842,8 @@ describe("Auth agents, Artifact sessions, and Git credentials", () => {
       const stored = sessionRows.results.find((row) => row.id === session.id);
       expect(stored?.token_hash).toBe(await sha256Hex(session.token));
       expect(stored?.token_hash).not.toBe(session.token);
-      expect(stored?.git_token_id).not.toBe(session.gitToken);
+      expect(stored?.git_token_hash).toBe(await sha256Hex(session.gitToken));
+      expect(stored?.git_token_id).toBe("");
       expect(JSON.stringify(stored)).not.toContain(session.gitToken);
     }
 
@@ -1036,7 +1036,7 @@ describe("Agent delivery mode and session renewal", () => {
   it("renews a session, keeps the fork and session token, and rotates the Git credential", async () => {
     const { session } = await fixture();
     const before = artifacts.snapshot(session.workspaceName).tokens;
-    expect(before.filter((token) => token.state === "active")).toHaveLength(1);
+    expect(before.filter((token) => token.state === "active")).toHaveLength(0);
     const response = await renew(session.token, { ttlSeconds: 7200 });
     expect(response.status).toBe(200);
     const renewed = RenewedSchema.parse(await response.json()).data;
@@ -1045,10 +1045,14 @@ describe("Agent delivery mode and session renewal", () => {
     expect(renewed.expiresAt).toBeGreaterThan(session.expiresAt);
     expect(renewed.renewalCount).toBe(1);
     const after = artifacts.snapshot(session.workspaceName).tokens;
-    expect(after.filter((token) => token.state === "revoked").map((token) => token.id)).toContain(
-      before.find((token) => token.state === "active")?.id
-    );
-    expect(after.filter((token) => token.state === "active")).toHaveLength(1);
+    expect(after.filter((token) => token.state === "active")).toHaveLength(0);
+    const storedCredential = await env.DB.prepare(
+      "SELECT git_token_hash AS hash FROM auth_agent_sessions WHERE id = ?"
+    )
+      .bind(session.id)
+      .first<{ hash: string }>();
+    expect(storedCredential?.hash).toBe(await sha256Hex(renewed.gitToken));
+    expect(storedCredential?.hash).not.toBe(await sha256Hex(session.gitToken));
     const identity = await auth.fetch(
       new Request("https://auth.test/session", {
         headers: { Authorization: `Bearer ${session.token}` },
@@ -1134,7 +1138,7 @@ describe("Agent delivery mode and session renewal", () => {
       .run();
     expect((await renew(session.token)).status).toBe(401);
     const tokens = artifacts.snapshot(session.workspaceName).tokens;
-    expect(tokens.filter((token) => token.state === "active")).toHaveLength(1);
+    expect(tokens.filter((token) => token.state === "active")).toHaveLength(0);
     await env.DB.prepare("UPDATE repositories SET agents_enabled = 1 WHERE id = ?")
       .bind(session.repositoryId)
       .run();

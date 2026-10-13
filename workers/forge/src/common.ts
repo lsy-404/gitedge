@@ -21,6 +21,7 @@ export type ForgeEnv = {
   readonly DB: D1Database;
   readonly ARTIFACTS: Artifacts;
   readonly AUTH?: { fetch(request: Request): Promise<Response> };
+  readonly ACTIONS?: { fetch(request: Request): Promise<Response> };
   readonly GIT: { fetch(request: Request): Promise<Response> };
   readonly RELEASE_ASSETS?: R2Bucket;
   readonly MERGE_QUEUE: DurableObjectNamespace<MergeQueueDurableObject>;

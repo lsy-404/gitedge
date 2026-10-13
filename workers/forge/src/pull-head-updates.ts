@@ -1,3 +1,4 @@
+import { triggerPullActions } from "./pull-actions";
 import {
   type PushEventInput,
   type PushEventRefHeads,
@@ -432,6 +433,7 @@ export async function dispatchPushHeadUpdates(
       if (historyIndex === undefined || results[historyIndex]?.meta.changes !== 1) continue;
       const pullRepository = pullRepositories.get(pull.id);
       if (!pullRepository) continue;
+      await triggerPullActions(env, pull.id);
       try {
         await pullRequestEvent(
           env,

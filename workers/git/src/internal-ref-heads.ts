@@ -19,9 +19,9 @@ export async function handleInternalRefHeads(request: Request, env: GitEnv): Pro
   let artifactName: string | null;
   if (input.agentSessionId) {
     const session = await env.DB.prepare(
-      "SELECT s.workspace_name AS artifactName FROM auth_agent_sessions s JOIN auth_agents a ON a.id = s.agent_id AND a.user_id = s.user_id JOIN users u ON u.id = s.user_id AND u.disabled_at IS NULL JOIN auth_git_tokens t ON t.id = s.git_token_id AND t.user_id = s.user_id AND t.repository_id = s.repository_id AND t.permission = s.permission WHERE s.id = ? AND s.repository_id = ? AND s.user_id = ? AND s.permission = 'write' AND s.status = 'active' AND s.expires_at > ? AND a.disabled_at IS NULL AND t.revoked_at IS NULL AND t.expires_at > ? AND EXISTS (SELECT 1 FROM repositories r WHERE r.id = s.repository_id AND r.deleted_at IS NULL AND r.archived = 0 AND r.agents_enabled = 1)"
+      "SELECT s.workspace_name AS artifactName FROM auth_agent_sessions s JOIN auth_agents a ON a.id = s.agent_id AND a.user_id = s.user_id JOIN users u ON u.id = s.user_id AND u.disabled_at IS NULL WHERE s.id = ? AND s.repository_id = ? AND s.user_id = ? AND s.permission = 'write' AND s.status = 'active' AND s.expires_at > ? AND a.disabled_at IS NULL AND EXISTS (SELECT 1 FROM repositories r WHERE r.id = s.repository_id AND r.deleted_at IS NULL AND r.archived = 0 AND r.agents_enabled = 1)"
     )
-      .bind(input.agentSessionId, input.repositoryId, input.pusherId, now, now)
+      .bind(input.agentSessionId, input.repositoryId, input.pusherId, now)
       .first<{ artifactName: string }>();
     if (!session || !writableRole(await repositoryRole(env.DB, input.repositoryId, input.pusherId)))
       return errorResponse(403, "forbidden", "Session ref is unavailable.");

@@ -1,3 +1,4 @@
+import type { MergeCandidateRecord } from "../../../packages/contracts/src/merge-candidates";
 import { readJsonLimited } from "../../../src/worker/common/readText";
 import {
   GitOidSchema,
@@ -197,12 +198,14 @@ async function repositorySnapshot(
   repositoryId: string,
   ref: string,
   oid: string | undefined,
-  user: TrustedUser | null
+  user: TrustedUser | null,
+  sessionId?: string | null
 ): Promise<RepositorySnapshot> {
   const url = new URL(
     `https://git.internal/repositories/${encodeURIComponent(repositoryId)}/snapshot`
   );
   url.searchParams.set("ref", ref);
+  if (sessionId) url.searchParams.set("sessionId", sessionId);
   if (oid) url.searchParams.set("oid", oid);
   const response = await env.GIT.fetch(
     new Request(url, { headers: trustedHeaders(user ?? undefined) })
@@ -499,9 +502,31 @@ async function queueActionRun(
   repositoryId: string,
   ref: string,
   snapshot: RepositorySnapshot,
-  workflow: ActionWorkflow
+  workflow: ActionWorkflow,
+  context: {
+    eventType: "push" | "workflow_dispatch" | "pull_request" | "merge_group";
+    pullRequestId?: string;
+    candidateId?: string;
+  } = { eventType: "push" }
 ): Promise<QueueActionResult> {
   ref = ref.replace(/^refs\/heads\//, "");
+  if (context.candidateId) {
+    const prior = await env.DB.prepare(
+      "SELECT id FROM actions_runs WHERE candidate_id = ? AND path = ?"
+    )
+      .bind(context.candidateId, workflow.path)
+      .first<{ id: string }>();
+    if (prior) {
+      const run = await getRun(env, prior.id);
+      if (run) return { ok: true, summary: toSummary(run) };
+      return {
+        ok: false,
+        status: 503,
+        code: "candidate_run_pending",
+        message: "Candidate run initialization is pending.",
+      };
+    }
+  }
   const id = crypto.randomUUID();
   let stub: ActionRunStub;
   try {
@@ -524,7 +549,7 @@ async function queueActionRun(
   }
   const now = Date.now();
   const created = await env.DB.prepare(
-    "INSERT INTO actions_runs (id, repository_id, commit_oid, workflow, path, source_ref, created_by, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM actions_runs WHERE repository_id = ? AND created_at > ?) < ?"
+    "INSERT INTO actions_runs (id, repository_id, commit_oid, workflow, path, source_ref, created_by, created_at, pull_request_id, candidate_id, trigger_kind) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM actions_runs WHERE repository_id = ? AND created_at > ?) < ?"
   )
     .bind(
       id,
@@ -535,6 +560,9 @@ async function queueActionRun(
       ref,
       user.id,
       now,
+      context.pullRequestId ?? null,
+      context.candidateId ?? null,
+      context.eventType,
       repositoryId,
       now - RUN_LIMIT_WINDOW_MS,
       RUN_LIMIT_PER_HOUR
@@ -564,7 +592,8 @@ async function queueActionRun(
     ref,
     createdBy: user.id,
     createdAt: now,
-    enableInternet: repo.actions_network_enabled === 1,
+    enableInternet:
+      context.eventType === "pull_request" ? false : repo.actions_network_enabled === 1,
     jobs: workflow.jobs,
     fileCount: snapshot.files.length,
   };
@@ -734,6 +763,101 @@ async function handleInternalPush(request: Request, env: ActionsEnv): Promise<Re
   return dataResponse({ runs, failures }, failures.length ? 207 : 202);
 }
 
+async function handleInternalProposal(
+  request: Request,
+  env: ActionsEnv,
+  eventType: "pull_request" | "merge_group"
+): Promise<Response> {
+  if (new URL(request.url).hostname !== "actions.internal" || request.method !== "POST")
+    return errorResponse(404, "not_found", "Endpoint was not found.");
+  const user = readTrustedUser(request);
+  const body: unknown = await readJsonLimited(request, 65_536);
+  if (
+    !user ||
+    !isRecord(body) ||
+    typeof body.repositoryId !== "string" ||
+    typeof body.pullRequestId !== "string"
+  )
+    return errorResponse(400, "bad_request", "A trusted user and pull request are required.");
+  const repo = await repositoryFor(env, body.repositoryId);
+  if (!repo || !(await canWriteRepository(env, repo, user)))
+    return errorResponse(404, "not_found", "Repository was not found.");
+  if (repo.archived || repo.actions_enabled !== 1)
+    return errorResponse(409, "actions_disabled", "Actions are disabled.");
+  const pull = await env.DB.prepare(
+    "SELECT id, base_ref, head_ref, head_session_id, head_repository_id FROM forge_pull_requests WHERE id = ? AND repository_id = ? AND state = 'open'"
+  )
+    .bind(body.pullRequestId, repo.id)
+    .first<{
+      id: string;
+      base_ref: string;
+      head_ref: string;
+      head_session_id: string | null;
+      head_repository_id: string | null;
+    }>();
+  if (!pull) return errorResponse(404, "not_found", "Open pull request was not found.");
+  let candidate: MergeCandidateRecord | null = null;
+  if (eventType === "merge_group") {
+    if (typeof body.candidateId !== "string")
+      return errorResponse(400, "bad_request", "Candidate is required.");
+    candidate = await env.DB.prepare(
+      "SELECT * FROM forge_merge_candidates WHERE id = ? AND pull_request_id = ? AND repository_id = ?"
+    )
+      .bind(body.candidateId, pull.id, repo.id)
+      .first<MergeCandidateRecord>();
+    if (!candidate?.result_oid)
+      return errorResponse(409, "candidate_pending", "The merge candidate is not prepared.");
+  } else if (pull.head_repository_id)
+    return dataResponse({ runs: [], failures: [], skipped: "fork_pull_request" });
+  const ref = candidate?.source_ref ?? pull.head_ref;
+  const snapshot = await repositorySnapshot(
+    env,
+    repo.id,
+    ref,
+    candidate?.result_oid ?? undefined,
+    user,
+    candidate ? null : pull.head_session_id
+  );
+  const definitions = await repositorySnapshot(
+    env,
+    repo.id,
+    candidate?.base_oid ?? pull.base_ref,
+    candidate?.base_oid,
+    user
+  );
+  const native = definitions.files.some((file) => file.path.startsWith(".gitedge/workflows/"));
+  const prefix = native ? ".gitedge/workflows/" : ".github/workflows/";
+  const files = definitions.files.filter(
+    (file) => file.path.startsWith(prefix) && /\.(?:yml|yaml)$/.test(file.path)
+  );
+  const triggered: ActionWorkflow[] = [];
+  for (const file of files) {
+    const source = snapshotFile(definitions, file.path);
+    if (source === null) return errorResponse(422, "bad_request", "Workflow is not UTF-8.");
+    const workflow = parseWorkflow(file.path, source);
+    if (workflow.triggers.some((trigger) => String(trigger) === eventType))
+      triggered.push(workflow);
+  }
+  if (triggered.length > 3)
+    return errorResponse(422, "workflow_limit", "At most three workflows may run per event.");
+  if (candidate)
+    await env.DB.prepare("UPDATE forge_merge_candidates SET expected_workflows = ? WHERE id = ?")
+      .bind(JSON.stringify(triggered.map((workflow) => workflow.path)), candidate.id)
+      .run();
+  const runs: ActionRunSummary[] = [];
+  const failures: Array<{ path: string; message: string }> = [];
+  for (const workflow of triggered) {
+    const result = await queueActionRun(env, repo, user, repo.id, ref, snapshot, workflow, {
+      eventType,
+      pullRequestId: pull.id,
+      candidateId: candidate?.id,
+    });
+    if (result.ok) runs.push(result.summary);
+    else failures.push({ path: workflow.path, message: result.message });
+  }
+  return dataResponse({ runs, failures }, failures.length ? 207 : 202);
+}
+
 async function startRun(
   request: Request,
   env: ActionsEnv,
@@ -792,7 +916,9 @@ async function startRun(
     );
   }
 
-  const result = await queueActionRun(env, repo, user, repositoryId, body.ref, snapshot, workflow);
+  const result = await queueActionRun(env, repo, user, repositoryId, body.ref, snapshot, workflow, {
+    eventType: "workflow_dispatch",
+  });
   if (!result.ok)
     return errorResponse(
       result.status,
@@ -902,6 +1028,10 @@ export default {
       const url = new URL(request.url);
       if (request.method === "GET" && url.pathname === "/internal/health")
         return dataResponse({ ok: true });
+      if (url.pathname === "/internal/pull-request")
+        return await handleInternalProposal(request, env, "pull_request");
+      if (url.pathname === "/internal/merge-group")
+        return await handleInternalProposal(request, env, "merge_group");
       if (url.pathname === "/internal/push") return await handleInternalPush(request, env);
       const user = readTrustedUser(request);
       const parts = url.pathname.split("/").filter(Boolean);

@@ -1,3 +1,5 @@
+import type { MergeCandidateRecord } from "../../../packages/contracts/src/merge-candidates";
+import { acquireRefWrites } from "../../../src/worker/common/ref-writes";
 import { repositoryNotFound } from "../../../src/worker/common/repository-response";
 import { trustedHeaders } from "../../../packages/contracts/src/trust";
 import { recordGitWrite, reportPushEvent } from "./events";
@@ -300,6 +302,11 @@ export async function handleGitApi(
           : null;
     if (!target || target.startsWith("refs/"))
       return errorResponse(400, "bad_request", "Invalid Git mutation.");
+    await using _writeLease = await acquireRefWrites(
+      env.DB,
+      session?.workspaceName ?? access.repository.artifactName!,
+      [`refs/heads/${target}`]
+    );
     if (!session && (await protectedBranch(env.DB, repositoryId, target)))
       return errorResponse(
         403,
@@ -444,6 +451,9 @@ export async function handleGitApi(
       return errorResponse(403, "protected_branch", "Protected branches reject direct updates.");
     using upstream = await env.ARTIFACTS.get(parent.artifactName);
     try {
+      await using _syncWriteLease = await acquireRefWrites(env.DB, access.repository.artifactName, [
+        `refs/heads/${input.data.branch}`,
+      ]);
       const outcome = await syncForkBranch(
         repo,
         upstream,
@@ -502,6 +512,72 @@ export async function handleGitApi(
       throw cause;
     }
   }
+  if (
+    resource === "merge-candidate" &&
+    request.method === "POST" &&
+    url.hostname === "git.internal"
+  ) {
+    if (!access.user || !access.repository.canWrite || userSession || access.repository.archived)
+      return errorResponse(403, "forbidden", "A repository writer is required.");
+    const parsed = GitMergeInputSchema.safeParse(await readJsonLimited(request));
+    if (!parsed.success || !parsed.data.candidateId)
+      return errorResponse(400, "bad_request", "Invalid candidate.");
+    const input = parsed.data;
+    const candidate = await env.DB.prepare(
+      "SELECT * FROM forge_merge_candidates WHERE id = ? AND repository_id = ? AND pull_request_id = ? AND base_oid = ? AND head_oid = ? AND method = ?"
+    )
+      .bind(
+        input.candidateId,
+        repositoryId,
+        input.pullRequestId,
+        input.expectedBaseOid,
+        input.expectedHeadOid,
+        input.method
+      )
+      .first<MergeCandidateRecord>();
+    if (!candidate) return errorResponse(409, "candidate_changed", "Candidate was not found.");
+    const headArtifact = await resolveProposalHead(env, access, {
+      sessionId: input.headSessionId,
+      repositoryId: input.headRepositoryId,
+      ref: input.headRef,
+    });
+    if (!headArtifact) return errorResponse(404, "not_found", "Head repository was not found.");
+    using headRepo = await env.ARTIFACTS.get(headArtifact);
+    await using _candidateLease = await acquireRefWrites(env.DB, access.repository.artifactName!, [
+      candidate.source_ref,
+    ]);
+    const rules = matchingBranchRules(await branchRules(env.DB, repositoryId), input.baseRef);
+    const result = await mergeArtifacts(
+      repo,
+      headRepo,
+      {
+        ...input,
+        author: { name: candidate.author_name, email: candidate.author_email },
+        message: candidate.message,
+        commitTimestamp: Math.floor(candidate.created_at / 1000),
+      },
+      {
+        destinationRef: candidate.source_ref,
+        requireLinearHistory: rules.some((rule) => rule.requireLinearHistory),
+        requireSignedCommits: rules.some((rule) => rule.requireSignedCommits),
+        verifySignature: async (raw) =>
+          (await verifyObjectSignature(env.DB, "commit", raw)).status === "valid",
+        beforePush: async () => {
+          const latest = await resolveGitAccess(request, env, repositoryId);
+          if (
+            latest instanceof Response ||
+            !latest?.repository.canWrite ||
+            latest.repository.archived
+          )
+            throw new GitWriteConflict("Repository permissions changed during preparation.");
+        },
+      },
+      env.LOG_LEVEL
+    );
+    return result.ok
+      ? dataResponse({ oid: result.oid })
+      : errorResponse(409, result.reason, "The candidate could not be prepared.");
+  }
   if (resource === "merge" && request.method === "POST") {
     if (access.repository.archived)
       return errorResponse(409, "repository_archived", "Archived repositories are read-only.");
@@ -520,6 +596,9 @@ export async function handleGitApi(
     const rules = matchingBranchRules(await branchRules(env.DB, repositoryId), input.data.baseRef);
     if (rules.some((rule) => rule.locked))
       return errorResponse(403, "protected_branch", "This branch is locked.");
+    await using _mergeWriteLease = await acquireRefWrites(env.DB, access.repository.artifactName!, [
+      `refs/heads/${input.data.baseRef}`,
+    ]);
     const operationKey = await sha256Hex(
       JSON.stringify([
         repositoryId,
@@ -539,11 +618,37 @@ export async function handleGitApi(
         .first<{ oid: string }>();
       if (receipt) return dataResponse({ oid: receipt.oid });
     }
+    const candidate = input.data.candidateId
+      ? await env.DB.prepare(
+          "SELECT * FROM forge_merge_candidates WHERE id = ? AND repository_id = ? AND pull_request_id = ? AND base_oid = ? AND head_oid = ? AND method = ? AND result_oid = ?"
+        )
+          .bind(
+            input.data.candidateId,
+            repositoryId,
+            input.data.pullRequestId,
+            input.data.expectedBaseOid,
+            input.data.expectedHeadOid,
+            input.data.method,
+            input.data.candidateOid
+          )
+          .first<MergeCandidateRecord>()
+      : null;
+    if (input.data.candidateId && !candidate)
+      return errorResponse(409, "candidate_changed", "Candidate does not match the merge.");
+    const mergeInput = candidate
+      ? {
+          ...input.data,
+          author: { name: candidate.author_name, email: candidate.author_email },
+          message: candidate.message,
+          commitTimestamp: Math.floor(candidate.created_at / 1000),
+        }
+      : input.data;
     const result = await mergeArtifacts(
       repo,
       headRepo,
-      input.data,
+      mergeInput,
       {
+        expectedResultOid: candidate?.result_oid ?? undefined,
         requireLinearHistory: rules.some((rule) => rule.requireLinearHistory),
         requireSignedCommits: rules.some((rule) => rule.requireSignedCommits),
         verifySignature: async (raw) =>

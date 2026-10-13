@@ -24,6 +24,8 @@ export const AuditActions = [
   "invitation.declined",
   "invitation.cancelled",
   "pull_request.merged",
+  "pull_request.locked",
+  "pull_request.unlocked",
   "pull_request.auto_merge_enabled",
   "pull_request.auto_merge_disabled",
   "pull_request.queued",

@@ -1,3 +1,4 @@
+import { candidateMergeAllowed } from "./merge-candidates";
 import {
   actorForUser,
   trustedHeaders,
@@ -33,6 +34,8 @@ export interface MergeAttempt {
 
 export interface MergeInput {
   readonly method: MergeMethod;
+  readonly candidateId?: string;
+  readonly candidateOid?: string;
   readonly expectedBaseOid: string;
   readonly expectedHeadOid: string;
 }
@@ -90,6 +93,8 @@ export async function executeMerge(
   if (!mergeMethodAllowed(repository, input.method))
     return failed(403, "merge_method_disabled", "This merge method is disabled.");
 
+  if (trigger === "queue" && !(await candidateMergeAllowed(env, repository, current, input)))
+    return failed(409, "merge_checks_changed", "The combined result has not passed its checks.");
   const leaseAt = Date.now();
   const lease = await env.DB.prepare(
     "UPDATE forge_pull_requests SET merge_started_at = ?, merge_base_oid = ?, merge_head_oid = ? WHERE id = ? AND state = 'open' AND draft = 0 AND (merge_started_at IS NULL OR merge_started_at < ?) RETURNING id"
@@ -147,6 +152,8 @@ export async function executeMerge(
       method: "POST",
       headers: gitHeaders,
       body: JSON.stringify({
+        candidateId: input.candidateId,
+        candidateOid: input.candidateOid,
         pullRequestId: String(current.id),
         leaseAt,
         method: input.method,

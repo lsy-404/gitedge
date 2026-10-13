@@ -132,6 +132,14 @@ export class MergeQueueDurableObject extends DurableObject<Record<string, never>
     };
   }
 
+  wait(pullRequestId: string, token: string): void {
+    this.ctx.storage.sql.exec(
+      "UPDATE entries SET lease_token = NULL, lease_until = 0 WHERE pull_request_id = ? AND lease_token = ?",
+      pullRequestId,
+      token
+    );
+  }
+
   finish(pullRequestId: string, token: string): FinishResult {
     const deleted = this.ctx.storage.sql.exec(
       "DELETE FROM entries WHERE pull_request_id = ? AND lease_token = ?",

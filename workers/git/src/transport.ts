@@ -1,3 +1,4 @@
+import { acquireRefWrites, holdRefWrites } from "../../../src/worker/common/ref-writes";
 import { repositoryNotFound } from "../../../src/worker/common/repository-response";
 import { recordGitWrite, reportPushEvent } from "./events";
 import { ReceiveReport, type RefUpdate } from "./receive-commands";
@@ -159,98 +160,112 @@ export async function proxyGitTransport(
       "repository_storage_unavailable",
       "Repository must be imported to Artifacts."
     );
-  using repo = await env.ARTIFACTS.get(artifactName);
-  const info = await repo.info();
-  const token = await repo.createToken(write ? "write" : "read", 60);
-  const target = new URL(`${info.remote}/${match[3]}`);
-  target.search = url.search;
-  const headers = new Headers();
-  for (const name of ["Content-Type", "Accept", "Git-Protocol", "Content-Encoding"]) {
-    const value = request.headers.get(name);
-    if (value) headers.set(name, value);
-  }
-  headers.set("Authorization", `Bearer ${token.plaintext}`);
-  const logger = createLogger(env.LOG_LEVEL, { service: "git-proxy", repoId: repository.id });
+  const writeLease = updates.length
+    ? await acquireRefWrites(
+        env.DB,
+        artifactName,
+        updates.map((update) => update.ref)
+      )
+    : null;
+  let streamOwnsLease = false;
   try {
-    const response = await fetch(target, {
-      method: request.method,
-      headers,
-      body: upstreamBody,
-      redirect: "manual",
-      signal: AbortSignal.timeout(120_000),
-    });
-    if (response.status >= 300 && response.status < 400)
-      return errorResponse(502, "upstream_redirect", "Artifacts redirected the Git request.");
-    logger.debug("artifacts:git-transport", {
-      operation: match[3],
-      status: response.status,
-      sessionId: access.user?.agentSession?.id,
-    });
-    if (response.status === 401 || response.status === 403)
-      return errorResponse(
-        502,
-        "upstream_auth_failed",
-        "Artifacts rejected the scoped credential."
-      );
-    const responseHeaders = new Headers(response.headers);
-    responseHeaders.set("Cache-Control", "no-store");
-    const writer = access.user;
-    const report = new ReceiveReport();
-    const body =
-      response.ok && writer && updates.length && response.body
-        ? response.body.pipeThrough(
-            new TransformStream<Uint8Array, Uint8Array>({
-              transform(chunk, controller) {
-                report.feed(chunk);
-                controller.enqueue(chunk);
-              },
-              async flush() {
-                const accepted = report.accepted();
-                if (!accepted)
-                  logger.warn("git:receive-report-unparsed", { count: updates.length });
-                const applied = accepted
-                  ? updates.filter((update) => accepted.has(update.ref))
-                  : [];
-                const changed = applied.filter(
-                  (update) =>
-                    update.ref.startsWith("refs/heads/") && update.newOid !== "0".repeat(40)
-                );
-                const notify = async () => {
-                  await reportPushEvent(
-                    env,
-                    repository.id,
-                    writer,
-                    applied.map((update) => ({
-                      ref: update.ref,
-                      before: update.oldOid,
-                      after: update.newOid,
-                    }))
-                  );
-                  if (!writer.agentSession)
-                    for (const update of changed.slice(0, 3))
-                      await recordGitWrite(
-                        env,
-                        repository.id,
-                        artifactName,
-                        writer,
-                        update.ref.slice(11),
-                        update.newOid
-                      );
-                  if (!writer.agentSession && changed.length > 3)
-                    logger.warn("actions:push-branches-truncated", { count: changed.length });
-                };
-                if (ctx) ctx.waitUntil(notify());
-                else await notify();
-              },
-            })
-          )
-        : response.body;
-    return new Response(body, { status: response.status, headers: responseHeaders });
-  } finally {
-    try {
-      await repo.revokeToken(token.id);
-    } catch {
-      logger.warn("artifacts:transport-token-revoke-failed", {});
+    using repo = await env.ARTIFACTS.get(artifactName);
+    const info = await repo.info();
+    const token = await repo.createToken(write ? "write" : "read", 60);
+    const target = new URL(`${info.remote}/${match[3]}`);
+    target.search = url.search;
+    const headers = new Headers();
+    for (const name of ["Content-Type", "Accept", "Git-Protocol", "Content-Encoding"]) {
+      const value = request.headers.get(name);
+      if (value) headers.set(name, value);
     }
+    headers.set("Authorization", `Bearer ${token.plaintext}`);
+    const logger = createLogger(env.LOG_LEVEL, { service: "git-proxy", repoId: repository.id });
+    try {
+      const response = await fetch(target, {
+        method: request.method,
+        headers,
+        body: upstreamBody,
+        redirect: "manual",
+        signal: AbortSignal.timeout(120_000),
+      });
+      if (response.status >= 300 && response.status < 400)
+        return errorResponse(502, "upstream_redirect", "Artifacts redirected the Git request.");
+      logger.debug("artifacts:git-transport", {
+        operation: match[3],
+        status: response.status,
+        sessionId: access.user?.agentSession?.id,
+      });
+      if (response.status === 401 || response.status === 403)
+        return errorResponse(
+          502,
+          "upstream_auth_failed",
+          "Artifacts rejected the scoped credential."
+        );
+      const responseHeaders = new Headers(response.headers);
+      responseHeaders.set("Cache-Control", "no-store");
+      const writer = access.user;
+      const report = new ReceiveReport();
+      const body =
+        response.ok && writer && updates.length && response.body
+          ? response.body.pipeThrough(
+              new TransformStream<Uint8Array, Uint8Array>({
+                transform(chunk, controller) {
+                  report.feed(chunk);
+                  controller.enqueue(chunk);
+                },
+                async flush() {
+                  const accepted = report.accepted();
+                  if (!accepted)
+                    logger.warn("git:receive-report-unparsed", { count: updates.length });
+                  const applied = accepted
+                    ? updates.filter((update) => accepted.has(update.ref))
+                    : [];
+                  const changed = applied.filter(
+                    (update) =>
+                      update.ref.startsWith("refs/heads/") && update.newOid !== "0".repeat(40)
+                  );
+                  const notify = async () => {
+                    await reportPushEvent(
+                      env,
+                      repository.id,
+                      writer,
+                      applied.map((update) => ({
+                        ref: update.ref,
+                        before: update.oldOid,
+                        after: update.newOid,
+                      }))
+                    );
+                    if (!writer.agentSession)
+                      for (const update of changed.slice(0, 3))
+                        await recordGitWrite(
+                          env,
+                          repository.id,
+                          artifactName,
+                          writer,
+                          update.ref.slice(11),
+                          update.newOid
+                        );
+                    if (!writer.agentSession && changed.length > 3)
+                      logger.warn("actions:push-branches-truncated", { count: changed.length });
+                  };
+                  if (ctx) ctx.waitUntil(notify());
+                  else await notify();
+                },
+              })
+            )
+          : response.body;
+      const guardedBody = body && writeLease ? holdRefWrites(body, writeLease) : body;
+      streamOwnsLease = Boolean(writeLease && guardedBody);
+      return new Response(guardedBody, { status: response.status, headers: responseHeaders });
+    } finally {
+      try {
+        await repo.revokeToken(token.id);
+      } catch {
+        logger.warn("artifacts:transport-token-revoke-failed", {});
+      }
+    }
+  } finally {
+    if (writeLease && !streamOwnsLease) await writeLease.release();
   }
 }
