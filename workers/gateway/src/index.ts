@@ -316,11 +316,15 @@ async function enforceIpLimit(request: Request, env: GatewayEnv): Promise<Respon
     const configured = Number(setting?.value);
     if (
       setting &&
-      Number.isSafeInteger(configured) &&
-      configured >= IP_RPM_MIN &&
-      configured <= IP_RPM_MAX
-    )
-      limit = configured;
+      (!Number.isSafeInteger(configured) || configured < IP_RPM_MIN || configured > IP_RPM_MAX)
+    ) {
+      createLogger(undefined, { service: "gateway" }).error("gateway:ip-limit-setting-invalid", {});
+      return Response.json(
+        { error: "Request policy is misconfigured" },
+        { status: 503, headers: { "Cache-Control": "no-store" } }
+      );
+    }
+    if (setting) limit = configured;
   } catch (cause) {
     createLogger(undefined, { service: "gateway" }).error("gateway:ip-limit-setting-read-failed", {
       error: cause instanceof Error ? cause.message : "unknown",

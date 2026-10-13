@@ -102,41 +102,78 @@ async function createAccessBan(
     value = user.id;
   }
 
-  const activeCount = await env.DB.prepare(
-    "SELECT COUNT(*) AS count FROM access_bans WHERE expires_at IS NULL OR expires_at > ?"
-  )
-    .bind(now)
-    .first<{ count: number }>();
-  if ((activeCount?.count ?? 0) >= 100)
-    return errorResponse(409, "conflict", "At most 100 active access bans are allowed.");
-
+  const createdAt = Date.now();
+  if (input.expiresAt !== null && input.expiresAt <= createdAt)
+    return errorResponse(400, "bad_request", "The expiry must be in the future.");
   const id = crypto.randomUUID();
+  let changes: D1Result[];
   try {
-    await env.DB.prepare(
-      "INSERT INTO access_bans (id, kind, subject_value, reason, expires_at, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)"
-    )
-      .bind(id, input.kind, value, input.reason, input.expiresAt, now, admin.id)
-      .run();
-  } catch {
-    return errorResponse(409, "conflict", "A matching active ban already exists.");
-  }
-
-  if (input.kind === "user") {
-    const changed = await env.DB.prepare(
-      "UPDATE users SET disabled_at = ? WHERE id = ? AND disabled_at IS NULL AND deleted_at IS NULL AND is_site_admin = 0"
-    )
-      .bind(now, value)
-      .run();
-    if (changed.meta.changes !== 1) {
-      await env.DB.prepare("DELETE FROM access_bans WHERE id = ?").bind(id).run();
-      return errorResponse(409, "conflict", "The account could not be banned.");
-    }
-    await env.DB.batch([
-      env.DB.prepare("DELETE FROM auth_sessions WHERE user_id = ?").bind(value),
+    const statements = [
       env.DB.prepare(
-        "UPDATE auth_access_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL"
-      ).bind(now, value),
-    ]);
+        "INSERT INTO access_bans (id, kind, subject_value, reason, expires_at, created_at, created_by) SELECT ?, ?, ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM access_bans WHERE expires_at IS NULL OR expires_at > ?) < 100 AND (? IS NULL OR ? > ?) AND (? <> 'user' OR EXISTS (SELECT 1 FROM users WHERE id = ? AND disabled_at IS NULL AND deleted_at IS NULL AND is_site_admin = 0))"
+      ).bind(
+        id,
+        input.kind,
+        value,
+        input.reason,
+        input.expiresAt,
+        createdAt,
+        admin.id,
+        createdAt,
+        input.expiresAt,
+        input.expiresAt,
+        createdAt,
+        input.kind,
+        value
+      ),
+    ];
+    if (input.kind === "user") {
+      const activeBan =
+        "EXISTS (SELECT 1 FROM access_bans WHERE id = ? AND kind = 'user' AND subject_value = ?)";
+      statements.push(
+        env.DB.prepare(
+          `UPDATE users SET disabled_at = ? WHERE id = ? AND disabled_at IS NULL AND deleted_at IS NULL AND is_site_admin = 0 AND ${activeBan}`
+        ).bind(createdAt, value, id, value),
+        env.DB.prepare(`DELETE FROM auth_sessions WHERE user_id = ? AND ${activeBan}`).bind(
+          value,
+          id,
+          value
+        ),
+        env.DB.prepare(
+          `UPDATE auth_access_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL AND ${activeBan}`
+        ).bind(createdAt, value, id, value),
+        env.DB.prepare(
+          `UPDATE auth_git_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL AND ${activeBan}`
+        ).bind(createdAt, value, id, value),
+        env.DB.prepare(
+          `UPDATE auth_agent_sessions SET status = 'revoked' WHERE user_id = ? AND status = 'active' AND ${activeBan}`
+        ).bind(value, id, value)
+      );
+    }
+    changes = await env.DB.batch(statements);
+  } catch {
+    try {
+      const existing = await env.DB.prepare(
+        "SELECT id FROM access_bans WHERE kind = ? AND subject_value = ?"
+      )
+        .bind(input.kind, value)
+        .first<{ id: string }>();
+      if (existing) return errorResponse(409, "conflict", "A matching active ban already exists.");
+    } catch {
+      // The failed write remains a service error when its cause cannot be identified.
+    }
+    createLogger(env.LOG_LEVEL, { service: "admin" }).error("admin:access-ban-write-failed", {
+      kind: input.kind,
+    });
+    return errorResponse(503, "internal_error", "The access ban could not be saved.");
+  }
+  if (changes[0]?.meta.changes !== 1)
+    return errorResponse(
+      409,
+      "conflict",
+      "A matching ban exists or the active ban limit was reached."
+    );
+  if (input.kind === "user") {
     const revoked = await revokeUserAgentSessions(env, value, false);
     if (!revoked)
       createLogger(env.LOG_LEVEL, { service: "admin" }).warn(
@@ -165,7 +202,7 @@ async function createAccessBan(
       value: input.kind === "ip" ? value : input.value,
       reason: input.reason,
       expiresAt: input.expiresAt,
-      createdAt: now,
+      createdAt,
       createdBy: admin.identifier,
     },
     201
@@ -174,15 +211,19 @@ async function createAccessBan(
 
 async function removeAccessBan(env: AdminEnv, admin: TrustedUser, id: string): Promise<Response> {
   const row = await env.DB.prepare(
-    "DELETE FROM access_bans WHERE id = ? RETURNING id, kind, subject_value AS subjectValue, reason, expires_at AS expiresAt, created_at AS createdAt"
+    "SELECT id, kind, subject_value AS subjectValue, reason, expires_at AS expiresAt, created_at AS createdAt FROM access_bans WHERE id = ?"
   )
     .bind(id)
     .first<Omit<AccessBanRow, "createdBy">>();
   if (!row) return errorResponse(404, "not_found", "Access ban was not found.");
-  if (row.kind === "user")
-    await env.DB.prepare("UPDATE users SET disabled_at = NULL WHERE id = ? AND disabled_at = ?")
-      .bind(row.subjectValue, row.createdAt)
-      .run();
+  const changes = await env.DB.batch([
+    env.DB.prepare(
+      "UPDATE users SET disabled_at = NULL WHERE id = ? AND disabled_at = ? AND EXISTS (SELECT 1 FROM access_bans WHERE id = ? AND kind = 'user' AND subject_value = ?)"
+    ).bind(row.subjectValue, row.createdAt, id, row.subjectValue),
+    env.DB.prepare("DELETE FROM access_bans WHERE id = ?").bind(id),
+  ]);
+  if (changes[1]?.meta.changes !== 1)
+    return errorResponse(404, "not_found", "Access ban was not found.");
   await recordAudit(env, {
     action: "admin.access_ban_removed",
     actor: auditActor(admin),

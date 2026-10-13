@@ -1,4 +1,5 @@
 import { bytesToBase64 } from "../../../src/worker/common/encoding";
+import { expireUserAccessBan } from "./access-bans";
 const SESSION_COOKIE = "gitedge_session";
 export const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
 export function createSessionCookie(token: string, maxAge: number): string {
@@ -22,6 +23,7 @@ export async function issueSession(
   const token = createToken();
   const id = crypto.randomUUID();
   const now = Date.now();
+  await expireUserAccessBan(env, userId, now);
   const inserted = await env.DB.prepare(
     "INSERT INTO auth_sessions (id, token_hash, user_id, expires_at, created_at, recent_auth_at) SELECT ?, ?, id, ?, ?, ? FROM users WHERE id = ? AND disabled_at IS NULL"
   )

@@ -313,7 +313,9 @@ async function revokeSession(env: AgentAuthEnv, row: AgentSessionRow): Promise<v
     using workspace = await env.ARTIFACTS.get(row.workspaceName);
     await revokeArtifactsToken(workspace, row.gitTokenId);
   }
-  await env.DB.prepare("UPDATE auth_agent_sessions SET status = 'revoked' WHERE id = ?")
+  await env.DB.prepare(
+    "UPDATE auth_agent_sessions SET status = 'revoked', git_token_id = '', git_token_hash = NULL WHERE id = ?"
+  )
     .bind(row.id)
     .run();
 }
@@ -489,7 +491,7 @@ export async function revokeUserAgentSessions(
   for (let round = 0; round < 5; round += 1) {
     const rows = await env.DB.prepare(
       sessionSelect +
-        " WHERE s.status = 'active' AND (s.user_id = ?1 OR (?2 = 1 AND s.repository_id IN (SELECT r.id FROM repositories r JOIN namespaces n ON n.id = r.namespace_id WHERE n.kind = 'personal' AND n.created_by = ?1))) LIMIT ?3"
+        " WHERE (s.status = 'active' OR (s.status = 'revoked' AND s.git_token_id != '')) AND (s.user_id = ?1 OR (?2 = 1 AND s.repository_id IN (SELECT r.id FROM repositories r JOIN namespaces n ON n.id = r.namespace_id WHERE n.kind = 'personal' AND n.created_by = ?1))) LIMIT ?3"
     )
       .bind(userId, Number(personalRepositories), REVOKE_BATCH_LIMIT)
       .all<AgentSessionRow>();

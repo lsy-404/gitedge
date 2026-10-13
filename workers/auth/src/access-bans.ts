@@ -11,3 +11,18 @@ export async function expireAccessBans(env: { DB: D1Database }, now = Date.now()
     if (removed.meta.changes === 0) return;
   }
 }
+
+export async function expireUserAccessBan(
+  env: { DB: D1Database },
+  userId: string,
+  now = Date.now()
+): Promise<void> {
+  await env.DB.batch([
+    env.DB.prepare(
+      "UPDATE users SET disabled_at = NULL WHERE id = ? AND disabled_at = (SELECT created_at FROM access_bans WHERE kind = 'user' AND subject_value = ? AND expires_at IS NOT NULL AND expires_at <= ? LIMIT 1)"
+    ).bind(userId, userId, now),
+    env.DB.prepare(
+      "DELETE FROM access_bans WHERE kind = 'user' AND subject_value = ? AND expires_at IS NOT NULL AND expires_at <= ?"
+    ).bind(userId, now),
+  ]);
+}

@@ -6,7 +6,7 @@ import {
 } from "./browser-accounts";
 import { ReservedAccountIdentifiers } from "../../../packages/contracts/src/account";
 import { handleSigningKeys } from "./signing-keys";
-import { expireAccessBans } from "./access-bans";
+import { expireAccessBans, expireUserAccessBan } from "./access-bans";
 import { handleSso } from "./sso/routes";
 import {
   consumeRateLimit,
@@ -283,6 +283,10 @@ export async function login(env: AuthEnv, input: unknown): Promise<ServiceResult
       error: { code: "bad_request", message: "Invalid login payload." },
     };
   const identifier = parsed.data.identifier.toLowerCase();
+  const account = await env.DB.prepare("SELECT id FROM users WHERE identifier = ?")
+    .bind(identifier)
+    .first<{ id: string }>();
+  if (account) await expireUserAccessBan(env, account.id);
   const user = await env.DB.prepare(
     "SELECT id, identifier, group_key, password_salt, password_hash, password_auth_enabled, disabled_at FROM users WHERE identifier = ?"
   )
