@@ -7,6 +7,7 @@ import { api, errorMessage, ssoAuthorizationUrl } from "../lib/api";
 import ConfirmButton from "./ConfirmButton.vue";
 import NoticeBar from "./NoticeBar.vue";
 import StatusBadge from "./StatusBadge.vue";
+import StatusState from "./StatusState.vue";
 import { clearSession, sessionState } from "../lib/session";
 import { FluentButton } from "@platform-kit/fluent/vue";
 
@@ -44,6 +45,8 @@ const availableProviders = computed(() =>
     (provider) => !identities.value.some((identity) => identity.providerId === provider.id)
   )
 );
+
+const ssoAvailable = computed(() => providers.value.length > 0 || identities.value.length > 0);
 
 async function load() {
   loading.value = true;
@@ -147,11 +150,22 @@ onMounted(load);
     </header>
     <NoticeBar v-if="linkedNotice" intent="success">{{ t("ssoLinked") }}</NoticeBar>
     <NoticeBar v-if="callbackError" intent="error">{{ callbackError }}</NoticeBar>
-    <NoticeBar v-if="loadingError" intent="error">{{ loadingError }}</NoticeBar>
     <NoticeBar v-if="actionError" intent="error">{{ actionError }}</NoticeBar>
     <NoticeBar v-if="notice" intent="success">{{ notice }}</NoticeBar>
+    <StatusState
+      :loading="loading"
+      :error="loadingError"
+      :empty="!externalIdentity && !ssoAvailable"
+      @retry="load"
+    >
+      <template #empty>{{ t("ssoNoProviders") }}</template>
+    </StatusState>
 
-    <section class="box" aria-labelledby="linked-provider-heading">
+    <section
+      v-if="externalIdentity || ssoAvailable"
+      class="box"
+      aria-labelledby="linked-provider-heading"
+    >
       <header class="box-header">
         <h3 id="linked-provider-heading">{{ t("signInMethods") }}</h3>
       </header>
@@ -181,7 +195,7 @@ onMounted(load);
       </div>
     </section>
 
-    <section class="box" aria-labelledby="sso-identities-heading">
+    <section v-if="ssoAvailable" class="box" aria-labelledby="sso-identities-heading">
       <header class="box-header">
         <h3 id="sso-identities-heading">{{ t("ssoIdentities") }}</h3>
         <FluentButton
@@ -242,7 +256,7 @@ onMounted(load);
       </ul>
     </section>
 
-    <section class="box" aria-labelledby="sso-add-heading">
+    <section v-if="ssoAvailable" class="box" aria-labelledby="sso-add-heading">
       <header class="box-header">
         <h3 id="sso-add-heading">{{ t("ssoAddIdentity") }}</h3>
       </header>
