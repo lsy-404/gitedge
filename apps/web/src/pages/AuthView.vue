@@ -35,12 +35,13 @@ const busy = ref(false);
 const challenge = ref<LoginSecondFactorChallenge | null>(null);
 const passkeysSupported = browserSupportsWebAuthn();
 const providers = ref<SsoProviderSummary[]>([]);
-const providersError = ref(false);
 const githubEnabled = ref(false);
 const returnTo = computed(() => safeReturnTo(route.query.redirect));
-/** The built-in GitHub OAuth button below owns GitHub; never list it a second time as a federation provider. */
+/** The built-in GitHub OAuth button owns GitHub while it is enabled; do not list it twice. */
 const federationProviders = computed(() =>
-  providers.value.filter((item) => !/github/i.test(`${item.id} ${item.label}`))
+  githubEnabled.value
+    ? providers.value.filter((item) => !/github/i.test(`${item.id} ${item.label}`))
+    : providers.value
 );
 const samlProviders = computed(() =>
   providers.value.filter((item) => item.protocol === "saml" && metadataHref(item.metadataUrl))
@@ -92,7 +93,6 @@ onMounted(async () => {
     api.githubOAuthStatus(),
   ]);
   if (providerResult.status === "fulfilled") providers.value = providerResult.value;
-  else providersError.value = true;
   githubEnabled.value = githubResult.status === "fulfilled" && githubResult.value.enabled;
 });
 
@@ -193,7 +193,7 @@ async function cancelAddingAccount() {
     <div v-else class="auth-card">
       <NoticeBar v-if="callbackError" intent="error">{{ callbackError }}</NoticeBar>
       <div
-        v-if="githubEnabled || federationProviders.length || providersError || samlProviders.length"
+        v-if="githubEnabled || federationProviders.length || samlProviders.length"
         class="auth-provider-list"
       >
         <FluentButton
@@ -216,7 +216,6 @@ async function cancelAddingAccount() {
           ><strong>{{ t("continueWith", { provider: provider.label }) }}</strong
           ><StatusBadge>{{ provider.protocol.toUpperCase() }}</StatusBadge>
         </a>
-        <NoticeBar v-if="providersError" intent="warning">{{ t("ssoProvidersError") }}</NoticeBar>
         <a
           v-for="provider in samlProviders"
           :key="`${provider.id}-metadata`"
