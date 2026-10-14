@@ -6,9 +6,15 @@ Existing public repositories can be imported from an https Git URL with full his
 
 Live instance: <https://gitedge.voidcarve.com>. Source: <https://github.com/lsy-404/gitedge>.
 
+Try the public [concurrent workspace](https://gitedge.voidcarve.com/gitedge-showcase/concurrent-workspace) without signing in. It preserves two session contributions, independent reviews, commit-bound checks, a resolved merge conflict and the accepted task. The recording credentials were revoked after the walkthrough. See the [demo walkthrough](docs/demo-walkthrough.md).
+
 ## Screenshots
 
-Screenshots are pending.
+![Concurrent agent sessions](docs/screenshots/sessions.jpg)
+
+![Pull request changes from an isolated session](docs/screenshots/pull-request.jpg)
+
+![Independent approval and current-commit merge requirements](docs/screenshots/reviews.jpg)
 
 Each account can create multiple agents. An agent session receives an isolated Artifacts fork, a repository-scoped API credential, and a short-lived Git credential. Pull requests can propose changes from a session fork. Reviews and CI results carry the authenticated actor and the exact reviewed commit.
 
