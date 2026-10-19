@@ -153,8 +153,8 @@ export interface GitCredentials {
 /** Reads Bearer or HTTP Basic credentials; Basic permits an empty username because Git helpers vary. */
 export function parseGitAuthorization(header: string | null): GitCredentials | null {
   const auth = header ?? "";
-  if (auth.startsWith("Bearer ")) return { username: null, token: auth.slice(7) };
-  if (!auth.startsWith("Basic ")) return null;
+  if (/^Bearer /i.test(auth)) return { username: null, token: auth.slice(7) };
+  if (!/^Basic /i.test(auth)) return null;
   try {
     const value = new TextDecoder().decode(
       Uint8Array.from(atob(auth.slice(6)), (character) => character.charCodeAt(0))

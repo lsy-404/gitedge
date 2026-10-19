@@ -25,6 +25,7 @@ import {
   buildOpenApiDocument,
 } from "../../../packages/contracts/src/openapi";
 import { createLogger, type Logger } from "../../../src/worker/common/logger";
+import { handleGitHubApiRequest, githubApiError, isGitHubApiPath } from "./github-api";
 import {
   SITE_FETCH_VARY,
   loadedByApplicationOrigin,
@@ -506,6 +507,73 @@ async function handleMcp(request: Request, env: GatewayEnv): Promise<Response> {
   return env.MCP.fetch(forwarded);
 }
 
+async function handleGitHubCompatibility(request: Request, env: GatewayEnv): Promise<Response> {
+  const headers = new Headers(request.headers);
+  withoutTrustedHeaders(headers);
+  headers.delete("Cookie");
+  const authorization = headers.get("Authorization");
+  const token = /^(?:Bearer|token) ([^\s]+)$/i.exec(authorization ?? "");
+  if (authorization && !token)
+    return githubApiError(401, "unauthorized", "A Bearer or token access credential is required.");
+  if (token) headers.set("Authorization", `Bearer ${token[1]}`);
+  const machineRequest = new Request(request, {
+    headers,
+    method: request.method === "HEAD" ? "GET" : request.method,
+  });
+  const session = await authenticate(machineRequest, env.AUTH);
+  if (session instanceof Response) {
+    await session.body?.cancel();
+    return githubApiError(502, "authentication_unavailable", "Authentication is unavailable.");
+  }
+  if (
+    (!session.authenticated && authorization) ||
+    (!session.authenticated && request.method !== "GET" && request.method !== "HEAD")
+  ) {
+    const response = githubApiError(401, "unauthorized", "Bad credentials.");
+    response.headers.set("WWW-Authenticate", 'Bearer realm="GitEdge"');
+    return response;
+  }
+  if (session.authenticated) {
+    const limit = await enforceUserLimit(session, env);
+    if (limit) return limit;
+  }
+  try {
+    const response = await handleGitHubApiRequest(machineRequest, {
+      db: env.DB,
+      user: session.authenticated ? session : null,
+      async dispatch(native) {
+        const pathname = new URL(native.url).pathname;
+        const prefix = isApiPath(pathname, "/api/forge")
+          ? "/api/forge"
+          : isApiPath(pathname, "/api/git")
+            ? "/api/git"
+            : null;
+        if (!prefix || /\/_?internal(?:\/|$)/.test(pathname))
+          return githubApiError(501, "unsupported", "This native operation is not supported.");
+        if (prefix === "/api/git" && native.method !== "GET" && native.method !== "HEAD")
+          return githubApiError(501, "unsupported", "This Git write operation is not supported.");
+        const archiveLimit = await enforceArchiveLimit(native, pathname, session, env);
+        if (archiveLimit) return archiveLimit;
+        const service = prefix === "/api/forge" ? env.FORGE : env.GIT;
+        return presentRepositoryResponse(
+          await service.fetch(
+            forwardAuthenticated(native, prefix, session.authenticated ? session : undefined)
+          ),
+          env
+        );
+      },
+    });
+    if (request.method !== "HEAD") return response;
+    await response.body?.cancel();
+    return new Response(null, { status: response.status, headers: response.headers });
+  } catch {
+    createLogger(undefined, { service: "gateway" }).error("gateway:github-api-failed", {
+      method: request.method,
+    });
+    return githubApiError(502, "service_unavailable", "The compatibility service is unavailable.");
+  }
+}
+
 async function serveSpa(request: Request, assets: GatewayService): Promise<Response> {
   const assetResponse = await assets.fetch(request);
   if (assetResponse.status !== 404 || (request.method !== "GET" && request.method !== "HEAD")) {
@@ -562,6 +630,19 @@ async function handleSite(request: Request, env: GatewayEnv, match: SiteMatch): 
 
 export async function handleGatewayRequest(request: Request, env: GatewayEnv): Promise<Response> {
   const url = new URL(request.url);
+  const suffixlessGit = /^\/([^/]+)\/([^/]+)\/(info\/refs|git-upload-pack|git-receive-pack)$/.exec(
+    url.pathname
+  );
+  if (
+    suffixlessGit &&
+    !ReservedAccountIdentifiers.has(suffixlessGit[1]) &&
+    !suffixlessGit[2].endsWith(".git") &&
+    NamespaceSlugSchema.safeParse(suffixlessGit[1]).success &&
+    RepositorySlugSchema.safeParse(suffixlessGit[2]).success
+  ) {
+    url.pathname = `/${suffixlessGit[1]}/${suffixlessGit[2]}.git/${suffixlessGit[3]}`;
+    request = new Request(url, request);
+  }
 
   const ipBanResponse = await enforceIpBan(request, env);
   if (ipBanResponse) return ipBanResponse;
@@ -601,6 +682,7 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
     return env.FORGE.fetch(forwardAuthenticated(request, "/api/forge"));
   }
   if (url.pathname === MCP_PATH) return handleMcp(request, env);
+  if (isGitHubApiPath(url.pathname)) return handleGitHubCompatibility(request, env);
 
   if (isApiPath(url.pathname, "/api/auth")) {
     return env.AUTH.fetch(forwardServicePath(request, "/api/auth"));

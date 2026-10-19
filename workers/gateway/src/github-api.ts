@@ -68,6 +68,7 @@ const CreateInput = z
 
 const UpdateInput = z
   .object({
+    tag_name: z.string().min(1).max(200).optional(),
     name: z.string().max(200).optional(),
     body: z.string().max(50_000).optional(),
     draft: z.boolean().optional(),
@@ -96,7 +97,12 @@ export function githubApiError(status: number, code: string, message: string): R
 }
 
 export function isGitHubApiPath(pathname: string): boolean {
-  return pathname === "/api/v3" || pathname.startsWith("/api/v3/") || pathname === "/api/graphql";
+  return (
+    pathname === "/api/v3" ||
+    pathname.startsWith("/api/v3/") ||
+    pathname === "/api/graphql" ||
+    pathname.startsWith("/api/graphql/")
+  );
 }
 
 function unsupported(message: string): Response {
@@ -278,6 +284,34 @@ function repositoryObject(repository: Repository, id: number, origin: string) {
   };
 }
 
+function assetObject(
+  mapper: RequestIdMapper,
+  repository: Repository,
+  releaseId: string,
+  asset: Release["assets"][number],
+  origin: string
+) {
+  const assetId = mapper.get("asset", asset.id);
+  return {
+    id: assetId,
+    name: asset.name,
+    size: asset.size,
+    content_type: asset.contentType,
+    state: "uploaded",
+    created_at: new Date(asset.createdAt).toISOString(),
+    updated_at: new Date(asset.createdAt).toISOString(),
+    uploader: { login: asset.uploader },
+    browser_download_url: new URL(
+      `/api/forge/repositories/${encodeURIComponent(repository.id)}/releases/${encodeURIComponent(releaseId)}/assets/${encodeURIComponent(asset.id)}`,
+      origin
+    ).toString(),
+    url: new URL(
+      `/api/v3/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/releases/assets/${assetId}`,
+      origin
+    ).toString(),
+  };
+}
+
 function releaseObject(
   mapper: RequestIdMapper,
   repository: Repository,
@@ -285,25 +319,9 @@ function releaseObject(
   origin: string
 ) {
   const releaseId = mapper.get("release", release.id);
-  const assets = release.assets.map((asset) => {
-    const assetId = mapper.get("asset", asset.id);
-    const url = new URL(
-      `/api/forge/repositories/${encodeURIComponent(repository.id)}/releases/${encodeURIComponent(release.id)}/assets/${encodeURIComponent(asset.id)}`,
-      origin
-    ).toString();
-    return {
-      id: assetId,
-      name: asset.name,
-      size: asset.size,
-      content_type: asset.contentType,
-      state: "uploaded",
-      browser_download_url: url,
-      url: new URL(
-        `/api/v3/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/releases/assets/${assetId}`,
-        origin
-      ).toString(),
-    };
-  });
+  const assets = release.assets.map((asset) =>
+    assetObject(mapper, repository, release.id, asset, origin)
+  );
   const base = `/api/v3/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/releases`;
   return {
     id: releaseId,
@@ -496,7 +514,8 @@ export async function handleGitHubApiRequest(
 ): Promise<Response> {
   const url = new URL(request.url);
   const logger = createLogger(undefined, { service: "gateway-github-api" });
-  if (url.pathname === "/api/graphql") return unsupported("GraphQL is not supported.");
+  if (url.pathname === "/api/graphql" || url.pathname.startsWith("/api/graphql/"))
+    return unsupported("GraphQL is not supported.");
   if (url.pathname === "/api/v3" || url.pathname === "/api/v3/") {
     if (request.method !== "GET")
       return githubApiError(405, "method_not_allowed", "Method not allowed");
@@ -569,7 +588,7 @@ export async function handleGitHubApiRequest(
     if (parts[3] !== "releases") return unsupported("This repository endpoint is not supported.");
     if (parts.length === 4) {
       if (request.method === "GET")
-        return getReleaseList(request, context, repository, url.origin, mapper);
+        return await getReleaseList(request, context, repository, url.origin, mapper);
       if (request.method !== "POST")
         return githubApiError(405, "method_not_allowed", "Method not allowed");
       const invalid = queryError(url, []);
@@ -677,20 +696,7 @@ export async function handleGitHubApiRequest(
           )
         );
       await mapper.load("asset", [found.asset.id], repository.id);
-      const assetId = mapper.get("asset", found.asset.id);
-      const assetUrl = new URL(
-        `/api/v3/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/releases/assets/${assetId}`,
-        url.origin
-      ).toString();
-      return json(200, {
-        id: assetId,
-        name: found.asset.name,
-        size: found.asset.size,
-        content_type: found.asset.contentType,
-        state: "uploaded",
-        browser_download_url: assetUrl,
-        url: assetUrl,
-      });
+      return json(200, assetObject(mapper, repository, found.release.id, found.asset, url.origin));
     }
     const releaseSelector = parts[4];
     if (releaseSelector && parts.length === 5) {
@@ -729,6 +735,7 @@ export async function handleGitHubApiRequest(
       const bodyObject = UserBodySchema.safeParse(await readJsonLimited(request));
       if (!bodyObject.success) return badRequest("Request body must be a JSON object.");
       const unknownKey = unknownBodyKey(bodyObject.data, [
+        "tag_name",
         "name",
         "body",
         "draft",
@@ -743,6 +750,20 @@ export async function handleGitHubApiRequest(
       const parsed = UpdateInput.safeParse(bodyObject.data);
       if (!parsed.success || Object.keys(parsed.data).length === 0)
         return badRequest("Invalid or unsupported release fields.");
+      if (parsed.data.tag_name !== undefined) {
+        const current = await context.dispatch(
+          internalRequest(
+            request,
+            `/api/forge/repositories/${encodeURIComponent(repository.id)}/releases/${encodeURIComponent(nativeReleaseId)}`,
+            "GET"
+          )
+        );
+        if (!current.ok) return errorFromNative(current);
+        const release = await data(current, NativeReleaseSchema);
+        if (!release) return githubApiError(502, "native_error", "Release data was unavailable");
+        if (release.tagName !== parsed.data.tag_name)
+          return unsupported("Changing a release tag is not supported.");
+      }
       const nativeBody = UpdateReleaseInputSchema.safeParse({
         title: parsed.data.name,
         body: parsed.data.body,
@@ -794,20 +815,7 @@ export async function handleGitHubApiRequest(
       const asset = await data(native, NativeAssetSchema);
       if (!asset) return githubApiError(502, "native_error", "Asset data was unavailable");
       await mapper.load("asset", [asset.id], repository.id);
-      const mappedId = mapper.get("asset", asset.id);
-      const assetUrl = new URL(
-        `/api/v3/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/releases/assets/${mappedId}`,
-        url.origin
-      ).toString();
-      return json(201, {
-        id: mappedId,
-        name: asset.name,
-        size: asset.size,
-        content_type: asset.contentType,
-        state: "uploaded",
-        browser_download_url: assetUrl,
-        url: assetUrl,
-      });
+      return json(201, assetObject(mapper, repository, releaseId, asset, url.origin));
     }
     return unsupported("This release endpoint or method is not supported.");
   } catch (cause) {
