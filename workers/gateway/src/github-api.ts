@@ -8,7 +8,7 @@ import {
   type Repository,
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
-import { readJsonLimited } from "../../../src/worker/common/readText";
+import { readJsonLimited, readTextLimited } from "../../../src/worker/common/readText";
 import { createLogger } from "../../../src/worker/common/logger";
 
 export interface GitHubApiContext {
@@ -22,6 +22,8 @@ interface IdRow {
   native_id: string;
   repository_id: string | null;
 }
+
+type GitHubIdKind = "repository" | "release" | "asset" | "user";
 
 const NativeAssetSchema = z.object({
   id: z.string(),
@@ -105,8 +107,16 @@ function badRequest(message: string): Response {
   return githubApiError(422, "validation_failed", message);
 }
 
-function routeParts(pathname: string): string[] {
-  return pathname.split("/").filter(Boolean).slice(2);
+function routeParts(pathname: string): string[] | null {
+  try {
+    return pathname
+      .split("/")
+      .filter(Boolean)
+      .slice(2)
+      .map((part) => decodeURIComponent(part));
+  } catch {
+    return null;
+  }
 }
 
 function internalRequest(
@@ -117,13 +127,17 @@ function internalRequest(
 ): Request {
   const url = new URL(request.url);
   url.pathname = pathname;
+  url.search = "";
   const headers = new Headers();
-  for (const name of ["Accept", "Content-Type", "Content-Length"]) {
+  for (const name of ["Accept", "Content-Type"]) {
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
   }
-  if (typeof body === "string" && !headers.has("Content-Type"))
-    headers.set("Content-Type", "application/json");
+  if (body !== undefined && body !== null) {
+    headers.delete("Content-Length");
+    if (typeof body === "string" && !headers.has("Content-Type"))
+      headers.set("Content-Type", "application/json");
+  }
   return new Request(url, {
     method,
     headers,
@@ -134,14 +148,40 @@ function internalRequest(
 
 async function data<T>(response: Response, schema: z.ZodType<T>): Promise<T | null> {
   try {
-    const parsed = z.object({ data: schema }).safeParse(await response.json());
+    const text = await readTextLimited(response.body, 2_100_000);
+    const value: unknown = text === null ? null : JSON.parse(text);
+    const parsed = z.object({ data: schema }).safeParse(value);
     return parsed.success ? parsed.data.data : null;
   } catch {
     return null;
   }
 }
 
-function errorFromNative(response: Response): Response {
+async function releaseList(
+  response: Response
+): Promise<z.infer<typeof NativeReleaseListSchema> | null> {
+  try {
+    const value = await readJsonLimited(response, 2_100_000);
+    const parsed = NativeReleaseListSchema.safeParse(value);
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+async function errorFromNative(response: Response): Promise<Response> {
+  const headers = new Headers();
+  for (const name of [
+    "WWW-Authenticate",
+    "Retry-After",
+    "X-RateLimit-Limit",
+    "X-RateLimit-Remaining",
+    "X-RateLimit-Reset",
+  ]) {
+    const value = response.headers.get(name);
+    if (value) headers.set(name, value);
+  }
+  await response.body?.cancel().catch(() => undefined);
   const status = response.status;
   const message =
     status === 404
@@ -149,40 +189,66 @@ function errorFromNative(response: Response): Response {
       : status === 403
         ? "Resource not accessible by integration"
         : "GitEdge could not complete the request";
-  return githubApiError(
+  const result = githubApiError(
     status,
     status === 404 ? "not_found" : status === 403 ? "forbidden" : "native_error",
     message
   );
+  headers.forEach((value, name) => result.headers.set(name, value));
+  return result;
 }
 
-async function mapId(
-  context: GitHubApiContext,
-  kind: string,
-  nativeId: string,
-  repositoryId: string | null
-): Promise<number> {
-  await context.db
-    .prepare(
-      "INSERT OR IGNORE INTO github_api_ids (kind, native_id, repository_id) VALUES (?, ?, ?)"
-    )
-    .bind(kind, nativeId, repositoryId)
-    .run();
-  const row = await context.db
-    .prepare(
-      "SELECT id, native_id, repository_id FROM github_api_ids WHERE kind = ? AND native_id = ?"
-    )
-    .bind(kind, nativeId)
-    .first<IdRow>();
-  if (
-    !row ||
-    row.native_id !== nativeId ||
-    row.repository_id !== repositoryId ||
-    !Number.isSafeInteger(row.id)
-  )
-    throw new Error("compatibility id mapping unavailable");
-  return row.id;
+class RequestIdMapper {
+  private readonly ids = new Map<string, number>();
+  private count = 0;
+
+  constructor(private readonly context: GitHubApiContext) {}
+
+  ensureCapacity(additional: number): void {
+    if (this.count + additional > 200)
+      throw new BoundedResultError(
+        "The response includes too many release assets; use a smaller per_page value."
+      );
+  }
+
+  async load(kind: GitHubIdKind, nativeIds: string[], repositoryId: string | null): Promise<void> {
+    const unique = [...new Set(nativeIds)].filter((id) => !this.ids.has(`${kind}:${id}`));
+    this.ensureCapacity(unique.length);
+    for (let offset = 0; offset < unique.length; offset += 30) {
+      const chunk = unique.slice(offset, offset + 30);
+      const values = chunk.map(() => "(?, ?, ?)").join(", ");
+      const bindings = chunk.flatMap((id) => [kind, id, repositoryId]);
+      await this.context.db
+        .prepare(
+          `INSERT OR IGNORE INTO github_api_ids (kind, native_id, repository_id) VALUES ${values}`
+        )
+        .bind(...bindings)
+        .run();
+      const placeholders = chunk.map(() => "?").join(", ");
+      const rows = await this.context.db
+        .prepare(
+          `SELECT id, native_id, repository_id FROM github_api_ids WHERE kind = ? AND native_id IN (${placeholders})`
+        )
+        .bind(kind, ...chunk)
+        .all<IdRow>();
+      for (const nativeId of chunk) {
+        const row = rows.results.find((entry) => entry.native_id === nativeId);
+        if (!row || row.repository_id !== repositoryId || !Number.isSafeInteger(row.id))
+          throw new Error("compatibility id mapping unavailable");
+        this.ids.set(`${kind}:${nativeId}`, row.id);
+        this.count += 1;
+      }
+    }
+  }
+
+  get(kind: GitHubIdKind, nativeId: string): number {
+    const value = this.ids.get(`${kind}:${nativeId}`);
+    if (value === undefined) throw new Error("compatibility id mapping unavailable");
+    return value;
+  }
 }
+
+class BoundedResultError extends Error {}
 
 async function nativeId(
   context: GitHubApiContext,
@@ -212,31 +278,32 @@ function repositoryObject(repository: Repository, id: number, origin: string) {
   };
 }
 
-async function releaseObject(
-  context: GitHubApiContext,
+function releaseObject(
+  mapper: RequestIdMapper,
   repository: Repository,
   release: Release,
   origin: string
 ) {
-  const releaseId = await mapId(context, "release", release.id, repository.id);
-  const assets = await Promise.all(
-    release.assets.map(async (asset) => {
-      const assetId = await mapId(context, "asset", asset.id, repository.id);
-      const url = new URL(
+  const releaseId = mapper.get("release", release.id);
+  const assets = release.assets.map((asset) => {
+    const assetId = mapper.get("asset", asset.id);
+    const url = new URL(
+      `/api/forge/repositories/${encodeURIComponent(repository.id)}/releases/${encodeURIComponent(release.id)}/assets/${encodeURIComponent(asset.id)}`,
+      origin
+    ).toString();
+    return {
+      id: assetId,
+      name: asset.name,
+      size: asset.size,
+      content_type: asset.contentType,
+      state: "uploaded",
+      browser_download_url: url,
+      url: new URL(
         `/api/v3/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/releases/assets/${assetId}`,
         origin
-      ).toString();
-      return {
-        id: assetId,
-        name: asset.name,
-        size: asset.size,
-        content_type: asset.contentType,
-        state: "uploaded",
-        browser_download_url: url,
-        url,
-      };
-    })
-  );
+      ).toString(),
+    };
+  });
   const base = `/api/v3/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/releases`;
   return {
     id: releaseId,
@@ -245,7 +312,7 @@ async function releaseObject(
     body: release.body,
     draft: release.draft,
     prerelease: release.prerelease,
-    target_commitish: release.target ?? repository.defaultBranch,
+    ...(release.target === null ? {} : { target_commitish: release.target }),
     author: { login: release.author },
     created_at: new Date(release.createdAt).toISOString(),
     updated_at: new Date(release.updatedAt).toISOString(),
@@ -269,8 +336,8 @@ async function resolveRepository(
   { repository: Repository; response?: never } | { repository?: never; response: Response }
 > {
   const path = `/api/forge/repositories/by-name/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
-  const response = await context.dispatch(internalRequest(request, path));
-  if (!response.ok) return { response: errorFromNative(response) };
+  const response = await context.dispatch(internalRequest(request, path, "GET"));
+  if (!response.ok) return { response: await errorFromNative(response) };
   const repository = await data(response, RepositorySchema);
   if (!repository)
     return { response: githubApiError(502, "native_error", "Repository data was unavailable") };
@@ -290,7 +357,8 @@ async function getReleaseList(
   request: Request,
   context: GitHubApiContext,
   repository: Repository,
-  origin: string
+  origin: string,
+  mapper: RequestIdMapper
 ): Promise<Response> {
   const url = new URL(request.url);
   const invalid = queryError(url, ["page", "per_page"]);
@@ -298,9 +366,9 @@ async function getReleaseList(
   const page = Number(url.searchParams.get("page") ?? "1");
   const perPage = Number(url.searchParams.get("per_page") ?? "30");
   if (
-    !Number.isInteger(page) ||
+    !Number.isSafeInteger(page) ||
     page < 1 ||
-    !Number.isInteger(perPage) ||
+    !Number.isSafeInteger(perPage) ||
     perPage < 1 ||
     perPage > 100
   )
@@ -308,11 +376,12 @@ async function getReleaseList(
   const native = await context.dispatch(
     internalRequest(
       request,
-      `/api/forge/repositories/${encodeURIComponent(repository.id)}/releases`
+      `/api/forge/repositories/${encodeURIComponent(repository.id)}/releases`,
+      "GET"
     )
   );
   if (!native.ok) return errorFromNative(native);
-  const list = await data(native, NativeReleaseListSchema);
+  const list = await releaseList(native);
   if (!list) return githubApiError(502, "native_error", "Release data was unavailable");
   if (list.truncated)
     return githubApiError(
@@ -322,9 +391,14 @@ async function getReleaseList(
     );
   const start = (page - 1) * perPage;
   const selected = list.data.slice(start, start + perPage);
-  const output = await Promise.all(
-    selected.map((release) => releaseObject(context, repository, release, origin))
-  );
+  const releaseIds = [...new Set(selected.map((release) => release.id))];
+  const assetIds = [
+    ...new Set(selected.flatMap((release) => release.assets.map((asset) => asset.id))),
+  ];
+  mapper.ensureCapacity(releaseIds.length + assetIds.length);
+  await mapper.load("release", releaseIds, repository.id);
+  await mapper.load("asset", assetIds, repository.id);
+  const output = selected.map((release) => releaseObject(mapper, repository, release, origin));
   const headers = new Headers();
   if (start + perPage < list.data.length) {
     const next = new URL(url);
@@ -345,11 +419,12 @@ async function findRelease(
   const response = await context.dispatch(
     internalRequest(
       request,
-      `/api/forge/repositories/${encodeURIComponent(repository.id)}/releases`
+      `/api/forge/repositories/${encodeURIComponent(repository.id)}/releases`,
+      "GET"
     )
   );
   if (!response.ok) return errorFromNative(response);
-  const list = await data(response, NativeReleaseListSchema);
+  const list = await releaseList(response);
   if (!list) return githubApiError(502, "native_error", "Release data was unavailable");
   if (list.truncated)
     return githubApiError(
@@ -371,11 +446,12 @@ async function findAsset(
   const response = await context.dispatch(
     internalRequest(
       request,
-      `/api/forge/repositories/${encodeURIComponent(repository.id)}/releases`
+      `/api/forge/repositories/${encodeURIComponent(repository.id)}/releases`,
+      "GET"
     )
   );
   if (!response.ok) return errorFromNative(response);
-  const list = await data(response, NativeReleaseListSchema);
+  const list = await releaseList(response);
   if (!list) return githubApiError(502, "native_error", "Release data was unavailable");
   if (list.truncated)
     return githubApiError(
@@ -390,10 +466,28 @@ async function findAsset(
   return null;
 }
 
+async function prepareRelease(
+  mapper: RequestIdMapper,
+  repository: Repository,
+  release: Release
+): Promise<void> {
+  mapper.ensureCapacity(1 + new Set(release.assets.map((asset) => asset.id)).size);
+  await mapper.load("release", [release.id], repository.id);
+  await mapper.load(
+    "asset",
+    release.assets.map((asset) => asset.id),
+    repository.id
+  );
+}
+
 function hasUnsupportedReleaseFeatures(value: Record<string, unknown>): boolean {
   return ["make_latest", "generate_release_notes", "discussion_category_name"].some(
     (key) => key in value
   );
+}
+
+function unknownBodyKey(value: Record<string, unknown>, allowed: string[]): string | null {
+  return Object.keys(value).find((key) => !allowed.includes(key)) ?? null;
 }
 
 export async function handleGitHubApiRequest(
@@ -415,6 +509,7 @@ export async function handleGitHubApiRequest(
     });
   }
   const parts = routeParts(url.pathname);
+  if (!parts) return badRequest("The URL path contains invalid percent encoding.");
   if (parts.length === 2 && parts[0] === "gitedge" && parts[1] === "capabilities") {
     if (request.method !== "GET")
       return githubApiError(405, "method_not_allowed", "Method not allowed");
@@ -440,14 +535,16 @@ export async function handleGitHubApiRequest(
     if (invalid) return invalid;
     if (!context.user) return githubApiError(401, "unauthorized", "Requires authentication");
     try {
-      const id = await mapId(context, "user", context.user.id, null);
+      const mapper = new RequestIdMapper(context);
+      await mapper.load("user", [context.user.id], null);
+      const id = mapper.get("user", context.user.id);
       return json(200, {
         id,
         login: context.user.identifier,
         type: context.user.agentSession ? "Bot" : "User",
       });
     } catch {
-      logger.error("github-api:user-id-map-failed", { method: request.method, path: url.pathname });
+      logger.error("github-api:user-id-map-failed", { method: request.method, route: "user" });
       return githubApiError(500, "mapping_failed", "User compatibility ID could not be resolved");
     }
   }
@@ -458,18 +555,21 @@ export async function handleGitHubApiRequest(
   const resolved = await resolveRepository(request, context, parts[1], parts[2]);
   if (resolved.response) return resolved.response;
   const repository = resolved.repository;
+  const mapper = new RequestIdMapper(context);
   try {
     if (parts.length === 3) {
       if (request.method !== "GET")
         return githubApiError(405, "method_not_allowed", "Method not allowed");
       const invalid = queryError(url, []);
       if (invalid) return invalid;
-      const id = await mapId(context, "repository", repository.id, null);
+      await mapper.load("repository", [repository.id], repository.id);
+      const id = mapper.get("repository", repository.id);
       return json(200, repositoryObject(repository, id, url.origin));
     }
     if (parts[3] !== "releases") return unsupported("This repository endpoint is not supported.");
     if (parts.length === 4) {
-      if (request.method === "GET") return getReleaseList(request, context, repository, url.origin);
+      if (request.method === "GET")
+        return getReleaseList(request, context, repository, url.origin, mapper);
       if (request.method !== "POST")
         return githubApiError(405, "method_not_allowed", "Method not allowed");
       const invalid = queryError(url, []);
@@ -477,6 +577,18 @@ export async function handleGitHubApiRequest(
       const parsedBody = await readJsonLimited(request);
       const bodyObject = UserBodySchema.safeParse(parsedBody);
       if (!bodyObject.success) return badRequest("Request body must be a JSON object.");
+      const unknownKey = unknownBodyKey(bodyObject.data, [
+        "tag_name",
+        "target_commitish",
+        "name",
+        "body",
+        "draft",
+        "prerelease",
+        "make_latest",
+        "generate_release_notes",
+        "discussion_category_name",
+      ]);
+      if (unknownKey) return unsupported(`Request field '${unknownKey}' is not supported.`);
       const unsupportedFields = hasUnsupportedReleaseFeatures(bodyObject.data);
       if (unsupportedFields) return unsupported("The requested release feature is not supported.");
       const parsed = CreateInput.safeParse(parsedBody);
@@ -503,7 +615,8 @@ export async function handleGitHubApiRequest(
       if (!native.ok) return errorFromNative(native);
       const release = await data(native, NativeReleaseSchema);
       if (!release) return githubApiError(502, "native_error", "Release data was unavailable");
-      return json(201, await releaseObject(context, repository, release, url.origin));
+      await prepareRelease(mapper, repository, release);
+      return json(201, releaseObject(mapper, repository, release, url.origin));
     }
     if (parts[4] === "latest" && parts.length === 5) {
       if (request.method !== "GET")
@@ -513,14 +626,15 @@ export async function handleGitHubApiRequest(
       const native = await context.dispatch(
         internalRequest(
           request,
-          `/api/forge/repositories/${encodeURIComponent(repository.id)}/releases/latest`
+          `/api/forge/repositories/${encodeURIComponent(repository.id)}/releases/latest`,
+          "GET"
         )
       );
       if (!native.ok) return errorFromNative(native);
       const release = await data(native, NativeReleaseSchema);
-      return release
-        ? json(200, await releaseObject(context, repository, release, url.origin))
-        : githubApiError(502, "native_error", "Release data was unavailable");
+      if (!release) return githubApiError(502, "native_error", "Release data was unavailable");
+      await prepareRelease(mapper, repository, release);
+      return json(200, releaseObject(mapper, repository, release, url.origin));
     }
     if (parts[4] === "tags" && parts[5] && parts.length === 6) {
       if (request.method !== "GET")
@@ -529,9 +643,9 @@ export async function handleGitHubApiRequest(
       if (invalid) return invalid;
       const release = await findRelease(context, request, repository, parts[5]);
       if (release instanceof Response) return release;
-      return release
-        ? json(200, await releaseObject(context, repository, release, url.origin))
-        : githubApiError(404, "not_found", "Not Found");
+      if (!release) return githubApiError(404, "not_found", "Not Found");
+      await prepareRelease(mapper, repository, release);
+      return json(200, releaseObject(mapper, repository, release, url.origin));
     }
     if (parts[4] === "assets" && parts[5] && parts.length === 6) {
       const invalid = queryError(url, []);
@@ -550,6 +664,7 @@ export async function handleGitHubApiRequest(
           )
         );
         if (!native.ok) return errorFromNative(native);
+        await native.body?.cancel().catch(() => undefined);
         return new Response(null, { status: 204 });
       }
       const accept = request.headers.get("Accept") ?? "";
@@ -557,10 +672,12 @@ export async function handleGitHubApiRequest(
         return context.dispatch(
           internalRequest(
             request,
-            `/api/forge/repositories/${encodeURIComponent(repository.id)}/releases/${encodeURIComponent(found.release.id)}/assets/${encodeURIComponent(found.asset.id)}`
+            `/api/forge/repositories/${encodeURIComponent(repository.id)}/releases/${encodeURIComponent(found.release.id)}/assets/${encodeURIComponent(found.asset.id)}`,
+            "GET"
           )
         );
-      const assetId = await mapId(context, "asset", found.asset.id, repository.id);
+      await mapper.load("asset", [found.asset.id], repository.id);
+      const assetId = mapper.get("asset", found.asset.id);
       const assetUrl = new URL(
         `/api/v3/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/releases/assets/${assetId}`,
         url.origin
@@ -587,14 +704,15 @@ export async function handleGitHubApiRequest(
         const native = await context.dispatch(
           internalRequest(
             request,
-            `/api/forge/repositories/${encodeURIComponent(repository.id)}/releases/${encodeURIComponent(nativeReleaseId)}`
+            `/api/forge/repositories/${encodeURIComponent(repository.id)}/releases/${encodeURIComponent(nativeReleaseId)}`,
+            "GET"
           )
         );
         if (!native.ok) return errorFromNative(native);
         const release = await data(native, NativeReleaseSchema);
-        return release
-          ? json(200, await releaseObject(context, repository, release, url.origin))
-          : githubApiError(502, "native_error", "Release data was unavailable");
+        if (!release) return githubApiError(502, "native_error", "Release data was unavailable");
+        await prepareRelease(mapper, repository, release);
+        return json(200, releaseObject(mapper, repository, release, url.origin));
       }
       if (request.method === "DELETE") {
         const native = await context.dispatch(
@@ -605,10 +723,21 @@ export async function handleGitHubApiRequest(
           )
         );
         if (!native.ok) return errorFromNative(native);
+        await native.body?.cancel().catch(() => undefined);
         return new Response(null, { status: 204 });
       }
       const bodyObject = UserBodySchema.safeParse(await readJsonLimited(request));
       if (!bodyObject.success) return badRequest("Request body must be a JSON object.");
+      const unknownKey = unknownBodyKey(bodyObject.data, [
+        "name",
+        "body",
+        "draft",
+        "prerelease",
+        "make_latest",
+        "generate_release_notes",
+        "discussion_category_name",
+      ]);
+      if (unknownKey) return unsupported(`Request field '${unknownKey}' is not supported.`);
       if (hasUnsupportedReleaseFeatures(bodyObject.data))
         return unsupported("The requested release feature is not supported.");
       const parsed = UpdateInput.safeParse(bodyObject.data);
@@ -631,9 +760,9 @@ export async function handleGitHubApiRequest(
       );
       if (!native.ok) return errorFromNative(native);
       const release = await data(native, NativeReleaseSchema);
-      return release
-        ? json(200, await releaseObject(context, repository, release, url.origin))
-        : githubApiError(502, "native_error", "Release data was unavailable");
+      if (!release) return githubApiError(502, "native_error", "Release data was unavailable");
+      await prepareRelease(mapper, repository, release);
+      return json(200, releaseObject(mapper, repository, release, url.origin));
     }
     if (parts[4] && parts[5] === "assets" && parts.length === 6 && request.method === "POST") {
       const invalid = queryError(url, ["name", "label"]);
@@ -651,6 +780,7 @@ export async function handleGitHubApiRequest(
         `/api/forge/repositories/${encodeURIComponent(repository.id)}/releases/${encodeURIComponent(releaseId)}/assets`,
         request.url
       );
+      nativeUrl.search = "";
       nativeUrl.searchParams.set("name", name);
       const uploadHeaders = new Headers();
       const contentLength = request.headers.get("Content-Length");
@@ -663,7 +793,8 @@ export async function handleGitHubApiRequest(
       if (!native.ok) return errorFromNative(native);
       const asset = await data(native, NativeAssetSchema);
       if (!asset) return githubApiError(502, "native_error", "Asset data was unavailable");
-      const mappedId = await mapId(context, "asset", asset.id, repository.id);
+      await mapper.load("asset", [asset.id], repository.id);
+      const mappedId = mapper.get("asset", asset.id);
       const assetUrl = new URL(
         `/api/v3/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/releases/assets/${mappedId}`,
         url.origin
@@ -680,7 +811,9 @@ export async function handleGitHubApiRequest(
     }
     return unsupported("This release endpoint or method is not supported.");
   } catch (cause) {
-    logger.error("github-api-request-failed", { method: request.method, path: url.pathname });
+    if (cause instanceof BoundedResultError)
+      return githubApiError(422, "bounded_result", cause.message);
+    logger.error("github-api-request-failed", { method: request.method, route: "supported-rest" });
     return githubApiError(
       500,
       "internal_error",
