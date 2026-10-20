@@ -100,6 +100,8 @@ gh release create v1.0.0 dist/app.zip \
 
 REST lives under `/api/v3`. `GET /api/v3/gitedge/capabilities` lists supported operations. Repository metadata, the authenticated user, release list/latest/tag/ID reads, release create/edit/delete, and asset upload/read/delete use the native Auth, Forge and Git permissions. IDs are stable integers mapped to native IDs. Anonymous reads work for public repositories; unauthorized private reads follow the site's 404/403 policy. Cookies and inbound trusted identity headers do not authenticate this API.
 
+Release targets accept branch names, or commit SHAs reachable from the default branch. For other branch tips, use the branch name as `target_commitish` (`gh release create --target <branch>`); a SHA outside the default branch returns the native HTTP 400 rejection.
+
 `gh release create` with explicit title/notes/target, `edit`, `upload` and `delete-asset` use these REST operations. Changing a release tag or target, automatic release notes, discussions, latest overrides, asset labels, workflow-run APIs and GraphQL are unsupported. Commands or flags that require GraphQL, including the current CLI's `release view`, `release list`, `release download`, `release delete` and `--verify-tag`, fail explicitly. Use `gh api` for release reads, asset downloads and release deletion instead:
 
 ```sh
