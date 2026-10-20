@@ -71,6 +71,8 @@ In standalone GitHub polling mode, an organization profile must include one or m
 
 GitEdge repository administrators must enable Actions and the **Use registered local runners** repository setting (`actionsRunnerEnabled`). Apply migration `0045_runner_broker.sql` and deploy the updated services, including the Actions → Auth binding, before registering a broker. Registration does not enable repository execution automatically. `.gitedge/workflows/` keeps its container precedence; opted-in `.github/workflows/` files use the persistent runner queue.
 
+Registered runners discover only workflow definitions, then clone the selected commit through Git. The container snapshot limit does not restrict other repository assets for runner execution.
+
 GitEdge runner workflows currently support:
 
 - Human `push` and `workflow_dispatch` triggers. Push supports `branches` and `branches-ignore`; path and tag filters, PRs, merge groups and other trigger types are refused. Event payloads contain the repository, ref, source SHA and triggering identity; full GitHub commit metadata and history are not synthesized.
@@ -98,10 +100,11 @@ gh release create v1.0.0 dist/app.zip \
 
 REST lives under `/api/v3`. `GET /api/v3/gitedge/capabilities` lists supported operations. Repository metadata, the authenticated user, release list/latest/tag/ID reads, release create/edit/delete, and asset upload/read/delete use the native Auth, Forge and Git permissions. IDs are stable integers mapped to native IDs. Anonymous reads work for public repositories; unauthorized private reads follow the site's 404/403 policy. Cookies and inbound trusted identity headers do not authenticate this API.
 
-`gh release create` with explicit title/notes/target, `view --json tagName,assets,isDraft`, `edit`, `upload` and `delete-asset` use these REST operations. Changing a release tag or target, automatic release notes, discussions, latest overrides, asset labels, workflow-run APIs and GraphQL are unsupported. Commands or flags that require GraphQL, including the current CLI's `release list`, `release download`, `release delete` and `--verify-tag`, fail explicitly. Use `gh api` for release lists, asset downloads and release deletion instead:
+`gh release create` with explicit title/notes/target, `edit`, `upload` and `delete-asset` use these REST operations. Changing a release tag or target, automatic release notes, discussions, latest overrides, asset labels, workflow-run APIs and GraphQL are unsupported. Commands or flags that require GraphQL, including the current CLI's `release view`, `release list`, `release download`, `release delete` and `--verify-tag`, fail explicitly. Use `gh api` for release reads, asset downloads and release deletion instead:
 
 ```sh
 gh api 'repos/owner/repository/releases?per_page=30' --paginate
+gh api repos/owner/repository/releases/tags/v1.0.0
 gh api repos/owner/repository/releases/assets/<asset-id> \
   -H 'Accept: application/octet-stream' > app.zip
 gh api --method DELETE repos/owner/repository/releases/<release-id>

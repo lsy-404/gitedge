@@ -80,118 +80,139 @@ describe("Actions Worker workflow listing", () => {
     });
   });
 
-  it("queues a manual run for the exact snapshot and publishes the queued check", async () => {
-    const files = [
-      {
-        path: ".github/workflows/checks.yml",
-        contentBase64: btoa(workflow),
-        mode: "100644",
-      },
-      { path: "package.json", contentBase64: "e30=", mode: "100644" },
-    ];
-    let queuedInput: unknown;
-    let queuedRunId = "";
-    const writtenChunks: Array<{ index: number; value: string }> = [];
-    let scheduled = false;
-    let checkPayload: unknown;
-    const run = {
-      id: "run-1",
-      repositoryId: "repository-1",
-      commitOid: "b".repeat(40),
-      workflowPath: ".github/workflows/checks.yml",
-      workflowName: "Checks",
-      ref: "refs/heads/main",
-      createdBy: "user-1",
-      createdAt: 1,
-      startedAt: null,
-      status: "queued",
-      conclusion: null,
-      outputTruncated: false,
-      jobs: [],
-    };
-    const env = {
-      DB: {
-        prepare(sql: string) {
-          return {
-            bind() {
-              return {
-                first: async () =>
-                  sql.includes("CASE WHEN m.role")
-                    ? { role: "admin" }
-                    : {
-                        id: "repository-1",
-                        created_by: "user-1",
-                        visibility: "public",
-                        archived: 0,
-                        actions_enabled: 1,
-                        actions_network_enabled: 0,
-                        default_branch: "main",
-                      },
-                run: async () => ({ meta: { changes: 1 } }),
-              };
-            },
-          };
+  it.each([0, 1])(
+    "queues a complete container snapshot when runner opt-in is %i",
+    async (runnerEnabled) => {
+      const files = [
+        {
+          path: ".gitedge/workflows/checks.yml",
+          contentBase64: btoa(workflow),
+          mode: "100644",
         },
-      },
-      ACTION_RUNS: {
-        getByName() {
-          return {
-            async isContainerConfigured() {
-              return true;
-            },
-            async initialize(input: { id: string }) {
-              queuedInput = input;
-              queuedRunId = input.id;
-            },
-            async writeInputChunk(index: number, value: string) {
-              writtenChunks.push({ index, value });
-            },
-            async schedule() {
-              scheduled = true;
-            },
-            async getRun() {
-              return { ...run, id: queuedRunId };
-            },
-          };
+        { path: "package.json", contentBase64: "e30=", mode: "100644" },
+      ];
+      let queuedInput: unknown;
+      let queuedRunId = "";
+      const writtenChunks: Array<{ index: number; value: string }> = [];
+      let scheduled = false;
+      let checkPayload: unknown;
+      const run = {
+        id: "run-1",
+        repositoryId: "repository-1",
+        commitOid: "b".repeat(40),
+        workflowPath: ".github/workflows/checks.yml",
+        workflowName: "Checks",
+        ref: "refs/heads/main",
+        createdBy: "user-1",
+        createdAt: 1,
+        startedAt: null,
+        status: "queued",
+        conclusion: null,
+        outputTruncated: false,
+        jobs: [],
+      };
+      const env = {
+        DB: {
+          prepare(sql: string) {
+            return {
+              bind() {
+                return {
+                  first: async () =>
+                    sql.includes("CASE WHEN m.role")
+                      ? { role: "admin" }
+                      : {
+                          id: "repository-1",
+                          created_by: "user-1",
+                          visibility: "public",
+                          archived: 0,
+                          actions_enabled: 1,
+                          actions_runner_enabled: runnerEnabled,
+                          actions_network_enabled: 0,
+                          default_branch: "main",
+                        },
+                  run: async () => ({ meta: { changes: 1 } }),
+                };
+              },
+            };
+          },
         },
-      },
-      GIT: {
-        fetch: async () =>
-          Response.json({
-            data: {
-              oid: "b".repeat(40),
-              totalBytes: new TextEncoder().encode(workflow).byteLength + 2,
-              files,
-            },
+        ACTION_RUNS: {
+          getByName() {
+            return {
+              async isContainerConfigured() {
+                return true;
+              },
+              async initialize(input: { id: string }) {
+                queuedInput = input;
+                queuedRunId = input.id;
+              },
+              async writeInputChunk(index: number, value: string) {
+                writtenChunks.push({ index, value });
+              },
+              async schedule() {
+                scheduled = true;
+              },
+              async getRun() {
+                return { ...run, id: queuedRunId };
+              },
+            };
+          },
+        },
+        GIT: {
+          fetch: async (request: Request) => {
+            const selected =
+              new URL(request.url).searchParams.get("scope") === "workflows"
+                ? files.filter((file) => file.path.startsWith(".gitedge/workflows/"))
+                : files;
+            return Response.json({
+              data: {
+                oid: "b".repeat(40),
+                totalBytes: selected.reduce(
+                  (sum, file) => sum + atob(file.contentBase64).length,
+                  0
+                ),
+                files: selected,
+              },
+            });
+          },
+        },
+        FORGE: {
+          fetch: async (request: Request) => {
+            checkPayload = await request.json();
+            return new Response(null, { status: 204 });
+          },
+        },
+      } as unknown as Parameters<typeof actions.fetch>[1];
+      const headers = trustedHeaders({ id: "user-1", identifier: "user", groupKey: "free" });
+      const response = await actions.fetch(
+        new Request("https://actions.test/repositories/repository-1/runs", {
+          method: "POST",
+          headers: new Headers([...headers, ["Content-Type", "application/json"]]),
+          body: JSON.stringify({
+            workflowPath: ".gitedge/workflows/checks.yml",
+            ref: "refs/heads/main",
+            expectedOid: "b".repeat(40),
           }),
-      },
-      FORGE: {
-        fetch: async (request: Request) => {
-          checkPayload = await request.json();
-          return new Response(null, { status: 204 });
-        },
-      },
-    } as unknown as Parameters<typeof actions.fetch>[1];
-    const headers = trustedHeaders({ id: "user-1", identifier: "user", groupKey: "free" });
-    const response = await actions.fetch(
-      new Request("https://actions.test/repositories/repository-1/runs", {
-        method: "POST",
-        headers: new Headers([...headers, ["Content-Type", "application/json"]]),
-        body: JSON.stringify({
-          workflowPath: ".github/workflows/checks.yml",
-          ref: "refs/heads/main",
-          expectedOid: "b".repeat(40),
         }),
-      }),
-      env
-    );
+        env
+      );
 
-    expect(response.status).toBe(202);
-    expect(queuedInput).toMatchObject({ commitOid: "b".repeat(40), enableInternet: false });
-    expect(writtenChunks).toHaveLength(1);
-    expect(scheduled).toBe(true);
-    expect(checkPayload).toMatchObject({ runId: queuedRunId, status: "queued", conclusion: null });
-  });
+      expect(response.status).toBe(202);
+      expect(queuedInput).toMatchObject({ commitOid: "b".repeat(40), enableInternet: false });
+      expect(writtenChunks).toHaveLength(1);
+      expect(JSON.parse(writtenChunks.map((chunk) => chunk.value).join(""))).toContainEqual({
+        path: "package.json",
+        contentBase64: "e30=",
+        mode: "100644",
+      });
+      expect(scheduled).toBe(true);
+      expect(checkPayload).toMatchObject({
+        runId: queuedRunId,
+        status: "queued",
+        conclusion: null,
+      });
+    }
+  );
 
   it("accepts push automation only from the internal service hostname", async () => {
     const pushWorkflow = `name: Push checks

@@ -1,6 +1,7 @@
 import { isAlias, isMap, isSeq, parseDocument } from "yaml";
 import picomatch from "picomatch";
 import {
+  isActionWorkflowPath,
   ActionWorkflowSchema,
   ActionEventTypeSchema,
   ActionTriggerFilterSchema,
@@ -196,10 +197,6 @@ function parseJob(id: string, value: unknown): ActionJob {
       throw new WorkflowValidationError(`Job "${id}" artifact names must be unique.`);
   }
   return { id, name, steps: raw.steps.map(parseStep), ...(artifacts ? { artifacts } : {}) };
-}
-
-export function isActionWorkflowPath(path: string): boolean {
-  return /^(?:\.github|\.gitedge)\/workflows\/[A-Za-z0-9_.-]+\.(?:yml|yaml)$/.test(path);
 }
 
 export function workflowFiles(

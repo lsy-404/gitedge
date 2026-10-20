@@ -1,12 +1,13 @@
 import { z } from "zod";
 import { parseDocument } from "yaml";
 import {
+  isActionWorkflowPath,
   ActionDispatchInputSchema,
   type ActionEventType,
   type ActionWorkflow,
 } from "../../../packages/contracts/src/actions";
 import { RunnerLabelsSchema } from "../../../packages/contracts/src/runners";
-import { isActionWorkflowPath, WorkflowValidationError } from "./workflow";
+import { WorkflowValidationError } from "./workflow";
 
 const RecordSchema = z.record(z.string(), z.unknown());
 const FilterSchema = z

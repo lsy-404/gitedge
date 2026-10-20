@@ -19,14 +19,15 @@ import {
   readTrustedUser,
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
-import type {
-  ActionRunArtifact,
-  ActionEventType,
-  ActionCacheOutcome,
-  ActionRun as ActionRunDetails,
-  ActionRunSummary,
-  ActionWorkflow,
-  ActionWorkflowFile,
+import {
+  isActionWorkflowPath,
+  type ActionRunArtifact,
+  type ActionEventType,
+  type ActionCacheOutcome,
+  type ActionRun as ActionRunDetails,
+  type ActionRunSummary,
+  type ActionWorkflow,
+  type ActionWorkflowFile,
 } from "../../../packages/contracts/src/actions";
 import type {
   RepositorySnapshot,
@@ -35,7 +36,6 @@ import type {
 import { createLogger } from "../../../src/worker/common/logger";
 import { repositoryRole, writableRole } from "../../../src/worker/common/repositories";
 import {
-  isActionWorkflowPath,
   parseWorkflow,
   WorkflowValidationError,
   workflowFiles,
@@ -265,6 +265,7 @@ async function repositorySnapshot(
   ref: string,
   oid: string | undefined,
   user: TrustedUser | null,
+  workflowsOnly: boolean,
   sessionId?: string | null
 ): Promise<RepositorySnapshot> {
   const url = new URL(
@@ -273,6 +274,7 @@ async function repositorySnapshot(
   url.searchParams.set("ref", ref);
   if (sessionId) url.searchParams.set("sessionId", sessionId);
   if (oid) url.searchParams.set("oid", oid);
+  if (workflowsOnly) url.searchParams.set("scope", "workflows");
   const response = await env.GIT.fetch(
     new Request(url, { headers: trustedHeaders(user ?? undefined) })
   );
@@ -805,7 +807,14 @@ async function listWorkflows(
     return errorResponse(400, "bad_request", "Invalid ref or commit OID.");
   }
   try {
-    const snapshot = await repositorySnapshot(env, repositoryId, ref, oid, user);
+    const snapshot = await repositorySnapshot(
+      env,
+      repositoryId,
+      ref,
+      oid,
+      user,
+      repo.actions_runner_enabled === 1
+    );
     const workflows: ActionWorkflowFile[] = [];
     for (const file of workflowFiles(snapshot.files)) {
       const source = snapshotFile(snapshot, file.path);
@@ -1230,7 +1239,14 @@ async function handleInternalPush(request: Request, env: ActionsEnv): Promise<Re
   let snapshot: RepositorySnapshot;
   const workflows: ActionWorkflow[] = [];
   try {
-    snapshot = await repositorySnapshot(env, repositoryId, body.ref, body.expectedOid, user);
+    snapshot = await repositorySnapshot(
+      env,
+      repositoryId,
+      body.ref,
+      body.expectedOid,
+      user,
+      repo.actions_runner_enabled === 1
+    );
     if (snapshot.oid !== body.expectedOid) {
       return errorResponse(
         409,
@@ -1266,6 +1282,27 @@ async function handleInternalPush(request: Request, env: ActionsEnv): Promise<Re
   );
   if (triggered.length > 3) {
     return errorResponse(422, "bad_request", "A push may start at most three workflows.");
+  }
+  if (
+    repo.actions_runner_enabled === 1 &&
+    triggered.some((workflow) => workflow.executor !== "runner")
+  ) {
+    try {
+      snapshot = await repositorySnapshot(
+        env,
+        repositoryId,
+        body.ref,
+        body.expectedOid,
+        user,
+        false
+      );
+    } catch (cause) {
+      return errorResponse(
+        422,
+        "bad_request",
+        cause instanceof Error ? cause.message : "Unable to load repository source."
+      );
+    }
   }
   const runs: ActionRunSummary[] = [];
   const failures: Array<{ path: string; message: string }> = [];
@@ -1341,6 +1378,7 @@ async function handleInternalProposal(
     candidate?.result_oid ?? ref,
     candidate?.result_oid ?? undefined,
     user,
+    false,
     candidate ? null : pull.head_session_id
   );
   const definitions = await repositorySnapshot(
@@ -1348,7 +1386,8 @@ async function handleInternalProposal(
     repo.id,
     candidate?.base_oid ?? pull.base_ref,
     candidate?.base_oid,
-    user
+    user,
+    repo.actions_runner_enabled === 1
   );
   const files = workflowFiles(definitions.files);
   const triggered: ActionWorkflow[] = [];
@@ -1427,7 +1466,14 @@ async function startRun(
   let snapshot: RepositorySnapshot;
   let workflow: ActionWorkflow;
   try {
-    snapshot = await repositorySnapshot(env, repositoryId, body.ref, body.expectedOid, user);
+    snapshot = await repositorySnapshot(
+      env,
+      repositoryId,
+      body.ref,
+      body.expectedOid,
+      user,
+      repo.actions_runner_enabled === 1
+    );
     if (snapshot.oid !== body.expectedOid)
       return errorResponse(
         409,
@@ -1440,6 +1486,16 @@ async function startRun(
     workflow = parseRepositoryWorkflow(repo, body.workflowPath, source);
     if (!workflow.triggers.includes("workflow_dispatch")) {
       return errorResponse(409, "conflict", "This workflow does not enable manual dispatch.");
+    }
+    if (repo.actions_runner_enabled === 1 && workflow.executor !== "runner") {
+      snapshot = await repositorySnapshot(
+        env,
+        repositoryId,
+        body.ref,
+        body.expectedOid,
+        user,
+        false
+      );
     }
   } catch (cause) {
     return errorResponse(

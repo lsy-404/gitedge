@@ -762,10 +762,13 @@ export async function handleGitApi(
       );
     }
     if (resource === "snapshot") {
+      const scope = url.searchParams.get("scope");
+      if (scope !== null && scope !== "workflows")
+        return errorResponse(400, "bad_request", "Invalid snapshot scope.");
       const oid = url.searchParams.get("oid") ?? (await resolveCommit(repo, ref))?.hash ?? "";
       if (!GitOidSchema.safeParse(oid).success || !(await refContainsCommit(repo, ref, oid)))
         return errorResponse(404, "not_found", "The selected commit is unavailable.");
-      return dataResponse(await repositorySnapshot(repo, oid));
+      return dataResponse(await repositorySnapshot(repo, oid, scope === "workflows"));
     }
     if (resource === "signature") {
       const tagName = url.searchParams.get("tag");

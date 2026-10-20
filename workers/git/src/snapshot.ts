@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { isActionWorkflowPath } from "../../../packages/contracts/src/actions";
 import {
   editablePath,
   type RepositorySnapshot,
@@ -9,9 +10,16 @@ import { GitResourceLimitError } from "./http";
 const ACTION_SNAPSHOT_MAX_FILES = 2048;
 const ACTION_SNAPSHOT_MAX_TREES = 2048;
 const ACTION_SNAPSHOT_MAX_BYTES = 24 * 1024 * 1024;
+const WORKFLOW_DIRECTORIES = new Set([
+  ".github",
+  ".github/workflows",
+  ".gitedge",
+  ".gitedge/workflows",
+]);
 export async function repositorySnapshot(
   repo: ArtifactsRepo,
-  oid: string
+  oid: string,
+  workflowsOnly = false
 ): Promise<RepositorySnapshot> {
   const commit = await repo.readCommit(oid);
   if (!commit) throw new Error("Commit was not found.");
@@ -28,6 +36,11 @@ export async function repositorySnapshot(
     if (!entries) throw new Error("Repository tree is unavailable.");
     for (const entry of entries) {
       const path = item.path ? `${item.path}/${entry.name}` : entry.name;
+      if (
+        workflowsOnly &&
+        !(entry.type === "tree" ? WORKFLOW_DIRECTORIES.has(path) : isActionWorkflowPath(path))
+      )
+        continue;
       if (!editablePath(path))
         throw new GitResourceLimitError("Repository snapshot contains an unsupported path.");
       if (entry.type === "tree") {

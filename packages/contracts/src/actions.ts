@@ -1,5 +1,9 @@
 import { z } from "zod";
 
+export function isActionWorkflowPath(path: string): boolean {
+  return /^(?:\.github|\.gitedge)\/workflows\/[A-Za-z0-9_.-]+\.(?:yml|yaml)$/.test(path);
+}
+
 const actionPath = z
   .string()
   .min(1)
