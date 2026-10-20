@@ -57,8 +57,17 @@ async function fixture(large = false) {
   }
   git(local, "tag", "-a", "release", "-m", "Release");
   git(local, "push", source, "HEAD:refs/heads/main", "refs/tags/release:refs/tags/release");
+  let rejectedSecret: string | undefined;
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
+    if (rejectedSecret && url.pathname.startsWith("/source.git/")) {
+      const pkt = (text: string) => (text.length + 4).toString(16).padStart(4, "0") + text;
+      response.setHeader("Content-Type", "application/x-git-upload-pack-advertisement");
+      response.end(
+        pkt("# service=git-upload-pack\n") + "0000" + pkt(`ERR ${rejectedSecret}\n`) + "0000"
+      );
+      return;
+    }
     const backend = spawn("git", ["http-backend"], {
       env: {
         ...environment,
@@ -123,9 +132,20 @@ async function fixture(large = false) {
       process.once("close", resolve);
     });
     if (code !== 0) throw new Error(Buffer.concat(errors).toString());
-    return JSON.parse(Buffer.concat(chunks).toString()) as { status: string };
+    return JSON.parse(Buffer.concat(chunks).toString()) as { status: string; diagnostic?: string };
   }
-  return { source, destination, local, execution, history, plan, execute };
+  return {
+    source,
+    destination,
+    local,
+    execution,
+    history,
+    plan,
+    execute,
+    rejectSource(secret: string) {
+      rejectedSecret = secret;
+    },
+  };
 }
 
 it("transfers complete history containing an incompressible blob above 12 MiB", async () => {
@@ -182,6 +202,23 @@ it("reports a source ref that no longer names the requested commit as stale", as
     status: "stale",
   });
   expect(git(f.destination, "rev-parse", "main")).toBe(f.history[0]);
+});
+
+it("redacts the decoded HTTP credential from bounded native Git failure diagnostics", async () => {
+  const f = await fixture();
+  const secret = "never-print-this-password";
+  f.rejectSource(secret + "x".repeat(2000));
+  const result = await f.execute("prepare", {
+    ...f.plan,
+    source: {
+      ...f.plan.source,
+      authorization: `Basic ${Buffer.from(`x-access-token:${secret}`).toString("base64")}`,
+    },
+  });
+  expect(result.status).toBe("failed");
+  expect(result.diagnostic).toContain("[REDACTED]");
+  expect(result.diagnostic).not.toContain(secret);
+  expect(Buffer.byteLength(result.diagnostic!)).toBeLessThanOrEqual(1024);
 });
 
 it("rejects access to the internal transfer service through a public hostname", async () => {

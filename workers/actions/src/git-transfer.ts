@@ -9,6 +9,7 @@ import {
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 import { readJsonLimited, readTextLimited } from "../../../src/worker/common/readText";
 import { GIT_TRANSFER_PROGRAM } from "./git-transfer-program";
+import { createLogger } from "../../../src/worker/common/logger";
 
 function publicPlan(plan: GitTransferPlan) {
   return { ...plan, source: { url: plan.source.url }, destination: { url: plan.destination.url } };
@@ -118,7 +119,12 @@ export async function handleGitTransfer(
   }
   const result =
     input.operation === "prepare" ? await stub.prepare(input.plan) : await stub.push(input.plan);
+  if (result.status === "failed")
+    createLogger(undefined, { service: "git-transfer", doId: input.id }).warn(
+      "git-transfer:failed",
+      { reason: result.diagnostic ?? "Native Git command failed." }
+    );
   return result.status === "failed"
-    ? errorResponse(503, "git_transfer_failed", "Native Git transfer failed.")
+    ? errorResponse(503, "git_transfer_failed", result.diagnostic ?? "Native Git transfer failed.")
     : dataResponse(result);
 }

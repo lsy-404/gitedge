@@ -6,6 +6,7 @@ let text = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', chunk => text += chunk);
 process.stdin.on('end', () => {
+  let diagnostic = 'Native Git command failed.';
   try {
     const { operation, plan } = JSON.parse(text);
     const root = process.cwd();
@@ -27,8 +28,19 @@ process.stdin.on('end', () => {
     const env = { PATH: process.env.PATH, HOME: root, LANG: 'C.UTF-8', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '/usr/bin/false', GIT_CONFIG_COUNT: String(Object.keys(settings).length) };
     Object.entries(settings).forEach(([key, value], index) => { env['GIT_CONFIG_KEY_' + index] = key; env['GIT_CONFIG_VALUE_' + index] = value; });
     const git = args => spawnSync('git', args, { env, encoding: 'utf8', maxBuffer: 1024 * 1024, timeout: operation === 'prepare' ? 55000 : 25000 });
-    const checked = args => { const result = git(args); if (result.status !== 0) throw Error('git_failed'); return result.stdout.trim(); };
-    const result = status => process.stdout.write(JSON.stringify({ status }));
+    const failure = result => {
+      let message = operation + ': ' + (result.error?.code ?? result.status) + ': ' + (result.stderr || 'Git command failed.');
+      const secrets = [];
+      for (const remote of [plan.source, plan.destination]) {
+        const value = remote.authorization.split(' ')[1];
+        secrets.push(remote.authorization, value);
+        if (remote.authorization.startsWith('Basic ')) secrets.push(Buffer.from(value, 'base64').toString().split(':').slice(1).join(':'));
+      }
+      for (const secret of secrets.filter(Boolean).sort((a, b) => b.length - a.length)) message = message.replaceAll(secret, '[REDACTED]');
+      return Buffer.from(message).subarray(0, 768).toString('utf8');
+    };
+    const checked = args => { const result = git(args); if (result.status !== 0) { diagnostic = failure(result); throw Error('git_failed'); } return result.stdout.trim(); };
+    const result = status => process.stdout.write(JSON.stringify({ status, ...(status === 'failed' ? { diagnostic } : {}) }));
     if (operation === 'prepare') {
       checked(['init', '--bare', directory]);
       if (plan.after !== '0'.repeat(40)) {
@@ -51,9 +63,10 @@ process.stdin.on('end', () => {
     const pushed = git(args);
     if (pushed.status === 0) return result('synced');
     if (/\[rejected\]|\[remote rejected\]|non-fast-forward|fetch first|sync_destination_changed/.test(pushed.stdout + pushed.stderr)) return result('conflict');
+    diagnostic = failure(pushed);
     return result('failed');
   } catch {
-    process.stdout.write(JSON.stringify({ status: 'failed' }));
+    process.stdout.write(JSON.stringify({ status: 'failed', diagnostic }));
   }
 });
 `;

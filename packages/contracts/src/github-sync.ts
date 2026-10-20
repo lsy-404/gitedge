@@ -138,6 +138,7 @@ export type GitTransferPlan = z.infer<typeof GitTransferPlanSchema>;
 export const GitTransferResultSchema = z
   .object({
     status: z.enum(["ready", "synced", "stale", "conflict", "failed"]),
+    diagnostic: z.string().max(1024).optional(),
   })
   .strict();
 export type GitTransferResult = z.infer<typeof GitTransferResultSchema>;
