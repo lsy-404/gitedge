@@ -96,6 +96,11 @@ export const GitHubSyncTransferSchema = z
   })
   .strict();
 export type GitHubSyncTransfer = z.infer<typeof GitHubSyncTransferSchema>;
+export const GitTransferTimeouts = {
+  prepare: 300_000,
+  push: 120_000,
+  lifetime: 720_000,
+} as const;
 export interface GitHubSyncTransferResult {
   status: "synced" | "unchanged" | "stale";
   ref: string;

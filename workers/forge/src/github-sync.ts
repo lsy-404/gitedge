@@ -35,7 +35,7 @@ import { syncGithubCollaboration } from "./github-sync-collaboration";
 import { GitHubRunnerWebhookSchema } from "../../../packages/contracts/src/runners";
 import { stopGithubRunners } from "./github-runners";
 
-const LEASE_MS = 180_000;
+const LEASE_MS = 900_000;
 const GithubHookSchema = z.object({
   id: z.number().int().positive(),
   config: z.object({ url: z.string() }),

@@ -58,8 +58,21 @@ async function fixture(large = false) {
   git(local, "tag", "-a", "release", "-m", "Release");
   git(local, "push", source, "HEAD:refs/heads/main", "refs/tags/release:refs/tags/release");
   let rejectedSecret: string | undefined;
-  const server = createServer((request, response) => {
+  let sourceDelay = 0;
+  const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
+    if (sourceDelay && url.pathname.startsWith("/source.git/")) {
+      const delay = sourceDelay;
+      sourceDelay = 0;
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, delay);
+        response.once("close", () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+      if (response.destroyed) return;
+    }
     if (rejectedSecret && url.pathname.startsWith("/source.git/")) {
       const pkt = (text: string) => (text.length + 4).toString(16).padStart(4, "0") + text;
       response.setHeader("Content-Type", "application/x-git-upload-pack-advertisement");
@@ -145,8 +158,19 @@ async function fixture(large = false) {
     rejectSource(secret: string) {
       rejectedSecret = secret;
     },
+    delaySource(milliseconds: number) {
+      sourceDelay = milliseconds;
+    },
   };
 }
+
+it("transfers full history when upstream Git negotiation takes one minute", async () => {
+  const f = await fixture();
+  f.delaySource(60_000);
+  expect(await f.execute("prepare")).toEqual({ status: "ready" });
+  expect(await f.execute("push")).toEqual({ status: "synced" });
+  expect(git(f.destination, "rev-list", "main").split("\n")).toEqual([...f.history].reverse());
+}, 75_000);
 
 it("transfers complete history containing an incompressible blob above 12 MiB", async () => {
   const f = await fixture(true);

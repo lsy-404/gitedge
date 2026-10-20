@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   GitHubSyncTransferSchema,
   GitTransferResultSchema,
+  GitTransferTimeouts,
   type GitTransferPlan,
   type GitHubSyncTransfer,
   type GitHubSyncTransferResult,
@@ -358,7 +359,10 @@ export async function handleGithubGitSync(request: Request, env: GitEnv): Promis
   using repo = await env.ARTIFACTS.get(selected.artifactName);
   const info = await repo.info();
   const inbound = input.direction === "inbound";
-  const token = await repo.createToken(inbound ? "write" : "read", 120);
+  const token = await repo.createToken(
+    inbound ? "write" : "read",
+    GitTransferTimeouts.lifetime / 1000
+  );
   const logger = createLogger(env.LOG_LEVEL, {
     service: "github-git-sync",
     repoId: row.repository_id,
@@ -391,10 +395,6 @@ export async function handleGithubGitSync(request: Request, env: GitEnv): Promis
       return errorResponse(409, "sync_delete_conflict", "The destination changed before deletion.");
     if (inbound && !(await importAllowed(env, row, input, selected, before)))
       return errorResponse(409, "sync_protected_ref", "The destination ref is protected.");
-    await using lease = inbound
-      ? await acquireRefWrites(env.DB, selected.artifactName, [input.targetRef])
-      : null;
-    void lease;
     const transferId = crypto.randomUUID();
     const plan: GitTransferPlan = {
       source: { url: source, authorization: sourceHeaders.Authorization },
@@ -415,7 +415,9 @@ export async function handleGithubGitSync(request: Request, env: GitEnv): Promis
             operation,
             ...(operation === "cleanup" ? {} : { plan }),
           }),
-          signal: AbortSignal.timeout(operation === "prepare" ? 65_000 : 35_000),
+          signal: AbortSignal.timeout(
+            operation === "cleanup" ? 30_000 : GitTransferTimeouts[operation] + 50_000
+          ),
         })
       );
       const payload = await readJsonLimited(response, 4096);
@@ -428,6 +430,10 @@ export async function handleGithubGitSync(request: Request, env: GitEnv): Promis
       const prepared = await transfer("prepare");
       if (prepared?.status === "stale") return result("stale");
       if (prepared?.status !== "ready") throw new Error("github_git_prepare_failed");
+      await using lease = inbound
+        ? await acquireRefWrites(env.DB, selected.artifactName, [input.targetRef])
+        : null;
+      void lease;
       if (
         !(await authorizedSync(env, input)) ||
         (inbound && !(await importAllowed(env, row, input, selected, before)))

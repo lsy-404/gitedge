@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { GitOidSchema } from "../../../packages/contracts/src/forge";
-import type { GitHubSyncTransferResult } from "../../../packages/contracts/src/github-sync";
+import {
+  GitTransferTimeouts,
+  type GitHubSyncTransferResult,
+} from "../../../packages/contracts/src/github-sync";
 import { readJsonLimited } from "../../../src/worker/common/readText";
 import type { ForgeEnv } from "./common";
 import {
@@ -29,7 +32,7 @@ async function gitRequest(env: ForgeEnv, path: string, body: unknown): Promise<u
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(90_000),
+      signal: AbortSignal.timeout(path === "" ? GitTransferTimeouts.lifetime : 90_000),
     })
   );
   const payload = await readJsonLimited(response, 1_048_576);

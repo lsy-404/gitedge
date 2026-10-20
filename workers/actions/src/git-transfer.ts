@@ -3,6 +3,7 @@ import {
   GitTransferPlanSchema,
   GitTransferRequestSchema,
   GitTransferResultSchema,
+  GitTransferTimeouts,
   type GitTransferPlan,
   type GitTransferResult,
 } from "../../../packages/contracts/src/github-sync";
@@ -24,7 +25,7 @@ export class GitTransfer extends DurableObject {
     const plan = GitTransferPlanSchema.parse(raw);
     if (await this.ctx.storage.get("transfer")) throw new Error("Transfer already exists.");
     await this.ctx.storage.put("transfer", { state: "preparing", plan: publicPlan(plan) });
-    await this.ctx.storage.setAlarm(Date.now() + 120_000);
+    await this.ctx.storage.setAlarm(Date.now() + GitTransferTimeouts.lifetime);
     const container = this.ctx.container;
     if (!container) throw new Error("Git transfer container is unavailable.");
     try {
@@ -35,7 +36,7 @@ export class GitTransfer extends DurableObject {
         entrypoint: ["sleep", "infinity"],
       });
       await container.setInactivityTimeout(120_000);
-      const result = await this.execute("prepare", plan, 60_000);
+      const result = await this.execute("prepare", plan, GitTransferTimeouts.prepare + 30_000);
       if (result.status === "ready")
         await this.ctx.storage.put("transfer", { state: "prepared", plan: publicPlan(plan) });
       else await this.cleanup();
@@ -56,7 +57,7 @@ export class GitTransfer extends DurableObject {
       throw new Error("Prepared Git transfer does not match.");
     await this.ctx.storage.put("transfer", { ...stored, state: "pushing" });
     try {
-      return await this.execute("push", plan, 30_000);
+      return await this.execute("push", plan, GitTransferTimeouts.push + 30_000);
     } finally {
       await this.cleanup();
     }

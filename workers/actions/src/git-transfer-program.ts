@@ -1,3 +1,5 @@
+import { GitTransferTimeouts } from "../../../packages/contracts/src/github-sync";
+
 export const GIT_TRANSFER_PROGRAM = String.raw`
 const fs = require('node:fs');
 const path = require('node:path');
@@ -27,7 +29,7 @@ process.stdin.on('end', () => {
     };
     const env = { PATH: process.env.PATH, HOME: root, LANG: 'C.UTF-8', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '/usr/bin/false', GIT_CONFIG_COUNT: String(Object.keys(settings).length) };
     Object.entries(settings).forEach(([key, value], index) => { env['GIT_CONFIG_KEY_' + index] = key; env['GIT_CONFIG_VALUE_' + index] = value; });
-    const git = args => spawnSync('git', args, { env, encoding: 'utf8', maxBuffer: 1024 * 1024, timeout: operation === 'prepare' ? 55000 : 25000 });
+    const git = args => spawnSync('git', args, { env, encoding: 'utf8', maxBuffer: 1024 * 1024, timeout: operation === 'prepare' ? ${GitTransferTimeouts.prepare} : ${GitTransferTimeouts.push} });
     const failure = result => {
       let message = operation + ': ' + (result.error?.code ?? result.status) + ': ' + (result.stderr || 'Git command failed.');
       const secrets = [];
