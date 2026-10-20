@@ -19,6 +19,12 @@ function stream(bytes: Uint8Array): ReadableStream<Uint8Array> {
   });
 }
 describe("Receive-pack command enforcement", () => {
+  it("preserves flush-only authentication probes used by native Git for chunked pushes", async () => {
+    const parsed = await readReceiveCommands(stream(encoder.encode("0000")));
+    expect(parsed.updates).toEqual([]);
+    expect(parsed.capabilities).toEqual([]);
+    expect(await new Response(parsed.body).text()).toBe("0000");
+  });
   it("reads fragmented ref commands and preserves every streamed pack byte", async () => {
     const data = encoder.encode(
       packet(`${"0".repeat(40)} ${"a".repeat(40)} refs/heads/main\0report-status side-band-64k\n`) +
@@ -37,7 +43,6 @@ describe("Receive-pack command enforcement", () => {
       "zzzz",
       command + command + "0000",
       packet(`${"0".repeat(40)} ${"a".repeat(40)} refs/heads/../bad\n`) + "0000",
-      "0000",
     ])
       await expect(readReceiveCommands(stream(encoder.encode(text)))).rejects.toThrow();
   });

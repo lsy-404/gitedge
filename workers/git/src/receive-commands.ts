@@ -82,7 +82,7 @@ export async function readReceiveCommands(body: ReadableStream<Uint8Array> | nul
       joined.set(next.value.subarray(0, size), prefix.length);
       prefix = joined;
     }
-    if (!updates.length) throw new InvalidReceiveCommands("No ref updates were provided.");
+    // Native Git probes authentication with a flush-only request before streaming large pushes.
     let index = 0;
     const stream = new ReadableStream<Uint8Array>({
       async pull(controller) {
