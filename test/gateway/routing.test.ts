@@ -35,6 +35,25 @@ function environment(
 }
 
 describe("Gateway routing", () => {
+  it.each(["info/refs?service=git-upload-pack", "git-upload-pack"])(
+    "routes extensionless Git %s for an existing reserved-name namespace",
+    async (path) => {
+      let forwarded = "";
+      const response = await handleGatewayRequest(
+        new Request(`https://gitedge.example.com/admin/project/${path}`, {
+          method: path === "git-upload-pack" ? "POST" : "GET",
+        }),
+        environment({
+          git: service((request) => {
+            forwarded = request.url;
+            return new Response("git transport");
+          }),
+        })
+      );
+      expect(await response.text()).toBe("git transport");
+      expect(forwarded).toBe(`https://gitedge.example.com/admin/project.git/${path}`);
+    }
+  );
   it("forwards guest reads without credentials or identity and refuses guest writes", async () => {
     let forwarded = 0;
     const env = environment({

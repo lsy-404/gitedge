@@ -635,7 +635,6 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
   );
   if (
     suffixlessGit &&
-    !ReservedAccountIdentifiers.has(suffixlessGit[1]) &&
     !suffixlessGit[2].endsWith(".git") &&
     NamespaceSlugSchema.safeParse(suffixlessGit[1]).success &&
     RepositorySlugSchema.safeParse(suffixlessGit[2]).success
