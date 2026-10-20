@@ -1,8 +1,9 @@
 import * as git from "isomorphic-git";
-import { Volume, createFsFromVolume } from "memfs";
 import { z } from "zod";
 import {
   GitHubSyncTransferSchema,
+  GitTransferResultSchema,
+  type GitTransferPlan,
   type GitHubSyncTransfer,
   type GitHubSyncTransferResult,
 } from "../../../packages/contracts/src/github-sync";
@@ -394,89 +395,77 @@ export async function handleGithubGitSync(request: Request, env: GitEnv): Promis
       ? await acquireRefWrites(env.DB, selected.artifactName, [input.targetRef])
       : null;
     void lease;
-    const fs = createFsFromVolume(new Volume());
-    const dir = "/sync";
-    await git.init({ fs, dir });
-    await git.addRemote({ fs, dir, remote: "origin", url: destination });
-    if (input.after !== ZERO_OID) {
-      await git.addRemote({ fs, dir, remote: "source", url: source });
-      const fetched = await git.fetch({
-        fs,
-        dir,
-        http: gitHttpClient(source, 12 * 1024 * 1024),
-        url: source,
-        remote: "source",
-        ref: input.ref,
-        singleBranch: true,
-        tags: input.ref.startsWith("refs/tags/"),
-        headers: sourceHeaders,
-      });
-      const fetchedOid = input.ref.startsWith("refs/tags/")
-        ? await git.resolveRef({ fs, dir, ref: input.ref })
-        : fetched.fetchHead;
-      if (fetchedOid !== input.after) return result("stale");
-    }
-    await git.writeRef({
-      fs,
-      dir,
-      ref: input.targetRef,
-      value: input.after === ZERO_OID ? before : input.after,
-      force: true,
-    });
-    if (
-      !(await authorizedSync(env, input)) ||
-      (inbound && !(await importAllowed(env, row, input, selected, before)))
-    )
-      return errorResponse(409, "sync_ineligible", "Synchronization eligibility changed.");
-    if (inbound)
-      await env.DB.prepare(
-        "INSERT OR IGNORE INTO forge_github_ref_transfers (job_id,artifact_name,repository_id,session_id,ref,before_oid,after_oid) VALUES (?,?,?,?,?,?,?)"
-      )
-        .bind(
-          input.jobId,
-          selected.artifactName,
-          selected.repositoryId,
-          selected.sessionId ?? null,
-          input.targetRef,
-          before,
-          input.after
-        )
-        .run();
+    const transferId = crypto.randomUUID();
+    const plan: GitTransferPlan = {
+      source: { url: source, authorization: sourceHeaders.Authorization },
+      destination: { url: destination, authorization: destinationHeaders.Authorization },
+      ref: input.ref,
+      targetRef: input.targetRef,
+      before,
+      after: input.after,
+    };
+    const transfer = async (operation: "prepare" | "push" | "cleanup") => {
+      if (!env.ACTIONS) throw new Error("github_git_container_unavailable");
+      const response = await env.ACTIONS.fetch(
+        new Request("https://actions.internal/internal/git-transfer", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: transferId,
+            operation,
+            ...(operation === "cleanup" ? {} : { plan }),
+          }),
+          signal: AbortSignal.timeout(operation === "prepare" ? 65_000 : 35_000),
+        })
+      );
+      const payload = await readJsonLimited(response, 4096);
+      if (!response.ok) throw new Error("github_git_container_failed");
+      return operation === "cleanup"
+        ? null
+        : z.object({ data: GitTransferResultSchema }).parse(payload).data;
+    };
     try {
-      const pushed = await git.push({
-        fs,
-        dir,
-        http: gitHttpClient(destination, 12 * 1024 * 1024),
-        url: destination,
-        ref: input.targetRef,
-        remoteRef: input.targetRef,
-        force: false,
-        delete: input.after === ZERO_OID,
-        headers: destinationHeaders,
-        onPrePush: (refs) => refs.remoteRef.oid === before,
-      });
-      if (!pushed.ok)
-        return errorResponse(409, "sync_ref_conflict", "The destination rejected the ref update.");
-    } catch (cause) {
+      const prepared = await transfer("prepare");
+      if (prepared?.status === "stale") return result("stale");
+      if (prepared?.status !== "ready") throw new Error("github_git_prepare_failed");
       if (
-        cause instanceof git.Errors.PushRejectedError ||
-        cause instanceof git.Errors.UserCanceledError
+        !(await authorizedSync(env, input)) ||
+        (inbound && !(await importAllowed(env, row, input, selected, before)))
       )
+        return errorResponse(409, "sync_ineligible", "Synchronization eligibility changed.");
+      if (inbound)
+        await env.DB.prepare(
+          "INSERT OR IGNORE INTO forge_github_ref_transfers (job_id,artifact_name,repository_id,session_id,ref,before_oid,after_oid) VALUES (?,?,?,?,?,?,?)"
+        )
+          .bind(
+            input.jobId,
+            selected.artifactName,
+            selected.repositoryId,
+            selected.sessionId ?? null,
+            input.targetRef,
+            before,
+            input.after
+          )
+          .run();
+      const pushed = await transfer("push");
+      if (pushed?.status === "conflict")
+        return errorResponse(409, "sync_ref_conflict", "The destination rejected the ref update.");
+      if (pushed?.status !== "synced") throw new Error("github_git_push_failed");
+      if ((await exactRef(destination, destinationHeaders, input.targetRef)) !== input.after)
         return errorResponse(
           409,
-          "sync_ref_conflict",
-          "The destination changed or histories diverged."
+          "sync_ref_changed",
+          "The destination changed after synchronization."
         );
-      throw cause;
+      logger.info("github-sync:ref-updated", { direction: input.direction, ref: input.targetRef });
+      return result("synced");
+    } finally {
+      try {
+        await transfer("cleanup");
+      } catch {
+        logger.warn("github-sync:container-cleanup-pending", { transferId });
+      }
     }
-    if ((await exactRef(destination, destinationHeaders, input.targetRef)) !== input.after)
-      return errorResponse(
-        409,
-        "sync_ref_changed",
-        "The destination changed after synchronization."
-      );
-    logger.info("github-sync:ref-updated", { direction: input.direction, ref: input.targetRef });
-    return result("synced");
   } finally {
     await revokeWriteToken(repo, token.id, logger);
   }

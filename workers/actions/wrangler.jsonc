@@ -14,6 +14,15 @@
           "dockerfile": "./Dockerfile"
         }
       }
+    },
+    {
+      "class_name": "GitTransfer",
+      "scheduling_policy": "durable_object",
+      "images": {
+        "runtime": {
+          "dockerfile": "./Dockerfile"
+        }
+      }
     }
   ],
   "durable_objects": {
@@ -21,11 +30,19 @@
       {
         "name": "ACTION_RUNS",
         "class_name": "ActionRun"
+      },
+      {
+        "name": "GIT_TRANSFERS",
+        "class_name": "GitTransfer"
       }
     ]
   },
   "exports": {
     "ActionRun": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "GitTransfer": {
       "type": "durable-object",
       "storage": "sqlite"
     }

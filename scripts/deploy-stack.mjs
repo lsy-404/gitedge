@@ -11,7 +11,7 @@ const unresolvedIdPattern = /REPLACE_WITH_[A-Z0-9_]+/;
 
 const bootstrapServices = ["git", "forge", "actions", "gateway"];
 
-const deployOrder = ["limits", "auth", "forge", "git", "actions", "deploy", "mcp", "gateway"];
+const deployOrder = ["limits", "auth", "forge", "actions", "git", "deploy", "mcp", "gateway"];
 
 let activeAccountId;
 

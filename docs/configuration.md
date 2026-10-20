@@ -98,6 +98,8 @@ Pages serve public repositories only: serving private repositories would need cr
 
 Forge runs two cron triggers: every 15 minutes for repository purges and retention, and every minute to re-evaluate auto-merge settings and merge queues (at most two merges per run) and retry webhook deliveries. Auth and Forge encrypt separate records and may use independent `WEBHOOK_ENCRYPTION_KEY` values. Keep each Worker's key stable; replacing it makes that Worker's existing encrypted credentials undecryptable until the original key is restored or those credentials are rotated. Forge sets `global_fetch_strictly_public` so webhook requests can never reach private addresses.
 
+GitHub synchronization uses the Actions Worker's `GIT_TRANSFERS` container binding and its existing runtime image to run native Git without loading repository history into Worker memory. Deploy Actions before Git when adding this binding. Each transfer has an isolated filesystem, a two-minute cleanup alarm and separate fetch and push deadlines. Credentials are passed through process input and environment, and are excluded from durable state. The Git service rechecks authorization after fetching; normal non-force pushes also require the destination ref to match its previously observed commit.
+
 ### AI pull request summaries
 
 Pull request summaries are optional and ship disabled. Enable them for the whole site by adding a Workers AI binding to `workers/forge/wrangler.jsonc`:

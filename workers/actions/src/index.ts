@@ -48,8 +48,10 @@ import {
 } from "./run";
 import { base64ToBytes, bytesToBase64 } from "../../../src/worker/common/encoding";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
+import { handleGitTransfer } from "./git-transfer";
 
 export { ActionRunDurableObject as ActionRun };
+export { GitTransfer } from "./git-transfer";
 
 const MAX_SNAPSHOT_FILES = 2048;
 const MAX_SNAPSHOT_BYTES = 24 * 1024 * 1024;
@@ -1676,6 +1678,7 @@ export default {
       const url = new URL(request.url);
       if (request.method === "GET" && url.pathname === "/internal/health")
         return dataResponse({ ok: true });
+      if (url.pathname === "/internal/git-transfer") return await handleGitTransfer(request, env);
       if (url.pathname === "/internal/pull-request")
         return await handleInternalProposal(request, env, "pull_request");
       if (url.pathname === "/internal/merge-group")

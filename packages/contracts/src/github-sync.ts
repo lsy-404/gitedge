@@ -102,3 +102,48 @@ export interface GitHubSyncTransferResult {
   before: string;
   after: string;
 }
+
+const GitTransferRemoteSchema = z
+  .object({
+    url: z.url().refine((value) => {
+      const url = new URL(value);
+      return (
+        url.protocol === "https:" &&
+        !url.username &&
+        !url.password &&
+        !url.search &&
+        !url.hash &&
+        !url.port
+      );
+    }),
+    authorization: z
+      .string()
+      .min(1)
+      .max(4096)
+      .regex(/^(?:Basic|Bearer) [^\r\n\0]+$/),
+  })
+  .strict();
+
+export const GitTransferPlanSchema = z
+  .object({
+    source: GitTransferRemoteSchema,
+    destination: GitTransferRemoteSchema,
+    ref: GitHubSyncTransferSchema.shape.ref,
+    targetRef: GitHubSyncTransferSchema.shape.targetRef,
+    before: GitOidSchema,
+    after: GitOidSchema,
+  })
+  .strict();
+export type GitTransferPlan = z.infer<typeof GitTransferPlanSchema>;
+export const GitTransferResultSchema = z
+  .object({
+    status: z.enum(["ready", "synced", "stale", "conflict", "failed"]),
+  })
+  .strict();
+export type GitTransferResult = z.infer<typeof GitTransferResultSchema>;
+export const GitTransferRequestSchema = z.discriminatedUnion("operation", [
+  z
+    .object({ id: z.uuid(), operation: z.enum(["prepare", "push"]), plan: GitTransferPlanSchema })
+    .strict(),
+  z.object({ id: z.uuid(), operation: z.literal("cleanup") }).strict(),
+]);
