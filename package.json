@@ -17,6 +17,7 @@
     "check:migrations": "node scripts/check-migrations.mjs",
     "recovery": "node scripts/recovery.mjs",
     "actions": "node scripts/actions-runner.mjs",
+    "runner-broker": "node scripts/runner-broker.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit -p workers/auth/tsconfig.json && tsc --noEmit -p workers/forge/tsconfig.json && tsc --noEmit -p workers/git/tsconfig.json && tsc --noEmit -p workers/gateway/tsconfig.json && tsc --noEmit -p workers/limits/tsconfig.json && tsc --noEmit -p workers/mcp/tsconfig.json && pnpm --dir workers/deploy run typecheck && pnpm run typecheck:actions && pnpm --dir apps/web exec vue-tsc --noEmit",

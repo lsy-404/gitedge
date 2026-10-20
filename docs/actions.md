@@ -1,6 +1,6 @@
 # GitEdge Actions
 
-GitEdge provides two execution paths: the container service below, and an operator-run compatibility command using unmodified GitHub action packages and an official runner. The compatibility command is independent of the web Actions queue.
+GitEdge provides the container executor and an optional local runner broker. The original `actions run` command remains available for one explicitly selected workflow; the broker connects enabled `.github/workflows/` jobs to local GitHub or GitEdge runner profiles.
 
 ## Original GitHub action packages
 
@@ -22,11 +22,34 @@ The workflow is an explicit local file; the source commit and ref select the rem
 
 Action packages are downloaded from GitHub without rewriting. `actions/checkout` uses the actual GitEdge Git transport, including addresses without the `.git` suffix. Runner.Server interprets the workflow and supplies the runner protocol; this is not a guarantee that every GitHub workflow feature works. `runs-on` must match the current machine's real OS, architecture and labels. `--label` adds a label; it does not provision another operating system. Docker actions and container jobs require a working local container runtime.
 
-Use `--job <id>` to select a job, `--event` to select the event name, and `--secret-file` for a YAML mapping of string secrets. Event payload and GitHub environment approval integration are not implemented. `GITEDGE_TOKEN` becomes `secrets.GITHUB_TOKEN`; the command also supplies `GH_HOST`, `GH_ENTERPRISE_TOKEN` and `GITHUB_API_URL`. Inherited GitHub authentication variables are removed before starting the execution processes. The operator supplies a token with the needed repository permissions; workflow `permissions` does not mint a narrower GitEdge job token. Workflows execute with the local user's access, so run only code and secrets trusted for that machine.
+Use `--job <id>` to select a job, `--event` to select the event name, `--event-file` for an optional JSON object payload up to 1 MiB, and `--secret-file` for a YAML mapping of string secrets. GitHub environment approval integration is not implemented. `GITEDGE_TOKEN` becomes `secrets.GITHUB_TOKEN`; the command also supplies `GH_HOST`, `GH_ENTERPRISE_TOKEN` and `GITHUB_API_URL`. Inherited GitHub authentication variables are removed before starting the execution processes. The operator supplies a token with the needed repository permissions; workflow `permissions` does not mint a narrower GitEdge job token. Workflows execute with the local user's access, so run only code and secrets trusted for that machine.
 
 Unmodified `actions/upload-artifact` and `actions/download-artifact` packages are refused for custom origins: their toolkit checks the server host before accessing the artifact service. Reusable or composite actions can contain further unsupported dependencies; those failures remain visible in the runner output. Ordinary job files and the compatibility backend's local outputs are separate from the deployed container Actions artifacts.
 
-This path does not register an organization-wide GitEdge runner, dispatch automatically on pushes, publish trusted system CI checks, or implement GitHub environment approvals. The current container service continues to own those existing queue and check integrations.
+The direct `actions run` command does not register a persistent GitEdge runner, dispatch automatically on pushes, publish trusted system CI checks, or implement GitHub environment approvals. The container service remains the default queue and check path; administrators can explicitly enable the local broker for `.github/workflows/` execution.
+
+## Local runner broker
+
+The local broker runs one job at a time across independent GitEdge and GitHub registration profiles. It copies the installed official runner into a disposable directory for each execution; it does not modify an existing runner service. GitEdge profiles automatically include the current host's `self-hosted`, OS, and architecture labels; `--label` adds a custom label. State and GitEdge runner credentials live under `work/runner-broker` with private directory and file permissions. Use `--state-dir` to relocate that data. A process lock prevents concurrent profile changes or brokers, and the shared `work/actions` lock serializes broker jobs with the original `actions run` command.
+
+Initialize state, then register each target separately:
+
+```sh
+pnpm run runner-broker -- init
+GITEDGE_TOKEN='<admin-scoped GitEdge token>' pnpm run runner-broker -- register-gitedge \
+  --origin https://git.example.com --owner acme --repository app \
+  --label ci --runner-path /path/to/official-runner
+pnpm run runner-broker -- register-github --host github.com --owner acme \
+  --scope repo --repository app --label ci --runner-path /path/to/official-runner
+pnpm run runner-broker -- list
+pnpm run runner-broker -- serve
+```
+
+GitEdge registration creates one runner through the admin API and stores its returned runner credential locally. `GITEDGE_TOKEN` is not saved. Remove a profile with `pnpm run runner-broker -- remove <profile>`; removing a GitEdge profile revokes its server registration. GitHub profiles use the existing `gh` CLI authentication for their explicit `--host` and do not copy that credential into broker state.
+
+An organization GitHub profile must include one or more `--allow-repository owner/name` options. It uses the configured `--group-id` or `--group-name`, or resolves the organization's default runner group. The selected group must use selected-repository visibility, block public-repository access, and expose only repositories in the profile allowlist. An unrestricted group is rejected. Repository profiles use the repository's default runner group ID 1. The broker polls a bounded set of queued runs and jobs, then starts an ephemeral JIT runner only when a queued job requests `self-hosted` and every requested label matches the actual host and that profile's labels. A GitHub-hosted label such as `ubuntu-latest` never maps to a local macOS or Windows machine. A JIT runner is not pinned to the polled job; it may take any eligible job visible to its repository and runner group. The broker waits until the new runner is busy, then stops observing that job; if it remains idle for 120 seconds, it removes the ephemeral runner and returns to polling. `--poll-seconds` is bounded to 15–120 seconds; organization profiles poll no faster than every 30 seconds and require an explicit allowlist of at most 50 repositories. Normal organization polling inspects three allowlisted repositories and three runs per status per cycle, rotating repository and run pages. `serve --once` scans the full allowlist once from each saved page cursor and may make more REST calls. It exits after processing at most one eligible job, or after one bounded polling pass without a match.
+
+GitEdge repository administrators must explicitly enable `actionsRunnerEnabled` before repository workflows can use registered local runners. `.gitedge/workflows/` continues to use the container executor. Enabled `.github/workflows/` jobs are queued for the local runner and the complete workflow must fit one matching host. The initial broker supports `push` and `workflow_dispatch` events with their server-provided JSON payloads, limited to 1 MiB. Only top-level `permissions` contents and the supported literal `runs-on` labels are accepted; job-level permissions, environment approvals, and concurrency are rejected to avoid changing workflow semantics. Workflow compatibility is limited to the execution features implemented by the official runner and the GitEdge adapter; registration does not imply full GitHub Actions compatibility. The broker heartbeats active GitEdge leases, stops the child process on cancellation or lease renewal failure, and reports a bounded, token-redacted log tail.
 
 ## GitHub REST compatibility
 

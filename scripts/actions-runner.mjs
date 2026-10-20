@@ -302,6 +302,19 @@ async function runWorkflow(values, state) {
   if (Buffer.byteLength(source) > 1024 * 1024)
     throw new Error("Workflow files are limited to 1 MiB.");
   validateWorkflow(source, origin);
+  let eventPayload;
+  if (values["event-file"]) {
+    const payloadSource = await readFile(path.resolve(values["event-file"]), "utf8");
+    if (Buffer.byteLength(payloadSource) > 1024 * 1024)
+      throw new Error("Event payload files are limited to 1 MiB.");
+    try {
+      eventPayload = JSON.parse(payloadSource);
+    } catch {
+      throw new Error("--event-file must contain valid JSON.");
+    }
+    if (!eventPayload || typeof eventPayload !== "object" || Array.isArray(eventPayload))
+      throw new Error("--event-file must contain a JSON object.");
+  }
   const native = path.resolve(values["runner-path"]);
   await access(path.join(native, "bin", executable("Runner.Listener")), constants.X_OK);
   await mkdir(path.join(state, "runs"), { recursive: true });
@@ -317,6 +330,7 @@ async function runWorkflow(values, state) {
       ? "https://api.github.com/graphql"
       : `${origin.origin}/api/graphql`;
   const environment = { ...process.env };
+  delete environment.GITEDGE_BROKER_SLOT_HELD;
   for (const key of Object.keys(environment)) {
     if (
       /^(?:gh_token|github_token|gh_enterprise_token|github_enterprise_token|gitedge_token)$/i.test(
@@ -348,6 +362,7 @@ async function runWorkflow(values, state) {
   const secretFile = path.join(run, "secrets.yml");
   const envFile = path.join(run, "environment");
   const configFile = path.join(run, "server.json");
+  const eventPayloadFile = eventPayload ? path.join(run, "event.json") : undefined;
   try {
     const runtime = await installRuntime(state);
     await mkdir(ghConfig, { mode: 0o700 });
@@ -367,6 +382,12 @@ async function runWorkflow(values, state) {
       );
     }
     await writeFile(secretFile, stringify(secrets), { mode: 0o600 });
+    if (eventPayloadFile) {
+      const payloadSource = JSON.stringify(eventPayload);
+      if (Buffer.byteLength(payloadSource) > 1024 * 1024)
+        throw new Error("Serialized event payload exceeds 1 MiB.");
+      await writeFile(eventPayloadFile, payloadSource, { mode: 0o600 });
+    }
     const variables = {
       GH_HOST: origin.host,
       GITHUB_API_URL: api,
@@ -460,6 +481,7 @@ async function runWorkflow(values, state) {
     ];
     if (token) args.push("--secret", "github_token");
     if (values.job) args.push("--job", values.job);
+    if (eventPayloadFile) args.push("--payload", eventPayloadFile, "--no-default-payload");
     const client = launch(path.join(runtime, executable("Runner.Client")), args, {
       cwd: process.cwd(),
       env: environment,
@@ -492,15 +514,18 @@ async function runWorkflow(values, state) {
   } finally {
     await stopChildren();
     await Promise.all(
-      [runner, secretFile, envFile, configFile, ghConfig].map((file) =>
-        rm(file, { recursive: true, force: true })
-      )
+      [runner, secretFile, envFile, configFile, ghConfig, eventPayloadFile]
+        .filter(Boolean)
+        .map((file) => rm(file, { recursive: true, force: true }))
     );
   }
 }
 
 async function main() {
+  const args = process.argv.slice(2);
+  if (args[0] === "--") args.shift();
   const { values, positionals } = parseArgs({
+    args,
     allowPositionals: true,
     strict: true,
     options: {
@@ -514,6 +539,7 @@ async function main() {
       job: { type: "string" },
       label: { type: "string", multiple: true },
       "secret-file": { type: "string" },
+      "event-file": { type: "string" },
       "state-dir": { type: "string" },
       "timeout-minutes": { type: "string" },
       help: { type: "boolean", short: "h" },
@@ -522,7 +548,7 @@ async function main() {
   const action = positionals[0];
   if (values.help || !action) {
     console.log(
-      "Usage: pnpm run actions setup|run [options]\n\nrun --origin <origin> --repository <owner/name> --workflow <file>\n    --runner-path <official-runner-directory> --sha <commit> --ref <refs/heads/main>\n    [--label <label>] [--event push] [--job <id>] [--secret-file <yaml>]\n    [--state-dir <directory>] [--timeout-minutes 60]\n\nGITEDGE_TOKEN supplies the scoped access token. Execution uses the current host.\nThe official runner is copied into an isolated directory; existing services are untouched."
+      "Usage: pnpm run actions setup|run [options]\n\nrun --origin <origin> --repository <owner/name> --workflow <file>\n    --runner-path <official-runner-directory> --sha <commit> --ref <refs/heads/main>\n    [--label <label>] [--event push] [--event-file <json>] [--job <id>] [--secret-file <yaml>]\n    [--state-dir <directory>] [--timeout-minutes 60]\n\nGITEDGE_TOKEN supplies the scoped access token. Execution uses the current host.\nThe official runner is copied into an isolated directory; existing services are untouched."
     );
     return;
   }
@@ -531,21 +557,29 @@ async function main() {
   const state = path.resolve(values["state-dir"] ?? path.join(root, "work", "actions"));
   await mkdir(state, { recursive: true, mode: 0o700 });
   const lockPath = path.join(state, "active.lock");
-  const lock = await open(lockPath, "wx", 0o600).catch((error) => {
-    if (error.code === "EEXIST")
-      throw new Error(
-        `This state directory is already in use. Inspect ${lockPath} before removing a stale lock.`
-      );
-    throw error;
-  });
+  const brokerOwnsSlot = process.env.GITEDGE_BROKER_SLOT_HELD === "1";
+  const lock = brokerOwnsSlot
+    ? undefined
+    : await open(lockPath, "wx", 0o600).catch((error) => {
+        if (error.code === "EEXIST")
+          throw new Error(
+            `This state directory is already in use. Inspect ${lockPath} before removing a stale lock.`
+          );
+        throw error;
+      });
   try {
-    await lock.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
+    if (lock)
+      await lock.writeFile(
+        JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })
+      );
     if (action === "setup") console.log(`Runtime ready: ${await installRuntime(state)}`);
     else await runWorkflow(values, state);
   } finally {
     await stopChildren();
-    await lock.close();
-    await rm(lockPath, { force: true });
+    if (lock) {
+      await lock.close();
+      await rm(lockPath, { force: true });
+    }
   }
 }
 
