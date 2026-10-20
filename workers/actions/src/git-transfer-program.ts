@@ -7,7 +7,7 @@ const { spawnSync } = require('node:child_process');
 let text = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', chunk => text += chunk);
-process.stdin.on('end', () => {
+process.stdin.on('end', async () => {
   let diagnostic = 'Native Git command failed.';
   try {
     const { operation, plan } = JSON.parse(text);
@@ -29,7 +29,8 @@ process.stdin.on('end', () => {
     };
     const env = { PATH: process.env.PATH, HOME: root, LANG: 'C.UTF-8', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '/usr/bin/false', GIT_CONFIG_COUNT: String(Object.keys(settings).length) };
     Object.entries(settings).forEach(([key, value], index) => { env['GIT_CONFIG_KEY_' + index] = key; env['GIT_CONFIG_VALUE_' + index] = value; });
-    const git = args => spawnSync('git', args, { env, encoding: 'utf8', maxBuffer: 1024 * 1024, timeout: operation === 'prepare' ? ${GitTransferTimeouts.prepare} : ${GitTransferTimeouts.push} });
+    const deadline = Date.now() + (operation === 'prepare' ? ${GitTransferTimeouts.prepare} : ${GitTransferTimeouts.push});
+    const git = args => spawnSync('git', args, { env, encoding: 'utf8', maxBuffer: 1024 * 1024, timeout: Math.max(1, deadline - Date.now()) });
     const failure = result => {
       let message = operation + ': ' + (result.error?.code ?? result.status) + ': ' + (result.stderr || 'Git command failed.');
       const secrets = [];
@@ -46,7 +47,15 @@ process.stdin.on('end', () => {
     if (operation === 'prepare') {
       checked(['init', '--bare', directory]);
       if (plan.after !== '0'.repeat(40)) {
-        checked(['--git-dir=' + directory, 'fetch', '--no-tags', plan.source.url, plan.ref]);
+        for (let attempt = 0; ; attempt++) {
+          const fetched = git(['--git-dir=' + directory, 'fetch', '--no-tags', plan.source.url, plan.ref]);
+          if (fetched.status === 0) break;
+          diagnostic = failure(fetched);
+          const transient = fetched.error?.code === 'ETIMEDOUT' || /early EOF|unexpected disconnect|bytes (?:of body are still expected|remaining to read)|Could not resolve host|Failed to connect|Connection reset|timed out|Recv failure|Empty reply from server|HTTP (?:500|502|503|504)/i.test(fetched.stderr || '');
+          const delay = 1000 * (attempt + 1);
+          if (!transient || attempt === 2 || Date.now() + delay >= deadline) throw Error('git_failed');
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
         const fetched = checked(['--git-dir=' + directory, 'rev-parse', 'FETCH_HEAD']);
         if (fetched !== plan.after) return result('stale');
         checked(['--git-dir=' + directory, 'update-ref', 'refs/transfer/source', plan.after]);

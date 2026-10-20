@@ -59,8 +59,19 @@ async function fixture(large = false) {
   git(local, "push", source, "HEAD:refs/heads/main", "refs/tags/release:refs/tags/release");
   let rejectedSecret: string | undefined;
   let sourceDelay = 0;
+  let truncatedResponses = 0;
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
+    if (truncatedResponses && url.pathname.startsWith("/source.git/")) {
+      truncatedResponses--;
+      response.writeHead(200, {
+        "Content-Type": "application/x-git-upload-pack-advertisement",
+        "Content-Length": "100",
+        Connection: "close",
+      });
+      response.end("0000");
+      return;
+    }
     if (sourceDelay && url.pathname.startsWith("/source.git/")) {
       const delay = sourceDelay;
       sourceDelay = 0;
@@ -161,8 +172,19 @@ async function fixture(large = false) {
     delaySource(milliseconds: number) {
       sourceDelay = milliseconds;
     },
+    truncateSource(responses: number) {
+      truncatedResponses = responses;
+    },
   };
 }
+
+it("recovers complete history after a truncated upstream Git response", async () => {
+  const f = await fixture();
+  f.truncateSource(1);
+  expect(await f.execute("prepare")).toEqual({ status: "ready" });
+  expect(await f.execute("push")).toEqual({ status: "synced" });
+  expect(git(f.destination, "rev-list", "main").split("\n")).toEqual([...f.history].reverse());
+});
 
 it("transfers full history when upstream Git negotiation takes one minute", async () => {
   const f = await fixture();
