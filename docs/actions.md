@@ -37,7 +37,7 @@ Initialize state and register the GitEdge runner profile used by the production 
 ```sh
 pnpm run runner-broker -- init
 GITEDGE_TOKEN='<admin-scoped GitEdge token>' pnpm run runner-broker -- register-gitedge \
-  --origin https://git.example.com --owner acme --repository app \
+  --origin https://git.example.com --owner acme \
   --label ci --runner-path /path/to/official-runner
 pnpm run runner-broker -- list
 pnpm run runner-broker -- serve
@@ -60,6 +60,10 @@ pnpm run runner-broker -- service stop --install-dir /path/to/gitedge
 ```
 
 The LaunchAgent invokes the Node executable and broker script in that installation, uses the current user's home directory, and writes logs under the selected state directory. Keep the installation directory in place while the service is installed.
+
+An owner-wide registration serves enabled repositories in that GitEdge namespace; add `--repository` only to restrict it to one repository. To accept GitHub jobs, connect each source in the repository's GitHub sync settings and enable **Route GitHub self-hosted jobs to GitEdge runners**. Apply all migrations, including `0046_github_runner_bridge.sql`. The connection needs repository runner administration, Actions read, and the existing synchronization permissions. A fine-grained token can limit access to selected repositories. GitHub owners can differ from the GitEdge namespace.
+
+GitHub sends signed `workflow_job` requests to the connection's public webhook. Only jobs explicitly requesting `self-hosted` and matching the registered labels are claimed. GitEdge rechecks the source job before issuing a repository-scoped, ephemeral JIT identity. GitHub retains native action downloads, environment approvals, secrets, job credentials and logs. Temporary identities are removed after execution; cleanup is retried after connection failures. The queue accepts at most 100 pending demands per connection, expires unclaimed demands after 24 hours, and does not replay a completed or failed demand. Rerun the GitHub workflow after resolving an execution-start failure. GitHub chooses the eligible job for a temporary runner; it is not pinned to a webhook job ID.
 
 GitEdge registration creates one runner through the admin API and stores its returned runner credential locally. `GITEDGE_TOKEN` is not saved. Remove a profile with `pnpm run runner-broker -- remove <profile>`. For GitEdge removal, supply `GITEDGE_TOKEN` again with administrator scope so the broker can revoke the server registration before deleting local state. Standalone GitHub profiles use the existing stored `gh` CLI authentication for their explicit `--host` and do not copy that credential into broker state. Inherited token environment variables are ignored. The account must administer the target repository; organization runner groups and JIT registration require the corresponding organization runner permissions (`admin:org` for a classic OAuth token). GitHub jobs dispatched through the GitEdge profile do not use local `gh` authentication.
 

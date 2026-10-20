@@ -169,10 +169,7 @@ export function runnerDispatchInputs(
     if (!(key in definition.inputs)) fail(`Unknown dispatch input '${key}'.`);
   const values: Record<string, string | number | boolean> = {};
   for (const [key, input] of Object.entries(definition.inputs)) {
-    const value =
-      parsed.data[key] ??
-      input.default ??
-      (input.type === "choice" ? input.options?.[0] : undefined);
+    const value = parsed.data[key] ?? input.default;
     if (value === undefined) {
       if (input.required) fail(`Dispatch input '${key}' is required.`);
       continue;

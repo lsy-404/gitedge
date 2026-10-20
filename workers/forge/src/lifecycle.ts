@@ -23,6 +23,8 @@ import { revokeAgentSessions } from "./agent-events";
 import { closeForkPullRequests, detachForks, namespaceMayHoldFork } from "./forks";
 import { purgeReleaseAssets } from "./releases";
 import { parseJson, repoResponse, type ForgeEnv, type RepositoryRow } from "./common";
+import { githubConnection } from "./github-sync-store";
+import { stopGithubRunners } from "./github-runners";
 
 const MAX_DELETED_LISTING = 100;
 const PURGE_BATCH = 5;
@@ -381,11 +383,7 @@ async function requestArtifactsPurge(
   return parsed.success ? parsed.data.data : null;
 }
 
-/**
- * Advances one soft-deleted repository through revoke, Artifacts deletion and row removal.
- * Progress is persisted in purge_state and purge_cursor so interrupted runs resume without
- * repeating work.
- */
+// Preserve the purge cursor so interrupted deletion resumes safely.
 export async function purgeRepository(env: ForgeEnv, repositoryId: string): Promise<boolean> {
   const logger = createLogger(env.LOG_LEVEL, { service: "repository-purge", repoId: repositoryId });
   const read = () =>
@@ -438,6 +436,11 @@ export async function purgeRepository(env: ForgeEnv, repositoryId: string): Prom
     row = await read();
   }
   if (row?.state === "artifacts_deleted") {
+    const connection = await githubConnection(env.DB, repositoryId);
+    if (connection && !(await stopGithubRunners(env, connection))) {
+      logger.info("purge:github-runners-pending", {});
+      return false;
+    }
     if (!(await purgeReleaseAssets(env, repositoryId))) {
       logger.info("purge:release-assets-partial", {});
       return false;

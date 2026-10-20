@@ -3,6 +3,7 @@ export const zhOperationSummaries: Readonly<Record<string, string>> = {
   getGitHubSync: "查看 GitHub 连接和同步状态。",
   connectGitHubSync: "连接 GitHub 仓库并创建签名 Webhook。",
   setGitHubSyncEnabled: "暂停或恢复双向同步。",
+  setGitHubRunnerEnabled: "启用或停用 GitEdge runner 接收 GitHub 任务。",
   disconnectGitHubSync: "删除 GitHub Webhook 并断开连接。",
   reconcileGitHubSync: "核对两侧记录并重试失败或冲突的同步。",
   retryGitHubSyncJob: "重试单个同步任务，保留历史与并发检查。",

@@ -26,14 +26,15 @@ import { auditActor, recordAudit } from "../../../src/worker/common/audit";
 import { createLogger } from "../../../src/worker/common/logger";
 import { publishCheck } from "./check-delivery";
 import type { RunnerWorkflow } from "./runner-workflow";
+import { claimGithubRunner, githubRunnerLease } from "./github-runners";
 
 export interface RunnerEnv {
   DB: D1Database;
-  AUTH?: Fetcher;
-  FORGE: Fetcher;
+  AUTH?: Pick<Fetcher, "fetch">;
+  FORGE: Pick<Fetcher, "fetch">;
   LOG_LEVEL?: string;
 }
-interface RunnerRow {
+export interface RunnerRow {
   id: string;
   name: string;
   namespace_id: string;
@@ -262,6 +263,9 @@ export async function runnerManagement(
       ).bind(now, row.id),
       env.DB.prepare(
         "UPDATE actions_job_tokens SET revoked_at=? WHERE run_id IN (SELECT run_id FROM actions_runner_runs WHERE runner_id=?)"
+      ).bind(now, row.id),
+      env.DB.prepare(
+        "UPDATE actions_github_runner_jobs SET status='completed',conclusion='cancelled',completed_at=? WHERE runner_id=? AND status='running'"
       ).bind(now, row.id),
     ]);
     await recordAudit(env, {
@@ -508,6 +512,7 @@ async function claim(request: Request, env: RunnerEnv, runner: RunnerRow): Promi
       AND NOT EXISTS (SELECT 1 FROM json_each(j.labels_json) required WHERE lower(required.value) NOT IN (SELECT lower(value) FROM json_each(?)))
       ORDER BY a.created_at,a.id LIMIT 1)
     AND status='queued' AND NOT EXISTS (SELECT 1 FROM actions_runner_runs busy WHERE busy.runner_id=? AND busy.status='running')
+    AND NOT EXISTS (SELECT 1 FROM actions_github_runner_jobs busy WHERE busy.runner_id=? AND busy.status='running')
     AND EXISTS (SELECT 1 FROM actions_runners WHERE id=? AND revoked_at IS NULL) RETURNING run_id`
   )
     .bind(
@@ -521,10 +526,14 @@ async function claim(request: Request, env: RunnerEnv, runner: RunnerRow): Promi
       runner.repository_id,
       runner.labels_json,
       runner.id,
+      runner.id,
       runner.id
     )
     .first<{ run_id: string }>();
-  if (!claimed) return dataResponse({ run: null, pollAfterSeconds: 5 });
+  if (!claimed)
+    return (
+      (await claimGithubRunner(env, runner)) ?? dataResponse({ run: null, pollAfterSeconds: 5 })
+    );
   const row = await env.DB.prepare(`${runsSelect} WHERE a.id=?`)
     .bind(claimed.run_id)
     .first<RunRow>();
@@ -593,6 +602,7 @@ export async function runnerMachineRequest(request: Request, env: RunnerEnv): Pr
     .bind(now, runner.id, now - 30_000)
     .run();
   const operation = new URL(request.url).pathname.split("/")[2];
+  if (operation === "github") return githubRunnerLease(request, env, runner);
   if (operation === "claim") return claim(request, env, runner);
   const body = await readJsonLimited(
     request,

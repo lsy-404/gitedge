@@ -684,7 +684,11 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
   if (url.pathname === MCP_PATH) return handleMcp(request, env);
   if (isGitHubApiPath(url.pathname)) return handleGitHubCompatibility(request, env);
 
-  if (/^\/api\/actions\/runner\/(claim|heartbeat|complete)$/.test(url.pathname)) {
+  if (
+    /^\/api\/actions\/runner\/(?:claim|heartbeat|complete|github\/(?:heartbeat|complete))$/.test(
+      url.pathname
+    )
+  ) {
     if (!env.ACTIONS) return githubApiError(503, "service_unavailable", "Actions is unavailable.");
     const headers = new Headers(request.headers);
     withoutTrustedHeaders(headers);

@@ -7,6 +7,7 @@ import {
   runnerManagement,
 } from "./runners";
 import { parseRunnerWorkflow, runnerDispatchInputs } from "./runner-workflow";
+import { queueGithubRunner, expireGithubRunners } from "./github-runners";
 import { deliverCheck, publishCheck } from "./check-delivery";
 import type { MergeCandidateRecord } from "../../../packages/contracts/src/merge-candidates";
 import { readJsonLimited } from "../../../src/worker/common/readText";
@@ -1624,7 +1625,10 @@ export default {
       if (url.pathname === "/internal/merge-group")
         return await handleInternalProposal(request, env, "merge_group");
       if (url.pathname === "/internal/push") return await handleInternalPush(request, env);
-      if (/^\/runner\/(claim|heartbeat|complete)$/.test(url.pathname))
+      if (url.pathname === "/internal/github-runner") return await queueGithubRunner(request, env);
+      if (
+        /^\/runner\/(?:claim|heartbeat|complete|github\/(?:heartbeat|complete))$/.test(url.pathname)
+      )
         return await runnerMachineRequest(request, env);
       const user = readTrustedUser(request);
       if (url.pathname === "/runners" || url.pathname.startsWith("/runners/"))
@@ -1662,6 +1666,7 @@ export default {
     context.waitUntil(
       (async () => {
         await expireRunnerRuns(env);
+        await expireGithubRunners(env);
         await publishPendingChecks(env);
       })().catch((cause: unknown) => {
         const logger = createLogger(env.LOG_LEVEL, { service: "actions" });

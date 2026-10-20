@@ -841,11 +841,9 @@ async function runClaimedGitHub(profile, claim, signal) {
   )
     throw new Error("GitEdge returned invalid GitHub runner execution metadata.");
   if (
-    run.owner.toLowerCase() !== profile.owner.toLowerCase() ||
+    run.scope?.owner?.toLowerCase() !== profile.owner.toLowerCase() ||
     (profile.repository &&
-      run.repository.toLowerCase() !== `${profile.owner}/${profile.repository}`.toLowerCase()) ||
-    (!profile.repository &&
-      run.repository.split("/")[0]?.toLowerCase() !== profile.owner.toLowerCase())
+      run.scope?.repository?.toLowerCase() !== profile.repository.toLowerCase())
   )
     throw new Error("GitEdge returned a GitHub repository outside this runner profile.");
   if (!eligible(run.labels, profile))

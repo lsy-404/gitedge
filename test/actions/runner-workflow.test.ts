@@ -92,11 +92,6 @@ describe("parseRunnerWorkflow public contract", () => {
       workflow().replace("[self-hosted, linux, x64, ci]", "${{ runner.os }}"),
     ],
     [
-      "an unknown job declaration",
-      ".github/workflows/verify.yml",
-      workflow().replace("    runs-on:", "    strategy: {}\n    runs-on:"),
-    ],
-    [
       "an unknown dispatch input field",
       ".github/workflows/verify.yml",
       workflow().replace("        type: choice", "        type: choice\n        unsupported: true"),

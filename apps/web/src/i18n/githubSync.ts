@@ -17,6 +17,9 @@ export const githubSyncMessages = {
     githubSyncUpdate: "更新 GitHub 连接",
     githubSyncEnabled: "同步已启用",
     githubSyncDisabled: "同步已暂停",
+    githubSyncRunnerEnabled: "将 GitHub 自托管任务交给 GitEdge runner",
+    githubSyncRunnerHint:
+      "同一注册可服务此命名空间下已启用的仓库。GitHub 按标签分配任务，保留环境审批、secrets 和执行日志；连接凭证需要管理仓库 runner 的权限。",
     githubSyncWebhookReady: "Webhook 已就绪",
     githubSyncWebhookPending: "Webhook 尚未就绪",
     githubSyncLastSuccess: "最近成功同步",
@@ -69,6 +72,9 @@ export const githubSyncMessages = {
     githubSyncUpdate: "Update GitHub connection",
     githubSyncEnabled: "Sync enabled",
     githubSyncDisabled: "Sync paused",
+    githubSyncRunnerEnabled: "Route GitHub self-hosted jobs to GitEdge runners",
+    githubSyncRunnerHint:
+      "One registration serves enabled repositories in this namespace. GitHub matches labels and retains environment approvals, secrets and job logs. The connection credential needs repository runner administration access.",
     githubSyncWebhookReady: "Webhook ready",
     githubSyncWebhookPending: "Webhook not ready",
     githubSyncLastSuccess: "Last successful sync",

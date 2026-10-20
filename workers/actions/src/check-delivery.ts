@@ -3,7 +3,7 @@ import { createLogger } from "../../../src/worker/common/logger";
 
 interface ActionCheckEnv {
   DB: D1Database;
-  FORGE: Fetcher;
+  FORGE: Pick<Fetcher, "fetch">;
   LOG_LEVEL?: string;
 }
 

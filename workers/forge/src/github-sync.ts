@@ -32,6 +32,8 @@ import {
 } from "./github-sync-store";
 import { githubSyncRefs, syncGithubRef } from "./github-sync-git";
 import { syncGithubCollaboration } from "./github-sync-collaboration";
+import { GitHubRunnerWebhookSchema } from "../../../packages/contracts/src/runners";
+import { stopGithubRunners } from "./github-runners";
 
 const LEASE_MS = 180_000;
 const GithubHookSchema = z.object({
@@ -76,6 +78,7 @@ export async function githubSyncState(
       githubRepositoryId: connection.github_repository_id,
       githubUrl: `https://github.com/${encodeURIComponent(connection.owner)}/${encodeURIComponent(connection.name)}`,
       enabled: connection.enabled === 1,
+      runnerEnabled: connection.runner_enabled === 1,
       webhookReady: connection.hook_id !== null,
       errorCode: connection.error_code,
       lastSyncedAt: connection.last_synced_at,
@@ -216,7 +219,7 @@ async function setupGithubSync(
         {
           name: "web",
           active: true,
-          events: [...GitHubSyncEvents],
+          events: [...GitHubSyncEvents, "workflow_job"],
           config: { url: callback, content_type: "json", insecure_ssl: "0", secret },
         }
       )
@@ -290,7 +293,25 @@ export async function handleGithubSyncSettings(
         "github_sync_busy",
         "A synchronization operation is in progress. Retry when it finishes."
       );
-    if (request.method === "PATCH" && parts.length === 3) {
+    if (request.method === "PATCH" && parts[3] === "runner" && parts.length === 4) {
+      const input = GitHubSyncEnabledSchema.safeParse(await parseJson(request));
+      if (!input.success)
+        return errorResponse(400, "bad_request", "Invalid GitHub runner settings.");
+      if (input.data.enabled) {
+        if (connection.enabled !== 1 || !connection.hook_id)
+          return errorResponse(409, "github_hook_missing", "Enable the GitHub connection first.");
+        const credentials = await githubCredentials(env, connection);
+        const path = githubRepoPath(connection.owner, connection.name);
+        await githubRequest(credentials.token, `${path}/actions/runners?per_page=1`);
+        await githubRequest(credentials.token, `${path}/hooks/${connection.hook_id}`, "PATCH", {
+          events: [...GitHubSyncEvents, "workflow_job"],
+        });
+      }
+      await env.DB.prepare("UPDATE forge_github_connections SET runner_enabled=? WHERE id=?")
+        .bind(Number(input.data.enabled), connection.id)
+        .run();
+      if (!input.data.enabled) await stopGithubRunners(env, connection);
+    } else if (request.method === "PATCH" && parts.length === 3) {
       const input = GitHubSyncEnabledSchema.safeParse(await parseJson(request));
       if (!input.success)
         return errorResponse(400, "bad_request", "Invalid synchronization settings.");
@@ -306,10 +327,17 @@ export async function handleGithubSyncSettings(
         .bind(Number(input.data.enabled), connection.id)
         .run();
       if (input.data.enabled) await seedGithubSync(env.DB, connection.id);
+      else await stopGithubRunners(env, connection);
     } else if (request.method === "DELETE" && parts.length === 3) {
       await env.DB.prepare("UPDATE forge_github_connections SET enabled=0 WHERE id=?")
         .bind(connection.id)
         .run();
+      if (!(await stopGithubRunners(env, connection)))
+        return errorResponse(
+          409,
+          "github_runner_cleanup_pending",
+          "Temporary runners are being removed. Retry disconnecting shortly."
+        );
       if (connection.hook_id) {
         const credentials = await githubCredentials(env, connection);
         try {
@@ -435,6 +463,20 @@ export async function receiveGithubWebhook(
     );
   const event = request.headers.get("X-GitHub-Event");
   if (event === "ping") return dataResponse({ accepted: true }, 202);
+  if (event === "workflow_job") {
+    if (connection.enabled !== 1 || connection.runner_enabled !== 1)
+      return dataResponse({ ignored: true }, 202);
+    const parsed = GitHubRunnerWebhookSchema.safeParse(payload);
+    if (!parsed.success) return errorResponse(400, "bad_request", "Invalid GitHub workflow job.");
+    if (!env.ACTIONS) return errorResponse(503, "service_unavailable", "Actions is unavailable.");
+    return env.ACTIONS.fetch(
+      new Request("https://actions.internal/internal/github-runner", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...parsed.data, connectionId: connection.id }),
+      })
+    );
+  }
   if (!event || !GitHubSyncEvents.some((supported) => supported === event))
     return dataResponse({ ignored: true }, 202);
   const delivery = request.headers.get("X-GitHub-Delivery");

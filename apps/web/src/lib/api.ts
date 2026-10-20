@@ -1749,6 +1749,11 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ enabled }),
     }),
+  setGitHubRunnerEnabled: (repositoryId: string, enabled: boolean) =>
+    request<GitHubSyncState>(repositoryPath(repositoryId, "github-sync/runner"), {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+    }),
   disconnectGitHubSync: (repositoryId: string) =>
     request<GitHubSyncState>(repositoryPath(repositoryId, "github-sync"), { method: "DELETE" }),
   reconcileGitHubSync: (repositoryId: string) =>

@@ -14,7 +14,7 @@ PR 可由人工锁定，冻结来源分支的全部提交、改名和删除，�
 
 Actions 在支持 Containers 的部署中运行，每次执行使用独立容器，默认关闭网络；优先读取 `.gitedge/workflows`，也支持 `.github/workflows` 的脚本子集。提供 Node/pnpm、Python、静态站点和项目验证模板，支持推送、PR、合并候选与手动触发、分支过滤、依赖缓存和可下载产物；不支持的语法明确说明原因。
 
-管理员可在仓库设置中启用本机 runner，使 `.github/workflows` 通过持久队列运行原版 GitHub action 包；`.gitedge/workflows` 仍优先使用容器。一个本机 broker 可注册多个 GitHub 仓库、组织和 GitEdge 目标，共享官方 runner 程序及一个执行槽，各注册身份独立保存。GitEdge 支持人类推送和手动触发、运行参数、标签匹配、取消、日志及绑定确切提交的独立系统 CI 结果。每个工作流的所有作业使用同一匹配主机；任务凭证限定当前仓库，随取消、租约失效或执行结束撤销，不能管理 runner 或发布 CI 结果。
+管理员可在仓库设置中启用本机 runner，使 `.github/workflows` 通过持久队列运行原版 GitHub action 包；`.gitedge/workflows` 仍优先使用容器。一个本机 broker 向 GitEdge 命名空间注册一次，共享官方 runner 程序及一个执行槽，为该命名空间中启用的多个仓库执行任务。GitHub 通过签名 workflow_job Webhook 请求执行；GitEdge 使用仓库连接凭证签发一次性 GitHub runner 身份，保留 GitHub 原生环境审批、secrets、action 包和日志，任务结束后删除临时身份。本机只保存 GitEdge runner 凭证；仓库连接凭证加密保存在服务端。独立 GitHub 注册模式仍可显式使用。GitEdge 支持人类推送和手动触发、运行参数、标签匹配、取消、日志及绑定确切提交的独立系统 CI 结果。每个工作流的所有作业使用同一匹配主机；任务凭证限定当前仓库，随取消、租约失效或执行结束撤销，不能管理 runner 或发布 CI 结果。
 
 操作者也可通过本机命令显式运行原版 action 包。Gateway 提供仓库、Releases 和资产的 GitHub REST 子集，沿用本地权限；GraphQL、工作流 run API、自定义域名的官方 artifact 包，以及本机队列中的 PR/合并候选触发、环境审批和并发组明确不支持，能力范围以文档和接口声明为准。本机执行继承主机用户权限和网络环境，需要管理员显式启用。
 

@@ -13,6 +13,7 @@ export interface GithubConnectionRow {
   allow_visibility_mismatch: number;
   created_by: string;
   enabled: number;
+  runner_enabled: number;
   hook_id: number | null;
   callback_url: string;
   token_ciphertext: string;

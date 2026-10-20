@@ -1,0 +1,326 @@
+import { env } from "cloudflare:workers";
+import { beforeAll, afterEach, describe, expect, it, vi } from "vitest";
+import { trustedHeaders } from "../../packages/contracts/src/trust";
+import { importSealingKey, sealText } from "../../src/worker/common/secret-box";
+import { githubRunnerOperation } from "../../workers/forge/src/github-runners";
+import { receiveGithubWebhook } from "../../workers/forge/src/github-sync";
+import { queueGithubRunner, expireGithubRunners } from "../../workers/actions/src/github-runners";
+import {
+  runnerMachineRequest,
+  runnerManagement,
+  type RunnerEnv,
+} from "../../workers/actions/src/runners";
+import {
+  createPerson,
+  createRepository,
+  data,
+  forgeEnv,
+  migrate,
+  type Person,
+} from "../support/stack";
+import type { RegisteredRunner } from "../../packages/contracts/src/runners";
+
+const secret = "signed-webhook-fixture";
+const credential = "server-only-github-management-credential";
+const encryption = btoa("e".repeat(32));
+let owner: Person;
+let repositoryA: string;
+let repositoryB: string;
+let remoteRunnerId = 500;
+let lostResponse = false;
+const deletions: number[] = [];
+const inventory = new Map<number, string>();
+const bridgeEnv = {
+  ...forgeEnv,
+  WEBHOOK_ENCRYPTION_KEY: encryption,
+  ACTIONS: { fetch: (request: Request) => queueGithubRunner(request, machineEnv) },
+};
+const machineEnv: RunnerEnv = {
+  DB: env.DB,
+  LOG_LEVEL: "error",
+  AUTH: {
+    fetch: async () => {
+      throw new Error("GitHub jobs must not receive GitEdge job credentials.");
+    },
+  },
+  FORGE: { fetch: (request) => githubRunnerOperation(new Request(request), bridgeEnv) },
+};
+
+beforeAll(async () => {
+  await migrate();
+  owner = await createPerson("runner-owner");
+  repositoryA = await createRepository(owner, "first");
+  repositoryB = await createRepository(owner, "second");
+});
+afterEach(() => vi.unstubAllGlobals());
+
+async function connection(
+  repositoryId: string,
+  remoteName: string,
+  remoteId = 99
+): Promise<string> {
+  const id = crypto.randomUUID();
+  const key = await importSealingKey(encryption);
+  if (!key) throw new Error("Fixture encryption key is invalid.");
+  const tokenBox = await sealText(key, credential),
+    secretBox = await sealText(key, secret);
+  await env.DB.prepare("DELETE FROM forge_github_connections WHERE repository_id=?")
+    .bind(repositoryId)
+    .run();
+  await env.DB.prepare("UPDATE repositories SET actions_enabled=1 WHERE id=?")
+    .bind(repositoryId)
+    .run();
+  await env.DB.prepare(
+    `INSERT INTO forge_github_connections
+    (id,repository_id,owner,name,github_repository_id,github_private,created_by,enabled,runner_enabled,callback_url,token_ciphertext,token_iv,secret_ciphertext,secret_iv,created_at)
+    VALUES (?,?, 'remote-owner',?,?,1,?,1,1,'https://forge.test/hook',?,?,?,?,?)`
+  )
+    .bind(
+      id,
+      repositoryId,
+      remoteName,
+      remoteId,
+      owner.id,
+      tokenBox.ciphertext,
+      tokenBox.iv,
+      secretBox.ciphertext,
+      secretBox.iv,
+      Date.now()
+    )
+    .run();
+  return id;
+}
+
+function demand(connectionId: string, id: number, action = "queued"): Request {
+  return new Request("https://actions.internal/internal/github-runner", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      connectionId,
+      action,
+      workflow_job: {
+        id,
+        run_id: id + 100,
+        head_sha: "a".repeat(40),
+        labels: ["self-hosted", "macOS", "ARM64", "ci"],
+      },
+    }),
+  });
+}
+
+async function registration(): Promise<string> {
+  const response = await runnerManagement(
+    new Request("https://actions.internal/runners", {
+      method: "POST",
+      headers: trustedHeaders(owner),
+      body: JSON.stringify({
+        name: "one-mac",
+        scope: { owner: owner.identifier },
+        labels: ["self-hosted", "macOS", "ARM64", "ci"],
+      }),
+    }),
+    machineEnv,
+    owner
+  );
+  expect(response.status).toBe(201);
+  return (await data<{ runner: RegisteredRunner; token: string }>(response)).token;
+}
+
+function machine(token: string, path = "claim", body: unknown = {}): Promise<Response> {
+  return runnerMachineRequest(
+    new Request(`https://actions.internal/runner/${path}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+    machineEnv
+  );
+}
+
+function remoteApi(): void {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url
+      );
+      expect(url.origin).toBe("https://api.github.com");
+      expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${credential}`);
+      const job = /\/actions\/jobs\/(\d+)$/.exec(url.pathname);
+      if (job)
+        return Response.json({
+          id: Number(job[1]),
+          run_id: Number(job[1]) + 100,
+          head_sha: "a".repeat(40),
+          status: "queued",
+          labels: ["self-hosted", "macOS", "ARM64", "ci"],
+        });
+      if (url.pathname.endsWith("/generate-jitconfig")) {
+        const body = JSON.parse(String(init?.body));
+        const id = ++remoteRunnerId;
+        inventory.set(id, body.name);
+        if (lostResponse) throw new Error("Response lost after GitHub created the runner.");
+        return Response.json({ runner: { id }, encoded_jit_config: "opaque-single-use-jit" });
+      }
+      const runner = /\/actions\/runners\/(\d+)$/.exec(url.pathname);
+      if (runner) {
+        const id = Number(runner[1]);
+        if (init?.method === "DELETE") {
+          deletions.push(id);
+          inventory.delete(id);
+          return new Response(null, { status: 204 });
+        }
+        return Response.json({ busy: true });
+      }
+      if (url.pathname.endsWith("/actions/runners"))
+        return Response.json({
+          total_count: inventory.size,
+          runners: [...inventory].map(([id, name]) => ({ id, name })),
+        });
+      return Response.json({
+        id: url.pathname.endsWith("/second") ? 100 : 99,
+        full_name: "remote-owner/repository",
+        private: true,
+        archived: false,
+        default_branch: "main",
+      });
+    })
+  );
+}
+
+describe("single-registration GitHub runner bridge", () => {
+  it("serializes two repositories through one registration, owns leases, and removes temporary identities", async () => {
+    remoteApi();
+    lostResponse = false;
+    const first = await connection(repositoryA, "first"),
+      second = await connection(repositoryB, "second", 100);
+    const token = await registration();
+    expect((await queueGithubRunner(demand(first, 1), machineEnv)).status).toBe(202);
+    expect((await queueGithubRunner(demand(first, 1), machineEnv)).status).toBe(202);
+    expect((await queueGithubRunner(demand(second, 2), machineEnv)).status).toBe(202);
+    const claims = await Promise.all([machine(token), machine(token)]);
+    const values = await Promise.all(
+      claims.map((response) =>
+        data<{
+          run: {
+            id: string;
+            kind: string;
+            scope: { owner: string; repository: string };
+            githubRunnerId: number;
+          } | null;
+          leaseToken: string;
+        }>(response)
+      )
+    );
+    expect(values.filter((value) => value.run !== null)).toHaveLength(1);
+    const current = values.find((value) => value.run !== null);
+    if (!current?.run) throw new Error("No job was claimed.");
+    expect(current.run).toMatchObject({ kind: "github", scope: { owner: "runner-owner" } });
+    expect(JSON.stringify(current)).not.toContain(credential);
+    const lease = { runId: current.run.id, leaseToken: current.leaseToken };
+    expect(
+      (await machine(token, "github/heartbeat", { ...lease, leaseToken: "f".repeat(64) })).status
+    ).toBe(409);
+    const heartbeat = await machine(token, "github/heartbeat", lease);
+    expect(await data(heartbeat)).toMatchObject({ cancelled: false, assigned: true });
+    expect(
+      (await machine(token, "github/complete", { ...lease, conclusion: "success", log: "" })).status
+    ).toBe(200);
+    expect(deletions).toContain(current.run.githubRunnerId);
+    const next = await data<{
+      run: { id: string; scope: { repository: string }; githubRunnerId: number };
+      leaseToken: string;
+    }>(await machine(token));
+    expect(next.run.scope.repository).not.toBe(current.run.scope.repository);
+    await env.DB.prepare("UPDATE forge_github_connections SET runner_enabled=0 WHERE id IN (?,?)")
+      .bind(first, second)
+      .run();
+    expect(
+      await data(
+        await machine(token, "github/heartbeat", {
+          runId: next.run.id,
+          leaseToken: next.leaseToken,
+        })
+      )
+    ).toMatchObject({ cancelled: true });
+    expect(deletions).toContain(next.run.githubRunnerId);
+  });
+
+  it("accepts only a correctly signed webhook for its bound repository", async () => {
+    const id = await connection(repositoryA, "webhook");
+    const payload = JSON.stringify({
+      repository: { id: 99 },
+      action: "queued",
+      workflow_job: {
+        id: 3,
+        run_id: 103,
+        head_sha: "a".repeat(40),
+        labels: ["self-hosted", "macOS"],
+      },
+    });
+    const key = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(secret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+    const bytes = new Uint8Array(
+      await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payload))
+    );
+    const signature = `sha256=${[...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+    const request = (value: string) =>
+      new Request("https://forge.test/github-sync/hooks/" + id, {
+        method: "POST",
+        headers: { "X-GitHub-Event": "workflow_job", "X-Hub-Signature-256": value },
+        body: payload,
+      });
+    expect(
+      (await receiveGithubWebhook(bridgeEnv, request(`sha256=${"0".repeat(64)}`), id)).status
+    ).toBe(401);
+    expect(
+      await env.DB.prepare("SELECT 1 FROM actions_github_runner_jobs WHERE connection_id=?")
+        .bind(id)
+        .first()
+    ).toBeNull();
+    expect((await receiveGithubWebhook(bridgeEnv, request(signature), id)).status).toBe(202);
+    expect(
+      await env.DB.prepare(
+        "SELECT github_job_id FROM actions_github_runner_jobs WHERE connection_id=?"
+      )
+        .bind(id)
+        .first()
+    ).toEqual({ github_job_id: 3 });
+  });
+
+  it("recovers temporary identities after a lost JIT response without replaying the job", async () => {
+    remoteApi();
+    lostResponse = true;
+    const id = await connection(repositoryA, "lost-response");
+    const token = await registration();
+    await queueGithubRunner(demand(id, 4), machineEnv);
+    await expect(machine(token)).rejects.toThrow();
+    const job = await env.DB.prepare(
+      "SELECT id,status,cleanup_pending FROM actions_github_runner_jobs WHERE connection_id=?"
+    )
+      .bind(id)
+      .first<{ id: string; status: string; cleanup_pending: number }>();
+    expect(job).toMatchObject({ status: "completed", cleanup_pending: 1 });
+    if (!job) throw new Error("The demand disappeared.");
+    await env.DB.prepare("UPDATE actions_github_runner_jobs SET started_at=? WHERE id=?")
+      .bind(Date.now() - 180_000, job.id)
+      .run();
+    const before = deletions.length;
+    await expireGithubRunners(machineEnv);
+    expect(deletions.length).toBeGreaterThan(before);
+    expect(
+      await env.DB.prepare(
+        "SELECT status,cleanup_pending FROM actions_github_runner_jobs WHERE id=?"
+      )
+        .bind(job.id)
+        .first()
+    ).toEqual({ status: "completed", cleanup_pending: 0 });
+    expect(await data(await machine(token))).toMatchObject({ run: null });
+    lostResponse = false;
+  });
+});

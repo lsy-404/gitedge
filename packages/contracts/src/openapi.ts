@@ -190,6 +190,21 @@ export const API_OPERATIONS: readonly ApiOperation[] = [
     response: dataOf(GitHubSyncStateSchema),
   },
   {
+    operationId: "setGitHubRunnerEnabled",
+    method: "PATCH",
+    path: `${forgeRepository}/github-sync/runner`,
+    service: "forge",
+    tag: "GitHub sync",
+    summary:
+      "Enable or disable GitHub jobs on registered GitEdge runners. Recent identity confirmation required.",
+    scope: "admin",
+    anonymous: false,
+    browserSessionOnly: true,
+    body: GitHubSyncEnabledSchema,
+    status: 200,
+    response: dataOf(GitHubSyncStateSchema),
+  },
+  {
     operationId: "disconnectGitHubSync",
     method: "DELETE",
     path: `${forgeRepository}/github-sync`,

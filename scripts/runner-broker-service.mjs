@@ -46,8 +46,8 @@ async function main() {
   const node = process.execPath;
   await Promise.all([access(broker), access(node, constants.X_OK)]);
   const state = path.resolve(values["state-dir"] ?? path.join(installDir, "work", "runner-broker"));
-  const home = os.homedir();
-  const launchAgents = path.join(home, "Library", "LaunchAgents");
+  const userHome = os.homedir();
+  const launchAgents = path.join(userHome, "Library", "LaunchAgents");
   const logs = path.join(state, "logs");
   const plist = path.join(launchAgents, `${label}.plist`);
   const uid = process.getuid?.();
@@ -56,11 +56,25 @@ async function main() {
     await mkdir(launchAgents, { recursive: true, mode: 0o700 });
     await mkdir(logs, { recursive: true, mode: 0o700 });
     await chmod(logs, 0o700);
+    const gitConfig = path.join(state, "gitconfig");
+    await writeFile(gitConfig, "", { mode: 0o600 });
+    await chmod(gitConfig, 0o600);
     const environment = {
-      HOME: home,
-      PATH: [path.dirname(node), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"].join(
-        ":"
-      ),
+      HOME: userHome,
+      LANG: "en_US.UTF-8",
+      NVM_BIN: path.dirname(node),
+      GIT_CONFIG_GLOBAL: gitConfig,
+      GIT_CONFIG_NOSYSTEM: "1",
+      PATH: [
+        path.dirname(node),
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin",
+        path.join(userHome, ".cargo", "bin"),
+      ].join(":"),
     };
     const entries = Object.entries(environment)
       .map(([key, value]) => `    <key>${key}</key><string>${escapeXml(value)}</string>`)

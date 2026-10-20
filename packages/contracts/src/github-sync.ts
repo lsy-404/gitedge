@@ -55,6 +55,7 @@ export const GitHubSyncConnectionSchema = z.object({
   githubRepositoryId: z.number().int().positive(),
   githubUrl: z.url(),
   enabled: z.boolean(),
+  runnerEnabled: z.boolean(),
   webhookReady: z.boolean(),
   errorCode: z.string().nullable(),
   lastSyncedAt: z.number().nullable(),

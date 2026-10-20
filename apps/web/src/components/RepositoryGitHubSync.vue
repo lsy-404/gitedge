@@ -135,6 +135,12 @@ function toggleEnabled(): void {
     void updateState(() => api.setGitHubSyncEnabled(props.repositoryId, !current.enabled));
 }
 
+function toggleRunner(): void {
+  const current = connection.value;
+  if (current)
+    void updateState(() => api.setGitHubRunnerEnabled(props.repositoryId, !current.runnerEnabled));
+}
+
 function statusTone(job: GitHubSyncJob): "success" | "warning" | "danger" | "neutral" {
   if (job.status === "success") return "success";
   if (job.status === "conflict") return "warning";
@@ -217,6 +223,14 @@ onBeforeUnmount(() => {
             <span>{{ t("githubSyncFailedCount") }}: {{ connection.failed }}</span>
           </div>
         </div>
+        <FluentCheckbox
+          :model-value="connection.runnerEnabled"
+          :disabled="busy || !connection.enabled"
+          @update:model-value="toggleRunner"
+        >
+          {{ t("githubSyncRunnerEnabled") }}
+        </FluentCheckbox>
+        <p class="field-hint">{{ t("githubSyncRunnerHint") }}</p>
         <div class="settings-actions">
           <FluentButton type="button" :disabled="busy" @click="toggleEnabled">{{
             t(connection.enabled ? "githubSyncPause" : "githubSyncResume")
