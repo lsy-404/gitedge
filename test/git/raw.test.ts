@@ -66,6 +66,12 @@ describe("raw ref and path splitting", () => {
 function rawRepo(content: Uint8Array): RawRepository {
   const blob = "b".repeat(40);
   return {
+    async createToken() {
+      throw new Error("This fixture only supports unqualified refs.");
+    },
+    async revokeToken() {
+      return true;
+    },
     async info() {
       return { lastPushAt: "now" } as ArtifactsRepoInfo;
     },

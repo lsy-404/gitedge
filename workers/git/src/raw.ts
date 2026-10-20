@@ -20,7 +20,8 @@ const INLINE_IMAGE_TYPES: Readonly<Record<string, string>> = {
   svg: "image/svg+xml",
 };
 
-export type RawRepository = Pick<ArtifactsRepo, "info" | "log" | "readTree" | "readBlob">;
+export type RawRepository = Parameters<typeof readArtifactTree>[0] &
+  Pick<ArtifactsRepo, "readBlob">;
 export interface RawTarget {
   ref: string;
   path: string;

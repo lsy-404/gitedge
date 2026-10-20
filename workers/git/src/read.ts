@@ -21,7 +21,9 @@ export function commitResponse(commit: ArtifactsCommitMetadata): GitCommit {
     author: { ...commit.author, timestamp: commit.authoredAt },
   };
 }
-export async function listArtifactRefs(repo: ArtifactsRepo, level?: string): Promise<GitRef[]> {
+type RefReader = Pick<ArtifactsRepo, "info" | "createToken" | "revokeToken">;
+
+export async function listArtifactRefs(repo: RefReader, level?: string): Promise<GitRef[]> {
   const info = await repo.info();
   const token = await repo.createToken("read", 60);
   const logger = createLogger(level, { service: "git-read", repoId: info.name });
@@ -47,11 +49,19 @@ export async function listArtifactRefs(repo: ArtifactsRepo, level?: string): Pro
     }
   }
 }
+async function logReference(repo: RefReader, ref: string): Promise<string | null> {
+  if (!ref.startsWith("refs/")) return ref;
+  const selected = (await listArtifactRefs(repo)).find((candidate) => candidate.name === ref);
+  return selected?.peeledOid ?? selected?.oid ?? null;
+}
+
 export async function resolveCommit(
-  repo: Pick<ArtifactsRepo, "log">,
+  repo: RefReader & Pick<ArtifactsRepo, "log">,
   ref: string
 ): Promise<ArtifactsCommitMetadata | null> {
-  const commits = await repo.log({ ref, limit: 1 });
+  const resolved = await logReference(repo, ref);
+  if (!resolved) return null;
+  const commits = await repo.log({ ref: resolved, limit: 1 });
   return commits[0] ?? null;
 }
 const CONTAINMENT_PAGE_SIZE = 100;
@@ -63,9 +73,11 @@ export async function refContainsCommit(
   ref: string,
   oid: string
 ): Promise<boolean> {
+  const resolved = await logReference(repo, ref);
+  if (!resolved) return false;
   for (let page = 0; page < CONTAINMENT_MAX_PAGES; page++) {
     const commits = await repo.log({
-      ref,
+      ref: resolved,
       limit: CONTAINMENT_PAGE_SIZE,
       offset: page * CONTAINMENT_PAGE_SIZE,
     });
@@ -77,7 +89,7 @@ export async function refContainsCommit(
   );
 }
 export async function readArtifactTree(
-  repo: Pick<ArtifactsRepo, "info" | "log" | "readTree">,
+  repo: RefReader & Pick<ArtifactsRepo, "log" | "readTree">,
   ref: string,
   path: string
 ): Promise<GitTree | null> {
