@@ -357,7 +357,11 @@ onUnmounted(() => clearInterval(pollingTimer));
         intent="warning"
         >{{ t("actionsNetworkDisabled") }}</NoticeBar
       >
-      <NoticeBar v-if="chosenWorkflow?.executor === 'runner'" intent="info">
+      <NoticeBar
+        v-if="chosenWorkflow?.executor === 'runner'"
+        class="actions-runner-notice"
+        intent="info"
+      >
         {{ t("actionsRunnerNotice") }}
       </NoticeBar>
       <section class="box actions-panel" :aria-label="t('actionsWorkflows')">
@@ -627,6 +631,7 @@ onUnmounted(() => clearInterval(pollingTimer));
   padding-left: var(--space-5);
 }
 .actions-network-notice,
+.actions-runner-notice,
 .actions-load-error {
   grid-column: 1 / -1;
 }
@@ -768,6 +773,7 @@ onUnmounted(() => clearInterval(pollingTimer));
   }
   .actions-run-detail,
   .actions-network-notice,
+  .actions-runner-notice,
   .actions-load-error {
     grid-column: auto;
   }

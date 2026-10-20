@@ -11,7 +11,6 @@ import {
   rename,
   rm,
   stat,
-  symlink,
   writeFile,
 } from "node:fs/promises";
 import net from "node:net";
@@ -370,11 +369,10 @@ async function runWorkflow(values, state) {
       recursive: true,
       mode: constants.COPYFILE_FICLONE,
     });
-    await symlink(
-      path.join(native, "externals"),
-      path.join(runner, "externals"),
-      process.platform === "win32" ? "junction" : "dir"
-    );
+    await cp(path.join(native, "externals"), path.join(runner, "externals"), {
+      recursive: true,
+      mode: constants.COPYFILE_FICLONE,
+    });
     for (const name of ["Runner.Client", "Runner.Server", "Runner.Listener"]) {
       await writeFile(
         path.join(runtime, `${executable(name)}.portable.config`),

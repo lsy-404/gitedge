@@ -23,7 +23,7 @@ const repositoryControlsMessages = {
     repoSettingsActionsRunner: "使用已注册的本机 runner",
     repoSettingsActionsRunnerHint:
       "允许 .github 工作流在注册的主机上执行。主机具有本地用户权限；.gitedge 工作流继续使用容器。",
-    repoSettingsActionsNetworkHint: "允许已启用的 Actions 工作流发起网络请求。",
+    repoSettingsActionsNetworkHint: "允许容器中的 Actions 工作流发起网络请求。",
     repoSettingsOnlineEditing: "在线编辑",
     repoSettingsOnlineEditingHint: "允许在网页中直接创建和编辑文件。",
     repoSettingsAllowMergeCommit: "允许合并提交",
@@ -110,7 +110,7 @@ const repositoryControlsMessages = {
     repoSettingsActionsRunner: "Use registered local runners",
     repoSettingsActionsRunnerHint:
       "Allow .github workflows to execute on registered hosts with the local user's access. .gitedge workflows continue to use containers.",
-    repoSettingsActionsNetworkHint: "Allow enabled Actions workflows to make network requests.",
+    repoSettingsActionsNetworkHint: "Allow container Actions workflows to make network requests.",
     repoSettingsOnlineEditing: "Online editing",
     repoSettingsOnlineEditingHint: "Allow creating and editing files in the browser.",
     repoSettingsAllowMergeCommit: "Allow merge commits",

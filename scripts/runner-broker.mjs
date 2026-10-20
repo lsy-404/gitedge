@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants, createWriteStream } from "node:fs";
 import {
   access,
   chmod,
+  cp,
   mkdir,
   mkdtemp,
   open,
@@ -11,7 +12,6 @@ import {
   readdir,
   rename,
   rm,
-  symlink,
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
@@ -118,12 +118,25 @@ function validateProfileId(id) {
   return id;
 }
 
+function defaultProfileId(kind, endpoint, owner, repository) {
+  const suffix = createHash("sha256")
+    .update(`${endpoint}/${owner}/${repository ?? ""}`)
+    .digest("hex")
+    .slice(0, 8);
+  return `${`${kind}-${owner}-${repository ?? "org"}`.slice(0, 54)}-${suffix}`;
+}
+
 function validateProfileHostLabels(labels) {
   const actual = hostLabels();
   for (const label of labels.map((value) => value.toLowerCase())) {
     if (["linux", "windows", "macos", "x64", "arm64"].includes(label) && !actual.has(label))
       throw new Error(`Profile label ${label} does not match this host.`);
-    if (label === "ubuntu" || /^(?:ubuntu-|windows-|macos-)/.test(label))
+    if (
+      (label === "ubuntu" && process.platform !== "linux") ||
+      /^(?:ubuntu|windows|macos)-(?:latest|[0-9]+(?:\.[0-9]+)*)(?:-(?:arm|arm64|intel|large|xlarge))*$/.test(
+        label
+      )
+    )
       throw new Error(`GitHub-hosted runner label ${label} cannot be assigned to a local runner.`);
   }
 }
@@ -257,7 +270,9 @@ async function addGitEdge(state, values) {
   const adminToken = process.env.GITEDGE_TOKEN;
   if (!adminToken) throw new Error("Set GITEDGE_TOKEN to an admin-scoped GitEdge access token.");
   if (/\s/.test(adminToken)) throw new Error("GITEDGE_TOKEN must not contain whitespace.");
-  const id = validateProfileId(values.name ?? `${owner}${repository ? `-${repository}` : "-org"}`);
+  const id = validateProfileId(
+    values.name ?? defaultProfileId("gitedge", origin, owner, repository)
+  );
   const runnerPath = values["runner-path"] ? path.resolve(values["runner-path"]) : "";
   if (!runnerPath)
     throw new Error(
@@ -374,7 +389,7 @@ async function addGitHub(state, values) {
     access(path.join(runnerPath, "bin", executable("Runner.Listener")), constants.X_OK)
   );
   validateProfileHostLabels(labels);
-  const id = validateProfileId(values.name ?? `${owner}${repository ? `-${repository}` : "-org"}`);
+  const id = validateProfileId(values.name ?? defaultProfileId("github", host, owner, repository));
   const directory = path.join(state, "profiles", id);
   try {
     await access(directory);
@@ -442,23 +457,26 @@ async function listProfiles(state) {
   }
 }
 
+function githubEnvironment(profile) {
+  const env = { ...process.env, GH_HOST: profile.host };
+  for (const key of Object.keys(env))
+    if (
+      /^(?:gh_token|github_token|gh_enterprise_token|github_enterprise_token|gitedge_token)$/i.test(
+        key
+      )
+    )
+      delete env[key];
+  return env;
+}
+
 async function gh(profile, args, { json = true, serveSignal = true } = {}) {
   return new Promise((resolve, reject) => {
     const signal = AbortSignal.any(
       [serveSignal ? activeServeSignal : undefined, AbortSignal.timeout(30_000)].filter(Boolean)
     );
-    const env = { ...process.env, GH_HOST: profile.host };
-    for (const key of Object.keys(env)) {
-      if (
-        /^(?:gh_token|github_token|gh_enterprise_token|github_enterprise_token|gitedge_token)$/i.test(
-          key
-        )
-      )
-        delete env[key];
-    }
     const child = spawn("gh", ["api", ...args], {
       stdio: ["ignore", "pipe", "pipe"],
-      env,
+      env: githubEnvironment(profile),
       signal,
     });
     let stdout = "";
@@ -553,7 +571,13 @@ async function queuedGitHubJob(profile, fullScan = false) {
       const runs = await gh(profile, [
         `repos/${repository}/actions/runs?status=${status}&per_page=3&page=${page}`,
       ]);
-      githubRunPages.set(pageKey, page >= 10 ? 1 : page + 1);
+      if (!Array.isArray(runs.workflow_runs))
+        throw new Error("GitHub returned invalid queued runs.");
+      githubRunPages.set(pageKey, runs.workflow_runs.length < 3 || page >= 10 ? 1 : page + 1);
+      if (runs.total_count > 30 && page === 1)
+        console.error(
+          `GitHub profile ${profile.id} inspects only the first 30 ${status} runs in ${repository}.`
+        );
       const saved = Object.fromEntries(
         [...githubRunPages.entries()]
           .filter(([key]) => key.startsWith(`${profile.id}:`))
@@ -565,6 +589,8 @@ async function queuedGitHubJob(profile, fullScan = false) {
         const jobs = await gh(profile, [
           `repos/${repository}/actions/runs/${runId}/jobs?per_page=100`,
         ]);
+        if (jobs.total_count > 100)
+          console.error(`GitHub run ${runId} exceeds the 100-job inspection bound.`);
         const job = (jobs.jobs ?? []).find(
           (candidate) => candidate.status === "queued" && eligible(candidate.labels ?? [], profile)
         );
@@ -661,10 +687,8 @@ async function resolveOrgRunnerGroup(profile) {
   if (profile.groupId !== undefined && group.id !== profile.groupId)
     throw new Error(`Runner group ${profile.groupId} was not returned by GitHub.`);
   const details = await gh(profile, [`${prefix}/${group.id}`]);
-  if (details.visibility !== "selected" || details.allows_public_repositories !== false)
-    throw new Error(
-      `Runner group ${details.name} must use selected-repository visibility and block public repositories.`
-    );
+  if (details.visibility !== "selected")
+    throw new Error(`Runner group ${details.name} must use selected-repository visibility.`);
   const selection = await gh(profile, [`${prefix}/${group.id}/repositories?per_page=100`]);
   const repositories = selection.repositories;
   if (
@@ -679,12 +703,12 @@ async function resolveOrgRunnerGroup(profile) {
   const allowed = new Set(profile.allowRepositories.map((repository) => repository.toLowerCase()));
   if (
     repositories.length === 0 ||
+    repositories.length !== allowed.size ||
     repositories.some((repository) => !allowed.has(repository.full_name?.toLowerCase()))
   )
     throw new Error(
-      `Runner group ${details.name} can access repositories outside this profile's allowlist.`
+      `Runner group ${details.name} must select exactly the repositories in this profile's allowlist.`
     );
-  profile.resolvedGroupId = details.id;
   return details.id;
 }
 
@@ -711,6 +735,7 @@ async function acquireActionsSlot() {
 }
 
 async function runGitHub(profile, queued, signal) {
+  const executionSignal = AbortSignal.any([signal, AbortSignal.timeout(360 * 60_000)]);
   const releaseSlot = await acquireActionsSlot();
   if (!releaseSlot) return false;
   let jit;
@@ -720,22 +745,22 @@ async function runGitHub(profile, queued, signal) {
   let child;
   try {
     jit = await generateJit(profile);
+    console.log(
+      `GitHub profile ${profile.id}: starting a temporary runner for ${queued.repository}.`
+    );
     await mkdir(runRoot, { recursive: true, mode: 0o700 });
     await chmod(runRoot, 0o700);
     runDir = await mkdtemp(path.join(runRoot, `${safeRunId(queued.run.id)}-`));
     runner = path.join(runDir, "runner");
     await mkdir(runner);
-    await import("node:fs/promises").then(({ cp }) =>
-      cp(path.join(profile.runnerPath, "bin"), path.join(runner, "bin"), {
-        recursive: true,
-        mode: constants.COPYFILE_FICLONE,
-      })
-    );
-    await symlink(
-      path.join(profile.runnerPath, "externals"),
-      path.join(runner, "externals"),
-      process.platform === "win32" ? "junction" : "dir"
-    );
+    await cp(path.join(profile.runnerPath, "bin"), path.join(runner, "bin"), {
+      recursive: true,
+      mode: constants.COPYFILE_FICLONE,
+    });
+    await cp(path.join(profile.runnerPath, "externals"), path.join(runner, "externals"), {
+      recursive: true,
+      mode: constants.COPYFILE_FICLONE,
+    });
     const env = { ...process.env };
     for (const key of Object.keys(env)) {
       if (
@@ -761,8 +786,8 @@ async function runGitHub(profile, queued, signal) {
       detached: process.platform !== "win32",
     });
     const startupController = new AbortController();
-    const startupSignal = AbortSignal.any([signal, startupController.signal]);
-    const listener = waitChild(child, signal);
+    const startupSignal = AbortSignal.any([executionSignal, startupController.signal]);
+    const listener = waitChild(child, executionSignal);
     try {
       const assigned = await Promise.race([
         listener.then(() => false),
@@ -778,7 +803,6 @@ async function runGitHub(profile, queued, signal) {
     if (runner) {
       const diagnostics = path.join(runner, "_diag");
       try {
-        const { cp } = await import("node:fs/promises");
         await cp(diagnostics, path.join(runDir, "_diag"), { recursive: true });
       } catch {}
       await rm(runner, { recursive: true, force: true });
@@ -840,7 +864,10 @@ function waitChild(child, signal) {
       return;
     }
     signal.addEventListener("abort", abort, { once: true });
-    child.once("error", reject);
+    child.once("error", (error) => {
+      signal.removeEventListener("abort", abort);
+      reject(error);
+    });
     child.once("close", (code, sig) => {
       signal.removeEventListener("abort", abort);
       if (signal.aborted) reject(signal.reason);
@@ -903,9 +930,9 @@ async function runGitEdge(profile, run, leaseToken, signal) {
     if (
       typeof run.workflowSource !== "string" ||
       typeof run.token !== "string" ||
-      !run.token ||
+      !/^ge_job_[0-9a-f]{64}$/.test(run.token) ||
       typeof leaseToken !== "string" ||
-      !leaseToken ||
+      !/^[0-9a-f]{64}$/.test(leaseToken) ||
       !/^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/.test(run.repository) ||
       run.repository.split("/").some((part) => part === "." || part === "..")
     )
@@ -924,7 +951,10 @@ async function runGitEdge(profile, run, leaseToken, signal) {
       run.timeoutMinutes > 360
     )
       throw new Error("GitEdge returned invalid workflow execution metadata.");
-    if (typeof run.workflowPath !== "string" || !run.workflowPath.startsWith(".github/workflows/"))
+    if (
+      typeof run.workflowPath !== "string" ||
+      !/^\.github\/workflows\/[A-Za-z0-9_.-]+\.(?:yml|yaml)$/.test(run.workflowPath)
+    )
       throw new Error("Only .github/workflows files can run on the local GitEdge broker.");
     if (
       !profile.repository &&
@@ -974,9 +1004,10 @@ async function runGitEdge(profile, run, leaseToken, signal) {
   await chmod(runRoot, 0o700);
   const runDir = await mkdtemp(path.join(runRoot, `${profile.id}-${run.id}-`));
   await chmod(runDir, 0o700);
-  const workflowFile = path.join(runDir, "workflow.yml");
+  const workflowFile = path.join(runDir, run.workflowPath);
   const logFile = path.join(runDir, "runner.log");
   const eventPayloadFile = eventPayload ? path.join(runDir, "event.json") : undefined;
+  await mkdir(path.dirname(workflowFile), { recursive: true, mode: 0o700 });
   if (eventPayload) await writeFile(eventPayloadFile, eventPayloadSource, { mode: 0o600 });
   await writeFile(workflowFile, run.workflowSource, { mode: 0o600 });
   const log = createWriteStream(logFile, { mode: 0o600 });
@@ -1015,7 +1046,7 @@ async function runGitEdge(profile, run, leaseToken, signal) {
       delete childEnvironment[key];
   }
   const child = spawn(process.execPath, args, {
-    cwd: root,
+    cwd: runDir,
     env: {
       ...childEnvironment,
       GITEDGE_TOKEN: run.token,
@@ -1098,6 +1129,7 @@ async function runGitEdge(profile, run, leaseToken, signal) {
     });
     if (completed?.data?.completed !== true)
       console.error(`GitEdge did not confirm completion for run ${run.id}.`);
+    else console.log(`GitEdge run ${run.id}: ${conclusion}. Log: ${logFile}`);
   }
   if (failure && failure.message !== "GitEdge requested cancellation." && !signal.aborted)
     throw failure;
@@ -1161,7 +1193,7 @@ async function serve(state, { once, pollSeconds }) {
       const auth = await new Promise((resolve, reject) => {
         const child = spawn("gh", ["auth", "status", "--hostname", profile.host], {
           stdio: "ignore",
-          env: { ...process.env, GH_HOST: profile.host },
+          env: githubEnvironment(profile),
           signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]),
         });
         child.once("error", (error) =>
@@ -1177,85 +1209,106 @@ async function serve(state, { once, pollSeconds }) {
     }
   }
   const minPoll = pollSeconds ?? 15;
+  console.log(`Runner broker serving ${profiles.length} profiles with one execution slot.`);
   let processed = false;
   while (!controller.signal.aborted) {
     for (const profile of profiles) {
       if (controller.signal.aborted) break;
-      if (profile.kind === "gitedge") {
-        const releaseSlot = await acquireActionsSlot();
-        if (!releaseSlot) {
-          if (!once) await sleep(minPoll * 1000, controller.signal);
-          continue;
-        }
-        let claim;
-        try {
-          claim = await claimGitEdge(profile, controller.signal);
-          if (claim?.run) {
-            processed = true;
-            await runGitEdge(profile, claim.run, claim.leaseToken, controller.signal);
-          }
-        } finally {
-          await releaseSlot();
-        }
-        if (claim?.run) {
-          if (once) return;
-        } else {
-          if (!once) {
-            const requestedDelay = Number(claim?.pollAfterSeconds ?? minPoll);
-            const delay =
-              Math.min(
-                120,
-                Math.max(minPoll, Number.isFinite(requestedDelay) ? requestedDelay : minPoll)
-              ) * 1000;
-            await sleep(delay, controller.signal);
-          }
-        }
-      } else {
-        const queued = await queuedGitHubJob(profile, once);
-        if (queued) {
-          let didRun;
-          try {
-            didRun = await runGitHub(profile, queued, controller.signal);
-          } catch (error) {
-            if (controller.signal.aborted) throw error;
-            processed = true;
-            const message = error instanceof Error ? error.message : "Unknown error.";
-            console.error(
-              `GitHub profile ${profile.id} could not start its queued job: ${message}`
-            );
-            if (once) return;
-            await sleep(
-              Math.max(
-                pollSeconds ?? profile.pollSeconds ?? 30,
-                profile.scope === "org" ? 30 : 15
-              ) * 1000,
-              controller.signal
-            );
+      try {
+        if (profile.kind === "gitedge") {
+          const releaseSlot = await acquireActionsSlot();
+          if (!releaseSlot) {
+            if (!once) await sleep(minPoll * 1000, controller.signal);
             continue;
           }
-          if (didRun) {
-            processed = true;
+          let claim;
+          try {
+            claim = await claimGitEdge(profile, controller.signal);
+            if (claim?.run) {
+              processed = true;
+              console.log(`GitEdge profile ${profile.id}: running ${claim.run.id}.`);
+              await runGitEdge(profile, claim.run, claim.leaseToken, controller.signal);
+            }
+          } finally {
+            await releaseSlot();
+          }
+          if (claim?.run) {
             if (once) return;
-          } else await sleep(minPoll * 1000, controller.signal);
-        } else if (!once) {
-          const interval = pollSeconds ?? profile.pollSeconds ?? 30;
-          await sleep(
-            Math.max(interval, profile.scope === "org" ? 30 : 15) * 1000,
-            controller.signal
-          );
+          } else {
+            if (!once) {
+              const requestedDelay = Number(claim?.pollAfterSeconds ?? minPoll);
+              const delay =
+                Math.min(
+                  120,
+                  Math.max(minPoll, Number.isFinite(requestedDelay) ? requestedDelay : minPoll)
+                ) * 1000;
+              await sleep(delay, controller.signal);
+            }
+          }
+        } else {
+          const queued = await queuedGitHubJob(profile, once);
+          if (queued) {
+            let didRun;
+            try {
+              didRun = await runGitHub(profile, queued, controller.signal);
+            } catch (error) {
+              if (controller.signal.aborted) throw error;
+              processed = true;
+              const message = error instanceof Error ? error.message : "Unknown error.";
+              console.error(
+                `GitHub profile ${profile.id} could not start its queued job: ${message}`
+              );
+              if (once) throw error;
+              await sleep(
+                Math.max(
+                  pollSeconds ?? profile.pollSeconds ?? 30,
+                  profile.scope === "org" ? 30 : 15
+                ) * 1000,
+                controller.signal
+              );
+              continue;
+            }
+            if (didRun) {
+              processed = true;
+              if (once) return;
+            } else await sleep(minPoll * 1000, controller.signal);
+          } else if (!once) {
+            const interval = pollSeconds ?? profile.pollSeconds ?? 30;
+            await sleep(
+              Math.max(interval, profile.scope === "org" ? 30 : 15) * 1000,
+              controller.signal
+            );
+          }
         }
+      } catch (error) {
+        if (controller.signal.aborted || once) throw error;
+        console.error(
+          `Runner profile ${profile.id}: ${error instanceof Error ? error.message : "Request failed."}`
+        );
+        await sleep(
+          Math.max(pollSeconds ?? profile.pollSeconds ?? 30, 15) * 1000,
+          controller.signal
+        );
       }
     }
-    if (once && !processed) return;
+    if (once && !processed) {
+      console.log("No eligible job found in this polling pass.");
+      return;
+    }
   }
 }
 
 async function removeProfile(state, id) {
   const profile = await loadProfile(state, id);
   if (profile.kind === "gitedge") {
+    const adminToken = process.env.GITEDGE_TOKEN;
+    if (!adminToken || /\s/.test(adminToken))
+      throw new Error(
+        "Set GITEDGE_TOKEN to an admin-scoped token to revoke this GitEdge registration."
+      );
     await apiRequest(
       profile.origin,
-      profile.credential,
+      adminToken,
       `/api/actions/runners/${encodeURIComponent(profile.runnerId)}`,
       { method: "DELETE" }
     ).catch((error) => {

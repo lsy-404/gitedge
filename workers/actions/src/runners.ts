@@ -21,7 +21,7 @@ import type {
 import { readJsonLimited, readTextLimited } from "../../../src/worker/common/readText";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 import { randomHex } from "../../../src/worker/common/encoding";
-import { repositoryRole } from "../../../src/worker/common/repositories";
+import { repositoryRole, writableRole } from "../../../src/worker/common/repositories";
 import { auditActor, recordAudit } from "../../../src/worker/common/audit";
 import { createLogger } from "../../../src/worker/common/logger";
 import { publishCheck } from "./check-delivery";
@@ -334,12 +334,48 @@ export async function cancelRunnerRun(env: RunnerEnv, id: string): Promise<Actio
   return run;
 }
 
+async function cancelUnauthorizedLease(
+  env: RunnerEnv,
+  runId: string,
+  runnerId: string,
+  hash: string
+): Promise<boolean> {
+  const row = await env.DB.prepare(
+    `SELECT a.created_by,a.repository_id,u.disabled_at,p.deleted_at,p.archived,p.actions_enabled,p.actions_runner_enabled
+    FROM actions_runner_runs j JOIN actions_runs a ON a.id=j.run_id JOIN users u ON u.id=a.created_by
+    JOIN repositories p ON p.id=a.repository_id
+    WHERE j.run_id=? AND j.runner_id=? AND j.lease_hash=? AND j.status='running'`
+  )
+    .bind(runId, runnerId, hash)
+    .first<{
+      created_by: string;
+      repository_id: string;
+      disabled_at: number | null;
+      deleted_at: number | null;
+      archived: number;
+      actions_enabled: number;
+      actions_runner_enabled: number;
+    }>();
+  if (!row) return false;
+  if (
+    row.disabled_at === null &&
+    row.deleted_at === null &&
+    row.archived === 0 &&
+    row.actions_enabled === 1 &&
+    row.actions_runner_enabled === 1 &&
+    writableRole(await repositoryRole(env.DB, row.repository_id, row.created_by))
+  )
+    return false;
+  await cancelRunnerRun(env, runId);
+  return true;
+}
+
 export async function expireRunnerRuns(env: RunnerEnv): Promise<void> {
   const now = Date.now();
   const stale = await env.DB.prepare(
     `SELECT j.run_id FROM actions_runner_runs j JOIN actions_runs a ON a.id=j.run_id
     JOIN repositories p ON p.id=a.repository_id LEFT JOIN actions_runners r ON r.id=j.runner_id
-    WHERE j.status!='completed' AND ((j.status='running' AND (j.lease_expires_at<=? OR j.started_at+j.timeout_minutes*60000<=? OR r.revoked_at IS NOT NULL))
+    WHERE j.status!='completed' AND ((j.status='running' AND (j.lease_expires_at<=? OR j.started_at+j.timeout_minutes*60000<=? OR r.id IS NULL OR r.revoked_at IS NOT NULL))
       OR (j.status='queued' AND a.created_at<?) OR p.deleted_at IS NOT NULL OR p.archived=1 OR p.actions_enabled=0 OR p.actions_runner_enabled=0)
     ORDER BY a.created_at LIMIT 20`
   )
@@ -350,7 +386,7 @@ export async function expireRunnerRuns(env: RunnerEnv): Promise<void> {
       `UPDATE actions_runner_runs SET status='completed',conclusion='failure',completed_at=?,log='Runner lease expired, execution timed out, or repository execution was disabled. This run will not be retried automatically.'
       WHERE run_id=? AND run_id IN (SELECT j.run_id FROM actions_runner_runs j JOIN actions_runs a ON a.id=j.run_id
         JOIN repositories p ON p.id=a.repository_id LEFT JOIN actions_runners r ON r.id=j.runner_id
-        WHERE j.status!='completed' AND ((j.status='running' AND (j.lease_expires_at<=? OR j.started_at+j.timeout_minutes*60000<=? OR r.revoked_at IS NOT NULL))
+        WHERE j.status!='completed' AND ((j.status='running' AND (j.lease_expires_at<=? OR j.started_at+j.timeout_minutes*60000<=? OR r.id IS NULL OR r.revoked_at IS NOT NULL))
           OR (j.status='queued' AND a.created_at<?) OR p.deleted_at IS NOT NULL OR p.archived=1 OR p.actions_enabled=0 OR p.actions_runner_enabled=0))
       RETURNING run_id`
     )
@@ -558,24 +594,23 @@ export async function runnerMachineRequest(request: Request, env: RunnerEnv): Pr
     .run();
   const operation = new URL(request.url).pathname.split("/")[2];
   if (operation === "claim") return claim(request, env, runner);
-  const body = await readJsonLimited(request, 65_536);
+  const body = await readJsonLimited(
+    request,
+    operation === "complete" ? RUNNER_LOG_BYTES * 6 + 4096 : 8192
+  );
   if (operation === "heartbeat") {
     const parsed = RunnerLeaseInputSchema.safeParse(body);
     if (!parsed.success) return errorResponse(400, "bad_request", "Invalid lease heartbeat.");
+    const hash = await sha256Hex(parsed.data.leaseToken);
+    if (await cancelUnauthorizedLease(env, parsed.data.runId, runner.id, hash))
+      return dataResponse({ cancelRequested: true, leaseExpiresAt: now });
     const refreshed = await env.DB.prepare(
       `UPDATE actions_runner_runs SET lease_expires_at=MIN(started_at+timeout_minutes*60000,?)
       WHERE run_id=? AND runner_id=? AND lease_hash=? AND status='running' AND cancel_requested=0 AND lease_expires_at>?
       AND started_at+timeout_minutes*60000>? AND EXISTS (SELECT 1 FROM repositories p JOIN actions_runs a ON a.repository_id=p.id WHERE a.id=run_id AND p.archived=0 AND p.deleted_at IS NULL AND p.actions_enabled=1 AND p.actions_runner_enabled=1)
       RETURNING lease_expires_at`
     )
-      .bind(
-        now + RUNNER_LEASE_MS,
-        parsed.data.runId,
-        runner.id,
-        await sha256Hex(parsed.data.leaseToken),
-        now,
-        now
-      )
+      .bind(now + RUNNER_LEASE_MS, parsed.data.runId, runner.id, hash, now, now)
       .first<{ lease_expires_at: number }>();
     if (!refreshed) return dataResponse({ cancelRequested: true, leaseExpiresAt: now });
     return dataResponse({ cancelRequested: false, leaseExpiresAt: refreshed.lease_expires_at });
@@ -590,6 +625,8 @@ export async function runnerMachineRequest(request: Request, env: RunnerEnv): Pr
     const bytes = new TextEncoder().encode(log),
       bounded = new TextDecoder().decode(bytes.slice(0, RUNNER_LOG_BYTES));
     const hash = await sha256Hex(parsed.data.leaseToken);
+    if (await cancelUnauthorizedLease(env, parsed.data.runId, runner.id, hash))
+      return errorResponse(409, "conflict", "The job is no longer authorized.");
     const changed = await env.DB.prepare(
       `UPDATE actions_runner_runs SET status='completed',conclusion=?,completed_at=?,log=?,log_truncated=?
       WHERE run_id=? AND runner_id=? AND lease_hash=? AND status='running' AND cancel_requested=0 AND lease_expires_at>?

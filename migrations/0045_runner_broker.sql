@@ -26,7 +26,7 @@ CREATE TABLE actions_runner_runs (
   event_json TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'running', 'completed')),
   conclusion TEXT CHECK (conclusion IN ('success', 'failure', 'cancelled')),
-  runner_id TEXT REFERENCES actions_runners(id),
+  runner_id TEXT REFERENCES actions_runners(id) ON DELETE SET NULL,
   lease_hash TEXT,
   lease_expires_at INTEGER,
   started_at INTEGER,
