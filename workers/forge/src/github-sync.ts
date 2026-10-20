@@ -372,10 +372,16 @@ export async function handleGithubSyncSettings(
       parts[5] === "retry" &&
       parts.length === 6
     ) {
+      let jobId: string;
+      try {
+        jobId = decodeURIComponent(parts[4]);
+      } catch {
+        return errorResponse(400, "bad_request", "Invalid synchronization job identifier.");
+      }
       const changed = await env.DB.prepare(
         "UPDATE forge_github_jobs SET status='pending',attempts=0,next_attempt_at=?,error_code=NULL,completed_at=NULL WHERE id=? AND connection_id=? AND status IN ('failed','conflict')"
       )
-        .bind(Date.now(), parts[4], connection.id)
+        .bind(Date.now(), jobId, connection.id)
         .run();
       if (!changed.meta.changes)
         return errorResponse(
