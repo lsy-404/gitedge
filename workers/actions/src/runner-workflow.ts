@@ -50,7 +50,7 @@ export function parseRunnerWorkflow(path: string, source: string): RunnerWorkflo
   const permissions = z
     .object({ contents: z.enum(["read", "write"]) })
     .strict()
-    .safeParse(raw.permissions ?? { contents: "read" });
+    .safeParse(raw.permissions === undefined ? { contents: "read" } : raw.permissions);
   if (!permissions.success)
     fail("Runner permissions currently support only contents: read or write.");
   const triggers: ActionEventType[] = [];
