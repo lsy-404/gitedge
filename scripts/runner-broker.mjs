@@ -218,6 +218,11 @@ async function apiRequest(origin, token, route, options = {}) {
       ...(options.headers ?? {}),
     },
     signal: AbortSignal.any([options.signal, AbortSignal.timeout(20_000)].filter(Boolean)),
+  }).catch((error) => {
+    const code = error.cause?.code;
+    if (typeof code === "string" && /^[A-Z][A-Z0-9_]{1,64}$/.test(code))
+      throw new Error(`GitEdge API request failed (${code}).`, { cause: error });
+    throw error;
   });
   if (!response.ok) {
     await response.body?.cancel();
@@ -860,12 +865,15 @@ async function runClaimedGitHub(profile, claim, signal) {
   let output = "";
   let conclusion = "failure";
   let executionError;
-  const complete = async () => {
+  const logTail = () => {
     const bytes = Buffer.from(
       output.replaceAll(run.encodedJitConfig, "[REDACTED]").replaceAll(leaseToken, "[REDACTED]")
     );
     let start = Math.max(0, bytes.length - 16_384);
     while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) start++;
+    return bytes.subarray(start).toString("utf8");
+  };
+  const complete = async () => {
     await apiRequest(profile.origin, profile.credential, "/api/actions/runner/github/complete", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -873,7 +881,7 @@ async function runClaimedGitHub(profile, claim, signal) {
         runId,
         leaseToken,
         conclusion,
-        log: bytes.subarray(start).toString("utf8"),
+        log: logTail(),
       }),
     });
   };
@@ -970,6 +978,14 @@ async function runClaimedGitHub(profile, claim, signal) {
       console.error(`Could not report GitHub run ${runId}: ${error.message}`);
     });
     await rm(runDir, { recursive: true, force: true });
+    if (conclusion !== "success") {
+      const logs = path.join(profile.directory, "logs");
+      await mkdir(logs, { recursive: true, mode: 0o700 });
+      await chmod(logs, 0o700);
+      const logFile = path.join(logs, `${runId}.log`);
+      await writePrivate(logFile, logTail());
+      console.error(`GitHub run ${runId}: ${conclusion}. Log: ${logFile}`);
+    }
     console.log(`GitHub run ${runId}: ${conclusion}.`);
   }
   if (executionError && conclusion === "failure" && !signal.aborted) throw executionError;
