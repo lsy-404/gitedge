@@ -30,24 +30,40 @@ The direct `actions run` command does not register a persistent GitEdge runner, 
 
 ## Local runner broker
 
-The local broker runs one job at a time across independent GitEdge and GitHub registration profiles. It copies the installed official runner into a disposable directory for each execution; it does not modify an existing runner service. GitEdge profiles automatically include the current host's `self-hosted`, OS, and architecture labels; `--label` adds a custom label. State and GitEdge runner credentials live under `work/runner-broker` with private directory and file permissions. Use `--state-dir` to relocate that data. A process lock prevents concurrent profile changes or brokers, and the shared `work/actions` lock serializes broker jobs with the original `actions run` command.
+The production broker uses one GitEdge registration profile and one execution slot. The server can lease either a GitEdge workflow or a GitHub Actions job through that profile. GitHub management credentials stay on the server; the Mac receives only the GitEdge runner credential and a one-job JIT configuration in the Runner.Listener environment. The installed official runner is copied to a private temporary directory and removed after the job. GitEdge profiles automatically include the current host's `self-hosted`, OS, and architecture labels; `--label` adds a custom label. State and GitEdge runner credentials live under `work/runner-broker` with private directory and file permissions. Use `--state-dir` to relocate that data. A process lock prevents concurrent profile changes or brokers, and the shared `work/actions` lock serializes broker jobs with the original `actions run` command. The explicit `register-github` command remains available for standalone GitHub polling mode.
 
-Initialize state, then register each target separately:
+Initialize state and register the GitEdge runner profile used by the production broker:
 
 ```sh
 pnpm run runner-broker -- init
 GITEDGE_TOKEN='<admin-scoped GitEdge token>' pnpm run runner-broker -- register-gitedge \
   --origin https://git.example.com --owner acme --repository app \
   --label ci --runner-path /path/to/official-runner
-pnpm run runner-broker -- register-github --host github.com --owner acme \
-  --scope repo --repository app --label ci --runner-path /path/to/official-runner
 pnpm run runner-broker -- list
 pnpm run runner-broker -- serve
 ```
 
-GitEdge registration creates one runner through the admin API and stores its returned runner credential locally. `GITEDGE_TOKEN` is not saved. Remove a profile with `pnpm run runner-broker -- remove <profile>`. For GitEdge removal, supply `GITEDGE_TOKEN` again with administrator scope so the broker can revoke the server registration before deleting local state. GitHub profiles use the existing stored `gh` CLI authentication for their explicit `--host` and do not copy that credential into broker state. Inherited token environment variables are ignored. The account must administer the target repository; organization runner groups and JIT registration require the corresponding organization runner permissions (`admin:org` for a classic OAuth token).
+For the independent GitHub polling mode, `register-github` remains available and uses local `gh` authentication:
 
-An organization GitHub profile must include one or more `--allow-repository owner/name` options. It uses the configured `--group-id` or `--group-name`, or resolves the organization's default runner group. The selected group must use selected-repository visibility and its complete repository set must match the profile allowlist. GitHub continues to enforce that group's public-repository and workflow access settings. An unrestricted group is rejected. Repository profiles use the repository's default runner group ID 1. The broker polls a bounded set of queued runs and jobs, then starts an ephemeral JIT runner only when a queued job requests `self-hosted` and every requested label matches the actual host and that profile's labels. A GitHub-hosted label such as `ubuntu-latest` never maps to a local macOS or Windows machine. A JIT runner is not pinned to the polled job; it may take any eligible job visible to its repository and runner group. The broker waits until the new runner is busy, then stops observing that job; if it remains idle for 120 seconds, it removes the ephemeral runner and returns to polling. `--poll-seconds` is bounded to 15–120 seconds; organization profiles poll no faster than every 30 seconds and require an explicit allowlist of at most 50 repositories. Normal organization polling inspects three allowlisted repositories and three runs per status per cycle, rotating repository and run pages. Inspection is capped at 30 runs per status per repository and 100 jobs per run; larger results produce a warning. A temporary GitHub runner has a six-hour local execution deadline. `serve --once` scans the full allowlist once from each saved page cursor and may make more REST calls. It exits after processing at most one eligible job, or after one bounded polling pass without a match.
+```sh
+pnpm run runner-broker -- register-github --host github.com --owner acme \
+  --scope repo --repository app --label ci --runner-path /path/to/official-runner
+```
+
+To install a macOS LaunchAgent from an existing checkout or installation, provide its fixed directory explicitly. Install writes the plist but does not start it; start, stop, and status operate on `com.gitedge.runner-broker`:
+
+```sh
+pnpm run runner-broker -- service install --install-dir /path/to/gitedge
+pnpm run runner-broker -- service start --install-dir /path/to/gitedge
+pnpm run runner-broker -- service status --install-dir /path/to/gitedge
+pnpm run runner-broker -- service stop --install-dir /path/to/gitedge
+```
+
+The LaunchAgent invokes the Node executable and broker script in that installation, uses the current user's home directory, and writes logs under the selected state directory. Keep the installation directory in place while the service is installed.
+
+GitEdge registration creates one runner through the admin API and stores its returned runner credential locally. `GITEDGE_TOKEN` is not saved. Remove a profile with `pnpm run runner-broker -- remove <profile>`. For GitEdge removal, supply `GITEDGE_TOKEN` again with administrator scope so the broker can revoke the server registration before deleting local state. Standalone GitHub profiles use the existing stored `gh` CLI authentication for their explicit `--host` and do not copy that credential into broker state. Inherited token environment variables are ignored. The account must administer the target repository; organization runner groups and JIT registration require the corresponding organization runner permissions (`admin:org` for a classic OAuth token). GitHub jobs dispatched through the GitEdge profile do not use local `gh` authentication.
+
+In standalone GitHub polling mode, an organization profile must include one or more `--allow-repository owner/name` options. It uses the configured `--group-id` or `--group-name`, or resolves the organization's default runner group. The selected group must use selected-repository visibility and its complete repository set must match the profile allowlist. GitHub continues to enforce that group's public-repository and workflow access settings. An unrestricted group is rejected. Repository profiles use the repository's default runner group ID 1. The broker polls a bounded set of queued runs and jobs, then starts an ephemeral JIT runner only when a queued job requests `self-hosted` and every requested label matches the actual host and that profile's labels. A GitHub-hosted label such as `ubuntu-latest` never maps to a local macOS or Windows machine. A JIT runner is not pinned to the polled job; it may take any eligible job visible to its repository and runner group. The broker waits until the new runner is busy, then stops observing that job; if it remains idle for 120 seconds, it removes the ephemeral runner and returns to polling. `--poll-seconds` is bounded to 15–120 seconds; organization profiles poll no faster than every 30 seconds and require an explicit allowlist of at most 50 repositories. Normal organization polling inspects three allowlisted repositories and three runs per status per cycle, rotating repository and run pages. Inspection is capped at 30 runs per status per repository and 100 jobs per run; larger results produce a warning. A temporary GitHub runner has a six-hour local execution deadline. `serve --once` scans the full allowlist once from each saved page cursor and may make more REST calls. It exits after processing at most one eligible job, or after one bounded polling pass without a match.
 
 GitEdge repository administrators must enable Actions and the **Use registered local runners** repository setting (`actionsRunnerEnabled`). Apply migration `0045_runner_broker.sql` and deploy the updated services, including the Actions → Auth binding, before registering a broker. Registration does not enable repository execution automatically. `.gitedge/workflows/` keeps its container precedence; opted-in `.github/workflows/` files use the persistent runner queue.
 

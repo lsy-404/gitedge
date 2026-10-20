@@ -813,6 +813,170 @@ async function runGitHub(profile, queued, signal) {
   return true;
 }
 
+async function runClaimedGitHub(profile, claim, signal) {
+  const { run, leaseToken } = claim;
+  if (
+    typeof run.id !== "string" ||
+    !/^[0-9a-f-]{36}$/i.test(run.id) ||
+    typeof run.owner !== "string" ||
+    typeof run.repository !== "string" ||
+    !/^[a-zA-Z0-9._-]+$/.test(run.owner) ||
+    !/^[a-zA-Z0-9._-]+$/.test(run.repository) ||
+    !Number.isSafeInteger(run.jobId) ||
+    run.jobId < 1 ||
+    !Number.isSafeInteger(run.runId) ||
+    run.runId < 1 ||
+    !Array.isArray(run.labels) ||
+    run.labels.some(
+      (label) => typeof label !== "string" || label.length > 100 || /[\r\n\0]/.test(label)
+    ) ||
+    typeof run.encodedJitConfig !== "string" ||
+    !run.encodedJitConfig ||
+    Buffer.byteLength(run.encodedJitConfig) > 1024 * 1024 ||
+    !Number.isSafeInteger(run.githubRunnerId) ||
+    run.githubRunnerId < 1 ||
+    run.timeoutMinutes !== 360 ||
+    typeof leaseToken !== "string" ||
+    !leaseToken
+  )
+    throw new Error("GitEdge returned invalid GitHub runner execution metadata.");
+  if (
+    run.owner.toLowerCase() !== profile.owner.toLowerCase() ||
+    (profile.repository &&
+      run.repository.toLowerCase() !== `${profile.owner}/${profile.repository}`.toLowerCase()) ||
+    (!profile.repository &&
+      run.repository.split("/")[0]?.toLowerCase() !== profile.owner.toLowerCase())
+  )
+    throw new Error("GitEdge returned a GitHub repository outside this runner profile.");
+  if (!eligible(run.labels, profile))
+    throw new Error("GitHub job labels do not match this runner host.");
+  const runId = run.id;
+  const execution = AbortSignal.any([signal, AbortSignal.timeout(360 * 60_000)]);
+  const runRoot = path.join(profile.directory, "runs");
+  await mkdir(runRoot, { recursive: true, mode: 0o700 });
+  await chmod(runRoot, 0o700);
+  const runDir = await mkdtemp(path.join(runRoot, `${runId}-`));
+  await chmod(runDir, 0o700);
+  const runner = path.join(runDir, "runner");
+  let child;
+  let output = "";
+  let conclusion = "failure";
+  let executionError;
+  const complete = async () => {
+    const bytes = Buffer.from(
+      output.replaceAll(run.encodedJitConfig, "[REDACTED]").replaceAll(leaseToken, "[REDACTED]")
+    );
+    let start = Math.max(0, bytes.length - 16_384);
+    while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) start++;
+    await apiRequest(profile.origin, profile.credential, "/api/actions/runner/github/complete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        runId,
+        leaseToken,
+        conclusion,
+        log: bytes.subarray(start).toString("utf8"),
+      }),
+    });
+  };
+  const heartbeatController = new AbortController();
+  const heartbeatSignal = AbortSignal.any([execution, heartbeatController.signal]);
+  const startedAt = Date.now();
+  let heartbeatFailure;
+  const heartbeat = (async () => {
+    while (!heartbeatSignal.aborted) {
+      await sleep(30_000, heartbeatSignal);
+      if (child && child.exitCode !== null) return;
+      const response = await apiRequest(
+        profile.origin,
+        profile.credential,
+        "/api/actions/runner/github/heartbeat",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ runId, leaseToken }),
+          signal: heartbeatSignal,
+        }
+      );
+      if (
+        typeof response?.data?.cancelled !== "boolean" ||
+        typeof response.data.assigned !== "boolean" ||
+        !Number.isFinite(response.data.leaseExpiresAt)
+      )
+        throw new Error("GitEdge returned an invalid GitHub runner heartbeat.");
+      if (response.data.cancelled) throw new Error("GitEdge requested cancellation.");
+      if (!response.data.assigned && Date.now() - startedAt >= 120_000)
+        throw new Error("GitHub job was not assigned within 120 seconds.");
+    }
+  })();
+  void heartbeat.catch((error) => {
+    if (!heartbeatController.signal.aborted) {
+      heartbeatFailure = error;
+      if (child && child.exitCode === null) void killChild(child);
+    }
+  });
+  try {
+    await mkdir(runner);
+    await cp(path.join(profile.runnerPath, "bin"), path.join(runner, "bin"), {
+      recursive: true,
+      mode: constants.COPYFILE_FICLONE,
+    });
+    await cp(path.join(profile.runnerPath, "externals"), path.join(runner, "externals"), {
+      recursive: true,
+      mode: constants.COPYFILE_FICLONE,
+    });
+    if (heartbeatFailure) throw heartbeatFailure;
+    if (execution.aborted) throw execution.reason;
+    const env = { ...process.env };
+    for (const key of Object.keys(env))
+      if (
+        /^(?:GH_|GITHUB_|GITEDGE_|ACTIONS_RUNNER_INPUT_|RUNNER_TOKEN$|ACTIONS_RUNTIME_TOKEN$)/i.test(
+          key
+        )
+      )
+        delete env[key];
+    env.ACTIONS_RUNNER_INPUT_JITCONFIG = run.encodedJitConfig;
+    env.RUNNER_ALLOW_RUNASROOT = "1";
+    env.GH_CONFIG_DIR = path.join(runDir, "gh-config");
+    await mkdir(env.GH_CONFIG_DIR, { mode: 0o700 });
+    child = spawn(path.join(runner, "bin", executable("Runner.Listener")), ["run"], {
+      cwd: runner,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32",
+    });
+    for (const stream of [child.stdout, child.stderr])
+      stream.setEncoding("utf8").on("data", (chunk) => {
+        output = (output + chunk).slice(-32_768);
+      });
+    await waitChild(child, execution);
+    if (heartbeatFailure) throw heartbeatFailure;
+    conclusion = "success";
+  } catch (error) {
+    executionError = error;
+    if (
+      signal.aborted ||
+      error.message === "GitEdge requested cancellation." ||
+      heartbeatFailure?.message === "GitEdge requested cancellation."
+    )
+      conclusion = "cancelled";
+    output = `${output}\n${error instanceof Error ? error.message : "Runner failed."}`.slice(
+      -32_768
+    );
+  } finally {
+    heartbeatController.abort();
+    if (child && child.exitCode === null) await killChild(child);
+    await heartbeat.catch(() => {});
+    await rm(runner, { recursive: true, force: true });
+    await complete().catch((error) => {
+      console.error(`Could not report GitHub run ${runId}: ${error.message}`);
+    });
+    await rm(runDir, { recursive: true, force: true });
+    console.log(`GitHub run ${runId}: ${conclusion}.`);
+  }
+  if (executionError && conclusion === "failure" && !signal.aborted) throw executionError;
+}
+
 async function monitorJitAssignment(profile, queued, jit, signal) {
   const runnerId = safeRunId(jit.runner?.id);
   const runnerPath =
@@ -1158,6 +1322,15 @@ async function claimGitEdge(profile, signal) {
       throw new Error("GitEdge returned an invalid runner poll interval.");
     return claim;
   }
+  if (claim.run?.kind === "github") {
+    if (
+      typeof claim.leaseToken !== "string" ||
+      !claim.leaseToken ||
+      !Number.isFinite(claim.leaseExpiresAt)
+    )
+      throw new Error("GitEdge returned an incomplete GitHub runner lease.");
+    return claim;
+  }
   if (
     !claim.run ||
     typeof claim.run !== "object" ||
@@ -1226,8 +1399,15 @@ async function serve(state, { once, pollSeconds }) {
             claim = await claimGitEdge(profile, controller.signal);
             if (claim?.run) {
               processed = true;
-              console.log(`GitEdge profile ${profile.id}: running ${claim.run.id}.`);
-              await runGitEdge(profile, claim.run, claim.leaseToken, controller.signal);
+              if (claim.run.kind === "github") {
+                console.log(
+                  `GitEdge profile ${profile.id}: running GitHub job ${claim.run.jobId}.`
+                );
+                await runClaimedGitHub(profile, claim, controller.signal);
+              } else {
+                console.log(`GitEdge profile ${profile.id}: running ${claim.run.id}.`);
+                await runGitEdge(profile, claim.run, claim.leaseToken, controller.signal);
+              }
             }
           } finally {
             await releaseSlot();
@@ -1337,6 +1517,7 @@ async function main() {
       label: { type: "string", multiple: true },
       "allow-repository": { type: "string", multiple: true },
       "runner-path": { type: "string" },
+      "install-dir": { type: "string" },
       "group-id": { type: "string" },
       "group-name": { type: "string" },
       "poll-seconds": { type: "string" },
@@ -1348,7 +1529,7 @@ async function main() {
   const state = path.resolve(values["state-dir"] ?? stateDefault);
   if (!action || values.help) {
     console.log(
-      "Usage: pnpm run runner-broker -- init|register-gitedge|register-github|list|remove|serve [options]\n\nGitEdge: register-gitedge --origin URL --owner OWNER [--repository REPO] --label LABEL --runner-path DIR\nGitHub: register-github --host HOST --owner OWNER --scope repo|org [--repository REPO] --label LABEL --runner-path DIR [--allow-repository OWNER/REPO] [--group-id ID|--group-name NAME]\nServe: serve [--once] [--poll-seconds 30]\nAll commands accept --state-dir DIR. GitEdge registration reads GITEDGE_TOKEN; GitHub uses gh CLI authentication for each explicit host."
+      "Usage: pnpm run runner-broker -- init|register-gitedge|register-github|list|remove|serve|service [options]\n\nGitEdge: register-gitedge --origin URL --owner OWNER [--repository REPO] --label LABEL --runner-path DIR\nGitHub: register-github --host HOST --owner OWNER --scope repo|org [--repository REPO] --label LABEL --runner-path DIR [--allow-repository OWNER/REPO] [--group-id ID|--group-name NAME]\nServe: serve [--once] [--poll-seconds 30]\nService: service install|start|stop|status --install-dir DIR [--state-dir DIR]\nAll commands accept --state-dir DIR. GitEdge registration reads GITEDGE_TOKEN; standalone GitHub profiles use gh CLI authentication."
     );
     return;
   }
@@ -1378,6 +1559,34 @@ async function main() {
     } finally {
       await release();
     }
+    return;
+  }
+  if (action === "service") {
+    const serviceAction = positionals[1];
+    if (!serviceAction || positionals.length !== 2)
+      throw new Error("service requires install, start, stop, or status.");
+    if (!values["install-dir"]) throw new Error("service requires --install-dir.");
+    const serviceScript = path.join(root, "scripts", "runner-broker-service.mjs");
+    await new Promise((resolve, reject) => {
+      const child = spawn(
+        process.execPath,
+        [
+          serviceScript,
+          serviceAction,
+          "--install-dir",
+          values["install-dir"],
+          "--state-dir",
+          state,
+        ],
+        { stdio: "inherit" }
+      );
+      child.once("error", reject);
+      child.once("close", (code) =>
+        code === 0
+          ? resolve()
+          : reject(new Error(`service ${serviceAction} failed with status ${code ?? 1}.`))
+      );
+    });
     return;
   }
   throw new Error(
