@@ -84,6 +84,7 @@ const featureSwitches = [
   ["graphEnabled", "repoSettingsGraph", "repoSettingsGraphHint"],
   ["actionsEnabled", "repoSettingsActions", "repoSettingsActionsHint"],
   ["actionsNetworkEnabled", "repoSettingsActionsNetwork", "repoSettingsActionsNetworkHint"],
+  ["actionsRunnerEnabled", "repoSettingsActionsRunner", "repoSettingsActionsRunnerHint"],
   ["onlineEditingEnabled", "repoSettingsOnlineEditing", "repoSettingsOnlineEditingHint"],
 ] as const;
 const mergeMethodSwitches = [
@@ -109,6 +110,7 @@ const editableFields = [
   "graphEnabled",
   "actionsEnabled",
   "actionsNetworkEnabled",
+  "actionsRunnerEnabled",
   "onlineEditingEnabled",
   "aiSummariesEnabled",
   "aiSummariesPrivateConsent",

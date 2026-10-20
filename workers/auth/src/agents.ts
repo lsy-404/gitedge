@@ -24,6 +24,7 @@ import {
 import { createLogger, type Logger } from "../../../src/worker/common/logger";
 import { handleAgentWebhookManagement } from "./agent-webhooks";
 import { authenticateAccessToken, isAccessToken } from "./access-tokens";
+import { authenticateActionJob, isActionJobToken } from "./action-jobs";
 import { randomHex } from "../../../src/worker/common/encoding";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 
@@ -211,6 +212,20 @@ export async function authenticateGitToken(
   const owner = new URL(request.url).searchParams.get("owner");
   const slug = new URL(request.url).searchParams.get("repo");
   if (!owner || !slug) return INVALID_GIT_CREDENTIAL;
+  if (isActionJobToken(credentials.token)) {
+    const user = await authenticateActionJob(env, credentials.token);
+    const path = await resolveRepositoryPath(env.DB, owner, slug);
+    if (!user || !path) return INVALID_GIT_CREDENTIAL;
+    if (user.job?.repositoryId !== path.id) return { outcome: "insufficient_scope" };
+    return {
+      outcome: "granted",
+      grant: {
+        user,
+        repositoryId: path.id,
+        permission: user.token && accessTokenAllows(user.token, "repo:write") ? "write" : "read",
+      },
+    };
+  }
   if (isAccessToken(credentials.token))
     return authenticateAccessTokenForRepository(env, credentials.token, owner, slug);
   const grant = await authenticateRepositoryCredential(env, credentials, owner, slug);

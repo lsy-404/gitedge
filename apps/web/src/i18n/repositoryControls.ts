@@ -20,6 +20,9 @@ const repositoryControlsMessages = {
     repoMergePolicyHint: "分支保护可能要求快进或签名提交，服务器会验证选定方式。",
     repoSettingsActionsHint: "启用仓库自动化工作流。",
     repoSettingsActionsNetwork: "允许工作流访问网络",
+    repoSettingsActionsRunner: "使用已注册的本机 runner",
+    repoSettingsActionsRunnerHint:
+      "允许 .github 工作流在注册的主机上执行。主机具有本地用户权限；.gitedge 工作流继续使用容器。",
     repoSettingsActionsNetworkHint: "允许已启用的 Actions 工作流发起网络请求。",
     repoSettingsOnlineEditing: "在线编辑",
     repoSettingsOnlineEditingHint: "允许在网页中直接创建和编辑文件。",
@@ -104,6 +107,9 @@ const repositoryControlsMessages = {
       "Branch protection may require fast-forward or signed commits; the server validates the selected method.",
     repoSettingsActionsHint: "Enable repository automation workflows.",
     repoSettingsActionsNetwork: "Allow workflow network access",
+    repoSettingsActionsRunner: "Use registered local runners",
+    repoSettingsActionsRunnerHint:
+      "Allow .github workflows to execute on registered hosts with the local user's access. .gitedge workflows continue to use containers.",
     repoSettingsActionsNetworkHint: "Allow enabled Actions workflows to make network requests.",
     repoSettingsOnlineEditing: "Online editing",
     repoSettingsOnlineEditingHint: "Allow creating and editing files in the browser.",

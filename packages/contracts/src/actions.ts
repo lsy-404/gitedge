@@ -75,12 +75,36 @@ export const ActionJobSchema = z.object({
 });
 export type ActionJob = z.infer<typeof ActionJobSchema>;
 
+export const ActionDispatchInputSchema = z
+  .object({
+    description: z.string().max(1000).optional(),
+    required: z.boolean().optional(),
+    default: z.union([z.string().max(2000), z.boolean(), z.number()]).optional(),
+    type: z.enum(["string", "boolean", "number", "choice"]).optional(),
+    options: z.array(z.string().max(2000)).min(1).max(100).optional(),
+  })
+  .strict()
+  .refine((input) => {
+    const type = input.type ?? "string";
+    if (type === "choice" && !input.options) return false;
+    if (input.default === undefined) return true;
+    if (type === "boolean") return typeof input.default === "boolean";
+    if (type === "number") return typeof input.default === "number";
+    return (
+      typeof input.default === "string" &&
+      (type !== "choice" || input.options?.includes(input.default) === true)
+    );
+  }, "Dispatch input options or default do not match its type.");
+export type ActionDispatchInput = z.infer<typeof ActionDispatchInputSchema>;
+
 export const ActionWorkflowSchema = z.object({
+  executor: z.enum(["container", "runner"]).optional(),
+  dispatchInputs: z.record(z.string(), ActionDispatchInputSchema).optional(),
   path: z.string().min(1),
   name: z.string().min(1).max(100),
   triggers: z.array(z.enum(["workflow_dispatch", "push", "pull_request", "merge_group"])).min(1),
   triggerFilters: z.partialRecord(ActionEventTypeSchema, ActionTriggerFilterSchema).optional(),
-  jobs: z.array(ActionJobSchema).min(1).max(3),
+  jobs: z.array(ActionJobSchema).max(16),
   cache: ActionCacheSchema.optional(),
   supported: z.boolean().optional(),
   unsupportedReason: z.string().optional(),
@@ -113,6 +137,7 @@ export interface ActionRunJob {
 }
 
 export interface ActionRun {
+  readonly executor?: "container" | "runner";
   readonly id: string;
   readonly repositoryId: string;
   readonly commitOid: string;
@@ -149,12 +174,14 @@ export interface ActionArtifactOutcome {
 }
 
 export interface CreateActionRunInput {
+  readonly inputs?: Readonly<Record<string, string | number | boolean>>;
   readonly workflowPath: string;
   readonly ref: string;
   readonly expectedOid: string;
 }
 
 export interface ActionRunSummary {
+  readonly executor?: "container" | "runner";
   readonly id: string;
   readonly commitOid: string;
   readonly workflowPath: string;

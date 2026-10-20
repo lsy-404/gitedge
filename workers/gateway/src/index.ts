@@ -684,6 +684,14 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
   if (url.pathname === MCP_PATH) return handleMcp(request, env);
   if (isGitHubApiPath(url.pathname)) return handleGitHubCompatibility(request, env);
 
+  if (/^\/api\/actions\/runner\/(claim|heartbeat|complete)$/.test(url.pathname)) {
+    if (!env.ACTIONS) return githubApiError(503, "service_unavailable", "Actions is unavailable.");
+    const headers = new Headers(request.headers);
+    withoutTrustedHeaders(headers);
+    headers.delete("Cookie");
+    return env.ACTIONS.fetch(forwardServicePath(new Request(request, { headers }), "/api/actions"));
+  }
+
   if (isApiPath(url.pathname, "/api/auth")) {
     return env.AUTH.fetch(forwardServicePath(request, "/api/auth"));
   }
@@ -727,6 +735,12 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
       );
     const session = await authenticate(request, env.AUTH);
     if (session instanceof Response) return session;
+    if (session.authenticated && session.job && prefix !== "/api/git" && prefix !== "/api/forge")
+      return githubApiError(
+        403,
+        "forbidden",
+        "Job credentials are limited to repository contents and releases."
+      );
     const expectedUser = request.headers.get("X-GitEdge-Expected-User");
     const expectedView = request.headers.get("X-GitEdge-Expected-View");
     if (

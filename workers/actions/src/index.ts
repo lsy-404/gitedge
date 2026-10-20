@@ -1,3 +1,13 @@
+import {
+  cancelRunnerRun,
+  expireRunnerRuns,
+  getRunnerRun,
+  queueRunnerRun,
+  runnerMachineRequest,
+  runnerManagement,
+} from "./runners";
+import { parseRunnerWorkflow, runnerDispatchInputs } from "./runner-workflow";
+import { deliverCheck, publishCheck } from "./check-delivery";
 import type { MergeCandidateRecord } from "../../../packages/contracts/src/merge-candidates";
 import { readJsonLimited } from "../../../src/worker/common/readText";
 import {
@@ -55,6 +65,7 @@ interface ActionsEnv extends Cloudflare.Env {
   readonly DB: D1Database;
   readonly GIT: Fetcher;
   readonly FORGE: Fetcher;
+  readonly AUTH: Fetcher;
   readonly RELEASE_ASSETS: R2Bucket;
   readonly LOG_LEVEL?: string;
 }
@@ -65,10 +76,12 @@ interface RepositoryRow {
   readonly archived: number;
   readonly actions_enabled: number;
   readonly actions_network_enabled: number;
+  readonly actions_runner_enabled: number;
   readonly default_branch: string;
 }
 
 interface PendingCheckRow {
+  readonly executor: "container" | "runner";
   readonly id: string;
   readonly repository_id: string;
   readonly created_at: number;
@@ -117,10 +130,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 async function repositoryFor(env: ActionsEnv, id: string): Promise<RepositoryRow | null> {
   return env.DB.prepare(
-    "SELECT id, visibility, archived, actions_enabled, actions_network_enabled, default_branch FROM repositories WHERE id = ? AND deleted_at IS NULL"
+    "SELECT id, visibility, archived, actions_enabled, actions_network_enabled, actions_runner_enabled, default_branch FROM repositories WHERE id = ? AND deleted_at IS NULL"
   )
     .bind(id)
     .first<RepositoryRow>();
+}
+
+function parseRepositoryWorkflow(
+  repo: RepositoryRow,
+  path: string,
+  source: string
+): ActionWorkflow {
+  return repo.actions_runner_enabled === 1 && path.startsWith(".github/")
+    ? parseRunnerWorkflow(path, source).workflow
+    : parseWorkflow(path, source);
 }
 
 async function activeSession(
@@ -470,6 +493,7 @@ function toSummary(run: ActionRunDetails): ActionRunSummary {
     conclusion: run.conclusion,
     cacheOutcome: run.cacheOutcome,
     artifactCount: run.artifacts.length,
+    ...(run.executor ? { executor: run.executor } : {}),
   };
 }
 
@@ -646,7 +670,9 @@ async function publishActionOutputs(
 }
 
 async function publishPendingOutputs(env: ActionsEnv): Promise<void> {
-  const rows = await env.DB.prepare("SELECT id FROM actions_runs ORDER BY created_at DESC LIMIT ?")
+  const rows = await env.DB.prepare(
+    "SELECT id FROM actions_runs WHERE executor = 'container' ORDER BY created_at DESC LIMIT ?"
+  )
     .bind(MAX_RUN_LIST)
     .all<{ id: string }>();
   let transferred = 0;
@@ -660,89 +686,36 @@ async function publishPendingOutputs(env: ActionsEnv): Promise<void> {
   }
 }
 
-async function deliverCheck(
-  env: ActionsEnv,
-  runId: string,
-  repositoryId: string,
-  status: "queued" | "in_progress" | "completed",
-  conclusion: "success" | "failure" | "cancelled" | null,
-  summary: string,
-  now = Date.now()
-): Promise<boolean> {
-  const logger = createLogger(env.LOG_LEVEL, {
-    service: "actions",
-    repoId: repositoryId,
-    doId: runId,
-  });
-  let delivered = false;
-  try {
-    const response = await env.FORGE.fetch(
-      new Request("https://forge.internal/internal/actions-check", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ runId, status, conclusion, summary }),
-      })
-    );
-    delivered = response.ok;
-    if (!response.ok)
-      logger.warn("actions:check-delivery-rejected", { statusCode: response.status });
-  } catch (cause) {
-    logger.warn("actions:check-delivery-failed", {
-      reason: cause instanceof Error ? cause.message : "unknown",
-    });
-  }
-  try {
-    await env.DB.prepare(
-      "UPDATE actions_runs SET check_last_attempt_at = ?, check_status = CASE WHEN ? = 1 THEN ? ELSE check_status END, check_conclusion = CASE WHEN ? = 1 THEN ? ELSE check_conclusion END, check_published_at = CASE WHEN ? = 1 AND ? = 'completed' THEN COALESCE(check_published_at, ?) ELSE check_published_at END WHERE id = ?"
-    )
-      .bind(
-        now,
-        delivered ? 1 : 0,
-        status,
-        delivered ? 1 : 0,
-        conclusion,
-        delivered ? 1 : 0,
-        status,
-        now,
-        runId
-      )
-      .run();
-  } catch (cause) {
-    logger.warn("actions:check-outbox-update-failed", {
-      reason: cause instanceof Error ? cause.message : "unknown",
-    });
-  }
-  return delivered;
-}
-
-async function publishCheck(
-  env: ActionsEnv,
-  run: ActionRunDetails,
-  now = Date.now()
-): Promise<boolean> {
-  const status =
-    run.status === "completed" ? "completed" : run.status === "running" ? "in_progress" : "queued";
-  const conclusion = status !== "completed" ? null : run.conclusion;
-  const failed = run.jobs.flatMap((job) =>
-    job.steps
-      .filter((step) => step.conclusion === "failure")
-      .map((step) => `${job.name} / ${step.name}`)
-  );
-  const summary =
-    run.status === "completed"
-      ? `${run.workflowName}: ${run.conclusion ?? "completed"}.${failed.length ? ` Failed: ${failed.join(", ")}.` : ""}${run.outputTruncated ? " Output was truncated at 16 KiB." : ""}`
-      : `${run.workflowName} is ${run.status}.`;
-  return deliverCheck(env, run.id, run.repositoryId, status, conclusion, summary, now);
-}
-
 async function publishPendingChecks(env: ActionsEnv): Promise<void> {
   const now = Date.now();
   const rows = await env.DB.prepare(
-    "SELECT id, repository_id, created_at, check_last_attempt_at, check_status, check_conclusion FROM actions_runs WHERE check_published_at IS NULL AND (check_last_attempt_at IS NULL OR check_last_attempt_at <= ?) ORDER BY check_last_attempt_at ASC, created_at ASC LIMIT ?"
+    "SELECT id, repository_id, created_at, check_last_attempt_at, check_status, check_conclusion, executor FROM actions_runs WHERE check_published_at IS NULL AND (check_last_attempt_at IS NULL OR check_last_attempt_at <= ?) ORDER BY check_last_attempt_at ASC, created_at ASC LIMIT ?"
   )
     .bind(now - CHECK_RETRY_MS, CHECK_SCAN_LIMIT)
     .all<PendingCheckRow>();
   for (const row of rows.results) {
+    if (row.executor === "runner") {
+      const run = await getRunnerRun(env, row.id);
+      if (run) {
+        const status = run.status === "running" ? "in_progress" : run.status;
+        if (status !== row.check_status || run.conclusion !== row.check_conclusion)
+          await publishCheck(env, run, now);
+        else
+          await env.DB.prepare("UPDATE actions_runs SET check_last_attempt_at = ? WHERE id = ?")
+            .bind(now, row.id)
+            .run();
+      } else
+        await deliverCheck(
+          env,
+          row.id,
+          row.repository_id,
+          "completed",
+          "failure",
+          "Runner run did not initialize.",
+          now
+        );
+      continue;
+    }
     const stub = actionStub(env, row.id);
     try {
       let run = await stub.getRun();
@@ -847,7 +820,7 @@ async function listWorkflows(
         continue;
       }
       try {
-        workflows.push({ ...parseWorkflow(file.path, source), supported: true });
+        workflows.push({ ...parseRepositoryWorkflow(repo, file.path, source), supported: true });
       } catch (cause) {
         const unsupportedReason =
           cause instanceof WorkflowValidationError ? cause.message : "Workflow file is invalid.";
@@ -880,7 +853,7 @@ type QueueActionResult =
   | {
       readonly ok: false;
       readonly status: number;
-      readonly code: "conflict" | "run_limit" | "internal_error";
+      readonly code: "conflict" | "run_limit" | "internal_error" | "bad_request";
       readonly message: string;
       readonly retryAfter?: number;
     };
@@ -916,8 +889,54 @@ async function queueActionRun(
     pullRequestId?: string;
     candidateId?: string;
   } = { eventType: "push" },
-  transferBudget = { remaining: MAX_TRANSFER_CHUNKS }
+  transferBudget = { remaining: MAX_TRANSFER_CHUNKS },
+  dispatchInputs?: unknown
 ): Promise<QueueActionResult> {
+  if (workflow.executor === "runner") {
+    if (
+      user.job ||
+      user.agentSession ||
+      (context.eventType !== "push" && context.eventType !== "workflow_dispatch")
+    )
+      return {
+        ok: false,
+        status: 422,
+        code: "bad_request",
+        message: "Runner execution currently supports human push and workflow_dispatch events.",
+      };
+    const source = snapshotFile(snapshot, workflow.path);
+    if (source === null)
+      return {
+        ok: false,
+        status: 422,
+        code: "bad_request",
+        message: "Runner workflow source is unavailable.",
+      };
+    const definition = parseRunnerWorkflow(workflow.path, source);
+    const inputs =
+      context.eventType === "workflow_dispatch"
+        ? runnerDispatchInputs(definition, dispatchInputs)
+        : {};
+    const summary = await queueRunnerRun(
+      env,
+      repositoryId,
+      user,
+      ref,
+      snapshot.oid,
+      definition,
+      context.eventType,
+      inputs
+    );
+    return summary
+      ? { ok: true, summary }
+      : {
+          ok: false,
+          status: 429,
+          code: "run_limit",
+          message: "This repository has reached its limit of six runs per hour.",
+          retryAfter: await runLimitRetryAfter(env, repositoryId, Date.now()),
+        };
+  }
   ref = ref.replace(/^refs\/heads\//, "");
   if (context.candidateId) {
     const prior = await env.DB.prepare(
@@ -1186,6 +1205,7 @@ async function handleInternalPush(request: Request, env: ActionsEnv): Promise<Re
       "A repository, ref, and expected commit OID are required."
     );
   }
+  if (user.job) return dataResponse({ runs: [], failures: [], skipped: "job_token_push" });
   const repositoryId = body.repositoryId;
   const repo = await repositoryFor(env, repositoryId);
   if (!repo || !(await canReadRepository(env, repo, user))) {
@@ -1224,7 +1244,7 @@ async function handleInternalPush(request: Request, env: ActionsEnv): Promise<Re
         return errorResponse(422, "bad_request", `Workflow ${file.path} is not valid UTF-8.`);
       }
       try {
-        workflows.push(parseWorkflow(file.path, source));
+        workflows.push(parseRepositoryWorkflow(repo, file.path, source));
       } catch (cause) {
         const reason =
           cause instanceof WorkflowValidationError ? cause.message : "Workflow file is invalid.";
@@ -1334,7 +1354,7 @@ async function handleInternalProposal(
   for (const file of files) {
     const source = snapshotFile(definitions, file.path);
     if (source === null) return errorResponse(422, "bad_request", "Workflow is not UTF-8.");
-    const workflow = parseWorkflow(file.path, source);
+    const workflow = parseRepositoryWorkflow(repo, file.path, source);
     if (workflowMatchesEvent(workflow, eventType, pull.base_ref)) triggered.push(workflow);
   }
   if (triggered.length > 3)
@@ -1416,7 +1436,7 @@ async function startRun(
     const source = snapshotFile(snapshot, body.workflowPath);
     if (source === null)
       return errorResponse(404, "not_found", "Workflow file was not found at the selected commit.");
-    workflow = parseWorkflow(body.workflowPath, source);
+    workflow = parseRepositoryWorkflow(repo, body.workflowPath, source);
     if (!workflow.triggers.includes("workflow_dispatch")) {
       return errorResponse(409, "conflict", "This workflow does not enable manual dispatch.");
     }
@@ -1428,9 +1448,29 @@ async function startRun(
     );
   }
 
-  const result = await queueActionRun(env, repo, user, repositoryId, body.ref, snapshot, workflow, {
-    eventType: "workflow_dispatch",
-  });
+  let result: QueueActionResult;
+  try {
+    result = await queueActionRun(
+      env,
+      repo,
+      user,
+      repositoryId,
+      body.ref,
+      snapshot,
+      workflow,
+      {
+        eventType: "workflow_dispatch",
+      },
+      undefined,
+      body.inputs
+    );
+  } catch (cause) {
+    return errorResponse(
+      422,
+      "bad_request",
+      cause instanceof Error ? cause.message : "Workflow inputs are invalid."
+    );
+  }
   if (!result.ok)
     return errorResponse(
       result.status,
@@ -1443,23 +1483,27 @@ async function startRun(
 
 async function listRuns(env: ActionsEnv, repositoryId: string): Promise<Response> {
   const rows = await env.DB.prepare(
-    "SELECT id FROM actions_runs WHERE repository_id = ? ORDER BY created_at DESC LIMIT ?"
+    "SELECT id, executor FROM actions_runs WHERE repository_id = ? ORDER BY created_at DESC LIMIT ?"
   )
     .bind(repositoryId, MAX_RUN_LIST)
-    .all<{ id: string }>();
+    .all<{ id: string; executor: "container" | "runner" }>();
   const runs: ActionRunSummary[] = [];
   for (const row of rows.results) {
-    const run = await actionStub(env, row.id).getRun();
+    const run =
+      row.executor === "runner"
+        ? await getRunnerRun(env, row.id)
+        : await actionStub(env, row.id).getRun();
     if (run) runs.push(toSummary(run));
   }
   return dataResponse(runs);
 }
 
 async function getRun(env: ActionsEnv, id: string): Promise<ActionRunDetails | null> {
-  const row = await env.DB.prepare("SELECT id FROM actions_runs WHERE id = ?")
+  const row = await env.DB.prepare("SELECT id, executor FROM actions_runs WHERE id = ?")
     .bind(id)
-    .first<{ id: string }>();
+    .first<{ id: string; executor: "container" | "runner" }>();
   if (!row) return null;
+  if (row.executor === "runner") return getRunnerRun(env, id);
   const stub = actionStub(env, row.id);
   await publishActionOutputs(env, row.id, stub);
   const run = await stub.getRun();
@@ -1514,12 +1558,6 @@ async function handleRepositoryRoute(
     return errorResponse(404, "not_found", "Repository was not found.");
   if (repo.actions_enabled !== 1)
     return errorResponse(409, "conflict", "Repository Actions are disabled.");
-  if (!env.ACTION_RUNS)
-    return errorResponse(
-      503,
-      "internal_error",
-      "Repository Actions are unavailable on this deployment."
-    );
   if (tail.length === 1 && tail[0] === "workflows" && request.method === "GET") {
     return listWorkflows(request, env, repo, user, repositoryId);
   }
@@ -1540,17 +1578,15 @@ async function handleRunRoute(
   runId: string,
   cancel: boolean
 ): Promise<Response> {
-  if (!env.ACTION_RUNS)
-    return errorResponse(
-      503,
-      "internal_error",
-      "Repository Actions are unavailable on this deployment."
-    );
   const row = await env.DB.prepare(
-    "SELECT actions_runs.repository_id, actions_runs.check_published_at FROM actions_runs WHERE actions_runs.id = ?"
+    "SELECT actions_runs.repository_id, actions_runs.check_published_at, actions_runs.executor FROM actions_runs WHERE actions_runs.id = ?"
   )
     .bind(runId)
-    .first<{ repository_id: string; check_published_at: number | null }>();
+    .first<{
+      repository_id: string;
+      check_published_at: number | null;
+      executor: "container" | "runner";
+    }>();
   if (!row) return errorResponse(404, "not_found", "Action run was not found.");
   const repo = await repositoryFor(env, row.repository_id);
   if (!repo || !(await canReadRepository(env, repo, user)))
@@ -1560,7 +1596,10 @@ async function handleRunRoute(
       return errorResponse(405, "method_not_allowed", "Method is not allowed.");
     if (!user || !(await canWriteRepository(env, repo, user)))
       return errorResponse(403, "forbidden", "Write permission is required to cancel Actions.");
-    const cancelled = await actionStub(env, runId).cancel();
+    const cancelled =
+      row.executor === "runner"
+        ? await cancelRunnerRun(env, runId)
+        : await actionStub(env, runId).cancel();
     return cancelled
       ? dataResponse(cancelled)
       : errorResponse(404, "not_found", "Action run was not found.");
@@ -1585,7 +1624,13 @@ export default {
       if (url.pathname === "/internal/merge-group")
         return await handleInternalProposal(request, env, "merge_group");
       if (url.pathname === "/internal/push") return await handleInternalPush(request, env);
+      if (/^\/runner\/(claim|heartbeat|complete)$/.test(url.pathname))
+        return await runnerMachineRequest(request, env);
       const user = readTrustedUser(request);
+      if (url.pathname === "/runners" || url.pathname.startsWith("/runners/"))
+        return await runnerManagement(request, env, user);
+      if (user?.job)
+        return errorResponse(403, "forbidden", "Job credentials cannot control Actions.");
       const parts = url.pathname.split("/").filter(Boolean);
       if (parts.length === 2 && parts[0] === "repositories") {
         return await handleRepositoryRoute(request, env, user, parts[1] ?? "", []);
@@ -1615,7 +1660,10 @@ export default {
     context: ExecutionContext
   ): Promise<void> {
     context.waitUntil(
-      publishPendingChecks(env).catch((cause: unknown) => {
+      (async () => {
+        await expireRunnerRuns(env);
+        await publishPendingChecks(env);
+      })().catch((cause: unknown) => {
         const logger = createLogger(env.LOG_LEVEL, { service: "actions" });
         logger.error("actions:check-scan-failed", {
           reason: cause instanceof Error ? cause.message : "unknown",

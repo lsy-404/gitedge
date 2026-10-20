@@ -560,7 +560,7 @@ export async function handleGitHubApiRequest(
       return json(200, {
         id,
         login: context.user.identifier,
-        type: context.user.agentSession ? "Bot" : "User",
+        type: context.user.agentSession || context.user.job ? "Bot" : "User",
       });
     } catch {
       logger.error("github-api:user-id-map-failed", { method: request.method, route: "user" });

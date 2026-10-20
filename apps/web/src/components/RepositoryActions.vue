@@ -10,6 +10,7 @@ import {
 import NoticeBar from "./NoticeBar.vue";
 import ConfirmButton from "./ConfirmButton.vue";
 import SelectField from "./SelectField.vue";
+import TextField from "./TextField.vue";
 import StatusBadge from "./StatusBadge.vue";
 import StatusState from "./StatusState.vue";
 import { useI18n } from "vue-i18n";
@@ -38,6 +39,7 @@ const refs = ref<GitRef[]>([]);
 const workflowOid = ref("");
 const selectedRef = ref("");
 const selectedWorkflowPath = ref("");
+const dispatchInputs = ref<Record<string, string>>({});
 const runs = ref<ActionRunSummary[]>([]);
 const selectedRun = ref<ActionRun | null>(null);
 const selectedRunId = ref("");
@@ -212,10 +214,22 @@ async function startRun(): Promise<void> {
   saving.value = true;
   runError.value = "";
   try {
+    const inputs: Record<string, string | number | boolean> = {};
+    for (const [key, input] of Object.entries(chosenWorkflow.value.dispatchInputs ?? {})) {
+      const value = dispatchInputs.value[key] ?? "";
+      if (value === "" && !input.required) continue;
+      inputs[key] =
+        input.type === "boolean"
+          ? value === "true"
+          : input.type === "number"
+            ? Number(value)
+            : value;
+    }
     const run = await api.startActionRun(props.repositoryId, {
       workflowPath: chosenWorkflow.value.path,
       ref: selectedRef.value,
       expectedOid: workflowOid.value,
+      ...(chosenWorkflow.value.executor === "runner" ? { inputs } : {}),
     });
     selectedRunId.value = run.id;
     runs.value = [run, ...runs.value.filter((item) => item.id !== run.id)];
@@ -281,6 +295,22 @@ watch(selectedRef, async (next, previous) => {
   }
 });
 
+watch(chosenWorkflow, (workflow) => {
+  dispatchInputs.value = Object.fromEntries(
+    Object.entries(workflow?.dispatchInputs ?? {}).map(([key, input]) => [
+      key,
+      String(
+        input.default ??
+          (input.type === "boolean"
+            ? false
+            : input.type === "choice"
+              ? (input.options?.[0] ?? "")
+              : "")
+      ),
+    ])
+  );
+});
+
 onMounted(() => {
   void load();
   pollingTimer = window.setInterval(() => {
@@ -322,48 +352,95 @@ onUnmounted(() => clearInterval(pollingTimer));
         </template>
       </NoticeBar>
       <NoticeBar
-        v-if="actionsNetworkEnabled === false"
+        v-if="actionsNetworkEnabled === false && chosenWorkflow?.executor !== 'runner'"
         class="actions-network-notice"
         intent="warning"
         >{{ t("actionsNetworkDisabled") }}</NoticeBar
       >
+      <NoticeBar v-if="chosenWorkflow?.executor === 'runner'" intent="info">
+        {{ t("actionsRunnerNotice") }}
+      </NoticeBar>
       <section class="box actions-panel" :aria-label="t('actionsWorkflows')">
         <header class="box-header">
           <h3>{{ t("actionsWorkflows") }}</h3>
         </header>
         <div class="actions-panel-body">
-          <div class="actions-toolbar">
-            <SelectField
-              v-model="selectedRef"
-              :label="t('actionsRef')"
-              :disabled="loading || !selectableRefs.length"
+          <form class="actions-dispatch" @submit.prevent="startRun">
+            <div class="actions-toolbar">
+              <SelectField
+                v-model="selectedRef"
+                :label="t('actionsRef')"
+                :disabled="loading || !selectableRefs.length"
+              >
+                <option value="" disabled>{{ t("actionsNoBranches") }}</option>
+                <option
+                  v-for="item in branchRefs"
+                  :key="item.name"
+                  :value="selectionRef(item.name)"
+                >
+                  {{ refLabel(item.name) }}
+                </option>
+                <option v-for="item in tagRefs" :key="item.name" :value="selectionRef(item.name)">
+                  {{ item.name }}
+                </option>
+              </SelectField>
+              <SelectField
+                v-model="selectedWorkflowPath"
+                :label="t('actionsWorkflow')"
+                :disabled="loading || workflowLoading || !workflows.length"
+              >
+                <option value="" disabled>{{ t("actionsChooseWorkflow") }}</option>
+                <option v-for="workflow in workflows" :key="workflow.path" :value="workflow.path">
+                  {{ workflow.name }}
+                </option>
+              </SelectField>
+              <FluentButton
+                type="submit"
+                tone="primary"
+                :disabled="saving || loading || workflowLoading || !canDispatch"
+                >{{ saving ? t("loading") : t("actionsDispatch") }}</FluentButton
+              >
+            </div>
+            <div
+              v-if="canDispatch && Object.keys(chosenWorkflow?.dispatchInputs ?? {}).length"
+              class="actions-inputs"
+              :aria-label="t('actionsInputs')"
             >
-              <option value="" disabled>{{ t("actionsNoBranches") }}</option>
-              <option v-for="item in branchRefs" :key="item.name" :value="selectionRef(item.name)">
-                {{ refLabel(item.name) }}
-              </option>
-              <option v-for="item in tagRefs" :key="item.name" :value="selectionRef(item.name)">
-                {{ item.name }}
-              </option>
-            </SelectField>
-            <SelectField
-              v-model="selectedWorkflowPath"
-              :label="t('actionsWorkflow')"
-              :disabled="loading || workflowLoading || !workflows.length"
-            >
-              <option value="" disabled>{{ t("actionsChooseWorkflow") }}</option>
-              <option v-for="workflow in workflows" :key="workflow.path" :value="workflow.path">
-                {{ workflow.name }}
-              </option>
-            </SelectField>
-            <FluentButton
-              type="button"
-              tone="primary"
-              :disabled="saving || loading || workflowLoading || !canDispatch"
-              @click="startRun"
-              >{{ saving ? t("loading") : t("actionsDispatch") }}</FluentButton
-            >
-          </div>
+              <template v-for="(input, key) in chosenWorkflow?.dispatchInputs" :key="key">
+                <SelectField
+                  v-if="input.type === 'choice' || input.type === 'boolean'"
+                  v-model="dispatchInputs[key]"
+                  :label="key"
+                  :hint="input.description"
+                  :required="input.required"
+                  :disabled="saving"
+                >
+                  <template v-if="input.type === 'boolean'">
+                    <option value="true">true</option>
+                    <option value="false">false</option>
+                  </template>
+                  <option
+                    v-for="option in input.type === 'choice' ? input.options : []"
+                    :key="option"
+                    :value="option"
+                  >
+                    {{ option }}
+                  </option>
+                </SelectField>
+                <TextField
+                  v-else
+                  v-model="dispatchInputs[key]"
+                  :type="input.type === 'number' ? 'number' : 'text'"
+                  :step="input.type === 'number' ? 'any' : undefined"
+                  :required="input.required"
+                  :hint="input.description"
+                  :disabled="saving"
+                  maxlength="2000"
+                  >{{ key }}</TextField
+                >
+              </template>
+            </div>
+          </form>
           <details v-if="canWrite" class="actions-templates">
             <summary>{{ t("actionsTemplateTitle") }}</summary>
             <p class="actions-muted">{{ t("actionsTemplateHint") }}</p>
@@ -583,6 +660,11 @@ onUnmounted(() => clearInterval(pollingTimer));
 }
 .actions-toolbar > * {
   flex: 1 1 160px;
+}
+.actions-dispatch,
+.actions-inputs {
+  display: grid;
+  gap: var(--space-3);
 }
 .actions-empty,
 .actions-muted,

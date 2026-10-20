@@ -1,6 +1,7 @@
 import { AccessTokenIdentitySchema } from "./access-tokens";
 import { AgentSessionIdentitySchema, type Actor } from "./forge";
 import type { TrustedUser } from "./index";
+import { ActionJobIdentitySchema } from "./runners";
 
 export const REPOSITORY_ACCESS_DENIED_HEADER = "X-GitEdge-Repository-Access-Denied";
 
@@ -13,6 +14,7 @@ export const TRUSTED_USER_HEADERS = [
   "x-gitedge-user-group",
   "x-gitedge-agent-session",
   "x-gitedge-access-token",
+  "x-gitedge-action-job",
   "x-gitedge-git-grant",
   RECENT_AUTH_HEADER.toLowerCase(),
   REPOSITORY_ACCESS_DENIED_HEADER,
@@ -25,6 +27,7 @@ export function readTrustedUser(request: Request): TrustedUser | null {
   if (!id || !identifier || !groupKey) return null;
   const rawSession = request.headers.get("X-GitEdge-Agent-Session");
   const rawToken = request.headers.get("X-GitEdge-Access-Token");
+  const rawJob = request.headers.get("X-GitEdge-Action-Job");
   const rawRecent = request.headers.get(RECENT_AUTH_HEADER);
   const recent = rawRecent && /^\d{1,16}$/.test(rawRecent) ? Number(rawRecent) : undefined;
   try {
@@ -32,7 +35,13 @@ export function readTrustedUser(request: Request): TrustedUser | null {
       ? AgentSessionIdentitySchema.safeParse(JSON.parse(rawSession))
       : null;
     const token = rawToken ? AccessTokenIdentitySchema.safeParse(JSON.parse(rawToken)) : null;
-    if ((agentSession && !agentSession.success) || (token && !token.success)) return null;
+    const job = rawJob ? ActionJobIdentitySchema.safeParse(JSON.parse(rawJob)) : null;
+    if (
+      (agentSession && !agentSession.success) ||
+      (token && !token.success) ||
+      (job && (!job.success || !token?.success))
+    )
+      return null;
     // Only browser sessions carry a recent human confirmation.
     const human = !agentSession && !token;
     return {
@@ -41,6 +50,7 @@ export function readTrustedUser(request: Request): TrustedUser | null {
       groupKey,
       ...(agentSession?.success ? { agentSession: agentSession.data } : {}),
       ...(token?.success ? { token: token.data } : {}),
+      ...(job?.success ? { job: job.data } : {}),
       ...(human && recent !== undefined ? { recentAuthAt: recent } : {}),
     };
   } catch {
@@ -49,6 +59,7 @@ export function readTrustedUser(request: Request): TrustedUser | null {
 }
 
 export function actorForUser(user: TrustedUser): Actor {
+  if (user.job) return { kind: "ci", id: user.job.runId, name: "GitEdge Actions" };
   const session = user.agentSession;
   return session
     ? { kind: "agent", id: session.agentId, name: session.agentName, sessionId: session.id }
@@ -66,6 +77,7 @@ export function trustedHeaders(user?: TrustedUser): Headers {
     if (user.agentSession)
       headers.set("X-GitEdge-Agent-Session", JSON.stringify(user.agentSession));
     if (user.token) headers.set("X-GitEdge-Access-Token", JSON.stringify(user.token));
+    if (user.job) headers.set("X-GitEdge-Action-Job", JSON.stringify(user.job));
   }
   return headers;
 }

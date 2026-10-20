@@ -180,6 +180,7 @@ export interface RepositorySettings {
   graphEnabled: boolean;
   actionsEnabled: boolean;
   actionsNetworkEnabled: boolean;
+  actionsRunnerEnabled: boolean;
   onlineEditingEnabled: boolean;
   /** Read-only: the site has a Workers AI binding and has not switched summaries off. */
   aiSummariesAvailable: boolean;
@@ -296,6 +297,7 @@ export const UpdateRepositorySettingsInputSchema = z
     graphEnabled: z.boolean().optional(),
     actionsEnabled: z.boolean().optional(),
     actionsNetworkEnabled: z.boolean().optional(),
+    actionsRunnerEnabled: z.boolean().optional(),
     onlineEditingEnabled: z.boolean().optional(),
     aiSummariesEnabled: z.boolean().optional(),
     aiSummariesPrivateConsent: z.boolean().optional(),

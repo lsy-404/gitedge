@@ -2239,6 +2239,20 @@ const worker = {
     }
     const sessionError = await activeAgentSession(env, user);
     if (sessionError) return sessionError;
+    if (
+      user.job &&
+      !(
+        parts[0] === "repositories" &&
+        ((request.method === "GET" &&
+          (parts.length === 2 || (parts[1] === "by-name" && parts.length === 4))) ||
+          parts[2] === "releases")
+      )
+    )
+      return errorResponse(
+        403,
+        "forbidden",
+        "Job credentials are limited to repository contents and releases."
+      );
     if (user.token) {
       if (!accessTokenPermits(user.token, "forge", request.method, parts))
         return errorResponse(

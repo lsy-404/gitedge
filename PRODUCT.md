@@ -14,7 +14,9 @@ PR 可由人工锁定，冻结来源分支的全部提交、改名和删除，�
 
 Actions 在支持 Containers 的部署中运行，每次执行使用独立容器，默认关闭网络；优先读取 `.gitedge/workflows`，也支持 `.github/workflows` 的脚本子集。提供 Node/pnpm、Python、静态站点和项目验证模板，支持推送、PR、合并候选与手动触发、分支过滤、依赖缓存和可下载产物；不支持的语法明确说明原因。
 
-操作者也可通过本机命令显式运行原版 GitHub action 包，使用独立执行后端和官方 runner 的隔离副本。此入口不接入网页自动队列或独立系统 CI 身份。Gateway 提供仓库、Releases 和资产的 GitHub REST 子集，沿用本地权限；GraphQL、工作流 run API 与自定义域名的官方 artifact 包明确不支持，能力范围以文档和接口声明为准。
+管理员可在仓库设置中启用本机 runner，使 `.github/workflows` 通过持久队列运行原版 GitHub action 包；`.gitedge/workflows` 仍优先使用容器。一个本机 broker 可注册多个 GitHub 仓库、组织和 GitEdge 目标，共享官方 runner 程序及一个执行槽，各注册身份独立保存。GitEdge 支持人类推送和手动触发、运行参数、标签匹配、取消、日志及绑定确切提交的独立系统 CI 结果。每个工作流的所有作业使用同一匹配主机；任务凭证限定当前仓库，随取消、租约失效或执行结束撤销，不能管理 runner 或发布 CI 结果。
+
+操作者也可通过本机命令显式运行原版 action 包。Gateway 提供仓库、Releases 和资产的 GitHub REST 子集，沿用本地权限；GraphQL、工作流 run API、自定义域名的官方 artifact 包，以及本机队列中的 PR/合并候选触发、环境审批和并发组明确不支持，能力范围以文档和接口声明为准。本机执行继承主机用户权限和网络环境，需要管理员显式启用。
 
 Issues、PR 与 Discussions 在服务端过滤、统计和游标分页，网页、REST 与 MCP 使用相同条件。代码内容搜索绑定具体提交，提供路径过滤和行永久链接；达到扫描预算时明确提示继续或收窄范围。任务包含验收条件、阻塞原因、待评审状态和 session 准备，完成需要显式验收。工作台汇总需要评审、修改请求、失败检查、阻塞任务和即将到期的 session。
 

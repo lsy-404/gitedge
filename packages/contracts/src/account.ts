@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+export const NamespaceSlugSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .regex(/^[a-z0-9][a-z0-9-]{0,62}$/);
+
 export const ReservedAccountIdentifiers: ReadonlySet<string> = new Set([
   "account",
   "admin",

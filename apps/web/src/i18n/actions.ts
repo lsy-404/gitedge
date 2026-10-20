@@ -1,7 +1,12 @@
 export const actionsMessages = {
   "zh-CN": {
+    auditAction_actions_runner_created: "注册了本机 runner",
+    auditAction_actions_runner_revoked: "撤销了本机 runner",
     actionsTitle: "Actions",
-    actionsIntro: "在选定提交上运行仓库中的受限工作流。",
+    actionsIntro: "在选定提交上运行仓库工作流。",
+    actionsRunnerNotice:
+      "此工作流需要已注册且所有作业标签均匹配的本机 runner。网络访问使用主机环境。",
+    actionsInputs: "运行参数",
     actionsWorkflow: "工作流",
     actionsRef: "分支或标签",
     actionsChooseWorkflow: "选择工作流",
@@ -30,7 +35,7 @@ export const actionsMessages = {
     actionsNetworkDisabled: "此仓库的 Actions 网络访问已关闭。",
     actionsPushOnly: "此工作流仅由仓库推送触发，手动运行不可用。",
     actionsWorkflows: "工作流",
-    actionsSyntaxTitle: "支持的语法",
+    actionsSyntaxTitle: "容器工作流语法",
     actionsSyntaxTriggers:
       "工作流可放在 .gitedge/workflows/ 或受限的 .github/workflows/。触发器：push、workflow_dispatch、pull_request 与 merge_group；push 和 pull_request 支持 branches 与 branches-ignore。",
     actionsSyntaxSteps:
@@ -64,8 +69,13 @@ export const actionsMessages = {
     actionsDownloadArtifact: "下载 {name} ({size} 字节)",
   },
   en: {
+    auditAction_actions_runner_created: "Registered a local runner",
+    auditAction_actions_runner_revoked: "Revoked a local runner",
     actionsTitle: "Actions",
     actionsIntro: "Run a supported repository workflow at a selected commit.",
+    actionsRunnerNotice:
+      "This workflow requires a registered local runner matching every job label. Network access follows the host environment.",
+    actionsInputs: "Run inputs",
     actionsWorkflow: "Workflow",
     actionsRef: "Branch or tag",
     actionsChooseWorkflow: "Choose a workflow",
@@ -94,7 +104,7 @@ export const actionsMessages = {
     actionsNetworkDisabled: "Actions network access is disabled for this repository.",
     actionsPushOnly: "This workflow runs on repository pushes and cannot be started manually.",
     actionsWorkflows: "Workflows",
-    actionsSyntaxTitle: "Supported syntax",
+    actionsSyntaxTitle: "Container workflow syntax",
     actionsSyntaxTriggers:
       "Use .gitedge/workflows/ or the supported .github/workflows/ subset. Triggers: push, workflow_dispatch, pull_request and merge_group. push and pull_request support branches and branches-ignore.",
     actionsSyntaxSteps:

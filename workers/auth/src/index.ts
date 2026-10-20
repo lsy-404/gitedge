@@ -7,6 +7,7 @@ import {
 import { ReservedAccountIdentifiers } from "../../../packages/contracts/src/account";
 import { handleSigningKeys } from "./signing-keys";
 import { expireAccessBans, expireUserAccessBan } from "./access-bans";
+import { authenticateActionJob, isActionJobToken, issueActionJobToken } from "./action-jobs";
 import { handleSso } from "./sso/routes";
 import {
   consumeRateLimit,
@@ -624,6 +625,7 @@ export default {
     const logger = createLogger(env.LOG_LEVEL, { service: "auth" });
     const path = new URL(request.url).pathname;
     if (request.method === "GET" && path === "/internal/health") return dataResponse({ ok: true });
+    if (path === "/internal/actions-job-token") return issueActionJobToken(request, env);
     const deferred: Promise<void>[] = [];
     let humanSession: Promise<ServiceResult<SessionData>> | undefined;
     const getHumanSession = () => (humanSession ??= session(env, readCookie(request)));
@@ -838,7 +840,9 @@ export default {
             ? null
             : isAccessToken(bearer)
               ? await authenticateAccessToken(env, bearer)
-              : await authenticateAgentSession(env, bearer);
+              : isActionJobToken(bearer)
+                ? await authenticateActionJob(env, bearer)
+                : await authenticateAgentSession(env, bearer);
         return user
           ? dataResponse(user)
           : errorResponse(401, "unauthorized", "Invalid access token or agent session.");

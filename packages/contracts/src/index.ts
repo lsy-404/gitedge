@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { AccessTokenIdentitySchema } from "./access-tokens";
+import { ActionJobIdentitySchema } from "./runners";
+import { NamespaceSlugSchema } from "./account";
 import { AgentSessionIdentitySchema, GitBranchSchema } from "./forge";
 import { RepositorySlugSchema } from "./repository-controls";
 import { ConfirmationInputSchema } from "./lifecycle";
@@ -14,6 +16,7 @@ export * from "./tasks";
 export * from "./trust";
 export * from "./account";
 export * from "./actions";
+export * from "./runners";
 export * from "./browser-accounts";
 export * from "./ops";
 export * from "./lifecycle";
@@ -66,6 +69,7 @@ export const TrustedUserSchema = z
     groupKey: z.string().min(1),
     agentSession: AgentSessionIdentitySchema.optional(),
     token: AccessTokenIdentitySchema.optional(),
+    job: ActionJobIdentitySchema.optional(),
     recentAuthAt: z
       .number()
       .optional()
@@ -186,11 +190,6 @@ export function repositoryRouteCacheKey(namespaceSlug: string, repositorySlug: s
   return `repo-route:v1:${namespaceSlug}/${repositorySlug}`;
 }
 
-export const NamespaceSlugSchema = z
-  .string()
-  .trim()
-  .toLowerCase()
-  .regex(/^[a-z0-9][a-z0-9-]{0,62}$/);
 export const RegisterInputSchema = z.object({
   identifier: NamespaceSlugSchema.refine((value) => value.length >= 3),
   password: z.string().min(12).max(256),

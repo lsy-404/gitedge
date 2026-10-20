@@ -35,7 +35,8 @@ const MAX_METADATA_BYTES = 2000;
 const SECRET_KEY =
   /secret|password|passphrase|hash|credential|cookie|authorization|plaintext|private/i;
 const SECRET_KEY_EXACT = new Set(["token", "accesstoken", "code", "recoverycodes", "otp"]);
-const SECRET_VALUE = /(?:gep_|gei_|ge_token_|ge_session_(?:git_)?|ge_webhook_)[0-9a-f]{16,}/;
+const SECRET_VALUE =
+  /(?:gep_|gei_|ge_token_|ge_session_(?:git_)?|ge_webhook_|ge_runner_|ge_job_)[0-9a-f]{16,}/;
 
 function scalar(value: unknown): string | number | boolean | null | undefined {
   if (value === null || typeof value === "boolean") return value;
@@ -63,6 +64,8 @@ export function sanitizeAuditMetadata(metadata: Readonly<Record<string, unknown>
 }
 
 export function auditActor(user: TrustedUser): AuditActor {
+  if (user.job)
+    return { kind: "system", id: user.job.runId, name: "GitEdge Actions", ref: user.job.runId };
   if (user.agentSession)
     return {
       kind: "agent",
