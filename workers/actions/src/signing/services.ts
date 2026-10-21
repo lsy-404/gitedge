@@ -4,6 +4,7 @@ import { trustedHeaders } from "../../../../packages/contracts/src/index";
 import { parseDocument } from "yaml";
 import { z } from "zod";
 import type { SigningEnv, SigningExecutionHooks } from "./types";
+import { parseRunnerWorkflow } from "../runner-workflow";
 
 const sha = /^[a-f0-9]{40}$/;
 const digest = (bytes: Uint8Array) => crypto.subtle.digest("SHA-256", new Uint8Array(bytes).buffer).then(value => `sha256:${Array.from(new Uint8Array(value), b => b.toString(16).padStart(2,"0")).join("")}`);
@@ -67,11 +68,18 @@ function keyBytes(secret: string): Uint8Array<ArrayBuffer> {
   return value;
 }
 async function credentialKey(secret: string) { return crypto.subtle.importKey("raw", keyBytes(secret), "AES-GCM", false, ["encrypt", "decrypt"]); }
-function credentialSchema(platform: string) {
-  // Validation is intentionally delegated to strict platform-specific shapes at installation time.
-  return platform === "ios"
-    ? (value: unknown) => { if (!value || typeof value !== "object" || Object.keys(value).sort().join(",") !== "certificate_password,certificate_p12,provisioning_profile") throw new Error(); return value; }
-    : (value: unknown) => { if (!value || typeof value !== "object" || Object.keys(value).sort().join(",") !== "certificate_password,certificate_p12,notarization") throw new Error(); return value; };
+function credentialSchema(platform: string): (value: unknown) => Record<string, unknown> {
+  const certificate = z.object({
+    certificate_p12: z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/).max(40_000),
+    certificate_password: z.string().min(1).max(512),
+  });
+  if (platform === "ios") return (value: unknown) => certificate.extend({
+    provisioning_profile: z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/).max(80_000),
+  }).strict().parse(value);
+  if (platform === "macos") return (value: unknown) => certificate.extend({
+    notarization: z.object({ key_id: z.string().regex(/^[A-Z0-9]{10}$/), issuer_id: z.uuid(), private_key: z.string().min(100).max(10_000) }).strict(),
+  }).strict().parse(value);
+  return (_value: unknown): Record<string, unknown> => { throw new Error("signing_windows_uses_federated_identity"); };
 }
 
 export async function installSigningCredentials(env: SigningEnv, ownerId: string, repositoryId: string, profileName: string, platform: string, value: unknown): Promise<void> {
@@ -84,6 +92,33 @@ export async function installSigningCredentials(env: SigningEnv, ownerId: string
   const envelope = `${btoa(String.fromCharCode(...iv))}.${btoa(String.fromCharCode(...new Uint8Array(ciphertext)))}`;
   await env.DB.prepare(`INSERT INTO actions_signing_credentials(owner_id,repository_id,profile_revision,platform,ciphertext,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(owner_id,repository_id,profile_revision,platform) DO UPDATE SET ciphertext=excluded.ciphertext,updated_at=excluded.updated_at`)
     .bind(ownerId, repositoryId, profile.revision, platform, envelope, Date.now()).run();
+}
+
+export async function removeSigningCredentials(env: SigningEnv, ownerId: string, repositoryId: string, profileName: string, platform: string): Promise<void> {
+  const profile = await readProfile(env, ownerId, repositoryId, profileName);
+  if (!profile || profile.platform !== platform) throw new Error("signing_profile_not_approved");
+  await env.DB.prepare(`DELETE FROM actions_signing_credentials WHERE owner_id=? AND repository_id=? AND profile_revision=? AND platform=?`)
+    .bind(ownerId, repositoryId, profile.revision, platform).run();
+}
+
+export async function listApprovedProfiles(env: SigningEnv, ownerId: string, repositoryId: string) {
+  const result = await env.DB.prepare(`SELECT profile_json,approved_at FROM actions_signing_profiles WHERE owner_id=? AND repository_id=? AND revoked_at IS NULL ORDER BY name`)
+    .bind(ownerId, repositoryId).all<{ profile_json: string; approved_at: number }>();
+  return (result.results ?? []).flatMap(row => {
+    try {
+      const profile = SigningProfileSchema.parse(JSON.parse(row.profile_json));
+      return [{ name: profile.name, revision: profile.revision, platform: profile.platform, workflowOid: profile.workflowOid,
+        workflowPath: profile.workflowPath, workflowSource: profile.workflowSource, enabled: profile.enabled, approvedAt: row.approved_at }];
+    } catch { return []; }
+  });
+}
+
+export async function signingCredentialStatus(env: SigningEnv, ownerId: string, repositoryId: string, profileName: string) {
+  const profile = await readProfile(env, ownerId, repositoryId, profileName);
+  if (!profile) return null;
+  const row = await env.DB.prepare(`SELECT updated_at FROM actions_signing_credentials WHERE owner_id=? AND repository_id=? AND profile_revision=? AND platform=?`)
+    .bind(ownerId, repositoryId, profile.revision, profile.platform).first<{ updated_at: number }>();
+  return { name: profile.name, revision: profile.revision, platform: profile.platform, configured: Boolean(row), updatedAt: row?.updated_at ?? null };
 }
 
 export async function saveApprovedProfile(env: SigningEnv, user: TrustedUser, repositoryId: string, name: string): Promise<SigningProfile> {
@@ -101,29 +136,44 @@ export async function saveApprovedProfile(env: SigningEnv, user: TrustedUser, re
   const document = parseDocument(content, { schema: "core", uniqueKeys: true, strict: true });
   if (document.errors.length) throw new Error("signing_profile_file_invalid");
   const raw = document.toJS();
-  const parsed = SigningProfileSchema.omit({ revision: true, policyDigest: true }).parse(raw);
+  const profileFileSchema = SigningProfileSchema.omit({ revision: true, policyDigest: true, workflowSource: true })
+    .extend({ workflowSource: z.string().max(65_536).optional() });
+  const parsedFile = profileFileSchema.parse(raw);
+  const parsed = { ...parsedFile, workflowSource: "" };
   const stage = parsed.policy.stage;
-  if (parsed.platform === "macos" && !["sign","finalize","dmg_sign","dmg_finalize"].includes(String(stage))
+  if (parsed.platform === "macos" && stage !== "sign"
     || parsed.platform === "windows" && stage !== "windows_sign" || parsed.platform === "ios" && stage !== "ios_sign")
     throw new Error("signing_profile_stage_mismatch");
+  const project = parsed.policy.project as { macos?: { output_format?: unknown } } | undefined;
+  if (parsed.platform === "macos" && (stage === "dmg_sign" || stage === "dmg_finalize" || project?.macos?.output_format === "dmg"))
+    throw new Error("signing_dmg_template_unavailable");
   if (parsed.name !== name) throw new Error("signing_profile_name_mismatch");
   if (parsed.platform === "windows" && !["azure-managed-identity", "azure-workload-identity"].includes(String(parsed.policy.windowsIdentity)))
     throw new Error("signing_windows_identity_required");
   const repository = await env.DB.prepare(`SELECT r.id,n.created_by FROM repositories r JOIN namespaces n ON n.id=r.namespace_id WHERE r.id=? AND r.system_kind='account_runner' AND r.visibility='private' AND r.created_by=? AND n.kind='personal' AND n.created_by=? AND r.archived=0 AND r.deleted_at IS NULL`)
     .bind(repositoryId, user.id, user.id).first<{ id: string; created_by: string }>();
-  if (!repository || !env.SIGNING_GITHUB_TOKEN) throw new Error("signing_runner_or_github_unavailable");
-  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(parsed.workflowSource)) throw new Error("signing_workflow_source_invalid");
-  const target = await fetch(`https://api.github.com/repos/${parsed.workflowSource}/contents/${parsed.workflowPath}?ref=${parsed.workflowOid}`, { headers: { Authorization: `Bearer ${env.SIGNING_GITHUB_TOKEN}`, Accept:"application/vnd.github+json", "User-Agent":"gitedge-actions-signing" }, redirect:"error", signal:AbortSignal.timeout(15_000) });
-  if (!target.ok) throw new Error("signing_workflow_not_found");
-  const file = await target.json() as { sha?: string; path?: string; encoding?: string; content?: string };
-  if (file.path !== parsed.workflowPath || !file.sha || !/^[a-f0-9]{40}$/.test(parsed.workflowOid)) throw new Error("signing_workflow_invalid");
+  if (!repository) throw new Error("signing_runner_unavailable");
+  if (!/^[a-f0-9]{40}$/.test(parsed.workflowOid)) throw new Error("signing_workflow_invalid");
+  const workflowUrl = new URL(`/repositories/${encodeURIComponent(repositoryId)}/file`, "https://forge.internal");
+  workflowUrl.searchParams.set("ref", parsed.workflowOid);
+  workflowUrl.searchParams.set("path", parsed.workflowPath);
+  const workflowResponse = await env.FORGE.fetch(new Request(workflowUrl, { headers: trustedHeaders(user) }));
+  if (!workflowResponse.ok) { await workflowResponse.body?.cancel(); throw new Error("signing_workflow_not_found"); }
+  const workflowFile = await workflowResponse.json() as { data?: { content?: unknown; path?: unknown } };
+  const workflowSource = workflowFile.data?.content;
+  if (workflowFile.data?.path !== parsed.workflowPath || typeof workflowSource !== "string" || workflowSource.length > 65_536)
+    throw new Error("signing_workflow_invalid");
+  parseRunnerWorkflow(parsed.workflowPath, workflowSource);
   const policyDigest = await digest(new TextEncoder().encode(JSON.stringify(parsed.policy)));
-  const profile = SigningProfileSchema.parse({ ...parsed, policyDigest, revision: "0".repeat(40) });
+  const profile = SigningProfileSchema.parse({ ...parsed, workflowSource, policyDigest, revision: "0".repeat(40) });
   const { revision: _revision, ...immutable } = profile;
   const revision = (await digest(new TextEncoder().encode(JSON.stringify(immutable)))).slice(7, 47);
-  const approved = SigningProfileSchema.parse({ ...parsed, revision });
+  const approved = SigningProfileSchema.parse({ ...parsed, workflowSource, revision });
   const approvedAt = Date.now();
   await env.DB.batch([
+    env.DB.prepare(`DELETE FROM actions_signing_credentials WHERE owner_id=? AND repository_id=? AND profile_revision IN
+      (SELECT revision FROM actions_signing_profiles WHERE owner_id=? AND repository_id=? AND name=? AND revoked_at IS NULL)`)
+      .bind(user.id, repositoryId, user.id, repositoryId, approved.name),
     env.DB.prepare(`UPDATE actions_signing_profiles SET revoked_at=? WHERE owner_id=? AND repository_id=? AND name=? AND revoked_at IS NULL`)
       .bind(approvedAt, user.id, repositoryId, approved.name),
     env.DB.prepare(`INSERT INTO actions_signing_profiles(owner_id,repository_id,name,revision,profile_json,approved_by,approved_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(owner_id,repository_id,name,revision) DO UPDATE SET profile_json=excluded.profile_json,approved_by=excluded.approved_by,approved_at=excluded.approved_at,revoked_at=NULL`)
@@ -154,7 +204,7 @@ async function storedCredentials(env: SigningEnv, context: SigningMachineContext
     const cipher = Uint8Array.from(atob(cipherText), c => c.charCodeAt(0));
     const aad = new TextEncoder().encode(`${context.ownerId}:${context.repositoryId}:${profile.revision}:${profile.platform}`);
     const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv, additionalData: aad }, await credentialKey(env.SIGNING_ENCRYPTION_KEY), cipher);
-    return credentialSchema(profile.platform)(JSON.parse(new TextDecoder().decode(plaintext))) as Record<string, unknown>;
+    return credentialSchema(profile.platform)(JSON.parse(new TextDecoder().decode(plaintext)));
   } catch { return null; }
 }
 
@@ -268,13 +318,7 @@ export function createSigningExecutionHooks(env: SigningEnv, deps: Pick<SigningE
   return {
     ...deps,
     loadApprovedProfile: (user, repositoryId, name) => readProfile(env, user.id, repositoryId, name),
-    verifySource: async (user, submission) => {
-      const repositoryId = await env.DB.prepare(`SELECT id FROM repositories WHERE system_kind='account_runner' AND created_by=? AND id IN (SELECT repository_id FROM actions_signing_profiles WHERE owner_id=? AND name=? AND revoked_at IS NULL) LIMIT 1`)
-        .bind(user.id, user.id, submission.profile).first<{ id: string }>();
-      if (!repositoryId) return null;
-      const profile = await readProfile(env, user.id, repositoryId.id, submission.profile);
-      return profile ? verifySource(env, submission, profile) : null;
-    },
+    verifySource: async (_user, _repositoryId, profile, submission) => verifySource(env, submission, profile),
     authorizeCredentials: (context, profile) => grantCredentials(env, context, profile),
     verifyOutput: ({ context, profile, platform, sourceDigest, sourceCommitOid, version, outputDigest, outputSize, report }) => verifyOutput(env, context, profile, platform, sourceDigest, sourceCommitOid, version, outputDigest, outputSize, report),
   };

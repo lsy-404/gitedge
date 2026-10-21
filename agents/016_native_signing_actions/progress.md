@@ -6,5 +6,9 @@
 - Added migration 0050 for native-run bindings, immutable approved profile snapshots, and owner/profile/platform-scoped AES-GCM credentials.
 - Added 8 MiB multipart output upload up to 2 GB with streaming per-part and final archive SHA-256 checks. Windows profiles require an explicit managed/workload identity mode.
 - Added mature snake_case per-platform manifests, strict report schemas, archive verification, and Apple notary status/log verification for terminal macOS reports. Finalize stages receive no signing credentials.
-- Focused signing tests pass (3 tests) and `pnpm run typecheck:actions` passes.
-- Multi-stage progression remains incomplete: `awaiting_source` has no idempotent next-stage transition or scheduled reconciliation; artifact storage is still one output object per request, and DMG template resolution is not implemented. Do not treat this as cutover-ready.
+- Added `GET/POST /signing/profiles` and credential status/install/revoke operations. Approval and credential writes require a recent owner session; profile and credential responses expose no secret material.
+- Profile approval now reads the YAML and workflow from the exact private Runner repository at the pinned Forge OID; source GitHub APIs are used only for provenance checks.
+- Added idempotent macOS sign-to-finalize progression and `reconcileSigningRequests` for the parent-owned scheduled hook. It retries accepted/unbound final stages through the idempotent native enqueue adapter.
+- Added owner/repository-scoped job and token admission, repeat-safe failure callbacks, repeat-safe completion preflight, and multipart verification recovery after a transient R2 read failure.
+- Focused signing tests pass (11 tests), `pnpm run typecheck:actions` passes, and `git diff --check` passes.
+- DMG stages remain explicitly rejected because there is no separately approved template object path. `reconcileSigningRequests` still needs the parent to invoke it from the existing scheduled handler; this branch does not edit Actions routing or scheduler files.

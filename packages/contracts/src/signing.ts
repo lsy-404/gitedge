@@ -13,8 +13,8 @@ export const SigningProfileSchema = z.object({
   revision: z.string().regex(/^[0-9a-f]{40}$/),
   policyDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   workflowOid: z.string().regex(/^[0-9a-f]{40}$/),
-  workflowPath: z.string().regex(/^\.gitedge\/signing\/[a-z][a-z0-9-]{0,63}\.ya?ml$/),
-  workflowSource: z.string().min(1).max(256),
+  workflowPath: z.string().regex(/^\.github\/workflows\/[A-Za-z0-9_.-]+\.ya?ml$/),
+  workflowSource: z.string().min(1).max(65_536),
   platform: SigningPlatformSchema,
   timeoutMinutes: z.number().int().min(1).max(360),
   enabled: z.boolean(),
@@ -92,3 +92,21 @@ export const SigningMachineContextSchema = z
   })
   .strict();
 export type SigningMachineContext = z.infer<typeof SigningMachineContextSchema>;
+
+export const SigningHostApprovalSchema = z.object({
+  operatorApproved: z.literal(true),
+  approvedBy: z.string().min(1),
+  approvedAt: z.number().int().positive(),
+}).strict();
+
+export const SigningReconcileDispatchSchema = z.object({
+  profile: SigningProfileSchema,
+  submission: SigningSubmissionSchema,
+  generation: z.number().int().positive(),
+  nonce: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  operatorApproval: SigningHostApprovalSchema,
+  stage: SigningStageSchema,
+  inputDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  inputSize: z.number().int().positive().max(SIGNING_MAX_ARCHIVE_BYTES),
+}).strict();
+export type SigningReconcileDispatch = z.infer<typeof SigningReconcileDispatchSchema>;
