@@ -169,7 +169,7 @@ export interface RunnerHistoryItem {
 }
 export interface RunnerHistory {
   items: RunnerHistoryItem[];
-  nextBefore: number | null;
+  nextBefore: string | null;
 }
 export const ActionJobIdentitySchema = z.object({
   runId: z.string().min(1),
