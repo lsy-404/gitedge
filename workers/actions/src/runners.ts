@@ -3,6 +3,9 @@ import {
   RegisterRunnerInputSchema,
   RunnerCompleteInputSchema,
   RunnerLeaseInputSchema,
+  RunnerClaimInputSchema,
+  RunnerCapacitySchema,
+  RunnerBudgetSchema,
   RUNNER_TOKEN_PREFIX,
   RUNNER_LEASE_MS,
   RUNNER_LOG_BYTES,
@@ -27,6 +30,20 @@ import { createLogger } from "../../../src/worker/common/logger";
 import { publishCheck } from "./check-delivery";
 import type { RunnerWorkflow } from "./runner-workflow";
 import { claimGithubRunner, githubRunnerLease } from "./github-runners";
+import {
+  betterPeerExists,
+  claimRunnerCandidate,
+  clearRunnerDeferral,
+  clearRunnerFailures,
+  evaluateRunnerCandidate,
+  listRunnerCandidates,
+  recordRunnerFailure,
+  readRunnerBudget,
+  runnerPeersForJob,
+  runnerUsageMinutes24h,
+  saveRunnerDeferral,
+  type RunnerPeer,
+} from "./runner-scheduler";
 
 export interface RunnerEnv {
   DB: D1Database;
@@ -46,6 +63,11 @@ export interface RunnerRow {
   revoked_at: number | null;
   owner: string;
   repository: string | null;
+  capacity_json: string | null;
+  budget_json: string | null;
+  capacity_reported_at: number | null;
+  consecutive_failures: number;
+  held_until: number | null;
 }
 interface RunRow {
   id: string;
@@ -377,14 +399,21 @@ async function cancelUnauthorizedLease(
 export async function expireRunnerRuns(env: RunnerEnv): Promise<void> {
   const now = Date.now();
   const stale = await env.DB.prepare(
-    `SELECT j.run_id FROM actions_runner_runs j JOIN actions_runs a ON a.id=j.run_id
+    `SELECT j.run_id,j.runner_id,j.status AS prior_status,
+      (j.status='running' AND (j.lease_expires_at<=? OR j.started_at+j.timeout_minutes*60000<=? OR r.id IS NULL OR r.revoked_at IS NOT NULL)) AS infrastructure_failure
+    FROM actions_runner_runs j JOIN actions_runs a ON a.id=j.run_id
     JOIN repositories p ON p.id=a.repository_id LEFT JOIN actions_runners r ON r.id=j.runner_id
     WHERE j.status!='completed' AND ((j.status='running' AND (j.lease_expires_at<=? OR j.started_at+j.timeout_minutes*60000<=? OR r.id IS NULL OR r.revoked_at IS NOT NULL))
       OR (j.status='queued' AND a.created_at<?) OR p.deleted_at IS NOT NULL OR p.archived=1 OR p.actions_enabled=0 OR p.actions_runner_enabled=0)
     ORDER BY a.created_at LIMIT 20`
   )
-    .bind(now, now, now - 86_400_000)
-    .all<{ run_id: string }>();
+    .bind(now, now, now, now, now - 86_400_000)
+    .all<{
+      run_id: string;
+      runner_id: string | null;
+      prior_status: "queued" | "running" | "completed";
+      infrastructure_failure: number;
+    }>();
   for (const row of stale.results) {
     const expired = await env.DB.prepare(
       `UPDATE actions_runner_runs SET status='completed',conclusion='failure',completed_at=?,log='Runner lease expired, execution timed out, or repository execution was disabled. This run will not be retried automatically.'
@@ -397,6 +426,8 @@ export async function expireRunnerRuns(env: RunnerEnv): Promise<void> {
       .bind(now, row.run_id, now, now, now - 86_400_000)
       .first();
     if (!expired) continue;
+    if (row.prior_status === "running" && row.infrastructure_failure === 1)
+      await recordRunnerFailure(env, row.runner_id, now);
     await env.DB.prepare(
       "UPDATE actions_job_tokens SET revoked_at=COALESCE(revoked_at,?) WHERE run_id=?"
     )
@@ -499,95 +530,152 @@ export async function queueRunnerRun(
 }
 
 async function claim(request: Request, env: RunnerEnv, runner: RunnerRow): Promise<Response> {
-  await readJsonLimited(request, 4096);
+  const input = RunnerClaimInputSchema.safeParse(await readJsonLimited(request, 4096));
+  if (!input.success) return errorResponse(400, "bad_request", "Invalid runner capacity report.");
   if (!env.AUTH) return errorResponse(503, "internal_error", "Job authentication is unavailable.");
-  const now = Date.now(),
-    leaseToken = randomHex(32),
-    leaseHash = await sha256Hex(leaseToken);
-  const claimed = await env.DB.prepare(
-    `UPDATE actions_runner_runs SET status='running',runner_id=?,lease_hash=?,lease_expires_at=MIN(?,?+timeout_minutes*60000),started_at=?
-    WHERE run_id=(SELECT j.run_id FROM actions_runner_runs j JOIN actions_runs a ON a.id=j.run_id JOIN repositories p ON p.id=a.repository_id
-      JOIN users u ON u.id=a.created_by WHERE j.status='queued' AND p.namespace_id=? AND (? IS NULL OR p.id=?)
-      AND p.deleted_at IS NULL AND p.archived=0 AND p.actions_enabled=1 AND p.actions_runner_enabled=1 AND u.disabled_at IS NULL
-      AND NOT EXISTS (SELECT 1 FROM json_each(j.labels_json) required WHERE lower(required.value) NOT IN (SELECT lower(value) FROM json_each(?)))
-      ORDER BY a.created_at,a.id LIMIT 1)
-    AND status='queued' AND NOT EXISTS (SELECT 1 FROM actions_runner_runs busy WHERE busy.runner_id=? AND busy.status='running')
-    AND NOT EXISTS (SELECT 1 FROM actions_github_runner_jobs busy WHERE busy.runner_id=? AND busy.status='running')
-    AND EXISTS (SELECT 1 FROM actions_runners WHERE id=? AND revoked_at IS NULL) RETURNING run_id`
-  )
-    .bind(
-      runner.id,
-      leaseHash,
-      now + RUNNER_LEASE_MS,
-      now,
-      now,
-      runner.namespace_id,
-      runner.repository_id,
-      runner.repository_id,
-      runner.labels_json,
-      runner.id,
-      runner.id,
-      runner.id
+  const now = Date.now();
+  const capacity = input.data.capacity
+    ? RunnerCapacitySchema.parse(input.data.capacity)
+    : null;
+  const budget = input.data.budget ? RunnerBudgetSchema.parse(input.data.budget) : null;
+  if (capacity || budget) {
+    await env.DB.prepare(
+      `UPDATE actions_runners SET
+        capacity_json=COALESCE(?,capacity_json),budget_json=COALESCE(?,budget_json),
+        capacity_reported_at=CASE WHEN ? IS NULL THEN capacity_reported_at ELSE ? END,
+        last_seen_at=? WHERE id=? AND revoked_at IS NULL`
     )
-    .first<{ run_id: string }>();
-  if (!claimed)
-    return (
-      (await claimGithubRunner(env, runner)) ?? dataResponse({ run: null, pollAfterSeconds: 5 })
-    );
-  const row = await env.DB.prepare(`${runsSelect} WHERE a.id=?`)
-    .bind(claimed.run_id)
-    .first<RunRow>();
-  if (!row) return errorResponse(409, "conflict", "Claimed run is unavailable.");
-  try {
-    const response = await env.AUTH.fetch(
-      new Request("https://auth.internal/internal/actions-job-token", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ runId: row.id, runnerId: runner.id, leaseToken }),
-      })
-    );
-    const body: unknown = JSON.parse((await readTextLimited(response.body, 8192)) ?? "null");
-    const credential = z
-      .object({ data: z.object({ token: z.string().regex(/^ge_job_[0-9a-f]{64}$/) }) })
-      .safeParse(body);
-    if (!response.ok || !credential.success) throw new Error("Job credential could not be issued.");
-    await publishCheck(env, runDetails(row));
-    return dataResponse({
-      run: {
-        id: row.id,
-        repositoryId: row.repository_id,
-        repository: `${row.owner}/${row.repository}`,
-        workflowPath: row.path,
-        workflowSource: row.workflow_source,
-        sha: row.commit_oid,
-        ref: row.source_ref.startsWith("refs/") ? row.source_ref : `refs/heads/${row.source_ref}`,
-        event: row.trigger_kind,
-        eventPayload: JSON.parse(row.event_json),
-        token: credential.data.data.token,
-        permission: row.permission,
-        timeoutMinutes: row.timeout_minutes,
-      },
-      leaseToken,
-      leaseExpiresAt: row.lease_expires_at,
-    });
-  } catch {
-    await env.DB.batch([
-      env.DB.prepare(
-        "UPDATE actions_runner_runs SET status='completed',conclusion='failure',completed_at=?,log='The job credential could not be issued.' WHERE run_id=? AND lease_hash=? AND status='running'"
-      ).bind(Date.now(), row.id, leaseHash),
-      env.DB.prepare("UPDATE actions_job_tokens SET revoked_at=? WHERE run_id=?").bind(
-        Date.now(),
-        row.id
-      ),
-    ]);
-    const failed = await getRunnerRun(env, row.id);
-    if (failed) await publishCheck(env, failed);
-    createLogger(env.LOG_LEVEL, { service: "runner-broker" }).error(
-      "runner:job-credential-failed",
-      { runId: row.id }
-    );
-    return errorResponse(503, "internal_error", "The job credential could not be issued.");
+      .bind(
+        capacity ? JSON.stringify(capacity) : null,
+        budget ? JSON.stringify(budget) : null,
+        capacity ? now : null,
+        now,
+        now,
+        runner.id
+      )
+      .run();
+    if (capacity) {
+      await env.DB.prepare(
+        `INSERT OR IGNORE INTO actions_runner_samples (runner_id,minute,load1,mem_free_mb,busy)
+         VALUES (?,?,?,?,?)`
+      )
+        .bind(
+          runner.id,
+          Math.floor(now / 60_000),
+          capacity.load1,
+          capacity.memFreeMb,
+          capacity.busy
+        )
+        .run();
+    }
   }
+  const fresh = await env.DB.prepare(`${runnersSelect} WHERE r.id=? AND r.revoked_at IS NULL`)
+    .bind(runner.id)
+    .first<RunnerRow>();
+  if (!fresh) return errorResponse(401, "unauthorized", "Invalid or revoked runner registration.");
+  const cap = capacity;
+  const budgetData = budget ?? readRunnerBudget(fresh.budget_json);
+  if (
+    cap?.busy === 1 ||
+    (fresh.held_until !== null && fresh.held_until > now) ||
+    (await env.DB.prepare(
+      `SELECT 1 AS busy FROM actions_runner_runs WHERE runner_id=? AND status='running'
+       UNION ALL SELECT 1 AS busy FROM actions_github_runner_jobs WHERE runner_id=? AND status='running' LIMIT 1`
+    )
+      .bind(fresh.id, fresh.id)
+      .first())
+  )
+    return dataResponse({ run: null, pollAfterSeconds: 5 });
+
+  const used = await runnerUsageMinutes24h(env, fresh.id, now);
+  const candidates = await listRunnerCandidates(env, fresh);
+  const peerCache = new Map<string, RunnerPeer[]>();
+  for (const candidate of candidates) {
+    const evaluated = evaluateRunnerCandidate(fresh, cap, budgetData, used, candidate);
+    if (evaluated.reasons.length) {
+      await saveRunnerDeferral(env, candidate.kind, candidate.id, fresh.id, evaluated.reasons, now);
+      continue;
+    }
+    let peers = peerCache.get(candidate.repository_id);
+    if (!peers) {
+      peers = await runnerPeersForJob(env, fresh, candidate.repository_id, now);
+      peerCache.set(candidate.repository_id, peers);
+    }
+    if (betterPeerExists(peers, evaluated.claim.labels, evaluated.claim, cap, budgetData, used, candidate.created_at, now)) {
+      await saveRunnerDeferral(env, candidate.kind, candidate.id, fresh.id, ["peer-preferred"], now);
+      continue;
+    }
+    const leaseToken = randomHex(32);
+    const leaseHash = await sha256Hex(leaseToken);
+    const claimed = await claimRunnerCandidate(
+      env,
+      fresh,
+      candidate,
+      evaluated.claim.minutes,
+      leaseHash,
+      now,
+      fresh.capacity_reported_at
+    );
+    if (!claimed) continue;
+    await clearRunnerDeferral(env, candidate.kind, candidate.id);
+    if (candidate.kind === "github") {
+      const response = await claimGithubRunner(env, fresh, candidate.id, evaluated.claim, leaseToken, leaseHash, now);
+      if (response) return response;
+      continue;
+    }
+    const row = await env.DB.prepare(`${runsSelect} WHERE a.id=?`)
+      .bind(candidate.id)
+      .first<RunRow>();
+    if (!row) return errorResponse(409, "conflict", "Claimed run is unavailable.");
+    try {
+      const response = await env.AUTH.fetch(
+        new Request("https://auth.internal/internal/actions-job-token", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ runId: row.id, runnerId: fresh.id, leaseToken }),
+        })
+      );
+      const body: unknown = JSON.parse((await readTextLimited(response.body, 8192)) ?? "null");
+      const credential = z
+        .object({ data: z.object({ token: z.string().regex(/^ge_job_[0-9a-f]{64}$/) }) })
+        .safeParse(body);
+      if (!response.ok || !credential.success) throw new Error("Job credential could not be issued.");
+      await publishCheck(env, runDetails(row));
+      return dataResponse({
+        run: {
+          id: row.id,
+          repositoryId: row.repository_id,
+          repository: `${row.owner}/${row.repository}`,
+          workflowPath: row.path,
+          workflowSource: row.workflow_source,
+          sha: row.commit_oid,
+          ref: row.source_ref.startsWith("refs/") ? row.source_ref : `refs/heads/${row.source_ref}`,
+          event: row.trigger_kind,
+          eventPayload: JSON.parse(row.event_json),
+          token: credential.data.data.token,
+          permission: row.permission,
+          timeoutMinutes: row.timeout_minutes,
+        },
+        leaseToken,
+        leaseExpiresAt: row.lease_expires_at,
+      });
+    } catch {
+      const failedAt = Date.now();
+      const failed = await env.DB.prepare(
+        "UPDATE actions_runner_runs SET status='completed',conclusion='failure',completed_at=?,log='The job credential could not be issued.' WHERE run_id=? AND lease_hash=? AND status='running' RETURNING run_id"
+      ).bind(failedAt, row.id, leaseHash).first();
+      if (failed) await recordRunnerFailure(env, fresh.id, failedAt);
+      await env.DB.prepare("UPDATE actions_job_tokens SET revoked_at=? WHERE run_id=?")
+        .bind(failedAt, row.id).run();
+      const completed = await getRunnerRun(env, row.id);
+      if (completed) await publishCheck(env, completed);
+      createLogger(env.LOG_LEVEL, { service: "runner-broker" }).error(
+        "runner:job-credential-failed", { runId: row.id }
+      );
+      return errorResponse(503, "internal_error", "The job credential could not be issued.");
+    }
+  }
+  return dataResponse({ run: null, pollAfterSeconds: 5 });
 }
 
 export async function runnerMachineRequest(request: Request, env: RunnerEnv): Promise<Response> {
@@ -663,6 +751,8 @@ export async function runnerMachineRequest(request: Request, env: RunnerEnv): Pr
         .first();
       if (!prior)
         return errorResponse(409, "conflict", "The runner no longer owns this job lease.");
+    } else {
+      await clearRunnerFailures(env, runner.id);
     }
     await env.DB.prepare(
       "UPDATE actions_job_tokens SET revoked_at=COALESCE(revoked_at,?) WHERE run_id=?"
