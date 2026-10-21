@@ -429,6 +429,25 @@ async function validateOutput(outputDir, manifest) {
       : verification.team_id !== manifest.team_id)
   )
     throw new ClientError("INVALID_OUTPUT");
+  if (
+    stageFamily(manifest.stage).windows &&
+    (verification.bundle_id !== manifest.bundle_id ||
+      verification.version !== manifest.version ||
+      verification.architecture !== manifest.architecture)
+  )
+    throw new ClientError("INVALID_OUTPUT");
+  if (
+    !stageFamily(manifest.stage).windows &&
+    !stageFamily(manifest.stage).ios &&
+    (verification.team_id !== manifest.team_id ||
+      verification.bundle_id !== manifest.bundle_id ||
+      verification.version !== manifest.version ||
+      verification.architecture !== manifest.architecture ||
+      ((manifest.stage === "finalize" || manifest.stage === "dmg_finalize") &&
+        (verification.notarization_id !== manifest.notarization_id ||
+          verification.notary_archive_sha256 !== manifest.notary_archive_sha256)))
+  )
+    throw new ClientError("INVALID_OUTPUT");
   const expectedOutput = {
     sign: "signed.tar.gz",
     finalize: "product.zip",
@@ -467,36 +486,32 @@ async function validateOutput(outputDir, manifest) {
 
 async function executePlatform(manifest, inputFile, outputDir, credentialsProvider, templateFile) {
   const family = stageFamily(manifest.stage);
+  const credentials = manifest.stage.endsWith("finalize") ? undefined : credentialsProvider;
   if (family.windows) {
     if (process.platform !== "win32") throw new ClientError("NATIVE_HOST_REQUIRED");
     return (await import("./windows.mjs")).executeWindows(
       manifest,
       inputFile,
       outputDir,
-      credentialsProvider
+      credentials
     );
   }
   if (process.platform !== "darwin") throw new ClientError("NATIVE_HOST_REQUIRED");
   if (family.ios)
-    return (await import("./ios-sign.mjs")).executeIos(
-      manifest,
-      inputFile,
-      outputDir,
-      credentialsProvider
-    );
+    return (await import("./ios-sign.mjs")).executeIos(manifest, inputFile, outputDir, credentials);
   if (family.dmg)
     return (await import("./dmg.mjs")).executeDmg(
       manifest,
       inputFile,
       outputDir,
-      credentialsProvider,
+      credentials,
       templateFile
     );
   return (await import("./macos-sign.mjs")).executeMacos(
     manifest,
     inputFile,
     outputDir,
-    credentialsProvider
+    credentials
   );
 }
 
@@ -533,7 +548,7 @@ export async function runSigning({
     const started = await client.start();
     const manifest = started.manifest;
     if (manifest.stage === "windows_sign") {
-      const identityMode = manifest.profile?.policy?.windowsIdentity;
+      const identityMode = manifest.identity_mode;
       if (!new Set(["azure-managed-identity", "azure-workload-identity"]).has(identityMode))
         throw new ClientError("WINDOWS_IDENTITY_UNAPPROVED");
     }
@@ -574,28 +589,37 @@ export async function runSigning({
       credentialsProvided = true;
       if (heartbeatError) throw new ClientError("HEARTBEAT_FAILED");
       const authorization = await client.authorizeSign(manifest.stage);
+      if (
+        !Number.isSafeInteger(authorization.expiresAt) ||
+        authorization.expiresAt <= Date.now() ||
+        authorization.expiresAt > context.leaseExpiresAt
+      )
+        throw new ClientError("INVALID_RESPONSE");
       if (family.windows) {
         if (
-          authorization.credentials?.identityMode !== manifest.profile.policy.windowsIdentity ||
-          Object.keys(authorization.credentials).length !== 1 ||
-          !Number.isSafeInteger(authorization.expiresAt) ||
-          authorization.expiresAt <= Date.now()
+          authorization.credentials?.identityMode !== manifest.identity_mode ||
+          Object.keys(authorization.credentials).length !== 1
         )
           throw new ClientError("INVALID_RESPONSE");
         return authorization.credentials;
       }
       if (manifest.stage.endsWith("finalize")) {
-        if (authorization.credentials !== undefined) throw new ClientError("INVALID_RESPONSE");
         return;
       }
       return family.ios
         ? iosCredentialsSchema.parse(authorization.credentials)
         : credentialsSchema.parse(authorization.credentials);
     };
-    if (family.windows || manifest.stage.endsWith("finalize")) await credentialsProvider();
+    if (manifest.stage.endsWith("finalize")) await credentialsProvider();
     if (heartbeatError) throw new ClientError("HEARTBEAT_FAILED");
     if (platformExecutor)
-      await platformExecutor(manifest, inputFile, outputDir, credentialsProvider, templateFile);
+      await platformExecutor(
+        manifest,
+        inputFile,
+        outputDir,
+        manifest.stage.endsWith("finalize") ? undefined : credentialsProvider,
+        templateFile
+      );
     else await executePlatform(manifest, inputFile, outputDir, credentialsProvider, templateFile);
     if (heartbeatError) throw new ClientError("HEARTBEAT_FAILED");
     const verification = await validateOutput(outputDir, manifest);

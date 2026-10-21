@@ -30,7 +30,6 @@ import {
 } from "./contract.mjs";
 import { approvedAzureIdentityMode } from "./windows-identity.mjs";
 
-const SUBJECT = "CN=VOIDCARVE LABS, O=VOIDCARVE LABS, L=Mississauga, S=Ontario, C=CA";
 const TIMESTAMP_URL = "http://timestamp.acs.microsoft.com";
 const SIGNABLE_EXTENSIONS = new Set([".exe", ".dll", ".node"]);
 const NSIS_TOOLS = new Map([
@@ -224,7 +223,7 @@ async function savePrivateNsisDiagnostic(error) {
     if (!selected.length) return;
 
     const diagnostic = Buffer.from(`${selected.join("\n")}\n`, "utf8");
-    target = path.join(directory, "voidcarve-nsis-diagnostic.txt");
+    target = path.join(directory, "gitedge-nsis-diagnostic.txt");
     const file = await open(target, "wx", 0o600);
     created = true;
     try {
@@ -704,7 +703,7 @@ async function signNsis(manifest, appDir, work, output, signOne, signScript, con
       version: manifest.version,
       productName: manifest.windows.product_name,
       description: manifest.windows.product_name,
-      author: "VOIDCARVE LABS",
+      author: manifest.azure.subject,
     };
     await writeFile(path.join(projectDir, "package.json"), JSON.stringify(packageJson), {
       flag: "wx",
@@ -734,7 +733,7 @@ async function signNsis(manifest, appDir, work, output, signOne, signScript, con
           signExts: [".exe", ".EXE", ".dll", ".DLL", ".node", ".NODE"],
           signExecutable: true,
           signtoolOptions: {
-            publisherName: "VOIDCARVE LABS",
+            publisherName: manifest.azure.subject,
             signingHashAlgorithms: ["sha256"],
             rfc3161TimeStampServer: TIMESTAMP_URL,
             sign: async (task) => signOne(task.path),
@@ -863,8 +862,8 @@ async function signSquirrel(manifest, appDir, work, output, signScript, configPa
           version: packageVersion,
           exe: manifest.windows.executable_name,
           description: manifest.windows.product_name,
-          authors: "VOIDCARVE LABS",
-          owners: "VOIDCARVE LABS",
+          authors: manifest.azure.subject,
+          owners: manifest.azure.subject,
           setupExe: "Setup.exe",
           setupIcon: path.join(appDir, "resources", "installer.ico"),
           skipUpdateIcon: true,
@@ -985,7 +984,7 @@ async function execute(manifestInput, inputZip, outputDir, authorize) {
     if ((await inspectPeArchitecture(executable)) !== manifest.architecture)
       throw new Error("application architecture mismatch");
     const signable = await walkSignableFiles(appDir);
-    const identityMode = approvedAzureIdentityMode(manifest.profile);
+    const identityMode = approvedAzureIdentityMode(manifest.identity_mode);
     await writeFile(
       configPath,
       JSON.stringify({
@@ -1031,7 +1030,9 @@ async function execute(manifestInput, inputZip, outputDir, authorize) {
       throw new Error("Squirrel product name is not package-safe");
     }
     failureCode = "authorization";
-    await authorize();
+    const authorization = await authorize();
+    if (authorization?.identityMode !== identityMode)
+      throw new RunnerFailure("authorization", "client:INVALID_RESPONSE");
     failureCode = "codesign";
     await invokePowerShell(script, "SignFolder", configPath, appDir, "app");
     for (const file of signable) await invokePowerShell(script, "Verify", configPath, file, "app");
@@ -1077,7 +1078,7 @@ async function execute(manifestInput, inputZip, outputDir, authorize) {
       bundle_id: manifest.bundle_id,
       version: manifest.version,
       architecture: manifest.architecture,
-      subject: SUBJECT,
+      subject: manifest.azure.subject,
       authenticode_verified: true,
       timestamp_verified: true,
       nested_signatures_verified: true,

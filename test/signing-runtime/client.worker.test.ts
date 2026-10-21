@@ -9,7 +9,11 @@ import {
   readSigningContext,
   SigningContextError,
 } from "../../scripts/signing/context.mjs";
-import { manifestSchema, verificationSchema } from "../../scripts/signing/contract.mjs";
+import {
+  manifestSchema,
+  verificationSchema,
+  windowsManifestSchema,
+} from "../../scripts/signing/contract.mjs";
 import { approvedAzureIdentityMode } from "../../scripts/signing/windows-identity.mjs";
 
 const tempDirs = [];
@@ -91,6 +95,104 @@ function verification(size, sha256) {
   };
 }
 
+function windowsVerification(size, sha256) {
+  return {
+    schema_version: 1,
+    request_id: requestId,
+    generation: 1,
+    stage: "windows_sign",
+    input_digest: inputDigest,
+    recipe_sha: hash,
+    policy_digest: `sha256:${digest}`,
+    bundle_id: "com.example.product",
+    version: "1.2.3",
+    architecture: "x64",
+    subject: "CN=Example, O=Example",
+    authenticode_verified: true,
+    timestamp_verified: true,
+    nested_signatures_verified: true,
+    files: [{ path: "product.exe", size, sha256 }],
+  };
+}
+
+function windowsManifest() {
+  return {
+    schema_version: 1,
+    request_id: requestId,
+    generation: 1,
+    stage: "windows_sign",
+    project_id: "product",
+    version: "1.2.3",
+    source_sha: hash,
+    input_digest: inputDigest,
+    recipe_sha: hash,
+    policy_digest: `sha256:${digest}`,
+    bundle_id: "com.example.product",
+    architecture: "x64",
+    windows: {
+      product_name: "Product",
+      electron_version: "38.1.0",
+      executable_name: "Product.exe",
+      installer: "nsis",
+      portable: false,
+    },
+    azure: {
+      endpoint: "https://eus.codesigning.azure.net/",
+      account: "account-one",
+      certificate_profile: "public-trust",
+      subject: "CN=Example, O=Example",
+    },
+    identity_mode: "azure-managed-identity",
+    max_artifact_bytes: 20_000_000,
+    max_unpacked_bytes: 30_000_000,
+  };
+}
+
+function iosManifest() {
+  return {
+    schema_version: 1,
+    request_id: requestId,
+    generation: 1,
+    stage: "ios_sign",
+    project_id: "product",
+    version: "1.2.3",
+    source_sha: hash,
+    input_digest: inputDigest,
+    recipe_sha: hash,
+    policy_digest: `sha256:${digest}`,
+    team_id: "ABCDEFGHIJ",
+    bundle_id: "com.example.product",
+    architecture: "arm64",
+    max_artifact_bytes: 20_000_000,
+    max_unpacked_bytes: 30_000_000,
+  };
+}
+
+function iosVerification(size, sha256) {
+  return {
+    schema_version: 1,
+    request_id: requestId,
+    generation: 1,
+    stage: "ios_sign",
+    input_digest: inputDigest,
+    recipe_sha: hash,
+    policy_digest: `sha256:${digest}`,
+    source_sha: hash,
+    version: "1.2.3",
+    architecture: "arm64",
+    team_id: "ABCDEFGHIJ",
+    bundle_id: "com.example.product",
+    codesign_verified: true,
+    identity_class: "Apple Development",
+    certificate_expiration: "2099-01-01T00:00:00Z",
+    profile_uuid: randomUUID(),
+    profile_expiration: "2099-01-01T00:00:00Z",
+    profile_type: "development",
+    authorized_device_count: 1,
+    files: [{ path: "signed.ipa", size, sha256 }],
+  };
+}
+
 async function temporaryDirectory() {
   const dir = await mkdtemp(path.join(os.tmpdir(), "gitedge-signing-test-"));
   tempDirs.push(dir);
@@ -117,18 +219,60 @@ describe("native signing context and Actions client", () => {
   });
 
   it("only accepts the profile-approved Azure host identity providers", () => {
-    expect(
-      approvedAzureIdentityMode({ policy: { windowsIdentity: "azure-managed-identity" } })
-    ).toBe("azure-managed-identity");
-    expect(
-      approvedAzureIdentityMode({ policy: { windowsIdentity: "azure-workload-identity" } })
-    ).toBe("azure-workload-identity");
-    expect(() => approvedAzureIdentityMode({ policy: { windowsIdentity: "azure-cli" } })).toThrow(
+    expect(approvedAzureIdentityMode("azure-managed-identity")).toBe("azure-managed-identity");
+    expect(approvedAzureIdentityMode("azure-workload-identity")).toBe("azure-workload-identity");
+    expect(() => approvedAzureIdentityMode("azure-cli")).toThrow(
       "approved Azure identity provider missing"
     );
-    expect(() => approvedAzureIdentityMode({ policy: {} })).toThrow(
+    expect(() => approvedAzureIdentityMode(undefined)).toThrow(
       "approved Azure identity provider missing"
     );
+  });
+
+  it("validates account-specific Azure signing policy and an explicit host identity", () => {
+    const windowsManifest = {
+      schema_version: 1,
+      request_id: requestId,
+      generation: 1,
+      stage: "windows_sign",
+      project_id: "product",
+      version: "1.2.3",
+      source_sha: hash,
+      input_digest: inputDigest,
+      recipe_sha: hash,
+      policy_digest: `sha256:${digest}`,
+      bundle_id: "com.example.product",
+      architecture: "x64",
+      windows: {
+        product_name: "Product",
+        electron_version: "38.1.0",
+        executable_name: "Product.exe",
+        installer: "nsis",
+        portable: false,
+      },
+      azure: {
+        endpoint: "https://eus.codesigning.azure.net/",
+        account: "account-one",
+        certificate_profile: "public-trust",
+        subject: "CN=Example, O=Example",
+      },
+      identity_mode: "azure-managed-identity",
+      max_artifact_bytes: 20_000_000,
+      max_unpacked_bytes: 30_000_000,
+    };
+    expect(() => windowsManifestSchema.parse(windowsManifest)).not.toThrow();
+    expect(() =>
+      windowsManifestSchema.parse({ ...windowsManifest, identity_mode: "azure-cli" })
+    ).toThrow();
+    expect(() =>
+      windowsManifestSchema.parse({
+        ...windowsManifest,
+        azure: {
+          ...windowsManifest.azure,
+          endpoint: "https://evil.codesigning.azure.net.example/",
+        },
+      })
+    ).toThrow();
   });
 
   it("rejects a context file with broad POSIX permissions", async () => {
@@ -189,6 +333,7 @@ describe("native signing context and Actions client", () => {
                 private_key: "k".repeat(100),
               },
             },
+            expiresAt: Date.now() + 30_000,
           },
         });
       if (action === "output")
@@ -202,6 +347,8 @@ describe("native signing context and Actions client", () => {
         expect(Number(init.headers["content-length"])).toBe(
           Number(rangeEnd) - Number(rangeStart) + 1
         );
+        expect(init.headers["content-range"]).toMatch(/^bytes 0-\d+\/\d+$/);
+        expect(init.headers["x-part-digest"]).toMatch(/^sha256:[a-f0-9]{64}$/);
         return new Response(null, { status: 204 });
       }
       if (parsed.pathname.endsWith("/output/complete")) return Response.json({ data: {} });
@@ -257,6 +404,251 @@ describe("native signing context and Actions client", () => {
     ).toBe(false);
     expect(await readFile(contextFile).catch(() => null)).toBeNull();
     expect(await readdirSafe(workParent)).toEqual([]);
+  });
+
+  it("uses the server-approved Windows identity only after native input validation", async () => {
+    const dir = await temporaryDirectory();
+    const contextFile = path.join(dir, "run-context.json");
+    const workParent = path.join(dir, "work");
+    const runContext = context({ platform: "windows" });
+    await writeFile(contextFile, JSON.stringify(runContext), { mode: 0o600 });
+    const calls = [];
+    const fetchImpl = vi.fn(async (url, init = {}) => {
+      const parsed = new URL(url);
+      const action = parsed.pathname.split("/").slice(-1)[0];
+      calls.push({ url: parsed, init, action });
+      expect(init.headers.authorization).toBe(`Bearer ${runContext.runnerToken}`);
+      expect(init.headers["x-runner-run-id"]).toBe(runContext.runId);
+      expect(init.headers["x-runner-lease-token"]).toBe(runContext.leaseToken);
+      if (action === "start") return Response.json({ data: { manifest: windowsManifest() } });
+      if (action === "download")
+        return new Response(input, { headers: { "content-length": String(input.byteLength) } });
+      if (action === "authorize-sign")
+        return Response.json({
+          data: {
+            credentials: { identityMode: "azure-managed-identity" },
+            expiresAt: Date.now() + 30_000,
+          },
+        });
+      if (action === "output")
+        return Response.json({
+          data: { partSize: 8 * 1024 * 1024, partCount: 1, receivedParts: [] },
+        });
+      if (init.method === "PUT") return new Response(null, { status: 204 });
+      if (parsed.pathname.endsWith("/output/complete")) return Response.json({ data: {} });
+      if (action === "complete")
+        return Response.json({ data: { state: "succeeded" } }, { status: 202 });
+      throw new Error(`Unexpected signing route ${parsed.pathname}`);
+    });
+    const signed = Buffer.from("mock Windows-signed payload");
+    const report = windowsVerification(
+      signed.byteLength,
+      createHash("sha256").update(signed).digest("hex")
+    );
+    expect(() => windowsManifestSchema.parse(windowsManifest())).not.toThrow();
+    expect(() => verificationSchema.parse(report)).not.toThrow();
+    await runSigning({
+      contextFile,
+      outputParent: workParent,
+      fetchImpl,
+      sleep: async () => {},
+      contextReader: async (file) => parseSigningContext(JSON.parse(await readFile(file, "utf8"))),
+      platformExecutor: async (_manifest, _input, outputDir, credentialsProvider) => {
+        expect(await credentialsProvider()).toEqual({ identityMode: "azure-managed-identity" });
+        await writeFile(path.join(outputDir, "product.exe"), signed, { mode: 0o600 });
+        await writeFile(path.join(outputDir, "verification.json"), JSON.stringify(report), {
+          mode: 0o600,
+        });
+      },
+      bundleBuilder: async (_outputDir, _report, work) => {
+        const bytes = Buffer.from("mock Windows output archive");
+        const bundlePath = path.join(work, "mock-output.zip");
+        await writeFile(bundlePath, bytes, { mode: 0o600 });
+        return {
+          path: bundlePath,
+          size: bytes.length,
+          digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+        };
+      },
+    });
+    expect(calls.map((call) => call.action)).toEqual([
+      "start",
+      "download",
+      "authorize-sign",
+      "output",
+      "1",
+      "complete",
+      "complete",
+    ]);
+  });
+
+  it("authorizes macOS finalization while keeping signing credentials out of the native finalizer", async () => {
+    const dir = await temporaryDirectory();
+    const contextFile = path.join(dir, "run-context.json");
+    const workParent = path.join(dir, "work");
+    const runContext = context();
+    await writeFile(contextFile, JSON.stringify(runContext), { mode: 0o600 });
+    const finalManifest = {
+      ...manifest(),
+      stage: "finalize",
+      notarization_id: randomUUID(),
+      notary_archive_sha256: digest,
+    };
+    const calls = [];
+    const fetchImpl = vi.fn(async (url, init = {}) => {
+      const parsed = new URL(url);
+      const action = parsed.pathname.split("/").slice(-1)[0];
+      calls.push({ action, init });
+      if (action === "start") return Response.json({ data: { manifest: finalManifest } });
+      if (action === "download")
+        return new Response(input, { headers: { "content-length": String(input.byteLength) } });
+      if (action === "authorize-sign")
+        return Response.json({
+          data: {
+            expiresAt: Date.now() + 30_000,
+          },
+        });
+      if (action === "output")
+        return Response.json({
+          data: { partSize: 8 * 1024 * 1024, partCount: 1, receivedParts: [] },
+        });
+      if (init.method === "PUT") return new Response(null, { status: 204 });
+      if (parsed.pathname.endsWith("/output/complete")) return Response.json({ data: {} });
+      if (action === "complete")
+        return Response.json({ data: { state: "succeeded" } }, { status: 202 });
+      throw new Error(`Unexpected signing route ${parsed.pathname}`);
+    });
+    const product = Buffer.from("notarized product archive");
+    const report = {
+      ...verification(product.byteLength, createHash("sha256").update(product).digest("hex")),
+      stage: "finalize",
+      notarization_id: finalManifest.notarization_id,
+      notarization_status: "Accepted",
+      gatekeeper_verified: true,
+      staple_verified: true,
+      files: [
+        {
+          path: "product.zip",
+          size: product.byteLength,
+          sha256: createHash("sha256").update(product).digest("hex"),
+        },
+      ],
+    };
+    expect(() => manifestSchema.parse(finalManifest)).not.toThrow();
+    expect(() => verificationSchema.parse(report)).not.toThrow();
+    await runSigning({
+      contextFile,
+      outputParent: workParent,
+      fetchImpl,
+      sleep: async () => {},
+      contextReader: async (file) => parseSigningContext(JSON.parse(await readFile(file, "utf8"))),
+      platformExecutor: async (_manifest, _input, outputDir, credentialsProvider) => {
+        expect(credentialsProvider).toBeUndefined();
+        await writeFile(path.join(outputDir, "product.zip"), product, { mode: 0o600 });
+        await writeFile(path.join(outputDir, "verification.json"), JSON.stringify(report), {
+          mode: 0o600,
+        });
+      },
+      bundleBuilder: async (_outputDir, _report, work) => {
+        const bytes = Buffer.from("mock finalized output archive");
+        const bundlePath = path.join(work, "mock-output.zip");
+        await writeFile(bundlePath, bytes, { mode: 0o600 });
+        return {
+          path: bundlePath,
+          size: bytes.length,
+          digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+        };
+      },
+    });
+    expect(calls.map((call) => call.action)).toEqual([
+      "start",
+      "download",
+      "authorize-sign",
+      "output",
+      "1",
+      "complete",
+      "complete",
+    ]);
+  });
+
+  it("runs an iOS request through the pinned profile and strict per-file verification report", async () => {
+    const dir = await temporaryDirectory();
+    const contextFile = path.join(dir, "run-context.json");
+    const workParent = path.join(dir, "work");
+    const runContext = context({ platform: "ios" });
+    await writeFile(contextFile, JSON.stringify(runContext), { mode: 0o600 });
+    const calls = [];
+    const fetchImpl = vi.fn(async (url, init = {}) => {
+      const parsed = new URL(url);
+      const action = parsed.pathname.split("/").slice(-1)[0];
+      calls.push({ action, init });
+      if (action === "start") return Response.json({ data: { manifest: iosManifest() } });
+      if (action === "download")
+        return new Response(input, { headers: { "content-length": String(input.byteLength) } });
+      if (action === "authorize-sign")
+        return Response.json({
+          data: {
+            credentials: {
+              certificate_p12: "YQ==",
+              certificate_password: "one-time-credential",
+              provisioning_profile: "YQ==",
+            },
+            expiresAt: Date.now() + 30_000,
+          },
+        });
+      if (action === "output")
+        return Response.json({
+          data: { partSize: 8 * 1024 * 1024, partCount: 1, receivedParts: [] },
+        });
+      if (init.method === "PUT") return new Response(null, { status: 204 });
+      if (parsed.pathname.endsWith("/output/complete")) return Response.json({ data: {} });
+      if (action === "complete")
+        return Response.json({ data: { state: "succeeded" } }, { status: 202 });
+      throw new Error(`Unexpected signing route ${parsed.pathname}`);
+    });
+    const signed = Buffer.from("mock iOS-signed payload");
+    const report = iosVerification(
+      signed.byteLength,
+      createHash("sha256").update(signed).digest("hex")
+    );
+    expect(() => manifestSchema.parse(iosManifest())).not.toThrow();
+    expect(() => verificationSchema.parse(report)).not.toThrow();
+    await runSigning({
+      contextFile,
+      outputParent: workParent,
+      fetchImpl,
+      sleep: async () => {},
+      contextReader: async (file) => parseSigningContext(JSON.parse(await readFile(file, "utf8"))),
+      platformExecutor: async (_manifest, _input, outputDir, credentialsProvider) => {
+        expect(await credentialsProvider()).toMatchObject({
+          certificate_password: "one-time-credential",
+          provisioning_profile: "YQ==",
+        });
+        await writeFile(path.join(outputDir, "signed.ipa"), signed, { mode: 0o600 });
+        await writeFile(path.join(outputDir, "verification.json"), JSON.stringify(report), {
+          mode: 0o600,
+        });
+      },
+      bundleBuilder: async (_outputDir, _report, work) => {
+        const bytes = Buffer.from("mock iOS output archive");
+        const bundlePath = path.join(work, "mock-output.zip");
+        await writeFile(bundlePath, bytes, { mode: 0o600 });
+        return {
+          path: bundlePath,
+          size: bytes.length,
+          digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+        };
+      },
+    });
+    expect(calls.map((call) => call.action)).toEqual([
+      "start",
+      "download",
+      "authorize-sign",
+      "output",
+      "1",
+      "complete",
+      "complete",
+    ]);
   });
 });
 

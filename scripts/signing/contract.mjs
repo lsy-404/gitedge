@@ -124,10 +124,22 @@ export const macosVerificationSchema = z
 
 export const azureProfileSchema = z
   .object({
-    endpoint: z.literal("https://eus.codesigning.azure.net/"),
-    account: z.literal("voidcarve-signing"),
-    certificate_profile: z.literal("voidcarve-public-trust"),
-    subject: z.literal("CN=VOIDCARVE LABS, O=VOIDCARVE LABS, L=Mississauga, S=Ontario, C=CA"),
+    endpoint: z
+      .string()
+      .url()
+      .refine((value) => {
+        const endpoint = new URL(value);
+        return (
+          endpoint.protocol === "https:" &&
+          endpoint.hostname.endsWith(".codesigning.azure.net") &&
+          endpoint.pathname === "/" &&
+          !endpoint.search &&
+          !endpoint.hash
+        );
+      }),
+    account: z.string().regex(/^[A-Za-z0-9-]{1,64}$/),
+    certificate_profile: z.string().regex(/^[A-Za-z0-9-]{1,64}$/),
+    subject: z.string().min(1).max(512),
   })
   .strict();
 export const windowsRecipeSchema = z
@@ -155,6 +167,7 @@ export const windowsManifestSchema = z
     architecture: z.enum(["x64", "arm64"]),
     windows: windowsRecipeSchema,
     azure: azureProfileSchema,
+    identity_mode: z.enum(["azure-managed-identity", "azure-workload-identity"]),
     max_artifact_bytes: z.number().int().positive().max(2_000_000_000),
     max_unpacked_bytes: z.number().int().positive().max(8_000_000_000),
   })

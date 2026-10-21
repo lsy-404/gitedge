@@ -1,7 +1,8 @@
 # Findings
 
-- The native toolchain in `runner/` contains mature per-platform verification and packaging flows; these files were copied intact into `scripts/signing/` and are invoked only on their matching native host.
-- The broker callback contract uses GitEdge UUIDs and a runner registration credential. It does not use GitHub numeric run IDs, OIDC environment claims, or GitHub run environment variables.
-- The context reader requires a regular single-link file, a restricted POSIX mode and owner, or a protected Windows DACL owned by the current sign-host identity. The client deletes it in `finally`.
-- Multipart output uses 8 MiB parts, per-part SHA-256, content ranges and bounded retries; the final complete request carries the whole archive digest and the mature verifier's per-file report.
-- Core's current generic manifest does not yet contain the formal native platform schemas needed to invoke the copied mature executors. Windows additionally requires an explicitly approved Managed Identity or Workload Identity mode; Azure CLI is disabled. Do not treat a generic manifest as a usable signing request.
+- The SDK consumes the broker's private context file only for local identity/lease binding, validates strict owner approval and GitEdge UUIDs, and deletes the context and temporary work directory after execution.
+- Native platform manifests use the mature strict snake_case contracts; the adapters preserve their archive unpacking, signing, notarization, packaging, signature verification, and per-file SHA-256 checks.
+- All authenticated callbacks carry the runner registration token plus run UUID and lease headers. Source/template downloads verify the expected full digest, and output uses 8 MiB streamed parts with per-part SHA-256, Content-Range and an independently verified whole-archive digest.
+- Windows requires a profile-pinned Azure endpoint/account/certificate profile/subject and an explicit Managed Identity or Workload Identity mode, checked against the one-time authorize response. Azure CLI and other identity-chain providers are disabled.
+- Finalization requests require an expiring server authorization but the SDK does not pass Apple signing credentials to the mature finalizer. macOS output is bound to the approved profile, request, stage, source, and finalization notarization evidence.
+- The Actions core's stage scheduler, independent DMG template storage, and retry-idempotent completion remain cross-service integration requirements; local mock tests do not verify production native credentials or host tooling.

@@ -2,6 +2,7 @@
 
 - 2026-10-21: Created isolated branch `codex/account-runner-signing-sdk` from `85e9a18`; confirmed target signing directories are absent on this base.
 - 2026-10-21: Read the native executor sources and Actions signing contract; sent `createSigningClient` / `runSigning` contract and confirmed multipart protocol with the access owner and parent.
-- 2026-10-21: Ported native toolchain files without changing their verification logic; added UUID context validation, private file cleanup, callback headers, multipart streaming and a mocked complete HTTP execution test.
-- 2026-10-21: Enforced explicit Windows Managed Identity or Workload Identity selection and removed Azure CLI credential use. Focused runtime tests pass.
-- 2026-10-21: Core confirmed its current response still lacks formal mature per-platform manifest schemas. Waiting for those exact profile schemas before wiring the native executors; platform signing is not yet end-to-end validated.
+- 2026-10-21: Committed foundation checkpoint `43cefb4` with strict UUID context handling, private file cleanup, Actions callbacks, streaming multipart transfer, native mature tooling and the first mock protocol suite.
+- 2026-10-21: Aligned against core commit `0e13dfa` and its current changes: start manifests use mature snake_case platform contracts; verification reports retain mature per-file digests and bind source, profile, request, stage, and output archive separately without circular digests.
+- 2026-10-21: Wired Windows approved Azure identity mode and dynamic profile-pinned Azure subject/endpoint; disabled Azure CLI. Mock end-to-end tests now cover Windows identity, iOS signing, macOS signing and credential-free finalization.
+- 2026-10-21: Remaining service requirements sent to core: per-stage artifact resolution/template selection, macOS workflow stage transitions, and idempotent completion after an unknown response. Focused tests pass; real platform canaries remain external.
