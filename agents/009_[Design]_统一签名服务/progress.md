@@ -1,7 +1,6 @@
 # 操作记录
 
-- 2026-10-21：读取 agent-mode、AGENTS.md、项目索引和任务索引；在 `codex/sign-service-planning` 的 `7d5cdda82b97eb7accf46ac96ef326e98caa1fe9` 基线上只读调查。
-- 2026-10-21：核对 signing-center 的 macOS/Windows/iOS executor config、submission/snapshot/runner 校验、管理响应和请求表格；核对 signing-exec-private 三平台 workflow 当前 pin 与 host class。
-- 2026-10-21：确认调用端为 IRIS-Build、Epilogue、Oblivionis 的请求脚本；检索到 IRIS/Oblivionis/Epilogue 的 request body 当前分别带 public/private selector。未读取凭据值。
-- 2026-10-21：按用户定案编写 `docs/sign-executor-cutover.md` 与本审计更新，覆盖冻结/排空、private-only 配置、调用方合同、旧公开执行器退役、验证门槛和 stop criteria。
-- 只读计划工作：无代码修改、无测试、无 workflow dispatch、无线上配置/secret/repo改动；已运行 `git diff --check`，只提交方案与审计文件；未运行测试（不涉及代码改动）。
+- 2026-10-21：按只读方式调查 GitEdge 基线 `7d5cdda82b97eb7accf46ac96ef326e98caa1fe9`、signing-center 默认分支 `d1f97fb0635ab770851e0f69bfbce8a6fe10956c` 和已确认调用方；只记录凭据名称/职责，不读取秘密值。
+- 2026-10-21：响应后续架构选择，目标改为 GitEdge Actions 拥有签名策略、请求状态、传输、凭据授权与产物验证；每账户私有 Runner 仓库承载批准的非发现签名定义，专用账户 runner 执行。最终移除独立 signing-center 和 GitHub executor。
+- 2026-10-21：与 account-runner-repository 设计对齐：Runner 只跑自身 personal push/manual 工作流，既有项目 CI 保持原位；跨仓 source grant 精确审计，输入为已验证 archive；同 UID broker 不满足签名密钥隔离。
+- 只读方案变更：仅编辑 `docs/sign-executor-cutover.md` 与本 `/agents` 审计目录。无源代码、服务、仓库设置、凭据、runner 注册或签名请求修改；未运行测试/dispatch/deployment；提交前运行 `git diff --check`。
