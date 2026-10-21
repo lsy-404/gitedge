@@ -1,9 +1,18 @@
-import type { SigningMachineContext, SigningPlatform, SigningProfile, SigningRequest, SigningStage, SigningSubmission } from "../../../../packages/contracts/src/signing";
+import type {
+  SigningMachineContext,
+  SigningPlatform,
+  SigningProfile,
+  SigningRequest,
+  SigningStage,
+  SigningSubmission,
+} from "../../../../packages/contracts/src/signing";
 import type { TrustedUser } from "../../../../packages/contracts/src/index";
 
 declare global {
   interface Crypto {
-    readonly DigestStream: new (algorithm: string) => WritableStream<Uint8Array> & { readonly digest: Promise<ArrayBuffer> };
+    readonly DigestStream: new (
+      algorithm: string
+    ) => WritableStream<Uint8Array> & { readonly digest: Promise<ArrayBuffer> };
   }
 }
 
@@ -13,7 +22,6 @@ export interface SigningEnv {
   readonly SIGNING_COORDINATORS: DurableObjectNamespace<import("./coordinator").SigningCoordinator>;
   readonly SIGNING_ARTIFACTS: R2Bucket;
   readonly SIGNING_ENCRYPTION_KEY: string;
-  readonly SIGNING_GITHUB_TOKEN?: string;
 }
 
 export type ApprovedSigningProfile = SigningProfile;
@@ -43,12 +51,44 @@ export interface SigningHostApproval {
 }
 
 export interface SigningExecutionHooks {
-  loadApprovedProfile(user: TrustedUser, repositoryId: string, name: string): Promise<ApprovedSigningProfile | null>;
-  verifySource(user: TrustedUser, repositoryId: string, profile: ApprovedSigningProfile, input: SigningSubmission): Promise<{ body: ReadableStream<Uint8Array> } | null>;
+  loadApprovedProfile(
+    user: TrustedUser,
+    repositoryId: string,
+    name: string
+  ): Promise<ApprovedSigningProfile | null>;
+  verifySource(
+    user: TrustedUser,
+    repositoryId: string,
+    profile: ApprovedSigningProfile,
+    input: SigningSubmission
+  ): Promise<{ body: ReadableStream<Uint8Array> } | null>;
   enqueue(input: SigningQueueInput): Promise<{ runId: string }>;
-  verifySigningHost(ownerId: string, repositoryId: string, platform: SigningPlatform): Promise<SigningHostApproval | null>;
-  authorizeCredentials(context: SigningMachineContext, profile: ApprovedSigningProfile): Promise<{ credentials: Record<string, unknown>; expiresAt: number } | null>;
-  verifyOutput(input: { context: SigningMachineContext; profile: ApprovedSigningProfile; platform: SigningPlatform; sourceDigest: string; sourceCommitOid: string; version: string; outputDigest: string; outputSize: number; report: unknown }): Promise<boolean>;
+  verifySigningHost(
+    ownerId: string,
+    repositoryId: string,
+    platform: SigningPlatform
+  ): Promise<SigningHostApproval | null>;
+  verifyNotarization(
+    ownerId: string,
+    repositoryId: string,
+    profile: ApprovedSigningProfile,
+    report: unknown
+  ): Promise<"Accepted" | "In Progress" | "Invalid" | "Rejected">;
+  authorizeCredentials(
+    context: SigningMachineContext,
+    profile: ApprovedSigningProfile
+  ): Promise<{ credentials: Record<string, unknown>; expiresAt: number } | null>;
+  verifyOutput(input: {
+    context: SigningMachineContext;
+    profile: ApprovedSigningProfile;
+    platform: SigningPlatform;
+    sourceDigest: string;
+    sourceCommitOid: string;
+    version: string;
+    outputDigest: string;
+    outputSize: number;
+    report: unknown;
+  }): Promise<boolean>;
 }
 
 export interface SigningStoredRequest extends SigningRequest {
