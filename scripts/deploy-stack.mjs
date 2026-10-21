@@ -107,20 +107,33 @@ function bootstrapCyclicWorkers(configs) {
   return true;
 }
 
-// Wrangler does not create R2 buckets on deploy, so the release asset bucket is ensured first.
-function ensureReleaseAssetBucket(configs) {
-  const config = readConfig(configs.forge);
-  const bucket = config.r2_buckets?.find((entry) => entry.binding === "RELEASE_ASSETS");
-  if (!bucket) throw new Error("The Forge Worker must bind RELEASE_ASSETS.");
-  const info = spawnSync("pnpm", ["exec", "wrangler", "r2", "bucket", "info", bucket.bucket_name], {
-    encoding: "utf8",
-    env: cloudflareEnvironment(),
-  });
-  if (info.status === 0) return true;
-  console.log(`Creating R2 bucket ${bucket.bucket_name}`);
-  return run("pnpm", ["exec", "wrangler", "r2", "bucket", "create", bucket.bucket_name], {
-    cloudflare: true,
-  });
+// Wrangler requires R2 buckets to exist before deploying their bindings.
+function ensureAssetBuckets(configs) {
+  for (const [service, binding] of [
+    ["forge", "RELEASE_ASSETS"],
+    ["actions", "SIGNING_ARTIFACTS"],
+  ]) {
+    const config = readConfig(configs[service]);
+    const bucket = config.r2_buckets?.find((entry) => entry.binding === binding);
+    if (!bucket) throw new Error(`${service} must bind ${binding}.`);
+    const info = spawnSync(
+      "pnpm",
+      ["exec", "wrangler", "r2", "bucket", "info", bucket.bucket_name],
+      {
+        encoding: "utf8",
+        env: cloudflareEnvironment(),
+      }
+    );
+    if (info.status === 0) continue;
+    console.log(`Creating R2 bucket ${bucket.bucket_name}`);
+    if (
+      !run("pnpm", ["exec", "wrangler", "r2", "bucket", "create", bucket.bucket_name], {
+        cloudflare: true,
+      })
+    )
+      return false;
+  }
+  return true;
 }
 
 function ensureGithubSyncQueue(configs) {
@@ -182,7 +195,7 @@ export function deployStack({ dryRun = false } = {}) {
 
   if (!dryRun) {
     if (!migrateRemote(configs)) return false;
-    if (!ensureReleaseAssetBucket(configs)) return false;
+    if (!ensureAssetBuckets(configs)) return false;
     if (!ensureGithubSyncQueue(configs)) return false;
     if (!bootstrapCyclicWorkers(configs)) return false;
   }

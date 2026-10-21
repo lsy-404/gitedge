@@ -56,9 +56,16 @@ import {
 import { base64ToBytes, bytesToBase64 } from "../../../src/worker/common/encoding";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 import { handleGitTransfer } from "./git-transfer";
+import {
+  createSigningExecutionHooks,
+  handleSigningRoute,
+  reconcileSigningRequests,
+} from "./signing";
+import { enqueueNativeSigningRun, verifySigningHost } from "./signing-execution";
 
 export { ActionRunDurableObject as ActionRun };
 export { GitTransfer } from "./git-transfer";
+export { SigningCoordinator } from "./signing";
 
 const MAX_SNAPSHOT_FILES = 2048;
 const MAX_SNAPSHOT_BYTES = 24 * 1024 * 1024;
@@ -78,6 +85,14 @@ interface ActionsEnv extends Cloudflare.Env {
   readonly AUTH: Fetcher;
   readonly RELEASE_ASSETS: R2Bucket;
   readonly LOG_LEVEL?: string;
+}
+
+function signingExecutionHooks(env: ActionsEnv) {
+  return createSigningExecutionHooks(env, {
+    enqueue: (input) => enqueueNativeSigningRun(env, input),
+    verifySigningHost: (ownerId, repositoryId, platform) =>
+      verifySigningHost(env, ownerId, repositoryId, platform),
+  });
 }
 
 interface RepositoryRow {
@@ -922,7 +937,7 @@ async function runLimitRetryAfter(
   now: number
 ): Promise<number> {
   const oldest = await env.DB.prepare(
-    "SELECT created_at FROM actions_runs WHERE repository_id = ? AND created_at > ? ORDER BY created_at DESC LIMIT 1 OFFSET ?"
+    "SELECT created_at FROM actions_runs WHERE repository_id = ? AND created_at > ? AND NOT EXISTS (SELECT 1 FROM actions_signing_runs signing WHERE signing.run_id = actions_runs.id AND signing.stage NOT IN ('sign','windows_sign','ios_sign')) ORDER BY created_at DESC LIMIT 1 OFFSET ?"
   )
     .bind(repositoryId, now - RUN_LIMIT_WINDOW_MS, RUN_LIMIT_PER_HOUR - 1)
     .first<{ created_at: number }>();
@@ -1051,7 +1066,7 @@ async function queueActionRun(
   }
   const now = Date.now();
   const created = await env.DB.prepare(
-    "INSERT INTO actions_runs (id, repository_id, commit_oid, workflow, path, source_ref, created_by, created_at, pull_request_id, candidate_id, trigger_kind, cache_key, lockfile_hash, cache_event_type, cache_status) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM actions_runs WHERE repository_id = ? AND created_at > ?) < ?"
+    "INSERT INTO actions_runs (id, repository_id, commit_oid, workflow, path, source_ref, created_by, created_at, pull_request_id, candidate_id, trigger_kind, cache_key, lockfile_hash, cache_event_type, cache_status) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM actions_runs WHERE repository_id = ? AND created_at > ? AND NOT EXISTS (SELECT 1 FROM actions_signing_runs signing WHERE signing.run_id = actions_runs.id AND signing.stage NOT IN ('sign','windows_sign','ios_sign'))) < ?"
   )
     .bind(
       id,
@@ -1736,10 +1751,14 @@ export default {
       if (url.pathname === "/internal/push") return await handleInternalPush(request, env);
       if (url.pathname === "/internal/github-runner") return await queueGithubRunner(request, env);
       if (
-        /^\/runner\/(?:claim|heartbeat|complete|github\/(?:heartbeat|complete))$/.test(url.pathname)
+        /^\/runner\/(?:claim|heartbeat|complete|github\/(?:heartbeat|complete)|signing\/requests\/[0-9a-f-]{36}\/(?:start|heartbeat|download|authorize-sign|output(?:\/parts\/\d+|\/complete)?|complete|fail))$/.test(
+          url.pathname
+        )
       )
         return await runnerMachineRequest(request, env);
       const user = readTrustedUser(request);
+      if (url.pathname.startsWith("/signing/"))
+        return handleSigningRoute(request, env, user, signingExecutionHooks(env));
       if (request.method === "GET" && url.pathname === "/runners/overview")
         return await handleRunnerOverview(user, env, request);
       if (request.method === "GET" && url.pathname === "/runners/history")
@@ -1776,6 +1795,16 @@ export default {
     env: ActionsEnv,
     context: ExecutionContext
   ): Promise<void> {
+    context.waitUntil(
+      reconcileSigningRequests(env, signingExecutionHooks(env)).catch((cause: unknown) => {
+        createLogger(env.LOG_LEVEL, { service: "actions" }).error(
+          "actions:signing-reconcile-failed",
+          {
+            reason: cause instanceof Error ? cause.message : "unknown",
+          }
+        );
+      })
+    );
     context.waitUntil(
       runDueRunnerSchedules(
         env,

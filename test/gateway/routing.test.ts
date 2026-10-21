@@ -5,6 +5,7 @@ import {
   type GatewayService,
 } from "../../workers/gateway/src/index";
 import { emptyGatewayDatabase } from "../support/gateway-database";
+import { readTrustedUser } from "../../packages/contracts/src/index";
 
 function service(handler: (request: Request) => Response | Promise<Response>): GatewayService {
   return { fetch: async (request) => handler(request) };
@@ -35,6 +36,104 @@ function environment(
 }
 
 describe("Gateway routing", () => {
+  it.each([
+    ["POST", "signing/requests", 200],
+    ["GET", "signing/requests/8f561181-6f87-45fd-9a2a-d3e736250f6b", 200],
+    ["GET", "signing/requests/8f561181-6f87-45fd-9a2a-d3e736250f6b/download", 200],
+    ["POST", "signing/profiles", 403],
+    ["GET", "runners", 403],
+    ["POST", "runs/run/cancel", 403],
+  ])("limits job identity to signing request %s %s", async (method, path, status) => {
+    const response = await handleGatewayRequest(
+      new Request(`https://gitedge.example.com/api/actions/${path}`, {
+        method,
+        headers: { Authorization: "Bearer job-token" },
+      }),
+      {
+        ...environment({
+          auth: service(() =>
+            Response.json({
+              data: {
+                id: "owner",
+                identifier: "owner",
+                groupKey: "free",
+                token: {
+                  id: "job-token",
+                  scopes: ["repo:read"],
+                  repositoryIds: ["runner-repository"],
+                },
+                job: { runId: "run", repositoryId: "runner-repository", commitOid: "a".repeat(40) },
+              },
+            })
+          ),
+        }),
+        ACTIONS: service((request) => {
+          expect(readTrustedUser(request)?.job).toMatchObject({
+            repositoryId: "runner-repository",
+          });
+          expect(request.headers.has("Authorization")).toBe(false);
+          return new Response("forwarded");
+        }),
+      }
+    );
+    expect(response.status).toBe(status);
+  });
+  it.each([
+    "start",
+    "heartbeat",
+    "download",
+    "authorize-sign",
+    "output",
+    "output/parts/1",
+    "output/complete",
+    "complete",
+    "fail",
+  ])(
+    "forwards native signing %s with machine credentials and strips browser identity",
+    async (operation) => {
+      const id = "8f561181-6f87-45fd-9a2a-d3e736250f6b";
+      let forwarded = false;
+      const response = await handleGatewayRequest(
+        new Request(
+          `https://gitedge.example.com/api/actions/runner/signing/requests/${id}/${operation}`,
+          {
+            method:
+              operation === "download"
+                ? "GET"
+                : operation.startsWith("output/parts/")
+                  ? "PUT"
+                  : "POST",
+            headers: {
+              Authorization: "Bearer machine-token",
+              Cookie: "session=browser",
+              "X-GitEdge-User-Id": "forged",
+              "X-Runner-Lease": "lease-value",
+            },
+          }
+        ),
+        {
+          ...environment({
+            auth: service(() => {
+              throw new Error("Machine routes must use runner authentication.");
+            }),
+          }),
+          ACTIONS: service((request) => {
+            forwarded = true;
+            expect(new URL(request.url).pathname).toBe(
+              `/runner/signing/requests/${id}/${operation}`
+            );
+            expect(request.headers.get("Authorization")).toBe("Bearer machine-token");
+            expect(request.headers.get("X-Runner-Lease")).toBe("lease-value");
+            expect(request.headers.has("Cookie")).toBe(false);
+            expect(request.headers.has("X-GitEdge-User-Id")).toBe(false);
+            return new Response("machine callback");
+          }),
+        }
+      );
+      expect(response.status).toBe(200);
+      expect(forwarded).toBe(true);
+    }
+  );
   it.each(["info/refs?service=git-upload-pack", "git-upload-pack"])(
     "routes extensionless Git %s for an existing reserved-name namespace",
     async (path) => {

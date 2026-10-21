@@ -5,8 +5,9 @@ import {
 } from "../../../packages/contracts/src/index";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 import { createLogger } from "../../../src/worker/common/logger";
+import { readTextLimited } from "../../../src/worker/common/readText";
 import { activeImportPath } from "./imports";
-import { parseJson, repoResponse, type ForgeEnv, type RepositoryRow } from "./common";
+import { repoResponse, type ForgeEnv, type RepositoryRow } from "./common";
 
 const README = `# Account Runner\n\nThis private repository is the account-owned source for workflows and service configuration. GitEdge Actions workflows in this repository can coordinate the account's services. Edit files and commit them to configure services.\n`;
 const WORKFLOW = `name: Runner\non:\n  workflow_dispatch: {}\njobs:\n  node:\n    runs-on:\n      - self-hosted\n      - need-tool-node\n      - need-time-5m\n    timeout-minutes: 5\n    steps:\n      - name: Show Node.js version\n        run: node --version\n      - name: Confirm runner is available\n        run: echo "Runner job succeeded."\n`;
@@ -341,11 +342,19 @@ export async function handleAccountRunner(
       "Account Runner is available only to the account owner."
     );
   if (request.method === "POST") {
-    const hasBody = request.body !== null;
-    const payload = await parseJson(request).catch(() => undefined);
+    const text = await readTextLimited(request.body, 1024);
+    let payload: unknown;
+    try {
+      payload = text?.trim() ? JSON.parse(text) : {};
+    } catch {
+      payload = null;
+    }
     if (
-      hasBody &&
-      (typeof payload !== "object" || payload === null || Object.keys(payload).length > 0)
+      text === null ||
+      typeof payload !== "object" ||
+      payload === null ||
+      Array.isArray(payload) ||
+      Object.keys(payload).length > 0
     )
       return errorResponse(
         400,

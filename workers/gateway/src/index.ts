@@ -684,7 +684,7 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
   if (isGitHubApiPath(url.pathname)) return handleGitHubCompatibility(request, env);
 
   if (
-    /^\/api\/actions\/runner\/(?:claim|heartbeat|complete|github\/(?:heartbeat|complete))$/.test(
+    /^\/api\/actions\/runner\/(?:claim|heartbeat|complete|github\/(?:heartbeat|complete)|signing\/requests\/[0-9a-f-]{36}\/(?:start|heartbeat|download|authorize-sign|output(?:\/parts\/\d+|\/complete)?|complete|fail))$/.test(
       url.pathname
     )
   ) {
@@ -738,7 +738,18 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
       );
     const session = await authenticate(request, env.AUTH);
     if (session instanceof Response) return session;
-    if (session.authenticated && session.job && prefix !== "/api/git" && prefix !== "/api/forge")
+    const jobSigningRequest =
+      prefix === "/api/actions" &&
+      ((request.method === "POST" && url.pathname === "/api/actions/signing/requests") ||
+        (request.method === "GET" &&
+          /^\/api\/actions\/signing\/requests\/[0-9a-f-]{36}(?:\/download)?$/.test(url.pathname)));
+    if (
+      session.authenticated &&
+      session.job &&
+      prefix !== "/api/git" &&
+      prefix !== "/api/forge" &&
+      !jobSigningRequest
+    )
       return githubApiError(
         403,
         "forbidden",

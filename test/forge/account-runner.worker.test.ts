@@ -96,6 +96,29 @@ beforeEach(() => {
   });
 });
 
+it("accepts an empty forwarded request stream and rejects configuration payloads", async () => {
+  await addOwner("empty-stream-owner");
+  const response = await forge.fetch(
+    new Request("https://forge.test/account-runner", {
+      method: "POST",
+      headers: headers("empty-stream-owner", "empty-stream-owner"),
+      body: new ReadableStream({
+        start(controller) {
+          controller.close();
+        },
+      }),
+    }),
+    forgeEnv
+  );
+  expect(response.status).toBe(201);
+  for (const body of [[], { visibility: "public" }]) {
+    expect(
+      (await call("/account-runner", "POST", "empty-stream-owner", "empty-stream-owner", body))
+        .status
+    ).toBe(400);
+  }
+});
+
 async function addOwner(id: string): Promise<void> {
   await runSqlScript(
     env.DB,

@@ -296,9 +296,12 @@ describe("native signing context and Actions client", () => {
       });
       return Response.json({ data: { leaseExpiresAt: Date.now() + 60_000 } });
     });
-    await createSigningClient({ context: runContext, fetchImpl }).heartbeat();
+    const client = createSigningClient({ context: runContext, fetchImpl });
+    const previousExpiry = client.getLeaseExpiresAt();
+    await client.heartbeat();
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(String(fetchImpl.mock.calls[0][0])).toContain(`/requests/${requestId}/heartbeat`);
+    expect(client.getLeaseExpiresAt()).toBeGreaterThan(previousExpiry);
   });
 
   it("runs a signed request through native UUID API and multipart output using verified mock tooling", async () => {

@@ -34,6 +34,10 @@
       {
         "name": "GIT_TRANSFERS",
         "class_name": "GitTransfer"
+      },
+      {
+        "name": "SIGNING_COORDINATORS",
+        "class_name": "SigningCoordinator"
       }
     ]
   },
@@ -43,6 +47,10 @@
       "storage": "sqlite"
     },
     "GitTransfer": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "SigningCoordinator": {
       "type": "durable-object",
       "storage": "sqlite"
     }
@@ -58,6 +66,10 @@
     {
       "binding": "RELEASE_ASSETS",
       "bucket_name": "gitedge-release-assets"
+    },
+    {
+      "binding": "SIGNING_ARTIFACTS",
+      "bucket_name": "gitedge-signing-artifacts"
     }
   ],
   "services": [
@@ -73,6 +85,9 @@
   ],
   "triggers": {
     "crons": ["* * * * *"]
+  },
+  "secrets": {
+    "required": ["SIGNING_ENCRYPTION_KEY"]
   },
   "observability": {
     "enabled": true

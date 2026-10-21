@@ -127,6 +127,36 @@ describe("account export", () => {
 });
 
 describe("account deletion", () => {
+  it("purges the private Runner through account deletion without renaming its locked identity", async () => {
+    const owner = await createPerson("runner-delete-owner");
+    const namespace = await env.DB.prepare(
+      "SELECT id FROM namespaces WHERE created_by=? AND kind='personal'"
+    )
+      .bind(owner.id)
+      .first<{ id: string }>();
+    const repositoryId = crypto.randomUUID();
+    await env.DB.prepare(
+      "INSERT INTO repositories(id,namespace_id,created_by,slug,do_name,visibility,description,system_kind,created_at,updated_at) VALUES (?,?,?,'runner',?,'private','','account_runner',?,?)"
+    )
+      .bind(repositoryId, namespace!.id, owner.id, `repo:${repositoryId}`, Date.now(), Date.now())
+      .run();
+    expect(
+      (await authCall(owner, "/account/delete", "POST", { confirm: owner.identifier })).status
+    ).toBe(204);
+    const repository = await env.DB.prepare(
+      "SELECT slug,deleted_by,deleted_at,purge_after FROM repositories WHERE id=?"
+    )
+      .bind(repositoryId)
+      .first<{ slug: string; deleted_by: string; deleted_at: number; purge_after: number }>();
+    expect(repository).toMatchObject({ slug: "runner", deleted_by: owner.id });
+    expect(repository!.deleted_at).toBeGreaterThan(0);
+    expect(repository!.purge_after).toBeLessThanOrEqual(Date.now());
+    expect(
+      await env.DB.prepare("SELECT 1 FROM repository_paths WHERE repository_id=?")
+        .bind(repositoryId)
+        .first()
+    ).toBeNull();
+  });
   it("requires the username and recent authentication", async () => {
     const person = await createPerson("delete-guard");
     expect((await authCall(person, "/account/delete", "POST", { confirm: "wrong" })).status).toBe(
