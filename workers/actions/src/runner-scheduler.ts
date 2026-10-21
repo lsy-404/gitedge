@@ -383,7 +383,7 @@ export async function recordRunnerFailure(
   await env.DB.prepare(
     `UPDATE actions_runners SET consecutive_failures=consecutive_failures+1,
        held_until=CASE WHEN consecutive_failures+1>=? THEN
-         ?+MIN(?,?*(1 << MAX(0,consecutive_failures+1-?))) ELSE held_until END
+         ?+MIN(?,?*(1 << MIN(3,MAX(0,consecutive_failures+1-?)))) ELSE held_until END
      WHERE id=? AND revoked_at IS NULL`
   )
     .bind(
