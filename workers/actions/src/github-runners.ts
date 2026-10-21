@@ -6,12 +6,13 @@ import {
   RUNNER_LEASE_MS,
   sha256Hex,
   type GitHubRunnerJobRecord,
+  type JobClaim,
 } from "../../../packages/contracts/src/index";
-import { randomHex } from "../../../src/worker/common/encoding";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 import { readJsonLimited } from "../../../src/worker/common/readText";
 import { createLogger } from "../../../src/worker/common/logger";
 import type { RunnerEnv, RunnerRow } from "./runners";
+import { clearRunnerFailures, recordRunnerFailure } from "./runner-scheduler";
 
 export async function queueGithubRunner(request: Request, env: RunnerEnv): Promise<Response> {
   if (request.method !== "POST" || new URL(request.url).hostname !== "actions.internal")
@@ -84,13 +85,18 @@ async function forgeOperation(
 async function finish(
   env: RunnerEnv,
   id: string,
-  conclusion: "success" | "failure" | "cancelled"
+  conclusion: "success" | "failure" | "cancelled",
+  infrastructureFailure = false
 ): Promise<void> {
-  await env.DB.prepare(
-    "UPDATE actions_github_runner_jobs SET status='completed',conclusion=?,completed_at=? WHERE id=? AND status!='completed'"
+  const changed = await env.DB.prepare(
+    "UPDATE actions_github_runner_jobs SET status='completed',conclusion=?,completed_at=? WHERE id=? AND status!='completed' RETURNING runner_id"
   )
     .bind(conclusion, Date.now(), id)
-    .run();
+    .first<{ runner_id: string | null }>();
+  if (changed) {
+    if (infrastructureFailure) await recordRunnerFailure(env, changed.runner_id, Date.now());
+    else await clearRunnerFailures(env, changed.runner_id);
+  }
   try {
     await forgeOperation(env, "cleanup", id);
   } catch {
@@ -103,36 +109,17 @@ async function finish(
 
 export async function claimGithubRunner(
   env: RunnerEnv,
-  runner: RunnerRow
+  runner: RunnerRow,
+  jobId: string,
+  claim: JobClaim,
+  leaseToken: string,
+  hash: string,
+  now: number
 ): Promise<Response | null> {
-  const now = Date.now(),
-    leaseToken = randomHex(32),
-    hash = await sha256Hex(leaseToken);
   const job = await env.DB.prepare(
-    `UPDATE actions_github_runner_jobs SET status='running',runner_id=?,lease_hash=?,lease_expires_at=?,started_at=?,cleanup_pending=1
-     WHERE id=(SELECT j.id FROM actions_github_runner_jobs j JOIN forge_github_connections c ON c.id=j.connection_id
-       JOIN repositories p ON p.id=c.repository_id JOIN users u ON u.id=c.created_by
-       WHERE j.status='queued' AND c.enabled=1 AND c.runner_enabled=1 AND p.namespace_id=? AND (? IS NULL OR p.id=?)
-       AND p.deleted_at IS NULL AND p.archived=0 AND p.actions_enabled=1 AND u.disabled_at IS NULL
-       AND NOT EXISTS (SELECT 1 FROM json_each(j.labels_json) required WHERE lower(required.value) NOT IN (SELECT lower(value) FROM json_each(?)))
-       ORDER BY j.created_at,j.id LIMIT 1)
-     AND status='queued' AND NOT EXISTS (SELECT 1 FROM actions_github_runner_jobs busy WHERE busy.runner_id=? AND busy.status='running')
-     AND NOT EXISTS (SELECT 1 FROM actions_runner_runs busy WHERE busy.runner_id=? AND busy.status='running')
-     AND EXISTS (SELECT 1 FROM actions_runners WHERE id=? AND revoked_at IS NULL) RETURNING *`
+    "SELECT * FROM actions_github_runner_jobs WHERE id=? AND status='running' AND runner_id=? AND lease_hash=?"
   )
-    .bind(
-      runner.id,
-      hash,
-      now + RUNNER_LEASE_MS,
-      now,
-      runner.namespace_id,
-      runner.repository_id,
-      runner.repository_id,
-      runner.labels_json,
-      runner.id,
-      runner.id,
-      runner.id
-    )
+    .bind(jobId, runner.id, hash)
     .first<GitHubRunnerJobRecord>();
   if (!job) return null;
   try {
@@ -166,13 +153,13 @@ export async function claimGithubRunner(
         labels: JSON.parse(job.labels_json),
         encodedJitConfig: result.encodedJitConfig,
         githubRunnerId: result.githubRunnerId,
-        timeoutMinutes: 360,
+        timeoutMinutes: claim.minutes,
       },
       leaseToken,
       leaseExpiresAt: now + RUNNER_LEASE_MS,
     });
   } catch (cause) {
-    await finish(env, job.id, "failure");
+    await finish(env, job.id, "failure", true);
     createLogger(env.LOG_LEVEL, { service: "github-runner" }).warn("github-runner:start-failed", {
       id: job.id,
     });
@@ -240,6 +227,14 @@ export async function githubRunnerLease(
 
 export async function expireGithubRunners(env: RunnerEnv): Promise<void> {
   const now = Date.now();
+  const expired = await env.DB.prepare(
+    `SELECT j.id FROM actions_github_runner_jobs j LEFT JOIN actions_runners r ON r.id=j.runner_id
+     WHERE j.status='running' AND (j.lease_expires_at<=? OR j.started_at+21600000<=? OR r.id IS NULL OR r.revoked_at IS NOT NULL)
+     ORDER BY j.started_at LIMIT 20`
+  )
+    .bind(now, now)
+    .all<{ id: string }>();
+  for (const job of expired.results) await finish(env, job.id, "failure", true);
   await env.DB.prepare(
     `UPDATE actions_github_runner_jobs SET status='completed',conclusion='failure',completed_at=?
      WHERE id IN (SELECT j.id FROM actions_github_runner_jobs j JOIN forge_github_connections c ON c.id=j.connection_id

@@ -5,6 +5,7 @@ import { importSealingKey, sealText } from "../../src/worker/common/secret-box";
 import { githubRunnerOperation } from "../../workers/forge/src/github-runners";
 import { receiveGithubWebhook } from "../../workers/forge/src/github-sync";
 import { queueGithubRunner, expireGithubRunners } from "../../workers/actions/src/github-runners";
+import { recordRunnerFailure } from "../../workers/actions/src/runner-scheduler";
 import {
   runnerMachineRequest,
   runnerManagement,
@@ -91,7 +92,12 @@ async function connection(
   return id;
 }
 
-function demand(connectionId: string, id: number, action = "queued"): Request {
+function demand(
+  connectionId: string,
+  id: number,
+  action = "queued",
+  labels = ["self-hosted", "macOS", "ARM64", "ci"]
+): Request {
   return new Request("https://actions.internal/internal/github-runner", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -102,7 +108,7 @@ function demand(connectionId: string, id: number, action = "queued"): Request {
         id,
         run_id: id + 100,
         head_sha: "a".repeat(40),
-        labels: ["self-hosted", "macOS", "ARM64", "ci"],
+        labels,
       },
     }),
   });
@@ -147,14 +153,20 @@ function remoteApi(): void {
       expect(url.origin).toBe("https://api.github.com");
       expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${credential}`);
       const job = /\/actions\/jobs\/(\d+)$/.exec(url.pathname);
-      if (job)
+      if (job) {
+        const queued = await env.DB.prepare(
+          "SELECT labels_json FROM actions_github_runner_jobs WHERE github_job_id=? ORDER BY created_at DESC LIMIT 1"
+        )
+          .bind(Number(job[1]))
+          .first<{ labels_json: string }>();
         return Response.json({
           id: Number(job[1]),
           run_id: Number(job[1]) + 100,
           head_sha: "a".repeat(40),
           status: "queued",
-          labels: ["self-hosted", "macOS", "ARM64", "ci"],
+          labels: queued ? JSON.parse(queued.labels_json) : ["self-hosted", "macOS", "ARM64", "ci"],
         });
+      }
       if (url.pathname.endsWith("/generate-jitconfig")) {
         const body = JSON.parse(String(init?.body));
         const id = ++remoteRunnerId;
@@ -189,6 +201,93 @@ function remoteApi(): void {
 }
 
 describe("single-registration GitHub runner bridge", () => {
+  it("leaves a resource-incompatible job queued for a capable runner", async () => {
+    remoteApi();
+    const connectionId = await connection(repositoryA, "resource-claim");
+    const small = await registration();
+    const largeRegistration = await runnerManagement(
+      new Request("https://actions.internal/runners", {
+        method: "POST",
+        headers: trustedHeaders(owner),
+        body: JSON.stringify({
+          name: "large-linux",
+          scope: { owner: owner.identifier },
+          labels: ["self-hosted", "macOS", "ARM64", "ci"],
+        }),
+      }),
+      machineEnv,
+      owner
+    );
+    const large = (await data<{ token: string }>(largeRegistration)).token;
+    const labels = ["self-hosted", "macOS", "ARM64", "ci", "need-mem-4g"];
+    const capacity = (memFreeMb: number) => ({
+      os: "linux",
+      arch: "x64",
+      cpus: 2,
+      load1: 0.1,
+      memTotalMb: 8192,
+      memFreeMb,
+      diskFreeMb: 20_000,
+      tools: ["node"],
+      slots: 1,
+      busy: 0,
+    });
+
+    expect(
+      await data<{ run: unknown }>(await machine(small, "claim", { capacity: capacity(8192) }))
+    ).toMatchObject({ run: null });
+    expect((await queueGithubRunner(demand(connectionId, 901, "queued", labels), machineEnv)).status).toBe(202);
+    expect(
+      await machine(small, "claim", {})
+        .then((response) => data<{ run: unknown }>(response))
+    ).toMatchObject({ run: null });
+    expect(
+      await data<{ run: unknown }>(await machine(small, "claim", { capacity: capacity(630) }))
+    ).toMatchObject({ run: null });
+    expect(
+      await env.DB.prepare(
+        "SELECT status FROM actions_github_runner_jobs WHERE github_job_id=901"
+      ).first<{ status: string }>()
+    ).toEqual({ status: "queued" });
+
+    expect(
+      await data<{ run: unknown }>(
+        await machine(large, "claim", {
+          capacity: capacity(4096),
+          budget: { dailyMinutes: 100 },
+        })
+      )
+    ).toMatchObject({ run: null });
+    expect(
+      await env.DB.prepare("SELECT status FROM actions_github_runner_jobs WHERE github_job_id=901")
+        .first<{ status: string }>()
+    ).toEqual({ status: "queued" });
+    const claimed = await data<{ run: { labels: string[]; timeoutMinutes: number } | null }>(
+      await machine(large, "claim", {
+        capacity: capacity(4096),
+        budget: { dailyMinutes: 1440 },
+      })
+    );
+    expect(claimed.run).toMatchObject({ labels, timeoutMinutes: 360 });
+    const runnerId = await env.DB.prepare("SELECT id FROM actions_runners WHERE name='large-linux'")
+      .first<{ id: string }>();
+    if (!runnerId) throw new Error("Runner fixture is missing.");
+    const now = 50_000_000;
+    await recordRunnerFailure(machineEnv, runnerId.id, now);
+    await recordRunnerFailure(machineEnv, runnerId.id, now);
+    expect(
+      await env.DB.prepare("SELECT held_until FROM actions_runners WHERE id=?")
+        .bind(runnerId.id)
+        .first<{ held_until: number | null }>()
+    ).toEqual({ held_until: null });
+    await recordRunnerFailure(machineEnv, runnerId.id, now);
+    expect(
+      await env.DB.prepare("SELECT consecutive_failures,held_until FROM actions_runners WHERE id=?")
+        .bind(runnerId.id)
+        .first<{ consecutive_failures: number; held_until: number }>()
+    ).toEqual({ consecutive_failures: 3, held_until: now + 10 * 60_000 });
+  });
+
   it("serializes two repositories through one registration, owns leases, and removes temporary identities", async () => {
     remoteApi();
     lostResponse = false;

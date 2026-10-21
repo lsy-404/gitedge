@@ -8,6 +8,7 @@ import {
 } from "./runners";
 import { parseRunnerWorkflow, runnerDispatchInputs } from "./runner-workflow";
 import { queueGithubRunner, expireGithubRunners } from "./github-runners";
+import { cleanRunnerSchedulingData } from "./runner-scheduler";
 import { deliverCheck, publishCheck } from "./check-delivery";
 import type { MergeCandidateRecord } from "../../../packages/contracts/src/merge-candidates";
 import { readJsonLimited } from "../../../src/worker/common/readText";
@@ -1726,6 +1727,7 @@ export default {
       (async () => {
         await expireRunnerRuns(env);
         await expireGithubRunners(env);
+        await cleanRunnerSchedulingData(env, Date.now());
         await publishPendingChecks(env);
       })().catch((cause: unknown) => {
         const logger = createLogger(env.LOG_LEVEL, { service: "actions" });
