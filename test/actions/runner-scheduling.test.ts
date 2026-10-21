@@ -8,6 +8,8 @@ import {
   scoreRunner,
 } from "../../packages/contracts/runner-scheduling.mjs";
 import type { RunnerBudget, RunnerCapacity } from "../../packages/contracts/src/runners";
+import { RUNNER_DEFERRAL_AGE_MS } from "../../packages/contracts/src/runners";
+import { betterPeerExists, type RunnerPeer } from "../../workers/actions/src/runner-scheduler";
 
 const capacity = (overrides: Partial<RunnerCapacity> = {}): RunnerCapacity => ({
   os: "linux",
@@ -111,5 +113,33 @@ describe("runner scheduling contracts", () => {
   it("compares ordinary labels without case sensitivity", () => {
     expect(matchesLabels(["Self-Hosted", "linux"], ["self-hosted", "Linux", "ci"])).toBe(true);
     expect(matchesLabels(["arm64"], ["linux", "x64"])).toBe(false);
+  });
+
+  it("defers a usable job to a materially better peer only until the aging threshold", () => {
+    const claim = parseJobClaim(["self-hosted"]);
+    const peer: RunnerPeer = {
+      id: "peer",
+      repository_id: null,
+      labels_json: '["self-hosted"]',
+      capacity_json: JSON.stringify(capacity({ memTotalMb: 1024, memFreeMb: 630, cpus: 2 })),
+      budget_json: null,
+      used_minutes_24h: 0,
+    };
+    const own = capacity({ memTotalMb: 8192, memFreeMb: 7000, cpus: 8 });
+    expect(
+      betterPeerExists([peer], ["self-hosted"], claim, own, null, 0, 0, 10_000)
+    ).toBe(true);
+    expect(
+      betterPeerExists(
+        [peer],
+        ["self-hosted"],
+        claim,
+        own,
+        null,
+        0,
+        10_000,
+        10_000 + RUNNER_DEFERRAL_AGE_MS
+      )
+    ).toBe(false);
   });
 });

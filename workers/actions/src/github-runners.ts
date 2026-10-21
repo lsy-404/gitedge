@@ -191,8 +191,10 @@ export async function githubRunnerLease(
       if (job.conclusion !== parsed.conclusion)
         return errorResponse(409, "conflict", "The job already completed.");
     } else {
-      if ((job.lease_expires_at ?? 0) <= now || (job.started_at ?? 0) + 21_600_000 <= now)
+      if ((job.lease_expires_at ?? 0) <= now || (job.started_at ?? 0) + 21_600_000 <= now) {
+        await finish(env, job.id, "failure", true);
         return errorResponse(409, "conflict", "The job lease expired.");
+      }
       await finish(env, job.id, parsed.conclusion);
     }
     return dataResponse({ completed: true });
@@ -202,7 +204,7 @@ export async function githubRunnerLease(
     (job.lease_expires_at ?? 0) <= now ||
     (job.started_at ?? 0) + 21_600_000 <= now
   ) {
-    if (job.status === "running") await finish(env, job.id, "failure");
+    if (job.status === "running") await finish(env, job.id, "failure", true);
     return dataResponse({ cancelled: true, assigned: job.assigned === 1, leaseExpiresAt: now });
   }
   const status = z
