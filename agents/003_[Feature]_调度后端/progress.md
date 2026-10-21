@@ -1,0 +1,10 @@
+# Progress
+
+- Read the full approved design, repository rules, project index, and existing runner scheduling task notes.
+- Loaded Agent Mode, Cloudflare platform, and Workers best-practices guidance. Retrieved current official Workers best-practices documentation; no Cloudflare D1 documentation MCP is available.
+- Confirmed current base `4d44da9`, clean branch `codex/runner-backend`, and no repository changes before implementation.
+- Committed shared typed request/response contracts and the Node/Worker shared pure parser/matcher/scorer: `098640df96bde2446a5dd16676acfc1d435e9d5e`. Added the tie-safe history cursor contract in `949146623c641801697cb8f1651a80eee8276d4b`.
+- Implemented migration 0047, combined GitEdge/GitHub candidate scheduling, validation and persistence of current capacity/budget, matching/reason codes, peer-fit aging, atomic cross-queue slot and budget checks, job deadline clamp, exponential failure holds, and cron cleanup. Commit: `bbae7428c11bec41ac1839f593db5c4b1c2bc607`.
+- Fixed heartbeat and late-completion lease expiry accounting as infrastructure failure; capped hold exponent; added regression cases for cross-queue FIFO/atomicity, clipped 24-hour use across both queues, current-request-only capacity, budget rejection, peer aging, successful reset, expired heartbeat, 10-minute initial hold, and 1-hour cap. Commit: `c38a1c6a627d7275114fdde505aa53c10016599f`.
+- Verification on this branch: `pnpm run typecheck:actions` passed; `pnpm exec vitest run --config vitest.unit.config.ts test/actions/runner-scheduling.test.ts` passed (12 tests); `pnpm exec vitest run --config vitest.config.ts test/actions/github-runner.worker.test.ts` passed (5 tests). The Cloudflare pool emitted missing sourcemap notices for external OpenID libraries but all worker tests passed.
+- The dashboard implementation is separate (`090be52e1a0430a19125312bd6e5e652f03f4e7a`, `02ac84e3e3484139c1617e30b439d59b5e9bc2e9`); integration owner is handling merge and route wiring. No deployment, live API, SSH, or credential operation was performed.
