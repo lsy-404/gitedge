@@ -10,6 +10,7 @@ import {
   FluentTextArea,
   type FluentSelectOption,
 } from "@platform-kit/fluent/vue";
+import { RouterLink } from "vue-router";
 import type { Repository, RepositorySettings } from "../lib/api";
 import { ApiError, api, errorMessage } from "../lib/api";
 import { oneOf } from "../ui/formEvents";
@@ -153,6 +154,9 @@ const dirty = computed(
     editableFields.some((field) => draft.value?.[field] !== settings.value?.[field])
 );
 const canManage = computed(() => settings.value?.canManage === true);
+const isAccountRunner = computed(
+  () => "systemKind" in props.repository && props.repository.systemKind === "account_runner"
+);
 const archiveConfirm = useTemplateRef<InstanceType<typeof ConfirmButton>>("archiveConfirm");
 const archivingNow = computed(
   () => draft.value?.archived === true && settings.value?.archived === false
@@ -327,6 +331,27 @@ watch(() => props.repository.id, load, { immediate: true });
 <template>
   <section class="repository-settings">
     <StatusState v-if="loading || error" :loading="loading" :error="error" @retry="load" />
+    <div v-else-if="settings && draft && isAccountRunner" class="settings-layout">
+      <header class="settings-header">
+        <div>
+          <h2>{{ t("repositorySettingsTitle") }}</h2>
+          <p>{{ props.repository.owner }}/{{ props.repository.name }}</p>
+        </div>
+      </header>
+      <NoticeBar intent="info">{{ t("accountRunnerSettingsLocked") }}</NoticeBar>
+      <nav class="account-runner-settings-links" :aria-label="t('accountRunnerLinks')">
+        <RouterLink :to="`/${props.repository.owner}/${props.repository.slug}/code`">{{
+          t("accountRunnerOpenCode")
+        }}</RouterLink>
+        <RouterLink
+          :to="`/${props.repository.owner}/${props.repository.slug}/tree/.github/workflows`"
+          >{{ t("accountRunnerEditWorkflows") }}</RouterLink
+        >
+        <RouterLink :to="`/${props.repository.owner}/${props.repository.slug}/actions`">{{
+          t("accountRunnerOpenActions")
+        }}</RouterLink>
+      </nav>
+    </div>
     <form v-else-if="settings && draft" class="settings-layout" @submit.prevent="submit">
       <header class="settings-header">
         <div>
@@ -717,7 +742,7 @@ watch(() => props.repository.id, load, { immediate: true });
       </div>
     </form>
     <RepositoryTopicsEditor
-      v-if="!loading && !error && settings && settings.canManage"
+      v-if="!loading && !error && settings && settings.canManage && !isAccountRunner"
       :repository="repository"
       @saved="emit('topicsSaved', $event)"
     />

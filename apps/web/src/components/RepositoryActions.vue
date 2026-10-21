@@ -76,6 +76,11 @@ const tagRefs = computed(() =>
 const chosenWorkflow = computed(
   () => workflows.value.find((workflow) => workflow.path === selectedWorkflowPath.value) ?? null
 );
+const chosenWorkflowSchedules = computed(() => {
+  const workflow = chosenWorkflow.value;
+  if (!workflow || !("schedules" in workflow) || !Array.isArray(workflow.schedules)) return [];
+  return workflow.schedules.filter((schedule): schedule is string => typeof schedule === "string");
+});
 const activeRuns = computed(() => runs.value.some((run) => run.status !== "completed"));
 const selectedRunActive = computed(
   () => selectedRun.value?.status === "queued" || selectedRun.value?.status === "running"
@@ -470,6 +475,9 @@ onUnmounted(() => clearInterval(pollingTimer));
           </p>
           <p v-if="chosenWorkflow" class="actions-muted">
             {{ t("actionsTriggers", { triggers: chosenWorkflow.triggers.join(", ") || "-" }) }}
+          </p>
+          <p v-if="chosenWorkflowSchedules.length" class="actions-muted">
+            {{ t("actionsCronSchedule", { schedules: chosenWorkflowSchedules.join(", ") }) }}
           </p>
           <NoticeBar v-if="chosenWorkflow && !chosenWorkflow.supported" intent="warning">{{
             t("actionsUnsupported", { reason: chosenWorkflow.unsupportedReason })

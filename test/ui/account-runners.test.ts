@@ -3,8 +3,15 @@ import { h } from "vue";
 import AccountRunners from "../../apps/web/src/components/AccountRunners.vue";
 import { api } from "../../apps/web/src/lib/api";
 import { i18n } from "../../apps/web/src/i18n";
+import { router } from "../../apps/web/src/router";
 import type { RunnerOverview } from "../../packages/contracts/src/runners";
-import { mountAt, settle, unmountAll } from "./task-support";
+import {
+  findButton,
+  mountAt,
+  repository as baseRepository,
+  settle,
+  unmountAll,
+} from "./task-support";
 
 function overview(overrides: Partial<RunnerOverview> = {}): RunnerOverview {
   return {
@@ -93,6 +100,7 @@ afterEach(async () => {
 describe("AccountRunners", () => {
   it("shows runner states, bounded capacity, queue claims, and reason codes", async () => {
     vi.spyOn(api, "runnerOverview").mockResolvedValue(overview());
+    vi.spyOn(api, "accountRunner").mockResolvedValue({ repository: null });
     const mounted = await mountAt("/_verify/runners", "/_verify/runners", () => h(AccountRunners));
     await settle();
     expect(mounted.root.textContent).toContain("Held");
@@ -108,13 +116,95 @@ describe("AccountRunners", () => {
     vi.spyOn(api, "runnerOverview").mockResolvedValue(
       overview({ runners: [], github: [], queue: [] })
     );
+    vi.spyOn(api, "accountRunner").mockResolvedValue({ repository: null });
     const mounted = await mountAt("/_verify/runners-empty", "/_verify/runners-empty", () =>
       h(AccountRunners)
     );
     await settle();
+    expect(mounted.root.textContent).toContain("No account Runner repository exists yet.");
+    findButton(mounted.root, "Create Runner repository");
     expect(mounted.root.textContent).toContain("No self-hosted runners are registered yet.");
     expect(mounted.root.textContent).toContain(
       "No GitHub connections route jobs to self-hosted runners."
     );
+  });
+
+  it("provisions the private service repository and opens its Actions page", async () => {
+    vi.spyOn(api, "runnerOverview").mockResolvedValue(
+      overview({ runners: [], github: [], queue: [] })
+    );
+    vi.spyOn(api, "accountRunner").mockResolvedValue({ repository: null });
+    const accountRunnerRepository = {
+      ...baseRepository,
+      id: "account-runner",
+      owner: "ada",
+      name: "Runner",
+      slug: "runner",
+      visibility: "private" as const,
+      systemKind: "account_runner" as const,
+    };
+    vi.spyOn(api, "createAccountRunner").mockResolvedValue(accountRunnerRepository);
+    const mounted = await mountAt("/_verify/account-runner", "/_verify/account-runner", () =>
+      h(AccountRunners)
+    );
+    await settle();
+    const navigation = vi.spyOn(router, "push");
+    findButton(mounted.root, "Create Runner repository").click();
+    await settle();
+    expect(api.createAccountRunner).toHaveBeenCalledOnce();
+    expect(navigation).toHaveBeenCalledWith("/ada/runner/actions");
+  });
+
+  it("shows private repository links and workflow guidance for an existing owner", async () => {
+    vi.spyOn(api, "runnerOverview").mockResolvedValue(
+      overview({ runners: [], github: [], queue: [] })
+    );
+    const accountRunnerRepository = {
+      ...baseRepository,
+      id: "account-runner",
+      owner: "ada",
+      name: "Runner",
+      slug: "runner",
+      visibility: "private" as const,
+      systemKind: "account_runner" as const,
+    };
+    vi.spyOn(api, "accountRunner").mockResolvedValue({ repository: accountRunnerRepository });
+    const mounted = await mountAt(
+      "/_verify/account-runner-owner",
+      "/_verify/account-runner-owner",
+      () => h(AccountRunners)
+    );
+    await settle();
+    expect(mounted.root.textContent).toContain("Only this account owner can access the repository");
+    expect(mounted.root.textContent).toContain(
+      "Runner workflows support manual runs and up to five UTC cron schedules"
+    );
+    expect(mounted.root.querySelector('a[href="/ada/runner/actions"]')?.textContent).toContain(
+      "Open Actions and run results"
+    );
+    expect(
+      mounted.root.querySelector('a[href="/ada/runner/tree/.github/workflows"]')?.textContent
+    ).toContain("Edit or add service workflows");
+  });
+
+  it("shows an account Runner load error and retries the owner lookup", async () => {
+    const get = vi
+      .spyOn(api, "accountRunner")
+      .mockRejectedValueOnce(new Error("Runner service unavailable"))
+      .mockResolvedValueOnce({ repository: null });
+    vi.spyOn(api, "runnerOverview").mockResolvedValue(
+      overview({ runners: [], github: [], queue: [] })
+    );
+    const mounted = await mountAt(
+      "/_verify/account-runner-error",
+      "/_verify/account-runner-error",
+      () => h(AccountRunners)
+    );
+    await settle();
+    expect(mounted.root.textContent).toContain("Request failed. Try again later.");
+    findButton(mounted.root, "Retry").click();
+    await settle();
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(mounted.root.textContent).toContain("No account Runner repository exists yet.");
   });
 });

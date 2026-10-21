@@ -688,6 +688,9 @@ export const api = {
   usage: () => request<Usage>("/api/forge/usage"),
   runnerOverview: (signal?: AbortSignal) =>
     request<RunnerOverview>("/api/actions/runners/overview", { signal }),
+  accountRunner: (signal?: AbortSignal) =>
+    request<{ repository: Repository | null }>("/api/forge/account-runner", { signal }),
+  createAccountRunner: () => request<Repository>("/api/forge/account-runner", { method: "POST" }),
   runnerHistory: (runnerId: string, before?: string | number, signal?: AbortSignal) => {
     const params = new URLSearchParams({ runner: runnerId, limit: "50" });
     if (before !== undefined) params.set("before", String(before));
