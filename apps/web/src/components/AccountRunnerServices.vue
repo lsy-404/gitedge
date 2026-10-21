@@ -10,6 +10,7 @@ import StatusState from "./StatusState.vue";
 
 const { t } = useI18n();
 const router = useRouter();
+const emit = defineEmits<{ loaded: [repository: Repository | null] }>();
 const repository = ref<Repository | null>(null);
 const loading = ref(true);
 const creating = ref(false);
@@ -39,7 +40,10 @@ async function load(): Promise<void> {
   error.value = "";
   try {
     const result = await api.accountRunner(current.signal);
-    if (!current.signal.aborted) repository.value = result.repository;
+    if (!current.signal.aborted) {
+      repository.value = result.repository;
+      emit("loaded", result.repository);
+    }
   } catch (cause) {
     if (!current.signal.aborted) error.value = errorMessage(cause, t);
   } finally {
@@ -53,6 +57,7 @@ async function create(): Promise<void> {
   error.value = "";
   try {
     repository.value = await api.createAccountRunner();
+    emit("loaded", repository.value);
     await router.push(repositoryPath("actions"));
   } catch (cause) {
     error.value = errorMessage(cause, t);

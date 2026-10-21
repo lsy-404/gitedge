@@ -566,7 +566,9 @@ export async function queueRunnerRun(
   };
   const insertRun = env.DB.prepare(
     `INSERT OR IGNORE INTO actions_runs (id,repository_id,commit_oid,workflow,path,source_ref,created_by,created_at,trigger_kind,executor,scheduled_at)
-    SELECT ?,?,?,?,?,?,?,?,?,'runner',? WHERE (SELECT COUNT(*) FROM actions_runs WHERE repository_id=? AND created_at>?) < 6`
+    SELECT ?,?,?,?,?,?,?,?,?,'runner',? WHERE (SELECT COUNT(*) FROM actions_runs a WHERE a.repository_id=? AND a.created_at>?
+      AND NOT EXISTS (SELECT 1 FROM actions_signing_runs s WHERE s.run_id=a.id
+        AND s.stage NOT IN ('sign','windows_sign','ios_sign'))) < 6`
   ).bind(
     id,
     repositoryId,
@@ -893,31 +895,49 @@ export async function runnerMachineRequest(request: Request, env: RunnerEnv): Pr
       env as RunnerEnv & SigningEnv,
       runner.id
     );
-    const signingComplete =
+    const signingOperation =
       request.method === "POST" && /\/runner\/signing\/requests\/[0-9a-f-]{36}\/complete$/i.test(pathname);
-    if (signingComplete && response.status === 202) {
+    const signingFailure =
+      request.method === "POST" && /\/runner\/signing\/requests\/[0-9a-f-]{36}\/fail$/i.test(pathname);
+    const conclusion = signingOperation && response.status === 202
+      ? "success"
+      : signingFailure && response.status === 200
+        ? "failure"
+        : null;
+    if (conclusion) {
       const runId = request.headers.get("X-Runner-Run-Id") ?? "";
       const leaseToken = request.headers.get("X-Runner-Lease-Token") ?? "";
       const hash = await sha256Hex(leaseToken);
       const now = Date.now();
       const updated = await env.DB.prepare(
-        `UPDATE actions_runner_runs SET status='completed',conclusion='success',completed_at=?,
-          log='Signing stage output verified by coordinator.',log_truncated=0
+        `UPDATE actions_runner_runs SET status='completed',conclusion=?,completed_at=?,
+          log=?,log_truncated=0
          WHERE run_id=? AND runner_id=? AND lease_hash=? AND status='running' AND cancel_requested=0
            AND lease_expires_at>? AND started_at+timeout_minutes*60000>? RETURNING run_id`
       )
-        .bind(now, runId, runner.id, hash, now, now)
+        .bind(
+          conclusion,
+          now,
+          conclusion === "success"
+            ? "Signing stage output verified by coordinator."
+            : "Signing stage reported an execution failure.",
+          runId,
+          runner.id,
+          hash,
+          now,
+          now
+        )
         .first();
       if (!updated) {
         const prior = await env.DB.prepare(
           `SELECT 1 FROM actions_runner_runs WHERE run_id=? AND runner_id=? AND lease_hash=?
-           AND status='completed' AND conclusion='success'`
+           AND status='completed' AND conclusion=?`
         )
-          .bind(runId, runner.id, hash)
+          .bind(runId, runner.id, hash, conclusion)
           .first();
         if (!prior)
           return errorResponse(409, "conflict", "The signing runner lease is no longer active.");
-      } else {
+      } else if (conclusion === "success") {
         await clearRunnerFailures(env, runner.id);
       }
       const run = await getRunnerRun(env, runId);

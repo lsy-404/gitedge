@@ -128,6 +128,7 @@ describe("owner-approved signing runner execution class", () => {
   });
 
   it("reuses the same queued run after an enqueue response is retried", async () => {
+    expect((await approve(trusted(owner))).status).toBe(200);
     const row = await env.DB.prepare(
       "SELECT operator_approved_at FROM actions_runners WHERE id=?"
     )
@@ -137,7 +138,7 @@ describe("owner-approved signing runner execution class", () => {
       requestId: crypto.randomUUID(),
       ownerId: owner.id,
       repositoryId,
-      workflowOid: "a".repeat(40),
+      workflowOid: "e".repeat(40),
       workflowPath: ".gitedge/signing/release.yml",
       workflowSource: "trusted-source",
       stage: "sign" as const,
@@ -163,6 +164,70 @@ describe("owner-approved signing runner execution class", () => {
       .bind(input.requestId)
       .first<{ count: number }>();
     expect(count?.count).toBe(1);
+  });
+
+  it("does not count completed signing continuation stages against hourly admission", async () => {
+    expect((await approve(trusted(owner))).status).toBe(200);
+    const approval = await env.DB.prepare(
+      "SELECT operator_approved_at FROM actions_runners WHERE id=?"
+    )
+      .bind(runnerId)
+      .first<{ operator_approved_at: number }>();
+    const now = Date.now();
+    const admittedRequestId = crypto.randomUUID();
+    for (let index = 0; index < 6; index += 1) {
+      const runId = crypto.randomUUID();
+      const requestId = index === 0 ? admittedRequestId : crypto.randomUUID();
+      await env.DB.batch([
+        env.DB.prepare(
+          `INSERT INTO actions_runs(id,repository_id,commit_oid,workflow,path,source_ref,created_by,created_at,trigger_kind,executor)
+           VALUES(?,?,?,'windows_sign','/.gitedge/signing/release.yml','main',?,?, 'workflow_dispatch','runner')`
+        ).bind(runId, repositoryId, `${index}`.repeat(40), owner.id, now + index),
+        env.DB.prepare(
+          `INSERT INTO actions_runner_runs(run_id,workflow_source,labels_json,permission,timeout_minutes,event_json)
+           VALUES(?,'workflow','[]','read',60,'{}')`
+        ).bind(runId),
+        env.DB.prepare(
+          `INSERT INTO actions_signing_runs(run_id,request_id,owner_id,repository_id,profile_revision,workflow_oid,platform,stage,input_digest,
+            operator_approved_by,operator_approved_at,generation,nonce,created_at)
+          VALUES(?,?,?,?,?,?,'windows','windows_sign',?,?,?,1,?,?)`
+        ).bind(
+          runId,
+          requestId,
+          owner.id,
+          repositoryId,
+          "d".repeat(40),
+          "e".repeat(40),
+          `sha256:${"b".repeat(64)}`,
+          owner.id,
+          approval!.operator_approved_at,
+          `${String(index).padStart(1, "0")}${"f".repeat(42)}`,
+          now + index
+        ),
+      ]);
+    }
+    const run = await enqueueNativeSigningRun(actionEnv, {
+      requestId: admittedRequestId,
+      ownerId: owner.id,
+      repositoryId,
+      workflowOid: "e".repeat(40),
+      workflowPath: ".github/workflows/release.yml",
+      workflowSource: "trusted workflow",
+      stage: "finalize",
+      inputDigest: `sha256:${"c".repeat(64)}`,
+      platform: "windows",
+      generation: 2,
+      nonce: "g".repeat(43),
+      timeoutMinutes: 60,
+      sourceDigest: `sha256:${"c".repeat(64)}`,
+      profileRevision: "d".repeat(40),
+      operatorApproval: {
+        operatorApproved: true,
+        approvedBy: owner.id,
+        approvedAt: approval!.operator_approved_at,
+      },
+    });
+    expect(run.runId).toMatch(/^[0-9a-f-]{36}$/i);
   });
 
   it("does not allow a machine or direct database insert to self-promote a registration", async () => {
@@ -208,6 +273,7 @@ describe("owner-approved signing runner execution class", () => {
   });
 
   it("does not let ordinary labels claim a signing binding, while normal work remains claimable", async () => {
+    expect((await approve(trusted(owner))).status).toBe(200);
     const now = Date.now();
     const signingRunId = crypto.randomUUID();
     const requestId = crypto.randomUUID();
@@ -342,15 +408,50 @@ describe("owner-approved signing runner execution class", () => {
     const outputKey = `signing/${owner.id}/${repositoryId}/${requestId}/output.zip`;
     const profileRevision = "d".repeat(40);
     const signingProfile = {
-      platform: "windows",
-      workflowOid: "e".repeat(40),
+      name: "release",
+      revision: profileRevision,
       policyDigest: `sha256:${"f".repeat(64)}`,
+      workflowOid: "e".repeat(40),
+      workflowPath: ".github/workflows/sign.yml",
+      workflowSource: "name: signing\non: workflow_dispatch\njobs: {}\n",
+      platform: "windows",
+      timeoutMinutes: 60,
+      enabled: true,
       policy: {
+        stage: "windows_sign",
+        windowsIdentity: "azure-workload-identity",
         project: {
+          id: "release",
+          enabled: true,
           max_artifact_bytes: 1024,
-          windows: { bundle_id: "com.example.app", architecture: "x64", installer: "none", portable: false },
+          windows: {
+            bundle_id: "com.example.app",
+            architecture: "x64",
+            max_unpacked_bytes: 2048,
+            product_name: "Example",
+            electron_version: "1.2.3",
+            executable_name: "example.exe",
+            installer: "nsis",
+            portable: false,
+          },
         },
-        azure: { subject: "CN=Example Publisher" },
+        sourceRepositories: [
+          {
+            id: "1",
+            fullName: "example/source",
+            workflowPath: ".github/workflows/ci.yml",
+            artifactName: "release",
+            actorIds: [1],
+            events: ["workflow_run"],
+            refs: ["refs/heads/main"],
+          },
+        ],
+        azure: {
+          endpoint: "https://example.codesigning.azure.net/",
+          account: "example",
+          certificate_profile: "release",
+          subject: "CN=Example Publisher",
+        },
       },
     };
     const machineEnv = {
@@ -372,8 +473,41 @@ describe("owner-approved signing runner execution class", () => {
             if (operation === "output-target")
               return Response.json({ data: { key: outputKey, digest: outputDigest, size: outputBytes.length } });
             if (operation === "complete") return Response.json({ data: { state: "awaiting_source" } });
+            if (operation === "fail") return Response.json({ data: { state: "failed" } });
             return Response.json({
-              data: { state: "running", manifest: { requestId } },
+              data: {
+                state: "running",
+                manifest: {
+                  schema_version: 1,
+                  request_id: requestId,
+                  generation: 1,
+                  stage: "windows_sign",
+                  project_id: "release",
+                  version: "1.2.3",
+                  source_sha: "e".repeat(40),
+                  input_digest: digest,
+                  recipe_sha: "e".repeat(40),
+                  policy_digest: `sha256:${"f".repeat(64)}`,
+                  bundle_id: "com.example.app",
+                  architecture: "x64",
+                  windows: {
+                    product_name: "Example",
+                    electron_version: "1.2.3",
+                    executable_name: "example.exe",
+                    installer: "nsis",
+                    portable: false,
+                  },
+                  azure: {
+                    endpoint: "https://example.codesigning.azure.net/",
+                    account: "example",
+                    certificate_profile: "release",
+                    subject: "CN=Example Publisher",
+                  },
+                  identity_mode: "azure-workload-identity",
+                  max_artifact_bytes: 1024,
+                  max_unpacked_bytes: 2048,
+                },
+              },
             });
           },
         }),
@@ -469,6 +603,72 @@ describe("owner-approved signing runner execution class", () => {
       .first<{ status: string; conclusion: string; completed_at: number | null }>();
     expect(persisted).toMatchObject({ status: "completed", conclusion: "success" });
     expect(persisted?.completed_at).toBeTypeOf("number");
+    const failedRunId = crypto.randomUUID();
+    const failedRequestId = crypto.randomUUID();
+    const failedLeaseToken = "7".repeat(64);
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO actions_runs(id,repository_id,commit_oid,workflow,path,source_ref,created_by,created_at,trigger_kind,executor)
+         VALUES(?,?,?,'sign','/.gitedge/signing/sign.yml','main',?,?, 'workflow_dispatch','runner')`
+      ).bind(failedRunId, repositoryId, "2".repeat(40), owner.id, Date.now()),
+      env.DB.prepare(
+        `INSERT INTO actions_runner_runs(run_id,workflow_source,labels_json,permission,timeout_minutes,event_json)
+         VALUES(?,'workflow','["windows","signing"]','read',60,'{}')`
+      ).bind(failedRunId),
+      env.DB.prepare(
+        `INSERT INTO actions_signing_runs(run_id,request_id,owner_id,repository_id,profile_revision,workflow_oid,platform,stage,input_digest,
+          operator_approved_by,operator_approved_at,generation,nonce,created_at)
+         VALUES(?,?,?,?,?,?,'windows','windows_sign',?,?,?,1,?,?)`
+      ).bind(
+        failedRunId,
+        failedRequestId,
+        owner.id,
+        repositoryId,
+        profileRevision,
+        "e".repeat(40),
+        digest,
+        owner.id,
+        approval!.operator_approved_at,
+        "g".repeat(43),
+        Date.now()
+      ),
+    ]);
+    const failedCandidate = (await listRunnerCandidates(actionEnv, signingRunner!)).find(
+      (candidate) => candidate.id === failedRunId
+    )!;
+    expect(
+      await claimRunnerCandidate(
+        actionEnv,
+        signingRunner!,
+        failedCandidate,
+        60,
+        await sha256Hex(failedLeaseToken),
+        Date.now(),
+        null
+      )
+    ).toBe(true);
+    const failRequest = () =>
+      runnerMachineRequest(
+        new Request(`https://actions.internal/runner/signing/requests/${failedRequestId}/fail`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${runnerToken}`,
+            "X-Runner-Run-Id": failedRunId,
+            "X-Runner-Lease-Token": failedLeaseToken,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ code: "execution_failed" }),
+        }),
+        machineEnv
+      );
+    expect((await failRequest()).status).toBe(200);
+    expect((await failRequest()).status).toBe(200);
+    const failedPersisted = await env.DB.prepare(
+      "SELECT status,conclusion FROM actions_runner_runs WHERE run_id=?"
+    )
+      .bind(failedRunId)
+      .first<{ status: string; conclusion: string }>();
+    expect(failedPersisted).toEqual({ status: "completed", conclusion: "failure" });
     const revoked = await runnerManagement(
       request(`/runners/${runnerId}/signing`, "DELETE"),
       actionEnv,

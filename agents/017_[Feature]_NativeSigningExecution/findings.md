@@ -7,3 +7,8 @@
 - registration 的 `execution_class`、签名平台和批准记录由近期认证 browser human owner 创建/撤销。`dedicated_host_confirmed` 表示 owner 已核对专用 host/OS identity 的操作记录，不构成硬件证明；生产 host 尚未实测，不能报告为已隔离。
 - Core 的 signing DO RPC 使用 `SIGNING_COORDINATORS`；服务端 trusted context 需包含 ownerId、runnerId、runId、leaseExpiresAt、repositoryId、workflowOid、requestId、generation、profileRevision、nonce、operatorApproved、approvedBy、approvedAt。
 - Sign-only registration只领取绑定的签名任务；ordinary registration只领取常规 GitEdge/GitHub 队列，签名任务不签发 generic `ge_job` credential。签名 run 的普通 completion 不得将 signing DO 未验证的产物置为成功。
+- 同一签名 request 的多阶段仍复用 repository 六次/小时 admission：初始 sign/windows_sign/ios_sign 计数一次，finalize/dmg续阶段从 admission count 排除；状态确认/lease仍独立执行。普通 Actions 的相同 admission SQL 由父级同步应用过滤。
+- Broker profile 必须有显式 executionClass；老 GitEdge profile 缺字段时返回重新注册提示。Signing broker 直接运行 native signing SDK，不安装或调用官方 Runner.Listener。
+- Core contract merge tightened the stored signing profile and start manifest schemas; the existing Worker callback fixture no longer matched them and failed closed. Updated the fixture to a valid Windows signing profile/manifest, preserving the production schema checks.
+- Signing SDK reports output-init identity fields in its request body while the core parser initially rejected them as unknown. Core is updating the parser to validate the duplicated run identity against the Actions-created trusted context; lease token remains validated at the Actions boundary.
+- Broker signing heartbeat watchdog initially referenced undeclared controller/signal state. Added explicit per-run abort state and await process-tree termination before posting the trusted failure callback.
