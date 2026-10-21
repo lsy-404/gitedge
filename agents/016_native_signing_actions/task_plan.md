@@ -19,4 +19,5 @@ Do not modify Actions routing, runner lifecycle/scheduler, Worker config, root p
 4. [x] Complete the DMG four-stage path and verify Apple notary acceptance before later stages.
 5. [x] Replace globally shared source GitHub token with owner/repository/profile-scoped encrypted credentials.
 6. [x] Fix machine profile read for queued start and strengthen end-to-end tests for DMG retries/stage transitions.
-7. [ ] Finish fair reconciliation and remaining audit findings, rerun validation, and commit the final checkpoint.
+7. [x] Add bounded fair stage reconciliation and preserve the official Worker digest stream and DO waitUntil logging boundaries.
+8. [x] Restore default-branch and release-tag source admission with GitHub OIDC run identity, then run focused validation and commit locally.

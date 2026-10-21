@@ -8,14 +8,6 @@ import type {
 } from "../../../../packages/contracts/src/signing";
 import type { TrustedUser } from "../../../../packages/contracts/src/index";
 
-declare global {
-  interface Crypto {
-    readonly DigestStream: new (
-      algorithm: string
-    ) => WritableStream<Uint8Array> & { readonly digest: Promise<ArrayBuffer> };
-  }
-}
-
 export interface SigningEnv {
   readonly DB: D1Database;
   readonly FORGE: Fetcher;
@@ -60,7 +52,9 @@ export interface SigningExecutionHooks {
     user: TrustedUser,
     repositoryId: string,
     profile: ApprovedSigningProfile,
-    input: SigningSubmission
+    input: SigningSubmission,
+    runIdentity?: string | null,
+    audience?: string
   ): Promise<{ body: ReadableStream<Uint8Array> } | null>;
   enqueue(input: SigningQueueInput): Promise<{ runId: string }>;
   verifySigningHost(

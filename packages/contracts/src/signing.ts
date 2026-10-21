@@ -22,12 +22,26 @@ const SigningSourceRepositorySchema = z
     id: z.string().regex(/^[1-9]\d*$/),
     fullName: z.string().regex(/^[\w.-]+\/[\w.-]+$/),
     workflowPath: z.string().regex(/^\.github\/workflows\/[\w.-]+\.ya?ml$/),
+    releaseTagPattern: z
+      .string()
+      .max(100)
+      .regex(/^\^.*\$$/)
+      .optional(),
     artifactName: z.string().min(1).max(100),
     actorIds: z.array(z.number().int().positive()).min(1).max(32),
     events: z.array(z.string().min(1).max(64)).min(1).max(8),
     refs: z.array(z.string().min(1).max(256)).min(1).max(32),
   })
-  .strict();
+  .strict()
+  .superRefine((repository, context) => {
+    if (repository.releaseTagPattern) {
+      try {
+        new RegExp(repository.releaseTagPattern);
+      } catch {
+        context.addIssue({ code: "custom", message: "signing_release_tag_pattern_invalid" });
+      }
+    }
+  });
 
 const SigningMacosRecipeSchema = z
   .object({

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { generateKeyPair, SignJWT } from "jose";
 import {
   createSigningExecutionHooks,
   handleSigningRoute,
@@ -13,6 +14,7 @@ import {
 } from "../../workers/actions/src/signing/services";
 import type { SigningExecutionHooks, SigningEnv } from "../../workers/actions/src/signing/types";
 import type { TrustedUser } from "../../packages/contracts/src/index";
+import { SigningProfileSchema } from "../../packages/contracts/src/signing";
 
 const owner: TrustedUser = { id: "owner-1", identifier: "owner", groupKey: "free" };
 const submission = {
@@ -20,8 +22,8 @@ const submission = {
   platform: "windows" as const,
   sourceRepositoryId: "1234",
   sourceCommitOid: "a".repeat(40),
-  sourceRunId: "run-123",
-  sourceArtifactId: "artifact-9",
+  sourceRunId: "1234",
+  sourceArtifactId: "9",
   sourceDigest: "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
   sourceSize: 3,
   version: "1.2.3",
@@ -112,6 +114,7 @@ if (!cryptoWithDigest.DigestStream) {
     }
   };
 }
+Object.defineProperty(globalThis, "DigestStream", { value: cryptoWithDigest.DigestStream });
 
 function environment() {
   let created = false;
@@ -436,6 +439,7 @@ describe("native signing admission", () => {
       const url = new URL(String(input));
       if (url.hostname === "api.github.com")
         authorizations.push(new Headers(init?.headers).get("Authorization") ?? "");
+      if (url.pathname === "/repos/owner/source") return Response.json({ default_branch: "main" });
       if (url.pathname.includes("/actions/runs/"))
         return Response.json({
           repository: { id: 1234 },
@@ -493,10 +497,153 @@ describe("native signing admission", () => {
         "Bearer source-token-one",
         "Bearer source-token-one",
         "Bearer source-token-one",
+        "Bearer source-token-one",
+        "Bearer source-token-two",
         "Bearer source-token-two",
         "Bearer source-token-two",
         "Bearer source-token-two",
       ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("requires a matching GitHub OIDC identity and a reachable version tag for release sources", async () => {
+    const credentials = new Map<string, { ciphertext: string }>();
+    const approvedProfileBase = {
+      ...profile,
+      policy: {
+        ...profile.policy,
+        sourceRepositories: [
+          {
+            ...profile.policy.sourceRepositories[0],
+            events: ["push"],
+            releaseTagPattern: "^v\\d+\\.\\d+\\.\\d+$",
+          },
+        ],
+      },
+    };
+    const sha256 = async (value: unknown) =>
+      `sha256:${Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(value)))), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+    const parsedProfile = SigningProfileSchema.parse(approvedProfileBase);
+    const policyDigest = await sha256(parsedProfile.policy);
+    const approvedWithoutRevision = SigningProfileSchema.parse({ ...parsedProfile, policyDigest });
+    const { revision: _previousRevision, ...immutableProfile } = approvedWithoutRevision;
+    const revision = (await sha256(immutableProfile)).slice(7, 47);
+    const approvedProfile = SigningProfileSchema.parse({ ...approvedWithoutRevision, revision });
+    const profiles = new Map([
+      [
+        `${owner.id}:runner-repo`,
+        { profile_json: JSON.stringify(approvedProfile), approved_by: owner.id, approved_at: 1 },
+      ],
+    ]);
+    const env = {
+      SIGNING_ENCRYPTION_KEY: btoa(String.fromCharCode(...new Uint8Array(32).fill(7))),
+      DB: {
+        prepare: (query: string) => ({
+          bind: (...values: string[]) => ({
+            first: async () =>
+              query.includes("SELECT profile_json")
+                ? (profiles.get(`${values[0]}:${values[1]}`) ?? null)
+                : (credentials.get(`${values[0]}:${values[1]}:${values[2]}`) ?? null),
+            run: async () => {
+              if (query.startsWith("INSERT INTO actions_signing_source_credentials"))
+                credentials.set(`${values[0]}:${values[1]}:${values[2]}`, {
+                  ciphertext: values[3]!,
+                });
+              return {};
+            },
+          }),
+        }),
+      },
+    } as unknown as SigningEnv;
+    await installSigningCredentials(env, owner.id, "runner-repo", profile.name, "github-source", {
+      token: "release-source-token",
+    });
+    const { publicKey, privateKey } = await generateKeyPair("RS256");
+    const publicJwk = await crypto.subtle.exportKey("jwk", publicKey);
+    const claims = {
+      repository_id: "1234",
+      run_id: "1234",
+      run_attempt: "1",
+      actor_id: "123",
+      ref: "refs/tags/v1.2.3",
+      event_name: "push",
+      workflow_ref: "owner/source/.github/workflows/build.yml@refs/tags/v1.2.3",
+      workflow_sha: submission.sourceCommitOid,
+    };
+    const mintIdentity = (runAttempt: string) =>
+      new SignJWT({ ...claims, run_attempt: runAttempt })
+        .setProtectedHeader({ alg: "RS256", kid: "test-key" })
+        .setIssuer("https://token.actions.githubusercontent.com")
+        .setAudience("https://actions.test")
+        .setIssuedAt()
+        .setExpirationTime("5m")
+        .sign(privateKey);
+    const githubFetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/.well-known/jwks")
+        return Response.json({
+          keys: [{ ...publicJwk, kid: "test-key", alg: "RS256", use: "sig" }],
+        });
+      if (url.pathname === "/repos/owner/source") return Response.json({ default_branch: "main" });
+      if (url.pathname.endsWith("/actions/runs/1234"))
+        return Response.json({
+          repository: { id: 1234 },
+          head_sha: submission.sourceCommitOid,
+          status: "completed",
+          conclusion: "success",
+          path: ".github/workflows/build.yml@refs/tags/v1.2.3",
+          event: "push",
+          head_branch: "v1.2.3",
+          actor: { id: 123 },
+        });
+      if (url.pathname.endsWith("/git/ref/tags/v1.2.3"))
+        return Response.json({ object: { type: "commit", sha: submission.sourceCommitOid } });
+      if (url.pathname.includes("/compare/"))
+        return Response.json({ status: "behind", ahead_by: 0 });
+      if (url.pathname.endsWith("/actions/artifacts/9/zip"))
+        return new Response(null, {
+          status: 302,
+          headers: { Location: "https://productionresultssa1.blob.core.windows.net/archive" },
+        });
+      if (url.pathname.endsWith("/actions/artifacts/9"))
+        return Response.json({
+          name: "unsigned",
+          expired: false,
+          size_in_bytes: 3,
+          workflow_run: { id: 1234, head_sha: submission.sourceCommitOid },
+        });
+      return new Response("abc");
+    });
+    vi.stubGlobal("fetch", githubFetch);
+    try {
+      const hooks = createSigningExecutionHooks(env, {
+        enqueue: vi.fn(async () => ({ runId: "22222222-2222-4222-8222-222222222222" })),
+        verifySigningHost: vi.fn(async () => null),
+      });
+      const validIdentity = await mintIdentity("1");
+      const source = await hooks.verifySource(
+        owner,
+        "runner-repo",
+        approvedProfile,
+        submission,
+        validIdentity,
+        "https://actions.test"
+      );
+      expect(source).not.toBeNull();
+      await source?.body.cancel();
+      const retriedIdentity = await mintIdentity("2");
+      await expect(
+        hooks.verifySource(
+          owner,
+          "runner-repo",
+          approvedProfile,
+          submission,
+          retriedIdentity,
+          "https://actions.test"
+        )
+      ).resolves.toBeNull();
     } finally {
       vi.unstubAllGlobals();
     }
@@ -1286,7 +1433,10 @@ describe("native signing stage reconciliation", () => {
               },
             ],
           }),
-          bind: () => ({ first: async () => ({ active: 1 }) }),
+          bind: () => ({
+            first: async () => ({ active: 1 }),
+            run: async () => ({ meta: { changes: 1 } }),
+          }),
         }),
       },
       SIGNING_COORDINATORS: { getByName: () => stub },
@@ -1425,7 +1575,10 @@ describe("native signing stage reconciliation", () => {
               },
             ],
           }),
-          bind: () => ({ first: async () => ({ active: 1 }) }),
+          bind: () => ({
+            first: async () => ({ active: 1 }),
+            run: async () => ({ meta: { changes: 1 } }),
+          }),
         }),
       },
       SIGNING_COORDINATORS: { getByName: () => stub },
@@ -1458,11 +1611,11 @@ describe("native signing stage reconciliation", () => {
   });
 
   it("only scans current nonterminal signing stages so old completed runs do not occupy the reconciliation window", async () => {
-    let query = "";
+    const queries: string[] = [];
     const env = {
       DB: {
         prepare: (sql: string) => {
-          query = sql;
+          queries.push(sql);
           return { all: async () => ({ results: [] }) };
         },
       },
@@ -1480,12 +1633,13 @@ describe("native signing stage reconciliation", () => {
       skipped: 0,
       failed: 0,
     });
+    const query = queries.join("\n");
     expect(query).toContain("s.stage='sign' AND r.status='completed' AND r.conclusion='success'");
     expect(query).toContain("s.stage='finalize' AND (r.status IN ('queued','running')");
     expect(query).toContain(
       "newer.generation>s.generation OR (newer.generation=s.generation AND newer.created_at>s.created_at)"
     );
-    expect(query).toContain("ORDER BY s.created_at DESC LIMIT 100");
+    expect(query).toContain("ORDER BY COALESCE(s.last_reconciled_at,0),s.created_at DESC LIMIT 20");
   });
 
   it("rejects a signing callback with an expired runner lease before contacting coordinator state", async () => {
