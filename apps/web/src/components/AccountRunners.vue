@@ -120,9 +120,10 @@ async function loadHistory(runnerId: string, more = false): Promise<void> {
 }
 
 function historyToggle(runnerId: string, event: Event): void {
-  if ((event.currentTarget as HTMLDetailsElement).open && !histories.value.has(runnerId))
-    void loadHistory(runnerId);
-  if (!(event.currentTarget as HTMLDetailsElement).open) {
+  const details = event.currentTarget;
+  if (!(details instanceof HTMLDetailsElement)) return;
+  if (details.open && !histories.value.has(runnerId)) void loadHistory(runnerId);
+  if (!details.open) {
     historyControllers.get(runnerId)?.abort();
     historyLoading.value = new Set([...historyLoading.value].filter((id) => id !== runnerId));
   }
@@ -348,7 +349,7 @@ onUnmounted(() => {
                     ? t("runnerSyncErrorCode", { code: connection.errorCode })
                     : connection.enabled
                       ? t("settingsActive")
-                      : t("settingsDisabled")
+                      : t("runnerConnectionDisabled")
                 }}
                 · {{ t("runnerFailureCount", { count: connection.failureCount }) }} ·
                 {{ t("runnerQueue") }}: {{ connection.queued }} ·
@@ -356,9 +357,7 @@ onUnmounted(() => {
               </div>
               <div class="row-meta">
                 {{ t("runnerLastSynced") }}:
-                {{
-                  connection.lastSyncedAt ? d(new Date(connection.lastSyncedAt), "short") : "—"
-                }}
+                {{ connection.lastSyncedAt ? d(new Date(connection.lastSyncedAt), "short") : "—" }}
                 · {{ t("runnerLastJob") }}:
                 {{ connection.lastJobAt ? d(new Date(connection.lastJobAt), "short") : "—" }}
               </div>

@@ -8,6 +8,7 @@ import {
   RunnerBudgetSchema,
   RunnerCapacitySchema,
   RUNNER_CAPACITY_STALE_MS,
+  RUNNER_DEFERRAL_AGE_MS,
   type JobClaim,
   type RegisteredRunner,
   type RunnerHistory,
@@ -80,6 +81,14 @@ interface QueueDbRow {
   labels_json: string;
   created_at: number;
   minutes: number;
+}
+
+interface DeferralDbRow {
+  job_kind: "gitedge" | "github";
+  job_id: string;
+  runner_id: string;
+  reasons_json: string;
+  updated_at: number;
 }
 
 const MAX_RUNNERS = 100;
@@ -327,8 +336,8 @@ export async function handleRunnerOverview(
           .bind(
             JSON.stringify(ids),
             now,
-            cutoff,
             now,
+            cutoff,
             now,
             cutoff,
             now,
@@ -402,6 +411,26 @@ export async function handleRunnerOverview(
           }>(),
         queueRows(env, user),
       ]);
+    const deferrals = queue.rows.length
+      ? await env.DB.prepare(
+          `SELECT d.job_kind,d.job_id,reason.key AS runner_id,reason.value AS reasons_json,d.updated_at
+          FROM actions_runner_deferrals d,json_each(d.reasons_json) reason
+          WHERE d.job_kind||':'||d.job_id IN (SELECT value FROM json_each(?))
+            AND reason.key IN (SELECT value FROM json_each(?)) AND d.updated_at>=? AND d.updated_at<=?`
+        )
+          .bind(
+            JSON.stringify(queue.rows.map((job) => `${job.kind}:${job.id}`)),
+            JSON.stringify(ids),
+            now - RUNNER_CAPACITY_STALE_MS,
+            now
+          )
+          .all<DeferralDbRow>()
+      : { results: [] as DeferralDbRow[] };
+    const recentPeerDeferrals = new Set(
+      deferrals.results
+        .filter((row) => safeLabels(row.reasons_json).includes("peer-preferred"))
+        .map((row) => `${row.job_kind}:${row.job_id}:${row.runner_id}`)
+    );
     truncated ||=
       statsResult.results.length > ids.length ||
       sampleResult.results.length > ids.length * MAX_SAMPLES ||
@@ -451,7 +480,7 @@ export async function handleRunnerOverview(
         const namespaceMatches = runner.owner === job.repository.split("/")[0];
         const repositoryMatches =
           runner.repository === null || runner.repository === job.repository.split("/")[1];
-        const reasons =
+        let reasons =
           namespaceMatches && repositoryMatches
             ? runnerUsageReasons(
                 runner,
@@ -462,6 +491,14 @@ export async function handleRunnerOverview(
                 running.has(runner.id)
               )
             : ["scope"];
+        if (
+          reasons.length === 0 &&
+          now - job.created_at < RUNNER_DEFERRAL_AGE_MS &&
+          now >= job.created_at &&
+          recentPeerDeferrals.has(`${job.kind}:${job.id}:${runnerView.id}`)
+        ) {
+          reasons = ["peer-preferred"];
+        }
         if (reasons.length) blockedBy[runnerView.id] = reasons;
       }
       return {

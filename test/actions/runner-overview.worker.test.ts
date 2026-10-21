@@ -134,6 +134,206 @@ describe("runner overview and history", () => {
     expect(body.data.queue.some((job) => job.repository.includes("private-queue"))).toBe(false);
   });
 
+  it("uses claim labels and combines GitEdge and GitHub usage in minute-based budgets", async () => {
+    const now = Date.now();
+    const capacity = {
+      os: "linux",
+      arch: "x64",
+      cpus: 4,
+      load1: null,
+      memTotalMb: 8192,
+      memFreeMb: 8192,
+      diskFreeMb: 100_000,
+      tools: [],
+      slots: 1,
+      busy: 0,
+    };
+    await env.DB.prepare(
+      "UPDATE actions_runners SET last_seen_at=?,capacity_json=?,capacity_reported_at=?,budget_json=? WHERE id=?"
+    )
+      .bind(now, JSON.stringify(capacity), now, JSON.stringify({ dailyMinutes: 1 }), runnerId)
+      .run();
+
+    const edgeRunId = crypto.randomUUID();
+    await env.DB.prepare(
+      `INSERT INTO actions_runs (id,repository_id,commit_oid,workflow,path,source_ref,created_by,created_at)
+      VALUES (?,?,?,?,?,?,?,?)`
+    )
+      .bind(
+        edgeRunId,
+        repositoryId,
+        "e".repeat(40),
+        "Usage edge",
+        ".github/workflows/usage.yml",
+        "main",
+        owner.id,
+        now - 120_000
+      )
+      .run();
+    await env.DB.prepare(
+      `INSERT INTO actions_runner_runs (run_id,workflow_source,labels_json,permission,timeout_minutes,event_json,status,
+        conclusion,runner_id,started_at,completed_at) VALUES (?,?,?,?,?,?,'completed','success',?,?,?)`
+    )
+      .bind(edgeRunId, "github", '["linux","x64"]', "read", 30, "{}", runnerId, now - 120_000, now)
+      .run();
+
+    const connectionId = crypto.randomUUID();
+    await env.DB.prepare(
+      `INSERT INTO forge_github_connections
+      (id,repository_id,owner,name,github_repository_id,github_private,created_by,enabled,runner_enabled,callback_url,
+        token_ciphertext,token_iv,secret_ciphertext,secret_iv,created_at)
+      VALUES (?,?, 'remote-owner','usage-repo',?,1,?,1,1,'https://forge.test/hook','cipher','iv','cipher','iv',?)`
+    )
+      .bind(connectionId, repositoryId, Date.now(), owner.id, now)
+      .run();
+    const githubJobId = crypto.randomUUID();
+    await env.DB.prepare(
+      `INSERT INTO actions_github_runner_jobs
+      (id,connection_id,github_job_id,github_run_id,head_oid,labels_json,status,runner_id,conclusion,created_at,started_at,completed_at)
+      VALUES (?,?,1,1,?,?,'completed',?,'success',?,?,?)`
+    )
+      .bind(
+        githubJobId,
+        connectionId,
+        "f".repeat(40),
+        '["linux","x64"]',
+        runnerId,
+        now - 120_000,
+        now - 120_000,
+        now
+      )
+      .run();
+
+    for (const kind of ["gitedge", "github"] as const) {
+      if (kind === "gitedge") {
+        const runId = crypto.randomUUID();
+        await env.DB.prepare(
+          `INSERT INTO actions_runs (id,repository_id,commit_oid,workflow,path,source_ref,created_by,created_at)
+          VALUES (?,?,?,?,?,?,?,?)`
+        )
+          .bind(
+            runId,
+            repositoryId,
+            "a".repeat(40),
+            "Budget edge",
+            ".github/workflows/budget.yml",
+            "main",
+            owner.id,
+            now
+          )
+          .run();
+        await env.DB.prepare(
+          `INSERT INTO actions_runner_runs (run_id,workflow_source,labels_json,permission,timeout_minutes,event_json,status)
+          VALUES (?,?,?,?,?,?,'queued')`
+        )
+          .bind(runId, "github", '["linux","x64","need-mem-4g"]', "read", 30, "{}")
+          .run();
+      } else {
+        await env.DB.prepare(
+          `INSERT INTO actions_github_runner_jobs
+          (id,connection_id,github_job_id,github_run_id,head_oid,labels_json,status,created_at)
+          VALUES (?,?,2,2,?,?,'queued',?)`
+        )
+          .bind(
+            crypto.randomUUID(),
+            connectionId,
+            "b".repeat(40),
+            '["linux","x64","need-mem-4g"]',
+            now
+          )
+          .run();
+      }
+    }
+
+    const response = await handleRunnerOverview(
+      trusted(owner),
+      { DB: env.DB },
+      url("/api/actions/runners/overview")
+    );
+    const body = (await response.json()) as {
+      data: {
+        runners: Array<{ id: string; usedMinutes24h: number }>;
+        queue: Array<{ kind: string; blockedBy: Record<string, string[]> }>;
+      };
+    };
+    expect(body.data.runners.find((runner) => runner.id === runnerId)?.usedMinutes24h).toBe(4);
+    expect(body.data.queue).toHaveLength(2);
+    for (const queued of body.data.queue) {
+      expect(queued.blockedBy[runnerId]).toContain("budget-daily");
+      expect(queued.blockedBy[runnerId]).not.toContain("label:need-mem-4g");
+    }
+  });
+
+  it("shows only fresh peer-preferred deferrals when the runner has no live blockers", async () => {
+    const now = Date.now();
+    const runId = crypto.randomUUID();
+    await env.DB.prepare(
+      "UPDATE actions_runners SET last_seen_at=?,capacity_json=?,capacity_reported_at=?,budget_json=NULL WHERE id=?"
+    )
+      .bind(
+        now,
+        JSON.stringify({
+          os: "linux",
+          arch: "x64",
+          cpus: 4,
+          load1: null,
+          memTotalMb: 8192,
+          memFreeMb: 8192,
+          diskFreeMb: 100_000,
+          tools: [],
+          slots: 1,
+          busy: 0,
+        }),
+        now,
+        runnerId
+      )
+      .run();
+    await env.DB.prepare(
+      `INSERT INTO actions_runs (id,repository_id,commit_oid,workflow,path,source_ref,created_by,created_at)
+      VALUES (?,?,?,?,?,?,?,?)`
+    )
+      .bind(
+        runId,
+        repositoryId,
+        "c".repeat(40),
+        "Peer preferred",
+        ".github/workflows/peer.yml",
+        "main",
+        owner.id,
+        now
+      )
+      .run();
+    await env.DB.prepare(
+      `INSERT INTO actions_runner_runs (run_id,workflow_source,labels_json,permission,timeout_minutes,event_json,status)
+      VALUES (?,?,?,?,?,?,'queued')`
+    )
+      .bind(runId, "github", '["linux","x64"]', "read", 30, "{}")
+      .run();
+    await env.DB.prepare(
+      "INSERT INTO actions_runner_deferrals (job_kind,job_id,reasons_json,updated_at) VALUES ('gitedge',?,?,?)"
+    )
+      .bind(runId, JSON.stringify({ [runnerId]: ["peer-preferred", "offline"] }), now)
+      .run();
+
+    const request = url("/api/actions/runners/overview");
+    const freshResponse = await handleRunnerOverview(trusted(owner), { DB: env.DB }, request);
+    const fresh = (await freshResponse.json()) as {
+      data: { queue: Array<{ id: string; blockedBy: Record<string, string[]> }> };
+    };
+    expect(fresh.data.queue.find((item) => item.id === runId)?.blockedBy[runnerId]).toEqual([
+      "peer-preferred",
+    ]);
+
+    await env.DB.prepare("UPDATE actions_runner_deferrals SET updated_at=? WHERE job_id=?")
+      .bind(now - 46_000, runId)
+      .run();
+    const staleResponse = await handleRunnerOverview(trusted(owner), { DB: env.DB }, request);
+    const stale = (await staleResponse.json()) as {
+      data: { queue: Array<{ id: string; blockedBy: Record<string, string[]> }> };
+    };
+    expect(stale.data.queue.find((item) => item.id === runId)?.blockedBy[runnerId]).toBeUndefined();
+  });
+
   it("uses a composite cursor to retain rows that share the same start time", async () => {
     const startedAt = Date.now() - 5000;
     const runIds: string[] = [];
@@ -187,8 +387,9 @@ describe("runner overview and history", () => {
     const second = (await secondResponse.json()) as {
       data: { items: Array<{ id: string }>; nextBefore: string | null };
     };
-    expect(second.data.items).toHaveLength(6);
-    const all = [...first.data.items, ...second.data.items].map((item) => item.id);
+    const all = [...first.data.items, ...second.data.items]
+      .map((item) => item.id)
+      .filter((id) => runIds.includes(id));
     expect(new Set(all).size).toBe(56);
     expect(all.sort()).toEqual([...runIds].sort());
   });
