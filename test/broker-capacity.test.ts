@@ -7,6 +7,7 @@ import {
   validateLocalJobClaim,
 } from "../scripts/runner-capacity.mjs";
 import { buildRunnerBrokerUnit } from "../scripts/runner-systemd-unit.mjs";
+import { createGitEdgeExecutionArgs } from "../scripts/runner-broker-execution.mjs";
 
 describe("runner capacity probes", () => {
   it("validates profile budget bounds and enforces need-label capacity plus local timeout", () => {
@@ -48,7 +49,7 @@ describe("runner capacity probes", () => {
     );
   });
 
-  it("builds a bounded unprivileged systemd unit and rejects paths that could inject directives", () => {
+  it("builds an unprivileged systemd unit without host-specific resource caps", () => {
     const unit = buildRunnerBrokerUnit({
       username: "gitedge",
       groupId: "1001",
@@ -57,8 +58,8 @@ describe("runner capacity probes", () => {
       nodePath: "/usr/bin/node",
     });
     expect(unit).toContain("User=gitedge\nGroup=1001");
-    expect(unit).toContain("MemoryMax=800M");
     expect(unit).toContain("TimeoutStopSec=60s\nKillMode=mixed");
+    expect(unit).not.toMatch(/CPUQuota=|Memory(?:High|Max)=|TasksMax=/);
     expect(unit).toContain("ExecStart=/usr/bin/node /opt/gitedge/scripts/runner-broker.mjs");
     expect(() =>
       buildRunnerBrokerUnit({
@@ -69,6 +70,51 @@ describe("runner capacity probes", () => {
         nodePath: "/usr/bin/node",
       })
     ).toThrow("install path");
+  });
+
+  it("passes the clamped deadline through to runner args for an accepted GitEdge lease", () => {
+    const capacity = {
+      cpus: 2,
+      memFreeMb: 900,
+      diskFreeMb: 5000,
+      load1: 0.2,
+      tools: ["docker"],
+    };
+    const jobClaim = validateLocalJobClaim(
+      ["self-hosted", "need-time-45m", "need-tool-docker"],
+      capacity,
+      120
+    );
+    const args = createGitEdgeExecutionArgs({
+      runnerScript: "C:/gitedge/scripts/actions-runner.mjs",
+      profile: {
+        origin: "https://git.example.com",
+        runnerPath: "/opt/actions-runner",
+        labels: ["self-hosted", "ubuntu24", "x64", "ubuntu24-1gb-light"],
+      },
+      run: {
+        repository: "acme/app",
+        sha: "a".repeat(40),
+        ref: "refs/heads/main",
+        event: "push",
+        timeoutMinutes: 90,
+      },
+      workflowFile: "/var/lib/gitedge/runs/lease/.github/workflows/check.yml",
+      actionsState: "/opt/gitedge/work/actions",
+      jobClaim,
+    });
+    expect(args).toContain("--timeout-minutes");
+    expect(args[args.indexOf("--timeout-minutes") + 1]).toBe("45");
+    expect(args.slice(-8)).toEqual([
+      "--label",
+      "self-hosted",
+      "--label",
+      "ubuntu24",
+      "--label",
+      "x64",
+      "--label",
+      "ubuntu24-1gb-light",
+    ]);
   });
 
   it("reads Linux available memory and unprivileged disk space in MiB", async () => {
