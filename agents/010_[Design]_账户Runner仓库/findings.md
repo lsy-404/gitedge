@@ -1,5 +1,7 @@
 # 调查结论
 
+- 最终复核补充：owner-only限制人类访问，owner委托agent/job仍须精确repository scope；不能阻断合法机器任务读取。当前子任务与broker同uid，文件0600不隔离同uid普通CI；签名必须专用host/VM或真实OS权限边界，不能仅建第二profile。
+
 - 账户由 `users.id` 标识；个人 namespace 有稳定 ID，但 slug 会随用户名变化。特殊仓库应以账户/namespace/repository ID 绑定，不能依赖用户名路径。
 - repositories 当前只有 public/private 可见性，namespace 内 slug 唯一。`repository_paths` 保留改名前的路径，因此旧 `runner` 路径可能继续冲突。
 - Forge 创建仓库负责数据库与 Git 存储；普通设置、协作者、转移、fork、软删除入口都必须识别并锁定特殊仓库。private 本身仍允许 namespace 成员和协作者，因此必须改共享授权解析为 owner-only。
