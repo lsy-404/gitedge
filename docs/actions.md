@@ -66,7 +66,7 @@ pnpm run runner-broker -- service stop --install-dir /path/to/gitedge
 
 The LaunchAgent invokes the Node executable and broker script in that installation, uses the current user's home directory, and writes logs under the selected state directory. Keep the installation directory in place while the service is installed.
 
-On Ubuntu 24.04, install a systemd unit as root but execute it as a dedicated unprivileged account. Initialize and register the profile as that account first so its credentials remain owned by that account, then install the service with `--run-as-user`. The unit is CPU, memory and task limited, and stops the broker with SIGTERM so active work is cancelled and its state lock is released:
+On Ubuntu 24.04, install a systemd unit as root but execute it as a dedicated unprivileged account. Initialize and register the profile as that account first so its credentials remain owned by that account, then install the service with `--run-as-user`. The unit stops the broker with SIGTERM so active work is cancelled and its state lock is released. It leaves CPU, memory and task sizing to the host's systemd policy; capacity reporting honors any cgroup v2 memory limit already applied to the service:
 
 ```sh
 sudo install -d -o gitedge -g gitedge -m 0700 /var/lib/gitedge/runner-broker

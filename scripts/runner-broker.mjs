@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { parseDocument } from "yaml";
 import { parseJobClaim, matchesLabels } from "../packages/contracts/runner-scheduling.mjs";
+import { createGitEdgeExecutionArgs } from "./runner-broker-execution.mjs";
 import {
   getRunnerCapacity,
   localExecutionMinutes,
@@ -1054,7 +1055,7 @@ function validateGitEdgeWorkflow(source, profile) {
   );
   if (!Number.isInteger(workflowMaximum) || workflowMaximum < 1)
     throw new Error("The queued workflow has an invalid total timeout.");
-  const claims = [];
+  const labelsUnion = [];
   for (const [name, job] of Object.entries(workflow.jobs)) {
     const labels = typeof job?.["runs-on"] === "string" ? [job["runs-on"]] : job?.["runs-on"];
     if (
@@ -1068,22 +1069,11 @@ function validateGitEdgeWorkflow(source, profile) {
     const timeout = job?.["timeout-minutes"] ?? 60;
     if (!Number.isInteger(timeout) || timeout < 1 || timeout > 360)
       throw new Error(`Job ${name} has an invalid timeout-minutes value.`);
-    const claim = parseJobClaim(labels, workflowMaximum);
-    if (!claim.valid) throw new Error(`Job ${name} has an invalid runner resource requirement.`);
-    claims.push(claim);
+    labelsUnion.push(...labels);
   }
-  return claims.reduce(
-    (maximum, claim) => ({
-      labels: [...new Set([...maximum.labels, ...claim.labels])],
-      memMb: Math.max(maximum.memMb, claim.memMb),
-      cpus: Math.max(maximum.cpus, claim.cpus),
-      diskMb: Math.max(maximum.diskMb, claim.diskMb),
-      tools: [...new Set([...maximum.tools, ...claim.tools])],
-      minutes: Math.min(maximum.minutes, claim.minutes),
-      valid: maximum.valid && claim.valid,
-    }),
-    { labels: [], memMb: 512, cpus: 1, diskMb: 0, tools: [], minutes: 360, valid: true }
-  );
+  const claim = parseJobClaim(labelsUnion, workflowMaximum);
+  if (!claim.valid) throw new Error("The workflow has an invalid runner resource requirement.");
+  return claim;
 }
 
 function waitChild(child, signal) {
@@ -1160,6 +1150,7 @@ function runnerScript() {
 async function runGitEdge(profile, run, leaseToken, signal) {
   let eventPayload = run.eventPayload;
   let eventPayloadSource;
+  let jobClaim;
   try {
     if (
       typeof run.workflowSource !== "string" ||
@@ -1203,7 +1194,7 @@ async function runGitEdge(profile, run, leaseToken, signal) {
     if (!["push", "workflow_dispatch"].includes(run.event))
       throw new Error(`GitEdge event ${run.event} is not supported by the local broker.`);
     validateProfileHostLabels(profile.labels);
-    const jobClaim = validateGitEdgeWorkflow(run.workflowSource, profile);
+    jobClaim = validateGitEdgeWorkflow(run.workflowSource, profile);
     const capacity = await getRunnerCapacity({
       workDirectories: [profile.directory, path.join(root, "work", "actions")],
     });
@@ -1250,30 +1241,15 @@ async function runGitEdge(profile, run, leaseToken, signal) {
   await writeFile(workflowFile, run.workflowSource, { mode: 0o600 });
   const log = createWriteStream(logFile, { mode: 0o600 });
   const actionsState = path.join(root, "work", "actions");
-  const args = [
-    runnerScript(),
-    "run",
-    "--origin",
-    profile.origin,
-    "--repository",
-    run.repository,
-    "--workflow",
+  const args = createGitEdgeExecutionArgs({
+    runnerScript: runnerScript(),
+    profile,
+    run,
     workflowFile,
-    "--runner-path",
-    profile.runnerPath,
-    "--sha",
-    run.sha,
-    "--ref",
-    run.ref,
-    "--event",
-    run.event,
-    "--timeout-minutes",
-    String(localExecutionMinutes(jobClaim, run.timeoutMinutes)),
-    "--state-dir",
     actionsState,
-  ];
-  for (const label of profile.labels) args.push("--label", label);
-  if (eventPayloadFile) args.push("--event-file", eventPayloadFile);
+    jobClaim,
+    eventPayloadFile,
+  });
   const childEnvironment = { ...process.env };
   for (const key of Object.keys(childEnvironment)) {
     if (
