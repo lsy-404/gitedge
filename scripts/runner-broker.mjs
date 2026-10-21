@@ -1193,7 +1193,7 @@ async function runGitEdge(profile, run, leaseToken, signal) {
       run.repository.toLowerCase() !== `${profile.owner}/${profile.repository}`.toLowerCase()
     )
       throw new Error("The claimed repository is outside this GitEdge repository profile.");
-    if (!["push", "workflow_dispatch"].includes(run.event))
+    if (!["push", "workflow_dispatch", "schedule"].includes(run.event))
       throw new Error(`GitEdge event ${run.event} is not supported by the local broker.`);
     validateProfileHostLabels(profile.labels);
     const workflowDemand = validateGitEdgeWorkflow(run.workflowSource, profile);

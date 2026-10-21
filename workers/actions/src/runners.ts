@@ -445,8 +445,9 @@ export async function queueRunnerRun(
   ref: string,
   oid: string,
   definition: RunnerWorkflow,
-  event: "push" | "workflow_dispatch",
-  inputs: Record<string, string | number | boolean> = {}
+  event: "push" | "workflow_dispatch" | "schedule",
+  inputs: Record<string, string | number | boolean> = {},
+  schedule?: { at: number; cron: string }
 ): Promise<ActionRunSummary | null> {
   const id = crypto.randomUUID(),
     now = Date.now();
@@ -461,6 +462,7 @@ export async function queueRunnerRun(
     ref: sourceRef,
     after: oid,
     inputs,
+    ...(schedule ? { schedule: schedule.cron } : {}),
     repository: {
       name: repo.slug,
       full_name: `${repo.owner}/${repo.slug}`,
@@ -472,44 +474,36 @@ export async function queueRunnerRun(
     pusher: { name: user.identifier },
     head_commit: { id: oid },
   };
-  const created = await env.DB.prepare(
-    `INSERT INTO actions_runs (id,repository_id,commit_oid,workflow,path,source_ref,created_by,created_at,trigger_kind,executor)
-    SELECT ?,?,?,?,?,?,?,?,?,'runner' WHERE (SELECT COUNT(*) FROM actions_runs WHERE repository_id=? AND created_at>?) < 6`
-  )
-    .bind(
-      id,
-      repositoryId,
-      oid,
-      definition.workflow.name,
-      definition.workflow.path,
-      ref.replace(/^refs\/heads\//, ""),
-      user.id,
-      now,
-      event,
-      repositoryId,
-      now - 3_600_000
-    )
-    .run();
+  const insertRun = env.DB.prepare(
+    `INSERT OR IGNORE INTO actions_runs (id,repository_id,commit_oid,workflow,path,source_ref,created_by,created_at,trigger_kind,executor,scheduled_at)
+    SELECT ?,?,?,?,?,?,?,?,?,'runner',? WHERE (SELECT COUNT(*) FROM actions_runs WHERE repository_id=? AND created_at>?) < 6`
+  ).bind(
+    id,
+    repositoryId,
+    oid,
+    definition.workflow.name,
+    definition.workflow.path,
+    ref.replace(/^refs\/heads\//, ""),
+    user.id,
+    now,
+    event,
+    schedule?.at ?? null,
+    repositoryId,
+    now - 3_600_000
+  );
+  const insertJob = env.DB.prepare(
+    "INSERT INTO actions_runner_runs (run_id,workflow_source,labels_json,permission,timeout_minutes,event_json) SELECT ?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM actions_runs WHERE id=?)"
+  ).bind(
+    id,
+    definition.source,
+    JSON.stringify(definition.labels),
+    definition.permission,
+    definition.timeoutMinutes,
+    JSON.stringify(payload),
+    id
+  );
+  const [created] = await env.DB.batch([insertRun, insertJob]);
   if (created.meta.changes !== 1) return null;
-  try {
-    await env.DB.prepare(
-      "INSERT INTO actions_runner_runs (run_id,workflow_source,labels_json,permission,timeout_minutes,event_json) VALUES (?,?,?,?,?,?)"
-    )
-      .bind(
-        id,
-        definition.source,
-        JSON.stringify(definition.labels),
-        definition.permission,
-        definition.timeoutMinutes,
-        JSON.stringify(payload)
-      )
-      .run();
-  } catch (cause) {
-    await env.DB.prepare("DELETE FROM actions_runs WHERE id=? AND executor='runner'")
-      .bind(id)
-      .run();
-    throw cause;
-  }
   const run = await getRunnerRun(env, id);
   if (!run) throw new Error("Runner run could not be initialized.");
   await publishCheck(env, run);

@@ -43,6 +43,7 @@ export const ActionEventTypeSchema = z.enum([
   "workflow_dispatch",
   "pull_request",
   "merge_group",
+  "schedule",
 ]);
 export type ActionEventType = z.infer<typeof ActionEventTypeSchema>;
 
@@ -106,7 +107,8 @@ export const ActionWorkflowSchema = z.object({
   dispatchInputs: z.record(z.string(), ActionDispatchInputSchema).optional(),
   path: z.string().min(1),
   name: z.string().min(1).max(100),
-  triggers: z.array(z.enum(["workflow_dispatch", "push", "pull_request", "merge_group"])).min(1),
+  triggers: z.array(ActionEventTypeSchema).min(1),
+  schedules: z.array(z.string().min(1).max(128)).max(5).optional(),
   triggerFilters: z.partialRecord(ActionEventTypeSchema, ActionTriggerFilterSchema).optional(),
   jobs: z.array(ActionJobSchema).max(16),
   cache: ActionCacheSchema.optional(),

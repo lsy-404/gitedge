@@ -8,6 +8,7 @@ import {
 } from "../../../packages/contracts/src/actions";
 import { RunnerLabelsSchema } from "../../../packages/contracts/src/runners";
 import { WorkflowValidationError } from "./workflow";
+import { parseCronSchedules } from "./cron";
 
 const RecordSchema = z.record(z.string(), z.unknown());
 const FilterSchema = z
@@ -57,6 +58,7 @@ export function parseRunnerWorkflow(path: string, source: string): RunnerWorkflo
   const triggers: ActionEventType[] = [];
   const filters: NonNullable<ActionWorkflow["triggerFilters"]> = {};
   let inputs: RunnerWorkflow["inputs"] = {};
+  let schedules: string[] | undefined;
   const events =
     typeof raw.on === "string"
       ? { [raw.on]: {} }
@@ -66,10 +68,16 @@ export function parseRunnerWorkflow(path: string, source: string): RunnerWorkflo
   const eventRecord = RecordSchema.safeParse(events);
   if (!eventRecord.success) fail("Workflow must declare triggers.");
   for (const [event, options] of Object.entries(eventRecord.data)) {
-    if (event !== "push" && event !== "workflow_dispatch")
-      fail(`Runner trigger '${event}' is not supported; use push or workflow_dispatch.`);
+    if (event !== "push" && event !== "workflow_dispatch" && event !== "schedule")
+      fail(`Runner trigger '${event}' is not supported; use push, workflow_dispatch or schedule.`);
     triggers.push(event);
-    if (event === "push") {
+    if (event === "schedule") {
+      try {
+        schedules = parseCronSchedules(options);
+      } catch {
+        fail("Schedule must declare one to five valid five-field cron expressions in UTC.");
+      }
+    } else if (event === "push") {
       const filter = FilterSchema.safeParse(options ?? {});
       if (!filter.success) fail("Runner push triggers currently support branch filters only.");
       filters.push = {
@@ -149,6 +157,7 @@ export function parseRunnerWorkflow(path: string, source: string): RunnerWorkflo
       jobs: [],
       executor: "runner",
       dispatchInputs: inputs,
+      ...(schedules ? { schedules } : {}),
     },
     source,
     labels: [...labels],

@@ -1,4 +1,5 @@
 import { MergeCandidateSchema } from "./merge-candidates";
+import { AccountRunnerStateSchema } from "./account-runner";
 import {
   GitHubSyncInputSchema,
   GitHubSyncEnabledSchema,
@@ -147,6 +148,32 @@ const forgePullRequest = `${forgeRepository}/pull-requests/{number}`;
 const gitRepository = "/api/git/repositories/{repositoryId}";
 
 export const API_OPERATIONS: readonly ApiOperation[] = [
+  {
+    operationId: "getAccountRunner",
+    method: "GET",
+    path: "/api/forge/account-runner",
+    service: "forge",
+    tag: "Account Runner",
+    summary: "Read the current account's private Runner service repository.",
+    scope: "repo:read",
+    anonymous: false,
+    browserSessionOnly: true,
+    status: 200,
+    response: dataOf(AccountRunnerStateSchema),
+  },
+  {
+    operationId: "createAccountRunner",
+    method: "POST",
+    path: "/api/forge/account-runner",
+    service: "forge",
+    tag: "Account Runner",
+    summary: "Provision the current account's private Runner service repository.",
+    scope: "admin",
+    anonymous: false,
+    browserSessionOnly: true,
+    status: 201,
+    response: dataOf(RepositorySchema),
+  },
   {
     operationId: "getGitHubSync",
     method: "GET",

@@ -10,6 +10,11 @@ import { parseRunnerWorkflow, runnerDispatchInputs } from "./runner-workflow";
 import { queueGithubRunner, expireGithubRunners } from "./github-runners";
 import { cleanRunnerSchedulingData } from "./runner-scheduler";
 import { handleRunnerHistory, handleRunnerOverview } from "./runner-overview";
+import {
+  runDueRunnerSchedules,
+  syncRunnerSchedules,
+  type ScheduledDefinitions,
+} from "./runner-schedules";
 import { deliverCheck, publishCheck } from "./check-delivery";
 import type { MergeCandidateRecord } from "../../../packages/contracts/src/merge-candidates";
 import { readJsonLimited } from "../../../src/worker/common/readText";
@@ -83,6 +88,7 @@ interface RepositoryRow {
   readonly actions_network_enabled: number;
   readonly actions_runner_enabled: number;
   readonly default_branch: string;
+  readonly system_kind: "account_runner" | null;
 }
 
 interface PendingCheckRow {
@@ -135,7 +141,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 async function repositoryFor(env: ActionsEnv, id: string): Promise<RepositoryRow | null> {
   return env.DB.prepare(
-    "SELECT id, visibility, archived, actions_enabled, actions_network_enabled, actions_runner_enabled, default_branch FROM repositories WHERE id = ? AND deleted_at IS NULL"
+    "SELECT id, visibility, archived, actions_enabled, actions_network_enabled, actions_runner_enabled, default_branch, system_kind FROM repositories WHERE id = ? AND deleted_at IS NULL"
   )
     .bind(id)
     .first<RepositoryRow>();
@@ -146,9 +152,15 @@ function parseRepositoryWorkflow(
   path: string,
   source: string
 ): ActionWorkflow {
-  return repo.actions_runner_enabled === 1 && path.startsWith(".github/")
-    ? parseRunnerWorkflow(path, source).workflow
-    : parseWorkflow(path, source);
+  const workflow =
+    repo.actions_runner_enabled === 1 && path.startsWith(".github/")
+      ? parseRunnerWorkflow(path, source).workflow
+      : parseWorkflow(path, source);
+  if (workflow.schedules?.length && repo.system_kind !== "account_runner")
+    throw new WorkflowValidationError(
+      "Cron workflows require the account's private Runner repository."
+    );
+  return workflow;
 }
 
 async function activeSession(
@@ -1281,6 +1293,25 @@ async function handleInternalPush(request: Request, env: ActionsEnv): Promise<Re
   }
 
   const pushBranch = body.ref.replace(/^refs\/heads\//, "");
+  if (
+    repo.system_kind === "account_runner" &&
+    pushBranch === repo.default_branch &&
+    !user.agentSession
+  ) {
+    await syncRunnerSchedules(
+      env,
+      repositoryId,
+      {
+        oid: snapshot.oid,
+        definitions: workflows
+          .filter((workflow) => workflow.executor === "runner")
+          .map((workflow) =>
+            parseRunnerWorkflow(workflow.path, snapshotFile(snapshot, workflow.path) ?? "")
+          ),
+      },
+      Date.now()
+    );
+  }
   const triggered = workflows.filter((workflow) =>
     workflowMatchesEvent(workflow, "push", pushBranch)
   );
@@ -1724,10 +1755,49 @@ export default {
     }
   },
   async scheduled(
-    _controller: ScheduledController,
+    controller: ScheduledController,
     env: ActionsEnv,
     context: ExecutionContext
   ): Promise<void> {
+    context.waitUntil(
+      runDueRunnerSchedules(
+        env,
+        controller.scheduledTime,
+        async (repositoryId, branch, user): Promise<ScheduledDefinitions> => {
+          const repo = await repositoryFor(env, repositoryId);
+          if (
+            !repo ||
+            repo.system_kind !== "account_runner" ||
+            !(await canWriteRepository(env, repo, user))
+          )
+            throw new Error("Scheduled Runner repository is unavailable.");
+          const snapshot = await repositorySnapshot(
+            env,
+            repositoryId,
+            branch,
+            undefined,
+            user,
+            true
+          );
+          const definitions = [];
+          for (const file of workflowFiles(snapshot.files)) {
+            if (!file.path.startsWith(".github/")) continue;
+            const source = snapshotFile(snapshot, file.path);
+            if (source === null) continue;
+            try {
+              definitions.push(parseRunnerWorkflow(file.path, source));
+            } catch {
+              /* Invalid definitions cannot retain an active schedule. */
+            }
+          }
+          return { oid: snapshot.oid, definitions };
+        }
+      ).catch((cause: unknown) => {
+        createLogger(env.LOG_LEVEL, { service: "actions" }).error("actions:schedule-scan-failed", {
+          reason: cause instanceof Error ? cause.message : "unknown",
+        });
+      })
+    );
     context.waitUntil(
       (async () => {
         await expireRunnerRuns(env);
