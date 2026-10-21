@@ -5,4 +5,6 @@
 - Added `docs/runner-devices.md` with a common copy-paste prompt and device-specific context for IONOS Linux, localwin Windows, and existing localmac macOS broker.
 - Updated the prompt with the seven-day / 1 GiB retired artifact/log retention and journald limits.
 - Corrected IONOS/Tokyo02 host identity and setup boundaries; consolidated device guidance into one `DEVICE=IONOS|localwin|localmac` prompt.
+- Updated signing guidance for full migration to the GitEdge account runner and preserved existing GitHub signing labels/credential boundaries until retirement is verified.
+- Inspected the parent integration's Linux setup script and confirmed the documented command, swap guard, journald settings, and Tokyo-only idle-load option.
 - No code, service, remote host, or secret changes were made.
