@@ -43,3 +43,5 @@ Use Actions to choose the workflow, run it manually, inspect its queue/execution
 ## Signing services
 
 Signing uses separately approved definitions, machine purposes and credential access. An ordinary task workflow cannot gain signing access by changing labels or YAML. The native signing migration and platform requirements are described in [sign-executor-cutover.md](sign-executor-cutover.md).
+
+See [account-runner-signing.md](account-runner-signing.md) for machine setup, profile approval and task submission.
