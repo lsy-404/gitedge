@@ -1,6 +1,12 @@
 import type { SigningMachineContext, SigningPlatform, SigningProfile, SigningRequest, SigningStage, SigningSubmission } from "../../../../packages/contracts/src/signing";
 import type { TrustedUser } from "../../../../packages/contracts/src/index";
 
+declare global {
+  interface Crypto {
+    readonly DigestStream: new (algorithm: string) => WritableStream<Uint8Array> & { readonly digest: Promise<ArrayBuffer> };
+  }
+}
+
 export interface SigningEnv {
   readonly DB: D1Database;
   readonly FORGE: Fetcher;
@@ -38,7 +44,7 @@ export interface SigningHostApproval {
 
 export interface SigningExecutionHooks {
   loadApprovedProfile(user: TrustedUser, repositoryId: string, name: string): Promise<ApprovedSigningProfile | null>;
-  verifySource(user: TrustedUser, input: SigningSubmission): Promise<{ body: ReadableStream<Uint8Array> } | null>;
+  verifySource(user: TrustedUser, repositoryId: string, profile: ApprovedSigningProfile, input: SigningSubmission): Promise<{ body: ReadableStream<Uint8Array> } | null>;
   enqueue(input: SigningQueueInput): Promise<{ runId: string }>;
   verifySigningHost(ownerId: string, repositoryId: string, platform: SigningPlatform): Promise<SigningHostApproval | null>;
   authorizeCredentials(context: SigningMachineContext, profile: ApprovedSigningProfile): Promise<{ credentials: Record<string, unknown>; expiresAt: number } | null>;

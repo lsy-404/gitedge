@@ -68,6 +68,14 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
         size INTEGER NOT NULL,
         PRIMARY KEY(request_id,part)
       );
+      CREATE TABLE IF NOT EXISTS signing_stage_outputs (
+        request_id TEXT NOT NULL REFERENCES signing_requests(id) ON DELETE CASCADE,
+        stage TEXT NOT NULL,
+        digest TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        verification_json TEXT NOT NULL,
+        PRIMARY KEY(request_id,stage)
+      );
     `);
   }
 
@@ -148,9 +156,12 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
 
   machine(id: string, context: import("../../../../packages/contracts/src/signing").SigningMachineContext, operation: string, payload?: Record<string, unknown>) {
     const row = this.row(id);
+    const terminalRead = (operation === "complete" || operation === "profile" || operation === "output-target")
+      && (row?.state === "awaiting_source" || row?.state === "succeeded")
+      || operation === "fail" && row?.state === "failed";
     if (!row || row.id !== context.requestId || row.owner_id !== context.ownerId || row.repository_id !== context.repositoryId
       || row.run_id !== context.runId || row.generation !== context.generation || row.nonce !== context.nonce
-      || row.state !== "queued" && row.state !== "running") throw new Error("signing_lease_invalid");
+      || row.state !== "queued" && row.state !== "running" && !terminalRead) throw new Error("signing_lease_invalid");
     const profile = JSON.parse(row.profile_json) as Record<string, unknown>;
     const approval = profile.operatorApproval as Record<string, unknown> | undefined;
     if (profile.revision !== context.profileRevision || profile.workflowOid !== context.workflowOid
@@ -161,7 +172,6 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
       || context.leaseExpiresAt <= Date.now()) throw new Error("signing_lease_invalid");
     if (operation === "start") {
       if (row.state !== "queued") throw new Error("signing_lease_invalid");
-      this.ctx.storage.sql.exec("UPDATE signing_requests SET state='running' WHERE id=? AND state='queued'", id);
       const submission = JSON.parse(row.submission_json) as Record<string, unknown>;
       const policy = profile.policy as Record<string, unknown>;
       const project = policy.project as Record<string, unknown> | undefined;
@@ -175,7 +185,9 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
         project_id: project.id,
         version: submission.version,
         source_sha: submission.sourceCommitOid,
-        input_digest: row.source_digest,
+        input_digest: previousStage(row.current_stage)
+          ? this.ctx.storage.sql.exec<{ digest: string }>("SELECT digest FROM signing_stage_outputs WHERE request_id=? AND stage=?", id, previousStage(row.current_stage)!).toArray()[0]?.digest
+          : row.source_digest,
         recipe_sha: profile.workflowOid,
         policy_digest: profile.policyDigest,
         max_artifact_bytes: project.max_artifact_bytes,
@@ -196,29 +208,47 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
       } else {
         const macos = project.macos as Record<string, unknown> | undefined;
         if (!macos || typeof policy.teamId !== "string") throw new Error("signing_macos_profile_invalid");
+        const previousReport = previousStage(row.current_stage)
+          ? this.ctx.storage.sql.exec<{ verification_json: string }>("SELECT verification_json FROM signing_stage_outputs WHERE request_id=? AND stage=?", id, previousStage(row.current_stage)!).toArray()[0]?.verification_json
+          : null;
+        const previousVerification = previousReport ? JSON.parse(previousReport) as Record<string, unknown> : null;
         manifest = { ...common, team_id: policy.teamId, bundle_id: macos.bundle_id, bundle_name: macos.bundle_name,
           architecture: macos.architecture, profile: macos.profile, harden_electron_fuses: macos.harden_electron_fuses,
           max_unpacked_bytes: macos.max_unpacked_bytes,
-          ...(["finalize","dmg_finalize"].includes(row.current_stage) && row.verification_json ? {
-            notarization_id: (JSON.parse(row.verification_json) as Record<string, unknown>).notarization_id,
-            notary_archive_sha256: (JSON.parse(row.verification_json) as Record<string, unknown>).notary_archive_sha256,
+          ...(["finalize","dmg_finalize"].includes(row.current_stage) && previousVerification ? {
+            notarization_id: previousVerification.notarization_id,
+            notary_archive_sha256: previousVerification.notary_archive_sha256,
           } : {}),
           ...(row.current_stage === "dmg_sign" ? { template_digest: row.source_digest } : {}),
         };
       }
+      const started = this.ctx.storage.sql.exec("UPDATE signing_requests SET state='running' WHERE id=? AND state='queued'", id).rowsWritten;
+      if (!started) throw new Error("signing_lease_invalid");
       return { state: "running", manifest };
     }
+    if (operation === "fail" && row.state === "failed") return { state: "failed" };
     if (row.state !== "running") throw new Error("signing_lease_invalid");
     if (operation === "download") {
       if (payload?.object !== undefined && payload.object !== "input" && payload.object !== "template") throw new Error("signing_object_invalid");
+      if (payload?.object === "template") throw new Error("signing_template_unavailable");
+      const input = previousStage(row.current_stage)
+        ? this.ctx.storage.sql.exec<{ digest: string; size: number }>("SELECT digest,size FROM signing_stage_outputs WHERE request_id=? AND stage=?", id, previousStage(row.current_stage)!).toArray()[0]
+        : null;
+      if (previousStage(row.current_stage) && !input) throw new Error("signing_input_unavailable");
+      if (input) return { key: `signing/${row.owner_id}/${row.repository_id}/${id}/${previousStage(row.current_stage)}.zip`, digest: input.digest, size: input.size };
       return { key: `signing/${row.owner_id}/${row.repository_id}/${row.id}/source.zip`, digest: row.source_digest, size: row.source_size };
     }
-    if (operation === "profile") return { profile, sourceDigest: row.source_digest, sourceCommitOid: JSON.parse(row.submission_json).sourceCommitOid, version: JSON.parse(row.submission_json).version };
+    if (operation === "profile") {
+      const previous = previousStage(row.current_stage)
+        ? this.ctx.storage.sql.exec<{ digest: string }>("SELECT digest FROM signing_stage_outputs WHERE request_id=? AND stage=?", id, previousStage(row.current_stage)!).toArray()[0]
+        : null;
+      return { profile, sourceDigest: previous?.digest ?? row.source_digest, sourceCommitOid: JSON.parse(row.submission_json).sourceCommitOid, version: JSON.parse(row.submission_json).version };
+    }
     if (operation === "output-target") {
       if (!row.output_digest || !row.output_size) throw new Error("signing_output_invalid");
       const upload = this.ctx.storage.sql.exec<{ verified: number }>("SELECT verified FROM signing_uploads WHERE request_id=?", id).toArray()[0];
       if (!upload?.verified) throw new Error("signing_output_invalid");
-      return { key: `signing/${row.owner_id}/${row.repository_id}/${row.id}/output.zip`, digest: row.output_digest, size: row.output_size };
+      return { key: `signing/${row.owner_id}/${row.repository_id}/${row.id}/${row.current_stage}.zip`, digest: row.output_digest, size: row.output_size };
     }
     if (operation === "heartbeat") return { leaseExpiresAt: context.leaseExpiresAt };
     if (operation === "authorize-sign") {
@@ -234,24 +264,37 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
       if ((row.output_digest && row.output_digest !== digest) || (row.output_size && row.output_size !== size))
         throw new Error("signing_output_invalid");
       this.ctx.storage.sql.exec("UPDATE signing_requests SET output_digest=?,output_size=? WHERE id=? AND state='running'", digest, size, id);
-      return { key: `signing/${row.owner_id}/${row.repository_id}/${row.id}/output.zip`, digest, size };
+      return { key: `signing/${row.owner_id}/${row.repository_id}/${row.id}/${row.current_stage}.zip`, digest, size };
     }
     if (operation === "output-upload") {
       if (row.authorized_at <= 0) throw new Error("signing_not_authorized");
       return { authorized: true };
     }
     if (operation === "complete") {
+      const persistedState = String(row.state);
+      if ((persistedState === "succeeded" || persistedState === "awaiting_source") && row.output_digest === payload?.digest && row.output_size === payload?.size
+        && row.verification_json === JSON.stringify(payload?.verificationReport)) return { state: persistedState };
       if (!row.output_digest || !row.output_size || payload?.digest !== row.output_digest || payload?.size !== row.output_size)
         throw new Error("signing_output_invalid");
       if (row.authorized_at <= 0 || typeof payload?.verificationReport !== "object" || payload.verificationReport === null)
         throw new Error("signing_not_authorized");
       const profile = JSON.parse(row.profile_json) as { platform: string; policy: { project?: { macos?: { output_format?: string } } } };
       const terminal = profile.platform === "windows" || profile.platform === "ios"
-        || profile.platform === "macos" && (row.current_stage === "dmg_finalize" || row.current_stage === "finalize" && profile.policy.project?.macos?.output_format !== "dmg");
+        || profile.platform === "macos" && row.current_stage === "finalize";
       const state = terminal ? "succeeded" : "awaiting_source";
+      if (!terminal) this.ctx.storage.sql.exec(
+        "INSERT INTO signing_stage_outputs(request_id,stage,digest,size,verification_json) VALUES (?,?,?,?,?) ON CONFLICT(request_id,stage) DO UPDATE SET digest=excluded.digest,size=excluded.size,verification_json=excluded.verification_json",
+        id, row.current_stage, row.output_digest, row.output_size, JSON.stringify(payload.verificationReport)
+      );
       this.ctx.storage.sql.exec("UPDATE signing_requests SET state=?,completed_at=?,verification_json=? WHERE id=? AND state='running'",
         state, terminal ? Date.now() : null, JSON.stringify(payload.verificationReport), id);
       return { state };
+    }
+    if (operation === "fail") {
+      if (row.state !== "running") throw new Error("signing_lease_invalid");
+      const code = typeof payload?.code === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(payload.code) ? payload.code : "signing_execution_failed";
+      this.ctx.storage.sql.exec("UPDATE signing_requests SET state='failed',completed_at=?,verification_json=? WHERE id=? AND state='running'", Date.now(), JSON.stringify({ error: code }), id);
+      return { state: "failed" };
     }
     throw new Error("signing_operation_invalid");
   }
@@ -270,7 +313,7 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
       return { partSize: existing.part_size, partCount: existing.part_count, receivedParts: this.ctx.storage.sql.exec<{ part: number }>("SELECT part FROM signing_upload_parts WHERE request_id=? ORDER BY part", id).toArray().map(value => value.part), verified: Boolean(existing.verified) };
     }
     const owner = this.row(id)!;
-    const key = `signing/${owner.owner_id}/${owner.repository_id}/${id}/output.zip`;
+    const key = `signing/${owner.owner_id}/${owner.repository_id}/${id}/${owner.current_stage}.zip`;
     const partSize = 8 * 1024 * 1024;
     const partCount = Math.ceil(size / partSize);
     const upload = await this.env.SIGNING_ARTIFACTS.createMultipartUpload(key, {
@@ -294,7 +337,7 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
     const expected = part < upload.part_count ? upload.part_size : upload.size - (upload.part_count - 1) * upload.part_size;
     if (length !== expected) throw new Error("signing_part_invalid");
     const row = this.row(id)!;
-    return { key: `signing/${row.owner_id}/${row.repository_id}/${id}/output.zip`, uploadId: upload.upload_id, expected, total: upload.size };
+    return { key: `signing/${row.owner_id}/${row.repository_id}/${id}/${row.current_stage}.zip`, uploadId: upload.upload_id, expected, total: upload.size };
   }
 
   recordOutputPart(id: string, context: import("../../../../packages/contracts/src/signing").SigningMachineContext, part: number, etag: string, size: number) {
@@ -308,18 +351,28 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
     const upload = this.outputUpload(id);
     if (!upload) throw new Error("signing_output_invalid");
     if (upload.verified) return { digest: upload.digest, size: upload.size, verified: true };
+    const row = this.row(id)!;
+    const key = `signing/${row.owner_id}/${row.repository_id}/${id}/${row.current_stage}.zip`;
+    const completed = await this.env.SIGNING_ARTIFACTS.get(key);
+    if (completed) {
+      const hash = new crypto.DigestStream("SHA-256");
+      await completed.body.pipeTo(hash);
+      const actual = `sha256:${Array.from(new Uint8Array(await hash.digest), value => value.toString(16).padStart(2, "0")).join("")}`;
+      if (completed.size === upload.size && actual === upload.digest) {
+        this.ctx.storage.sql.exec("UPDATE signing_uploads SET verified=1 WHERE request_id=? AND upload_id=?", id, upload.upload_id);
+        return { digest: upload.digest, size: upload.size, verified: true };
+      }
+      await this.env.SIGNING_ARTIFACTS.delete(key);
+    }
     const parts = this.ctx.storage.sql.exec<{ part: number; etag: string; size: number }>("SELECT part,etag,size FROM signing_upload_parts WHERE request_id=? ORDER BY part", id).toArray();
     if (parts.length !== upload.part_count || parts.some((value, index) => {
       const expected = index + 1 < upload.part_count ? upload.part_size : upload.size - (upload.part_count - 1) * upload.part_size;
       return value.part !== index + 1 || value.size !== expected;
     })) throw new Error("signing_parts_incomplete");
-    const row = this.row(id)!;
-    const key = `signing/${row.owner_id}/${row.repository_id}/${id}/output.zip`;
     await this.env.SIGNING_ARTIFACTS.resumeMultipartUpload(key, upload.upload_id).complete(parts.map(value => ({ partNumber: value.part, etag: value.etag })));
     const object = await this.env.SIGNING_ARTIFACTS.get(key);
     if (!object || object.size !== upload.size) { await object?.body.cancel(); await this.env.SIGNING_ARTIFACTS.delete(key); throw new Error("signing_output_invalid"); }
-    const DigestStream = (crypto as unknown as { DigestStream: new (algorithm: string) => WritableStream<Uint8Array> & { digest: Promise<ArrayBuffer> } }).DigestStream;
-    const digest = new DigestStream("SHA-256");
+    const digest = new crypto.DigestStream("SHA-256");
     await object.body.pipeTo(digest);
     const actual = Array.from(new Uint8Array(await digest.digest), value => value.toString(16).padStart(2, "0")).join("");
     if (`sha256:${actual}` !== upload.digest) { await this.env.SIGNING_ARTIFACTS.delete(key); throw new Error("signing_output_invalid"); }
@@ -338,6 +391,38 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
     return true;
   }
 
+  prepareNextStage(id: string, ownerId: string, repositoryId: string, nonce: string) {
+    const row = this.row(id);
+    if (!row || row.owner_id !== ownerId || row.repository_id !== repositoryId) return null;
+    if (row.state === "accepted" && !row.run_id) {
+      const previous = previousStage(row.current_stage);
+      const output = previous
+        ? this.ctx.storage.sql.exec<{ digest: string; size: number }>("SELECT digest,size FROM signing_stage_outputs WHERE request_id=? AND stage=?", id, previous).toArray()[0]
+        : null;
+      if (!output) return { request: this.public(row), dispatch: null };
+      return { request: this.public(row), dispatch: { ...this.dispatch(row), stage: row.current_stage, inputDigest: output.digest, inputSize: output.size } };
+    }
+    if (row.state !== "awaiting_source") return { request: this.public(row), dispatch: null };
+    const profile = JSON.parse(row.profile_json) as { policy: { project?: { macos?: { output_format?: string } } } };
+    const next = nextStage(row.current_stage, profile.policy.project?.macos?.output_format);
+    if (!next) return { request: this.public(row), dispatch: null };
+    const output = this.ctx.storage.sql.exec<{ digest: string; size: number }>("SELECT digest,size FROM signing_stage_outputs WHERE request_id=? AND stage=?", id, row.current_stage).toArray()[0];
+    if (!output) throw new Error("signing_stage_output_unavailable");
+    const advanced = this.ctx.storage.transactionSync(() => {
+      const changed = this.ctx.storage.sql.exec(
+        "UPDATE signing_requests SET state='accepted',current_stage=?,run_id=NULL,output_digest=NULL,output_size=NULL,authorized_at=0,verification_json=NULL,generation=generation+1,nonce=? WHERE id=? AND state='awaiting_source' AND current_stage=?",
+        next, nonce, id, row.current_stage
+      ).rowsWritten;
+      if (changed) {
+        this.ctx.storage.sql.exec("DELETE FROM signing_upload_parts WHERE request_id=?", id);
+        this.ctx.storage.sql.exec("DELETE FROM signing_uploads WHERE request_id=?", id);
+      }
+      return changed > 0;
+    });
+    const current = this.row(id)!;
+    return { request: this.public(current), dispatch: advanced ? { ...this.dispatch(current), stage: next, inputDigest: output.digest, inputSize: output.size } : null };
+  }
+
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const parts = url.pathname.split("/").filter(Boolean);
@@ -354,6 +439,11 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
     if (request.method === "POST" && parts[0] === "bind-run" && parts[1]) {
       const body = await request.json() as { ownerId: string; repositoryId: string; runId: string };
       return Response.json({ bound: this.bindRun(parts[1], body.ownerId, body.repositoryId, body.runId) });
+    }
+    if (request.method === "POST" && parts[0] === "prepare-next-stage" && parts[1]) {
+      const body = await request.json() as { ownerId: string; repositoryId: string; nonce: string };
+      try { return Response.json({ data: this.prepareNextStage(parts[1], body.ownerId, body.repositoryId, body.nonce) }); }
+      catch (error) { return Response.json({ error: error instanceof Error ? error.message : "signing_stage_error" }, { status: 409 }); }
     }
     if (request.method === "POST" && parts[0] === "machine" && parts[1] && parts[2]) {
       const body = await request.json() as { context: import("../../../../packages/contracts/src/signing").SigningMachineContext; payload?: Record<string, unknown> };
@@ -375,6 +465,19 @@ function containsCredentialMaterial(value: unknown): boolean {
   if (Array.isArray(value)) return value.some(containsCredentialMaterial);
   const blocked = /^(?:secret|secrets|credential|credentials|password|private_?key|certificate_p12|certificate_password|access_?token|api_?key)$/i;
   return Object.entries(value).some(([key, child]) => blocked.test(key) || containsCredentialMaterial(child));
+}
+
+function previousStage(stage: string): string | null {
+  if (stage === "finalize") return "sign";
+  if (stage === "dmg_sign") return "finalize";
+  if (stage === "dmg_finalize") return "dmg_sign";
+  return null;
+}
+
+function nextStage(stage: string, outputFormat?: string): string | null {
+  if (stage === "sign") return "finalize";
+  void outputFormat;
+  return null;
 }
 
 export function coordinator(env: SigningEnv, ownerId: string) {
