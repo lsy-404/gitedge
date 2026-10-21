@@ -258,7 +258,7 @@ export async function deleteAccount(
   const id = user.id;
   await env.DB.batch([
     env.DB.prepare(
-      "UPDATE repositories SET deleted_at = ?1, deleted_by = ?2, deleted_slug = slug, purge_after = ?1, purge_state = NULL, slug = 'deleted~' || id, updated_at = ?1 WHERE deleted_at IS NULL AND namespace_id IN (SELECT id FROM namespaces WHERE kind = 'personal' AND created_by = ?2)"
+      "UPDATE repositories SET deleted_at = ?1, deleted_by = ?2, deleted_slug = slug, purge_after = ?1, purge_state = NULL, slug = CASE WHEN system_kind = 'account_runner' THEN slug ELSE 'deleted~' || id END, updated_at = ?1 WHERE deleted_at IS NULL AND namespace_id IN (SELECT id FROM namespaces WHERE kind = 'personal' AND created_by = ?2)"
     ).bind(now, id),
     env.DB.prepare(
       "DELETE FROM repository_paths WHERE repository_id IN (SELECT id FROM repositories WHERE deleted_at = ?1 AND deleted_by = ?2) AND slug != 'deleted~' || repository_id"
