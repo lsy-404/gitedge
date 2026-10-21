@@ -7,6 +7,7 @@ export function createGitEdgeExecutionArgs({
   workflowFile,
   actionsState,
   jobClaim,
+  demandLabels,
   eventPayloadFile,
 }) {
   const args = [
@@ -31,7 +32,12 @@ export function createGitEdgeExecutionArgs({
     "--state-dir",
     actionsState,
   ];
-  for (const label of profile.labels) args.push("--label", label);
+  const labels = new Map();
+  for (const label of [...profile.labels, ...demandLabels]) {
+    const key = label.toLowerCase();
+    if (!labels.has(key)) labels.set(key, label);
+  }
+  for (const label of labels.values()) args.push("--label", label);
   if (eventPayloadFile) args.push("--event-file", eventPayloadFile);
   return args;
 }

@@ -1073,7 +1073,7 @@ function validateGitEdgeWorkflow(source, profile) {
   }
   const claim = parseJobClaim(labelsUnion, workflowMaximum);
   if (!claim.valid) throw new Error("The workflow has an invalid runner resource requirement.");
-  return claim;
+  return { claim, labels: labelsUnion };
 }
 
 function waitChild(child, signal) {
@@ -1151,6 +1151,7 @@ async function runGitEdge(profile, run, leaseToken, signal) {
   let eventPayload = run.eventPayload;
   let eventPayloadSource;
   let jobClaim;
+  let workflowDemandLabels;
   try {
     if (
       typeof run.workflowSource !== "string" ||
@@ -1194,7 +1195,9 @@ async function runGitEdge(profile, run, leaseToken, signal) {
     if (!["push", "workflow_dispatch"].includes(run.event))
       throw new Error(`GitEdge event ${run.event} is not supported by the local broker.`);
     validateProfileHostLabels(profile.labels);
-    jobClaim = validateGitEdgeWorkflow(run.workflowSource, profile);
+    const workflowDemand = validateGitEdgeWorkflow(run.workflowSource, profile);
+    jobClaim = workflowDemand.claim;
+    workflowDemandLabels = workflowDemand.labels;
     const capacity = await getRunnerCapacity({
       workDirectories: [profile.directory, path.join(root, "work", "actions")],
     });
@@ -1248,6 +1251,7 @@ async function runGitEdge(profile, run, leaseToken, signal) {
     workflowFile,
     actionsState,
     jobClaim,
+    demandLabels: workflowDemandLabels,
     eventPayloadFile,
   });
   const childEnvironment = { ...process.env };
