@@ -1,5 +1,6 @@
 import { ForkRepositoryInputSchema, type TrustedUser } from "../../../packages/contracts/src/index";
 import { dataResponse, errorResponse, jsonResponse } from "../../../src/worker/common/http";
+import { isAccountRunnerRepository } from "../../../src/worker/common/repositories";
 import { createLogger } from "../../../src/worker/common/logger";
 import { parseJson, repoResponse, type ForgeEnv, type RepositoryRow } from "./common";
 import { activeImportPath } from "./imports";
@@ -167,6 +168,12 @@ export async function repositoryForks(
   context: ForkContext
 ): Promise<Response | null> {
   if (parts[2] !== "forks" || parts.length !== 3) return null;
+  if (await isAccountRunnerRepository(env.DB, repository.id))
+    return errorResponse(
+      409,
+      "system_repository_locked",
+      "The Runner repository cannot be forked."
+    );
   if (request.method === "GET") return listForks(env, repository, user.id);
   if (request.method !== "POST")
     return errorResponse(405, "method_not_allowed", "Method is not allowed.");

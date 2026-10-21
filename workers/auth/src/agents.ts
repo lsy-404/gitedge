@@ -116,7 +116,7 @@ async function repositoryForOwner(
 
 const activeSessionSelect =
   sessionSelect +
-  " JOIN repositories r ON r.id=s.repository_id LEFT JOIN namespace_memberships m ON m.namespace_id=r.namespace_id AND m.user_id=s.user_id LEFT JOIN repository_collaborators c ON c.repository_id=r.id AND c.user_id=s.user_id WHERE s.status='active' AND s.expires_at>? AND a.disabled_at IS NULL AND u.disabled_at IS NULL AND r.deleted_at IS NULL AND r.agents_enabled=1 AND (m.user_id IS NOT NULL OR c.role IN ('write','admin') OR (s.permission='read' AND c.role='read'))";
+  " JOIN repositories r ON r.id=s.repository_id JOIN namespaces n ON n.id=r.namespace_id LEFT JOIN namespace_memberships m ON m.namespace_id=r.namespace_id AND m.user_id=s.user_id LEFT JOIN repository_collaborators c ON c.repository_id=r.id AND c.user_id=s.user_id WHERE s.status='active' AND s.expires_at>? AND a.disabled_at IS NULL AND u.disabled_at IS NULL AND r.deleted_at IS NULL AND r.agents_enabled=1 AND ((r.system_kind='account_runner' AND n.kind='personal' AND n.created_by=s.user_id) OR (r.system_kind IS NULL AND (m.user_id IS NOT NULL OR c.role IN ('write','admin') OR (s.permission='read' AND c.role='read'))))";
 
 export async function authenticateAgentSession(
   env: AgentAuthEnv,

@@ -155,11 +155,11 @@ async function visibleRunners(
     `${runnerSelect}
     LEFT JOIN namespace_memberships m ON m.namespace_id=r.namespace_id AND m.user_id=?
     LEFT JOIN repository_collaborators c ON c.repository_id=r.repository_id AND c.user_id=?
-    WHERE (r.created_by=? OR m.role='owner' OR c.role='admin') AND (p.id IS NULL OR p.deleted_at IS NULL)
+    WHERE ((p.system_kind='account_runner' AND n.created_by=?) OR (p.system_kind IS NULL AND (r.created_by=? OR m.role='owner' OR c.role='admin'))) AND (p.id IS NULL OR p.deleted_at IS NULL)
     ${repositoryFilter}
     ORDER BY r.created_at DESC,r.id LIMIT ?`
   )
-    .bind(user.id, user.id, user.id, ...repositoryArgs, MAX_RUNNERS + 1)
+    .bind(user.id, user.id, user.id, user.id, ...repositoryArgs, MAX_RUNNERS + 1)
     .all<RunnerDbRow>();
   const permitted = rows.results.filter((row) => {
     if (user.token && row.repository_id === null && user.token.repositoryIds) return false;
@@ -202,9 +202,9 @@ async function authorizedRunner(
     `${runnerSelect}
     LEFT JOIN namespace_memberships m ON m.namespace_id=r.namespace_id AND m.user_id=?
     LEFT JOIN repository_collaborators c ON c.repository_id=r.repository_id AND c.user_id=?
-    WHERE r.id=? AND (r.created_by=? OR m.role='owner' OR c.role='admin') AND (p.id IS NULL OR p.deleted_at IS NULL)`
+    WHERE r.id=? AND ((p.system_kind='account_runner' AND n.created_by=?) OR (p.system_kind IS NULL AND (r.created_by=? OR m.role='owner' OR c.role='admin'))) AND (p.id IS NULL OR p.deleted_at IS NULL)`
   )
-    .bind(user.id, user.id, runnerId, user.id)
+    .bind(user.id, user.id, runnerId, user.id, user.id)
     .first<RunnerDbRow>();
   if (!row || (user.token && row.repository_id === null && user.token.repositoryIds)) return null;
   if (
@@ -263,25 +263,25 @@ async function queueRows(
       `SELECT 'gitedge' AS kind,a.id,n.slug||'/'||p.slug AS repository,p.namespace_id,p.id AS repository_id,
       j.labels_json,a.created_at,j.timeout_minutes AS minutes FROM actions_runner_runs j
       JOIN actions_runs a ON a.id=j.run_id JOIN repositories p ON p.id=a.repository_id JOIN namespaces n ON n.id=p.namespace_id
-      WHERE j.status='queued' AND p.deleted_at IS NULL AND (
+      WHERE j.status='queued' AND p.deleted_at IS NULL AND ((p.system_kind='account_runner' AND n.created_by=?) OR (p.system_kind IS NULL AND (
         EXISTS (SELECT 1 FROM namespace_memberships m WHERE m.namespace_id=p.namespace_id AND m.user_id=? AND m.role='owner') OR
-        EXISTS (SELECT 1 FROM repository_collaborators c WHERE c.repository_id=p.id AND c.user_id=? AND c.role='admin'))
+        EXISTS (SELECT 1 FROM repository_collaborators c WHERE c.repository_id=p.id AND c.user_id=? AND c.role='admin'))))
       ${repositoryFilter}
         ORDER BY a.created_at,a.id LIMIT 51`
     )
-      .bind(user.id, user.id, ...visibilityArgs)
+      .bind(user.id, user.id, user.id, ...visibilityArgs)
       .all<QueueDbRow>(),
     env.DB.prepare(
       `SELECT 'github' AS kind,j.id,n.slug||'/'||p.slug AS repository,p.namespace_id,p.id AS repository_id,
       j.labels_json,j.created_at,360 AS minutes FROM actions_github_runner_jobs j
       JOIN forge_github_connections c ON c.id=j.connection_id JOIN repositories p ON p.id=c.repository_id
-      JOIN namespaces n ON n.id=p.namespace_id WHERE j.status='queued' AND p.deleted_at IS NULL AND (
+      JOIN namespaces n ON n.id=p.namespace_id WHERE j.status='queued' AND p.deleted_at IS NULL AND ((p.system_kind='account_runner' AND n.created_by=?) OR (p.system_kind IS NULL AND (
         EXISTS (SELECT 1 FROM namespace_memberships m WHERE m.namespace_id=p.namespace_id AND m.user_id=? AND m.role='owner') OR
-        EXISTS (SELECT 1 FROM repository_collaborators c WHERE c.repository_id=p.id AND c.user_id=? AND c.role='admin'))
+        EXISTS (SELECT 1 FROM repository_collaborators c WHERE c.repository_id=p.id AND c.user_id=? AND c.role='admin'))))
       ${repositoryFilter}
         ORDER BY j.created_at,j.id LIMIT 51`
     )
-      .bind(user.id, user.id, ...visibilityArgs)
+      .bind(user.id, user.id, user.id, ...visibilityArgs)
       .all<QueueDbRow>(),
   ]);
   const rows = [...gitedge.results, ...github.results].sort(
@@ -322,15 +322,15 @@ export async function handleRunnerOverview(
         SELECT runner_id,SUM(conclusion='success') AS success,SUM(conclusion='failure') AS failure,
         SUM(conclusion='cancelled') AS cancelled,SUM(CASE WHEN started_at IS NULL THEN 0 ELSE
           MAX(0,MIN(COALESCE(completed_at,?),?)-MAX(started_at,?)) END) AS busy_ms FROM (
-          SELECT j.runner_id,j.conclusion,j.started_at,j.completed_at FROM actions_runner_runs j JOIN actions_runs a ON a.id=j.run_id JOIN repositories p ON p.id=a.repository_id
-          WHERE j.runner_id IN (SELECT id FROM selected_runner_ids) AND COALESCE(j.completed_at,?)>=? AND j.started_at<=? AND (
+          SELECT j.runner_id,j.conclusion,j.started_at,j.completed_at FROM actions_runner_runs j JOIN actions_runs a ON a.id=j.run_id JOIN repositories p ON p.id=a.repository_id JOIN namespaces n ON n.id=p.namespace_id
+          WHERE j.runner_id IN (SELECT id FROM selected_runner_ids) AND COALESCE(j.completed_at,?)>=? AND j.started_at<=? AND ((p.system_kind='account_runner' AND n.created_by=?) OR (p.system_kind IS NULL AND (
             EXISTS (SELECT 1 FROM namespace_memberships m WHERE m.namespace_id=p.namespace_id AND m.user_id=? AND m.role='owner') OR
-            EXISTS (SELECT 1 FROM repository_collaborators c WHERE c.repository_id=p.id AND c.user_id=? AND c.role='admin'))
+            EXISTS (SELECT 1 FROM repository_collaborators c WHERE c.repository_id=p.id AND c.user_id=? AND c.role='admin'))))
           UNION ALL SELECT j.runner_id,j.conclusion,j.started_at,j.completed_at FROM actions_github_runner_jobs j
-          JOIN forge_github_connections c ON c.id=j.connection_id JOIN repositories p ON p.id=c.repository_id
-          WHERE j.runner_id IN (SELECT id FROM selected_runner_ids) AND COALESCE(j.completed_at,?)>=? AND j.started_at<=? AND (
+          JOIN forge_github_connections c ON c.id=j.connection_id JOIN repositories p ON p.id=c.repository_id JOIN namespaces n ON n.id=p.namespace_id
+          WHERE j.runner_id IN (SELECT id FROM selected_runner_ids) AND COALESCE(j.completed_at,?)>=? AND j.started_at<=? AND ((p.system_kind='account_runner' AND n.created_by=?) OR (p.system_kind IS NULL AND (
             EXISTS (SELECT 1 FROM namespace_memberships m WHERE m.namespace_id=p.namespace_id AND m.user_id=? AND m.role='owner') OR
-            EXISTS (SELECT 1 FROM repository_collaborators c2 WHERE c2.repository_id=p.id AND c2.user_id=? AND c2.role='admin'))
+            EXISTS (SELECT 1 FROM repository_collaborators c2 WHERE c2.repository_id=p.id AND c2.user_id=? AND c2.role='admin'))))
         ) GROUP BY runner_id`
         )
           .bind(
@@ -343,9 +343,11 @@ export async function handleRunnerOverview(
             now,
             user.id,
             user.id,
+            user.id,
             now,
             cutoff,
             now,
+            user.id,
             user.id,
             user.id
           )
@@ -353,21 +355,21 @@ export async function handleRunnerOverview(
         env.DB.prepare(
           `SELECT j.runner_id,'gitedge' AS kind,a.id,n.slug||'/'||p.slug AS repository,j.started_at
         FROM actions_runner_runs j JOIN actions_runs a ON a.id=j.run_id JOIN repositories p ON p.id=a.repository_id JOIN namespaces n ON n.id=p.namespace_id
-        WHERE j.status='running' AND j.runner_id IN (SELECT value FROM json_each(?)) AND (
+        WHERE j.status='running' AND j.runner_id IN (SELECT value FROM json_each(?)) AND ((p.system_kind='account_runner' AND n.created_by=?) OR (p.system_kind IS NULL AND (
           EXISTS (SELECT 1 FROM namespace_memberships m WHERE m.namespace_id=p.namespace_id AND m.user_id=? AND m.role='owner') OR
-          EXISTS (SELECT 1 FROM repository_collaborators c WHERE c.repository_id=p.id AND c.user_id=? AND c.role='admin'))`
+          EXISTS (SELECT 1 FROM repository_collaborators c WHERE c.repository_id=p.id AND c.user_id=? AND c.role='admin'))))`
         )
-          .bind(JSON.stringify(ids), user.id, user.id)
+          .bind(JSON.stringify(ids), user.id, user.id, user.id)
           .all<RunningDbRow>(),
         env.DB.prepare(
           `SELECT j.runner_id,'github' AS kind,j.id,n.slug||'/'||p.slug AS repository,j.started_at
         FROM actions_github_runner_jobs j JOIN forge_github_connections c ON c.id=j.connection_id
         JOIN repositories p ON p.id=c.repository_id JOIN namespaces n ON n.id=p.namespace_id
-        WHERE j.status='running' AND j.runner_id IN (SELECT value FROM json_each(?)) AND (
+        WHERE j.status='running' AND j.runner_id IN (SELECT value FROM json_each(?)) AND ((p.system_kind='account_runner' AND n.created_by=?) OR (p.system_kind IS NULL AND (
           EXISTS (SELECT 1 FROM namespace_memberships m WHERE m.namespace_id=p.namespace_id AND m.user_id=? AND m.role='owner') OR
-          EXISTS (SELECT 1 FROM repository_collaborators c2 WHERE c2.repository_id=p.id AND c2.user_id=? AND c2.role='admin'))`
+          EXISTS (SELECT 1 FROM repository_collaborators c2 WHERE c2.repository_id=p.id AND c2.user_id=? AND c2.role='admin'))))`
         )
-          .bind(JSON.stringify(ids), user.id, user.id)
+          .bind(JSON.stringify(ids), user.id, user.id, user.id)
           .all<RunningDbRow>(),
         env.DB.prepare(
           `SELECT runner_id,(minute/15)*15 AS minute,AVG(load1) AS load1,MIN(mem_free_mb) AS mem_free_mb,MAX(busy) AS busy
@@ -390,10 +392,10 @@ export async function handleRunnerOverview(
         LEFT JOIN (SELECT connection_id,COUNT(*) AS queued,MIN(created_at) AS oldest_queued_at FROM actions_github_runner_jobs WHERE status='queued' GROUP BY connection_id) q ON q.connection_id=c.id
         LEFT JOIN (SELECT connection_id,SUM(cleanup_pending) AS pending_cleanup,MAX(created_at) AS last_job_at FROM actions_github_runner_jobs GROUP BY connection_id) cl ON cl.connection_id=c.id
         LEFT JOIN (SELECT connection_id,MAX(created_at) AS last_job_at FROM actions_github_runner_jobs GROUP BY connection_id) j ON j.connection_id=c.id
-        WHERE c.runner_enabled=1 AND (m.role='owner' OR collab.role='admin') ${connectionRepositoryFilter}
+        WHERE c.runner_enabled=1 AND ((p.system_kind='account_runner' AND n.created_by=?) OR (p.system_kind IS NULL AND (m.role='owner' OR collab.role='admin'))) ${connectionRepositoryFilter}
         ORDER BY c.created_at DESC,c.id LIMIT ?`
         )
-          .bind(user.id, user.id, ...connectionRepositoryArgs, MAX_CONNECTIONS + 1)
+          .bind(user.id, user.id, user.id, ...connectionRepositoryArgs, MAX_CONNECTIONS + 1)
           .all<{
             connection_id: string;
             repository_id: string;
@@ -568,10 +570,10 @@ export async function handleRunnerOverview(
     LEFT JOIN (SELECT connection_id,COUNT(*) AS queued,MIN(created_at) AS oldest_queued_at FROM actions_github_runner_jobs WHERE status='queued' GROUP BY connection_id) q ON q.connection_id=c.id
     LEFT JOIN (SELECT connection_id,SUM(cleanup_pending) AS pending_cleanup FROM actions_github_runner_jobs GROUP BY connection_id) cl ON cl.connection_id=c.id
     LEFT JOIN (SELECT connection_id,MAX(created_at) AS last_job_at FROM actions_github_runner_jobs GROUP BY connection_id) j ON j.connection_id=c.id
-    WHERE c.runner_enabled=1 AND (m.role='owner' OR collab.role='admin') ${connectionRepositoryFilter}
+    WHERE c.runner_enabled=1 AND ((p.system_kind='account_runner' AND n.created_by=?) OR (p.system_kind IS NULL AND (m.role='owner' OR collab.role='admin'))) ${connectionRepositoryFilter}
     ORDER BY c.created_at DESC,c.id LIMIT ?`
   )
-    .bind(user.id, user.id, ...connectionRepositoryArgs, MAX_CONNECTIONS + 1)
+    .bind(user.id, user.id, user.id, ...connectionRepositoryArgs, MAX_CONNECTIONS + 1)
     .all<{
       connection_id: string;
       repository_id: string;
@@ -703,12 +705,12 @@ export async function handleRunnerHistory(
       `SELECT 'gitedge' AS kind,a.id,j.runner_id,n.slug||'/'||p.slug AS repository,j.labels_json,
       j.started_at,j.completed_at,j.conclusion FROM actions_runner_runs j JOIN actions_runs a ON a.id=j.run_id
       JOIN repositories p ON p.id=a.repository_id JOIN namespaces n ON n.id=p.namespace_id
-      WHERE j.runner_id=? AND j.started_at IS NOT NULL AND ${edgeFilter.sql} AND (
+      WHERE j.runner_id=? AND j.started_at IS NOT NULL AND ${edgeFilter.sql} AND ((p.system_kind='account_runner' AND n.created_by=?) OR (p.system_kind IS NULL AND (
         EXISTS (SELECT 1 FROM namespace_memberships m WHERE m.namespace_id=p.namespace_id AND m.user_id=? AND m.role='owner') OR
-        EXISTS (SELECT 1 FROM repository_collaborators c WHERE c.repository_id=p.id AND c.user_id=? AND c.role='admin'))
+        EXISTS (SELECT 1 FROM repository_collaborators c WHERE c.repository_id=p.id AND c.user_id=? AND c.role='admin'))))
       ORDER BY j.started_at DESC,a.id LIMIT ?`
     )
-      .bind(runnerId, ...edgeFilter.args, user.id, user.id, requested + 1)
+      .bind(runnerId, ...edgeFilter.args, user.id, user.id, user.id, requested + 1)
       .all<{
         kind: "gitedge";
         id: string;
@@ -723,12 +725,12 @@ export async function handleRunnerHistory(
       `SELECT 'github' AS kind,j.id,j.runner_id,n.slug||'/'||p.slug AS repository,j.labels_json,
       j.started_at,j.completed_at,j.conclusion FROM actions_github_runner_jobs j JOIN forge_github_connections c ON c.id=j.connection_id
       JOIN repositories p ON p.id=c.repository_id JOIN namespaces n ON n.id=p.namespace_id
-      WHERE j.runner_id=? AND j.started_at IS NOT NULL AND ${githubFilter.sql} AND (
+      WHERE j.runner_id=? AND j.started_at IS NOT NULL AND ${githubFilter.sql} AND ((p.system_kind='account_runner' AND n.created_by=?) OR (p.system_kind IS NULL AND (
         EXISTS (SELECT 1 FROM namespace_memberships m WHERE m.namespace_id=p.namespace_id AND m.user_id=? AND m.role='owner') OR
-        EXISTS (SELECT 1 FROM repository_collaborators c2 WHERE c2.repository_id=p.id AND c2.user_id=? AND c2.role='admin'))
+        EXISTS (SELECT 1 FROM repository_collaborators c2 WHERE c2.repository_id=p.id AND c2.user_id=? AND c2.role='admin'))))
       ORDER BY j.started_at DESC,j.id LIMIT ?`
     )
-      .bind(runnerId, ...githubFilter.args, user.id, user.id, requested + 1)
+      .bind(runnerId, ...githubFilter.args, user.id, user.id, user.id, requested + 1)
       .all<{
         kind: "github";
         id: string;

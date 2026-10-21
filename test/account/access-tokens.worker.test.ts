@@ -12,8 +12,9 @@ import {
 } from "../../packages/contracts/src/trust";
 import actions from "../../workers/actions/src/index";
 import auth from "../../workers/auth/src/index";
-import { parseGitAuthorization } from "../../workers/auth/src/agents";
+import { authenticateAgentSession, parseGitAuthorization } from "../../workers/auth/src/agents";
 import { handleAccessTokenManagement } from "../../workers/auth/src/access-tokens";
+import { repositoryRole } from "../../src/worker/common/repositories";
 import { hashToken, issueSession } from "../../workers/auth/src/session";
 import forge from "../../workers/forge/src/index";
 import git from "../../workers/git/src/index";
@@ -60,6 +61,8 @@ const ListSchema = z.object({
 
 let aliceCookie = "";
 let bobCookie = "";
+let eveCookie = "";
+let malloryCookie = "";
 
 async function cookieFor(userId: string): Promise<string> {
   return `gitedge_session=${await issueSession(env, userId)}`;
@@ -104,9 +107,9 @@ function basic(username: string, token: string): string {
   return `Basic ${btoa(`${username}:${token}`)}`;
 }
 
-async function gitSession(authorization: string, repo: string): Promise<Response> {
+async function gitSession(authorization: string, repo: string, owner = "alice"): Promise<Response> {
   return auth.fetch(
-    new Request(`https://auth.test/git-session?owner=alice&repo=${repo}`, {
+    new Request(`https://auth.test/git-session?owner=${owner}&repo=${repo}`, {
       headers: { Authorization: authorization },
     }),
     authEnv
@@ -139,13 +142,15 @@ beforeAll(async () => {
   for (const path of Object.keys(migrations).sort()) await runSqlScript(env.DB, migrations[path]);
   await runSqlScript(
     env.DB,
-    `INSERT INTO users (id, identifier, password_salt, password_hash, created_at) VALUES ('alice-id','alice','x','x',1), ('bob-id','bob','x','x',1);
+    `INSERT INTO users (id, identifier, password_salt, password_hash, created_at) VALUES ('alice-id','alice','x','x',1), ('bob-id','bob','x','x',1), ('eve-id','eve','x','x',1), ('mallory-id','mallory','x','x',1);
 INSERT INTO namespaces (id, slug, created_by, created_at, kind, display_name, description) VALUES ('n1','alice','alice-id',1,'personal','Alice',''), ('n2','bob','bob-id',1,'personal','Bob','');
 INSERT INTO namespace_memberships (namespace_id,user_id,created_at,role) VALUES ('n1','alice-id',1,'owner'), ('n2','bob-id',1,'owner');
 INSERT INTO repositories (id,namespace_id,created_by,slug,do_name,artifact_name,remote,visibility,description,created_at,updated_at) VALUES ('r1','n1','alice-id','demo','repo:r1','a1','https://a.test/r1.git','private','',1,1), ('r2','n1','alice-id','other','repo:r2','a2','https://a.test/r2.git','private','',1,1), ('r3','n2','bob-id','secret','repo:r3','a3','https://a.test/r3.git','private','',1,1);`
   );
   aliceCookie = await cookieFor("alice-id");
   bobCookie = await cookieFor("bob-id");
+  eveCookie = await cookieFor("eve-id");
+  malloryCookie = await cookieFor("mallory-id");
 });
 
 describe("personal access token lifecycle", () => {
@@ -334,6 +339,56 @@ describe("personal access token lifecycle", () => {
 });
 
 describe("Git credentials from personal access tokens", () => {
+  it("keeps account Runner private through namespace, collaborator, and token scope checks", async () => {
+    await runSqlScript(
+      env.DB,
+      `INSERT INTO repositories (id,namespace_id,created_by,slug,do_name,artifact_name,remote,visibility,description,created_at,updated_at,system_kind) VALUES ('runner-r1','n1','alice-id','runner','repo:runner-r1','a-runner','https://a.test/runner.git','private','',1,1,'account_runner');
+INSERT INTO namespace_memberships (namespace_id,user_id,created_at,role) VALUES ('n1','eve-id',1,'member');
+INSERT INTO repository_collaborators (repository_id,user_id,role,created_at) VALUES ('runner-r1','mallory-id','admin',1);`
+    );
+
+    const ownerToken = await mint(aliceCookie, ["repo:write"], { repositoryIds: ["runner-r1"] });
+    expect((await gitSession(`Bearer ${ownerToken.token}`, "runner")).status).toBe(200);
+    expect(await repositoryRole(env.DB, "runner-r1", "alice-id")).toBe("admin");
+    expect(await repositoryRole(env.DB, "runner-r1", "eve-id")).toBeNull();
+    expect(await repositoryRole(env.DB, "runner-r1", "mallory-id")).toBeNull();
+    expect(await repositoryRole(env.DB, "r1", "eve-id")).toBe("write");
+
+    await env.DB.prepare("UPDATE repositories SET agents_enabled=1 WHERE id='runner-r1'").run();
+    await runSqlScript(
+      env.DB,
+      `INSERT INTO auth_agents (id,user_id,name,created_at) VALUES ('runner-owner-agent','alice-id','owner-helper',1), ('runner-member-agent','eve-id','member-helper',1);
+INSERT INTO auth_agent_sessions (id,agent_id,user_id,repository_id,token_hash,git_token_id,workspace_name,remote,base_ref,permission,status,created_at,expires_at)
+VALUES ('runner-owner-session','runner-owner-agent','alice-id','runner-r1','${await sha256Hex(`ge_session_${"1".repeat(64)}`)}','git-owner','owner-workspace','artifact://runner','main','write','active',1,9999999999999),
+('runner-member-session','runner-member-agent','eve-id','runner-r1','${await sha256Hex(`ge_session_${"2".repeat(64)}`)}','git-member','member-workspace','artifact://runner','main','write','active',1,9999999999999);`
+    );
+    expect(
+      await authenticateAgentSession({ DB: env.DB }, `ge_session_${"1".repeat(64)}`)
+    ).not.toBeNull();
+    expect(
+      await authenticateAgentSession({ DB: env.DB }, `ge_session_${"2".repeat(64)}`)
+    ).toBeNull();
+
+    const refused = await account("/access-tokens", "POST", eveCookie, {
+      name: "runner access",
+      scopes: ["repo:write"],
+      expiresInDays: 30,
+      repositoryIds: ["runner-r1"],
+    });
+    expect(refused.status).toBe(404);
+
+    const collaboratorToken = await account("/access-tokens", "POST", malloryCookie, {
+      name: "runner collaborator access",
+      scopes: ["repo:write"],
+      expiresInDays: 30,
+      repositoryIds: ["runner-r1"],
+    });
+    expect(collaboratorToken.status).toBe(404);
+
+    const namespaceToken = await mint(eveCookie, ["repo:write"], { repositoryIds: ["r1"] });
+    expect((await gitSession(`Bearer ${namespaceToken.token}`, "demo")).status).toBe(200);
+  });
+
   it("parses Bearer and Basic credentials with any username", () => {
     expect(parseGitAuthorization("Bearer gep_x")).toEqual({ username: null, token: "gep_x" });
     expect(parseGitAuthorization(basic("whoever", "gep_x"))).toEqual({

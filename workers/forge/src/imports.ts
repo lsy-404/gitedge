@@ -408,6 +408,19 @@ async function createImport(context: ImportContext): Promise<Response> {
   const owner = await context.resolveOwner(parsed.data.owner);
   if (!owner) return errorResponse(404, "not_found", "Repository owner was not found.");
   if (!owner.canCreate) return ownerRequired();
+  if (
+    parsed.data.slug.toLowerCase() === "runner" &&
+    (
+      await env.DB.prepare("SELECT kind FROM namespaces WHERE id = ?")
+        .bind(owner.id)
+        .first<{ kind: string }>()
+    )?.kind === "personal"
+  )
+    return errorResponse(
+      409,
+      "reserved_repository_name",
+      "The name Runner is reserved in personal namespaces."
+    );
   if (await quotaReached(env, user)) return quotaExceeded();
   if (await pathTaken(env, owner.id, parsed.data.slug)) return nameTaken();
   const id = crypto.randomUUID();
@@ -451,6 +464,19 @@ async function retryImport(context: ImportContext, id: string): Promise<Response
     return errorResponse(409, "conflict", "Only failed imports can be retried.");
   const owner = await context.resolveOwner(row.owner);
   if (!owner?.canCreate) return ownerRequired();
+  if (
+    row.slug.toLowerCase() === "runner" &&
+    (
+      await env.DB.prepare("SELECT kind FROM namespaces WHERE id = ?")
+        .bind(owner.id)
+        .first<{ kind: string }>()
+    )?.kind === "personal"
+  )
+    return errorResponse(
+      409,
+      "reserved_repository_name",
+      "The name Runner is reserved in personal namespaces."
+    );
   if (await quotaReached(env, user)) return quotaExceeded();
   if (await pathTaken(env, row.namespace_id, row.slug)) return nameTaken();
   try {

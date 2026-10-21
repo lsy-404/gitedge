@@ -215,5 +215,21 @@ describe("account Runner repository", () => {
         "INSERT INTO repositories (id,namespace_id,created_by,slug,do_name,visibility,description,system_kind,created_at,updated_at) VALUES ('invalid-runner','owner-ns','owner','runner','repo:invalid','public','', 'account_runner',1,1)"
       ).run()
     ).rejects.toThrow();
+    const ownerRunner = await env.DB.prepare(
+      "SELECT id FROM repositories WHERE namespace_id='owner-ns' AND system_kind='account_runner'"
+    ).first<{ id: string }>();
+    expect(ownerRunner).not.toBeNull();
+    await expect(
+      env.DB.prepare(
+        "UPDATE repositories SET namespace_id='other-ns',created_by='other' WHERE id=?"
+      )
+        .bind(ownerRunner!.id)
+        .run()
+    ).rejects.toThrow();
+    await expect(
+      env.DB.prepare("UPDATE repositories SET created_by='other' WHERE id=?")
+        .bind(ownerRunner!.id)
+        .run()
+    ).rejects.toThrow();
   });
 });

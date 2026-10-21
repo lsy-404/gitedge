@@ -172,7 +172,7 @@ async function activeSession(
   if (!session) return true;
   if (session.repositoryId !== repositoryId) return false;
   const row = await env.DB.prepare(
-    "SELECT 1 AS found FROM auth_agent_sessions JOIN auth_agents ON auth_agents.id = auth_agent_sessions.agent_id WHERE auth_agent_sessions.id = ? AND auth_agent_sessions.user_id = ? AND auth_agent_sessions.repository_id = ? AND auth_agent_sessions.status = 'active' AND auth_agent_sessions.expires_at > ? AND auth_agents.disabled_at IS NULL AND (EXISTS (SELECT 1 FROM repositories r JOIN namespace_memberships m ON m.namespace_id = r.namespace_id WHERE r.id = auth_agent_sessions.repository_id AND m.user_id = auth_agent_sessions.user_id) OR EXISTS (SELECT 1 FROM repository_collaborators c WHERE c.repository_id = auth_agent_sessions.repository_id AND c.user_id = auth_agent_sessions.user_id))"
+    "SELECT 1 AS found FROM auth_agent_sessions JOIN auth_agents ON auth_agents.id = auth_agent_sessions.agent_id WHERE auth_agent_sessions.id = ? AND auth_agent_sessions.user_id = ? AND auth_agent_sessions.repository_id = ? AND auth_agent_sessions.status = 'active' AND auth_agent_sessions.expires_at > ? AND auth_agents.disabled_at IS NULL AND EXISTS (SELECT 1 FROM repositories r WHERE r.id = auth_agent_sessions.repository_id AND ((r.system_kind = 'account_runner' AND r.created_by = auth_agent_sessions.user_id) OR (r.system_kind IS NULL AND (EXISTS (SELECT 1 FROM namespace_memberships m WHERE m.namespace_id = r.namespace_id AND m.user_id = auth_agent_sessions.user_id) OR EXISTS (SELECT 1 FROM repository_collaborators c WHERE c.repository_id = r.id AND c.user_id = auth_agent_sessions.user_id)))))"
   )
     .bind(session.id, user.id, repositoryId, Date.now())
     .first<{ found: number }>();

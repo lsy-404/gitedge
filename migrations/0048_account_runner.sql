@@ -31,6 +31,8 @@ WHEN OLD.system_kind = 'account_runner' OR NEW.system_kind = 'account_runner'
 BEGIN
   SELECT CASE WHEN NEW.system_kind IS NOT 'account_runner'
     THEN RAISE(ABORT, 'account runner kind is immutable') END;
+  SELECT CASE WHEN NEW.namespace_id IS NOT OLD.namespace_id OR NEW.created_by IS NOT OLD.created_by
+    THEN RAISE(ABORT, 'account runner ownership is immutable') END;
   SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM namespaces n
     WHERE n.id = NEW.namespace_id
