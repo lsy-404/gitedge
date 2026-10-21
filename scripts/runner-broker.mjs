@@ -1445,13 +1445,19 @@ async function serve(state, { once, pollSeconds }) {
   const minPoll = pollSeconds ?? 15;
   console.log(`Runner broker serving ${profiles.length} profiles with one execution slot.`);
   let processed = false;
+  let lastRetentionAt = 0;
   while (!controller.signal.aborted) {
-    const cleanupSlot = await acquireActionsSlot();
-    if (cleanupSlot) {
-      try {
-        await pruneRunArtifacts(runArtifactRoots(state, profiles));
-      } finally {
-        await cleanupSlot();
+    if (Date.now() - lastRetentionAt >= 60 * 60 * 1000) {
+      const cleanupSlot = await acquireActionsSlot();
+      if (cleanupSlot) {
+        try {
+          await pruneRunArtifacts(
+            runArtifactRoots(state, profiles, path.join(root, "work", "actions"))
+          );
+          lastRetentionAt = Date.now();
+        } finally {
+          await cleanupSlot();
+        }
       }
     }
     for (const profile of profiles) {
