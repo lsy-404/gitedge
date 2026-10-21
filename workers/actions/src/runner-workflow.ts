@@ -74,8 +74,10 @@ export function parseRunnerWorkflow(path: string, source: string): RunnerWorkflo
     if (event === "schedule") {
       try {
         schedules = parseCronSchedules(options);
-      } catch {
-        fail("Schedule must declare one to five valid five-field cron expressions in UTC.");
+      } catch (cause) {
+        fail(
+          `Schedule must declare one to five valid five-field cron expressions in UTC: ${cause instanceof Error ? cause.message : "invalid schedule"}`
+        );
       }
     } else if (event === "push") {
       const filter = FilterSchema.safeParse(options ?? {});

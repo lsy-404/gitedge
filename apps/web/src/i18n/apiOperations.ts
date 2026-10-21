@@ -1,5 +1,7 @@
 /** Chinese summaries of the documented operations; English comes from the OpenAPI document. */
 export const zhOperationSummaries: Readonly<Record<string, string>> = {
+  getAccountRunner: "读取当前账户的私有 Runner 服务仓库。",
+  createAccountRunner: "创建当前账户唯一的私有 Runner 服务仓库。",
   getGitHubSync: "查看 GitHub 连接和同步状态。",
   connectGitHubSync: "连接 GitHub 仓库并创建签名 Webhook。",
   setGitHubSyncEnabled: "暂停或恢复双向同步。",
@@ -94,6 +96,7 @@ export const zhOperationSummaries: Readonly<Record<string, string>> = {
 };
 
 export const zhTagNames: Readonly<Record<string, string>> = {
+  "Account Runner": "账户 Runner",
   "GitHub sync": "GitHub 同步",
   "Site administration": "站点管理",
   Dashboard: "工作台",

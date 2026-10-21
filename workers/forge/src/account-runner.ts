@@ -31,10 +31,7 @@ async function accountRunnerRow(env: ForgeEnv, namespaceId: string): Promise<Rep
 }
 
 function artifactsErrorCode(cause: unknown): string {
-  return cause instanceof Error &&
-    cause.name === "ArtifactsError" &&
-    "code" in cause &&
-    typeof cause.code === "string"
+  return cause instanceof Error && "code" in cause && typeof cause.code === "string"
     ? cause.code
     : "UNKNOWN";
 }

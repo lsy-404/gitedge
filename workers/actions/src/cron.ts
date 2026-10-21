@@ -1,4 +1,4 @@
-import { CronExpressionParser } from "cron-parser";
+import { Cron } from "croner";
 import { z } from "zod";
 
 const aliases = new Set([
@@ -35,13 +35,9 @@ export function nextCronTime(expression: string, after: number): number {
     (expression.match(/[A-Za-z]+/g) ?? []).some((alias) => !aliases.has(alias.toUpperCase()))
   )
     throw new Error("Cron must use five POSIX fields in UTC.");
-  return CronExpressionParser.parse(expression, {
-    currentDate: after,
-    tz: "UTC",
-    hashSeed: expression,
-  })
-    .next()
-    .getTime();
+  const next = new Cron(expression, { timezone: "UTC" }).nextRun(new Date(after));
+  if (!next) throw new Error("Cron has no future occurrence.");
+  return next.getTime();
 }
 
 export function parseCronSchedules(value: unknown): string[] {

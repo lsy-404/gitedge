@@ -106,7 +106,7 @@ async function addOwner(id: string): Promise<void> {
 }
 
 function artifactsError(code: "NOT_FOUND" | "INTERNAL_ERROR"): Error {
-  return Object.assign(new Error(code), { name: "ArtifactsError", code, numericCode: 1 });
+  return Object.assign(new Error(code), { code, numericCode: 1 });
 }
 
 describe("account Runner repository", () => {

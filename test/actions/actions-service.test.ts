@@ -21,7 +21,7 @@ describe("Actions Worker workflow listing", () => {
             bind() {
               return {
                 first: async () =>
-                  sql.includes("CASE WHEN m.role")
+                  sql.includes("END AS role FROM repositories")
                     ? { role: "admin" }
                     : {
                         id: "repository-1",
@@ -118,7 +118,7 @@ describe("Actions Worker workflow listing", () => {
               bind() {
                 return {
                   first: async () =>
-                    sql.includes("CASE WHEN m.role")
+                    sql.includes("END AS role FROM repositories")
                       ? { role: "admin" }
                       : {
                           id: "repository-1",
@@ -239,7 +239,7 @@ jobs:
             bind() {
               return {
                 first: async () =>
-                  sql.includes("CASE WHEN m.role")
+                  sql.includes("END AS role FROM repositories")
                     ? { role: "admin" }
                     : {
                         id: "repository-1",
@@ -344,7 +344,7 @@ jobs:
             bind() {
               return {
                 first: async () =>
-                  sql.includes("CASE WHEN m.role")
+                  sql.includes("END AS role FROM repositories")
                     ? { role: "admin" }
                     : sql.includes("OFFSET")
                       ? { created_at: now - 59 * 60 * 1000 - 500 }

@@ -163,6 +163,34 @@ function parseRepositoryWorkflow(
   return workflow;
 }
 
+async function readScheduledDefinitions(
+  env: ActionsEnv,
+  repositoryId: string,
+  branch: string,
+  user: TrustedUser
+): Promise<ScheduledDefinitions> {
+  const repo = await repositoryFor(env, repositoryId);
+  if (
+    !repo ||
+    repo.system_kind !== "account_runner" ||
+    !(await canWriteRepository(env, repo, user))
+  )
+    throw new Error("Scheduled Runner repository is unavailable.");
+  const snapshot = await repositorySnapshot(env, repositoryId, branch, undefined, user, true);
+  const definitions = [];
+  for (const file of workflowFiles(snapshot.files)) {
+    if (!file.path.startsWith(".github/")) continue;
+    const source = snapshotFile(snapshot, file.path);
+    if (source === null) continue;
+    try {
+      definitions.push(parseRunnerWorkflow(file.path, source));
+    } catch {
+      /* Invalid definitions cannot retain an active schedule. */
+    }
+  }
+  return { oid: snapshot.oid, definitions };
+}
+
 async function activeSession(
   env: ActionsEnv,
   user: TrustedUser,
@@ -1293,22 +1321,11 @@ async function handleInternalPush(request: Request, env: ActionsEnv): Promise<Re
   }
 
   const pushBranch = body.ref.replace(/^refs\/heads\//, "");
-  if (
-    repo.system_kind === "account_runner" &&
-    pushBranch === repo.default_branch &&
-    !user.agentSession
-  ) {
+  if (repo.system_kind === "account_runner" && pushBranch === repo.default_branch) {
     await syncRunnerSchedules(
       env,
       repositoryId,
-      {
-        oid: snapshot.oid,
-        definitions: workflows
-          .filter((workflow) => workflow.executor === "runner")
-          .map((workflow) =>
-            parseRunnerWorkflow(workflow.path, snapshotFile(snapshot, workflow.path) ?? "")
-          ),
-      },
+      await readScheduledDefinitions(env, repositoryId, repo.default_branch, user),
       Date.now()
     );
   }
@@ -1764,33 +1781,7 @@ export default {
         env,
         controller.scheduledTime,
         async (repositoryId, branch, user): Promise<ScheduledDefinitions> => {
-          const repo = await repositoryFor(env, repositoryId);
-          if (
-            !repo ||
-            repo.system_kind !== "account_runner" ||
-            !(await canWriteRepository(env, repo, user))
-          )
-            throw new Error("Scheduled Runner repository is unavailable.");
-          const snapshot = await repositorySnapshot(
-            env,
-            repositoryId,
-            branch,
-            undefined,
-            user,
-            true
-          );
-          const definitions = [];
-          for (const file of workflowFiles(snapshot.files)) {
-            if (!file.path.startsWith(".github/")) continue;
-            const source = snapshotFile(snapshot, file.path);
-            if (source === null) continue;
-            try {
-              definitions.push(parseRunnerWorkflow(file.path, source));
-            } catch {
-              /* Invalid definitions cannot retain an active schedule. */
-            }
-          }
-          return { oid: snapshot.oid, definitions };
+          return readScheduledDefinitions(env, repositoryId, branch, user);
         }
       ).catch((cause: unknown) => {
         createLogger(env.LOG_LEVEL, { service: "actions" }).error("actions:schedule-scan-failed", {
