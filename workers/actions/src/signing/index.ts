@@ -230,7 +230,9 @@ export async function handleSigningMachineRoute(
       return dataResponse(await machineRpc(env, context.ownerId, id, "heartbeat", context));
     }
     if (operation === "download" && request.method === "GET") {
-      const target = await machineRpc<{ key: string; digest: string; size: number }>(env, context.ownerId, id, "download", context);
+      const objectName = new URL(request.url).searchParams.get("object") ?? "input";
+      if (objectName !== "input" && objectName !== "template") return errorResponse(400, "bad_request", "Requested signing input object is invalid.");
+      const target = await machineRpc<{ key: string; digest: string; size: number }>(env, context.ownerId, id, "download", context, { object: objectName });
       const start = parseRange(request.headers.get("Range"), target.size);
       const object = await env.SIGNING_ARTIFACTS.get(target.key, start ? { range: { offset: start } } : undefined);
       if (!object || object.size !== target.size) return errorResponse(409, "signing_object_unavailable", "The validated source archive is unavailable.");
@@ -298,9 +300,8 @@ export async function handleSigningMachineRoute(
       const output = await machineRpc<{ key: string; digest: string; size: number }>(env, context.ownerId, id, "output-target", context);
       if (body.digest !== output.digest || body.size !== output.size || !await verifiedObject(env, output.key, output.digest, output.size))
         return errorResponse(422, "signing_output_invalid", "The output archive is missing or does not match its declared digest.");
-      const { profile } = await machineRpc<{ profile: ApprovedSigningProfile; sourceDigest: string }>(env, context.ownerId, id, "profile", context);
-      const source = await machineRpc<{ sourceDigest: string }>(env, context.ownerId, id, "profile", context);
-      if (!await hooks.verifyOutput({ profile, platform: profile.platform as SigningPlatform, sourceDigest: source.sourceDigest, outputDigest: output.digest, outputSize: output.size, report: body.verificationReport }))
+      const { profile, sourceDigest, sourceCommitOid, version } = await machineRpc<{ profile: ApprovedSigningProfile; sourceDigest: string; sourceCommitOid: string; version: string }>(env, context.ownerId, id, "profile", context);
+      if (!await hooks.verifyOutput({ context, profile, platform: profile.platform as SigningPlatform, sourceDigest, sourceCommitOid, version, outputDigest: output.digest, outputSize: output.size, report: body.verificationReport }))
         return errorResponse(422, "signing_verification_failed", "The platform verification report was rejected.");
       return dataResponse(await machineRpc(env, context.ownerId, id, "complete", context, { digest: body.digest, size: body.size, verificationReport: body.verificationReport }), 202);
     }

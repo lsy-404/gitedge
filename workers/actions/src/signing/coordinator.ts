@@ -163,29 +163,57 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
       if (row.state !== "queued") throw new Error("signing_lease_invalid");
       this.ctx.storage.sql.exec("UPDATE signing_requests SET state='running' WHERE id=? AND state='queued'", id);
       const submission = JSON.parse(row.submission_json) as Record<string, unknown>;
-      return { state: "running", manifest: {
-        schemaVersion: 1,
-        requestId: id,
+      const policy = profile.policy as Record<string, unknown>;
+      const project = policy.project as Record<string, unknown> | undefined;
+      if (!project || project.enabled !== true || typeof project.id !== "string" || !Number.isSafeInteger(project.max_artifact_bytes))
+        throw new Error("signing_policy_invalid");
+      const common = {
+        schema_version: 1,
+        request_id: id,
         generation: row.generation,
-        platform: profile.platform,
         stage: row.current_stage,
-        profileRevision: profile.revision,
-        workflowOid: profile.workflowOid,
-        source: {
-          repositoryId: submission.sourceRepositoryId,
-          commitOid: submission.sourceCommitOid,
-          runId: submission.sourceRunId,
-          artifactId: submission.sourceArtifactId,
-          digest: row.source_digest,
-          size: row.source_size,
-        },
+        project_id: project.id,
         version: submission.version,
-        profile: profile,
-      } };
+        source_sha: submission.sourceCommitOid,
+        input_digest: row.source_digest,
+        recipe_sha: profile.workflowOid,
+        policy_digest: profile.policyDigest,
+        max_artifact_bytes: project.max_artifact_bytes,
+      };
+      let manifest: Record<string, unknown>;
+      if (profile.platform === "windows") {
+        const windows = project.windows as Record<string, unknown> | undefined;
+        const azure = policy.azure as Record<string, unknown> | undefined;
+        if (!windows || !azure || !policy.windowsIdentity) throw new Error("signing_windows_profile_invalid");
+        manifest = { ...common, stage: "windows_sign", identity_mode: policy.windowsIdentity, bundle_id: windows.bundle_id, architecture: windows.architecture,
+          max_unpacked_bytes: windows.max_unpacked_bytes, windows: { product_name: windows.product_name, electron_version: windows.electron_version,
+            executable_name: windows.executable_name, installer: windows.installer, portable: windows.portable }, azure };
+      } else if (profile.platform === "ios") {
+        const ios = project.ios as Record<string, unknown> | undefined;
+        if (!ios || typeof policy.teamId !== "string") throw new Error("signing_ios_profile_invalid");
+        manifest = { ...common, stage: "ios_sign", team_id: policy.teamId, bundle_id: ios.bundle_id,
+          architecture: ios.architecture, max_unpacked_bytes: ios.max_unpacked_bytes };
+      } else {
+        const macos = project.macos as Record<string, unknown> | undefined;
+        if (!macos || typeof policy.teamId !== "string") throw new Error("signing_macos_profile_invalid");
+        manifest = { ...common, team_id: policy.teamId, bundle_id: macos.bundle_id, bundle_name: macos.bundle_name,
+          architecture: macos.architecture, profile: macos.profile, harden_electron_fuses: macos.harden_electron_fuses,
+          max_unpacked_bytes: macos.max_unpacked_bytes,
+          ...(["finalize","dmg_finalize"].includes(row.current_stage) && row.verification_json ? {
+            notarization_id: (JSON.parse(row.verification_json) as Record<string, unknown>).notarization_id,
+            notary_archive_sha256: (JSON.parse(row.verification_json) as Record<string, unknown>).notary_archive_sha256,
+          } : {}),
+          ...(row.current_stage === "dmg_sign" ? { template_digest: row.source_digest } : {}),
+        };
+      }
+      return { state: "running", manifest };
     }
     if (row.state !== "running") throw new Error("signing_lease_invalid");
-    if (operation === "download") return { key: `signing/${row.owner_id}/${row.repository_id}/${row.id}/source.zip`, digest: row.source_digest, size: row.source_size };
-    if (operation === "profile") return { profile, sourceDigest: row.source_digest };
+    if (operation === "download") {
+      if (payload?.object !== undefined && payload.object !== "input" && payload.object !== "template") throw new Error("signing_object_invalid");
+      return { key: `signing/${row.owner_id}/${row.repository_id}/${row.id}/source.zip`, digest: row.source_digest, size: row.source_size };
+    }
+    if (operation === "profile") return { profile, sourceDigest: row.source_digest, sourceCommitOid: JSON.parse(row.submission_json).sourceCommitOid, version: JSON.parse(row.submission_json).version };
     if (operation === "output-target") {
       if (!row.output_digest || !row.output_size) throw new Error("signing_output_invalid");
       const upload = this.ctx.storage.sql.exec<{ verified: number }>("SELECT verified FROM signing_uploads WHERE request_id=?", id).toArray()[0];
@@ -217,8 +245,13 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
         throw new Error("signing_output_invalid");
       if (row.authorized_at <= 0 || typeof payload?.verificationReport !== "object" || payload.verificationReport === null)
         throw new Error("signing_not_authorized");
-      this.ctx.storage.sql.exec("UPDATE signing_requests SET state='succeeded',completed_at=?,verification_json=? WHERE id=? AND state='running'", Date.now(), JSON.stringify(payload.verificationReport), id);
-      return { state: "succeeded" };
+      const profile = JSON.parse(row.profile_json) as { platform: string; policy: { project?: { macos?: { output_format?: string } } } };
+      const terminal = profile.platform === "windows" || profile.platform === "ios"
+        || profile.platform === "macos" && (row.current_stage === "dmg_finalize" || row.current_stage === "finalize" && profile.policy.project?.macos?.output_format !== "dmg");
+      const state = terminal ? "succeeded" : "awaiting_source";
+      this.ctx.storage.sql.exec("UPDATE signing_requests SET state=?,completed_at=?,verification_json=? WHERE id=? AND state='running'",
+        state, terminal ? Date.now() : null, JSON.stringify(payload.verificationReport), id);
+      return { state };
     }
     throw new Error("signing_operation_invalid");
   }

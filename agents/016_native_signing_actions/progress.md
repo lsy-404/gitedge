@@ -5,5 +5,6 @@
 - Implemented the SigningCoordinator state machine, owner-bound request admission, trusted machine route adapter, GitHub workflow/run/artifact checks, and source archive verification.
 - Added migration 0050 for native-run bindings, immutable approved profile snapshots, and owner/profile/platform-scoped AES-GCM credentials.
 - Added 8 MiB multipart output upload up to 2 GB with streaming per-part and final archive SHA-256 checks. Windows profiles require an explicit managed/workload identity mode.
-- Focused signing tests pass (3 tests). TypeScript reports only baseline missing `ACTION_RUNS` and `GIT_TRANSFERS` bindings in Actions integration; no signer module type errors.
-- Mature per-platform manifest/stage lifecycle and notarization status verification remain incomplete; parent is resolving native-run binding cardinality for multi-stage macOS requests before this can be considered cutover-ready.
+- Added mature snake_case per-platform manifests, strict report schemas, archive verification, and Apple notary status/log verification for terminal macOS reports. Finalize stages receive no signing credentials.
+- Focused signing tests pass (3 tests) and `pnpm run typecheck:actions` passes.
+- Multi-stage progression remains incomplete: `awaiting_source` has no idempotent next-stage transition or scheduled reconciliation; artifact storage is still one output object per request, and DMG template resolution is not implemented. Do not treat this as cutover-ready.

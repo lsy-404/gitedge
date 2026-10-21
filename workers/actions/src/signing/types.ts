@@ -42,7 +42,7 @@ export interface SigningExecutionHooks {
   enqueue(input: SigningQueueInput): Promise<{ runId: string }>;
   verifySigningHost(ownerId: string, repositoryId: string, platform: SigningPlatform): Promise<SigningHostApproval | null>;
   authorizeCredentials(context: SigningMachineContext, profile: ApprovedSigningProfile): Promise<{ credentials: Record<string, unknown>; expiresAt: number } | null>;
-  verifyOutput(input: { profile: ApprovedSigningProfile; platform: SigningPlatform; sourceDigest: string; outputDigest: string; outputSize: number; report: unknown }): Promise<boolean>;
+  verifyOutput(input: { context: SigningMachineContext; profile: ApprovedSigningProfile; platform: SigningPlatform; sourceDigest: string; sourceCommitOid: string; version: string; outputDigest: string; outputSize: number; report: unknown }): Promise<boolean>;
 }
 
 export interface SigningStoredRequest extends SigningRequest {
