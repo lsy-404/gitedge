@@ -38,10 +38,15 @@ Initialize state and register the GitEdge runner profile used by the production 
 pnpm run runner-broker -- init
 GITEDGE_TOKEN='<admin-scoped GitEdge token>' pnpm run runner-broker -- register-gitedge \
   --origin https://git.example.com --owner acme \
-  --label ci --runner-path /path/to/official-runner
+  --label ci --runner-path /path/to/official-runner \
+  --max-job-minutes 60 --daily-minutes 240 --cost 10
 pnpm run runner-broker -- list
 pnpm run runner-broker -- serve
 ```
+
+The optional budget values are persisted in the local profile: `--max-job-minutes` accepts 1–360, `--daily-minutes` accepts 1–1440 rolling minutes, and `--cost` accepts a relative 0–100 score (lower is preferred). At each GitEdge claim the broker reports OS, architecture, logical CPUs, one-minute load, available and total memory, free space in both broker and Actions work directories, and allowlisted tools detected on the host. Tool probes are bounded and cached for ten minutes; Docker is advertised only when `docker info` reaches a working daemon. One slot is reported. The server applies the persisted budget and capacity report when choosing work.
+
+Workflow `runs-on` may include resource labels such as `need-mem-2g`, `need-cpu-2`, `need-disk-10g`, `need-tool-docker`, and `need-time-45m`. The broker and server reject unknown `need-*` labels. The broker checks claims against current local capacity before launching the workflow and uses `need-time` as a deadline, clamped to the GitEdge workflow maximum. GitHub jobs default to a 360-minute local deadline. Keep a custom label such as `ci` in every intended workflow: registration still includes standard `self-hosted` and host labels, so labels alone cannot prevent a generic `self-hosted` GitHub workflow from matching. GitHub provides no server-enforced custom-label-only policy in this broker.
 
 For the independent GitHub polling mode, `register-github` remains available and uses local `gh` authentication:
 
@@ -60,6 +65,24 @@ pnpm run runner-broker -- service stop --install-dir /path/to/gitedge
 ```
 
 The LaunchAgent invokes the Node executable and broker script in that installation, uses the current user's home directory, and writes logs under the selected state directory. Keep the installation directory in place while the service is installed.
+
+On Ubuntu 24.04, install a systemd unit as root but execute it as a dedicated unprivileged account. Initialize and register the profile as that account first so its credentials remain owned by that account, then install the service with `--run-as-user`. The unit is CPU, memory and task limited, and stops the broker with SIGTERM so active work is cancelled and its state lock is released:
+
+```sh
+sudo install -d -o gitedge -g gitedge -m 0700 /var/lib/gitedge/runner-broker
+sudo -u gitedge pnpm run runner-broker -- init --state-dir /var/lib/gitedge/runner-broker
+sudo -u gitedge env GITEDGE_TOKEN='<admin-scoped GitEdge token>' pnpm run runner-broker -- register-gitedge \
+  --state-dir /var/lib/gitedge/runner-broker \
+  --origin https://git.example.com --owner acme \
+  --label ubuntu24-1gb-light --runner-path /opt/actions-runner \
+  --max-job-minutes 60 --daily-minutes 240 --cost 0
+sudo pnpm run runner-broker -- service install \
+  --install-dir /opt/gitedge --state-dir /var/lib/gitedge/runner-broker --run-as-user gitedge
+sudo pnpm run runner-broker -- service start --install-dir /opt/gitedge
+sudo pnpm run runner-broker -- service status --install-dir /opt/gitedge
+```
+
+Use `ubuntu24-1gb-light` (or another custom label) in workflows that should target this small host. The broker does not provide server-enforced light-only routing; any workflow with matching standard labels can still be assigned by GitHub's native label rules.
 
 An owner-wide registration serves enabled repositories in that GitEdge namespace; add `--repository` only to restrict it to one repository. To accept GitHub jobs, connect each source in the repository's GitHub sync settings and enable **Route GitHub self-hosted jobs to GitEdge runners**. Apply all migrations, including `0046_github_runner_bridge.sql`. The connection needs repository runner administration, Actions read, and the existing synchronization permissions. A fine-grained token can limit access to selected repositories. GitHub owners can differ from the GitEdge namespace.
 
