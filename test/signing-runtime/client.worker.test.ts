@@ -304,6 +304,63 @@ describe("native signing context and Actions client", () => {
     expect(client.getLeaseExpiresAt()).toBeGreaterThan(previousExpiry);
   });
 
+  it("aborts the active platform executor when the signing lease heartbeat fails", async () => {
+    const dir = await temporaryDirectory();
+    const contextFile = path.join(dir, "run-context.json");
+    const runContext = context();
+    await writeFile(contextFile, JSON.stringify(runContext), { mode: 0o600 });
+    let executorStarted;
+    const started = new Promise((resolve) => {
+      executorStarted = resolve;
+    });
+    let executorAborted;
+    const aborted = new Promise((resolve) => {
+      executorAborted = resolve;
+    });
+    const fetchImpl = vi.fn(async (url) => {
+      const action = new URL(url).pathname.split("/").slice(-1)[0];
+      if (action === "start") return Response.json({ data: { manifest: manifest() } });
+      if (action === "download")
+        return new Response(input, { headers: { "content-length": String(input.byteLength) } });
+      if (action === "heartbeat") return Response.json({ error: "lease expired" }, { status: 409 });
+      throw new Error(`Unexpected signing route ${action}`);
+    });
+
+    const execution = runSigning({
+      contextFile,
+      outputParent: path.join(dir, "work"),
+      fetchImpl,
+      sleep: async () => {},
+      heartbeatIntervalMs: 5,
+      contextReader: async (file) => parseSigningContext(JSON.parse(await readFile(file, "utf8"))),
+      platformExecutor: async (_manifest, _input, _output, _credentials, _template, signal) => {
+        executorStarted();
+        await new Promise((resolve) => {
+          if (signal.aborted) {
+            executorAborted(signal.reason);
+            resolve();
+            return;
+          }
+          signal.addEventListener(
+            "abort",
+            () => {
+              executorAborted(signal.reason);
+              resolve();
+            },
+            { once: true }
+          );
+        });
+      },
+    });
+
+    await started;
+    await expect(aborted).resolves.toBeDefined();
+    await expect(execution).rejects.toMatchObject({ code: "HEARTBEAT_FAILED" });
+    expect(fetchImpl.mock.calls.some(([url]) => new URL(url).pathname.endsWith("/heartbeat"))).toBe(
+      true
+    );
+  });
+
   it("runs a signed request through native UUID API and multipart output using verified mock tooling", async () => {
     const dir = await temporaryDirectory();
     const contextFile = path.join(dir, "run-context.json");

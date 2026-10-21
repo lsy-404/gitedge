@@ -1,5 +1,6 @@
 import { createHash, randomBytes, X509Certificate } from "node:crypto";
 import { spawn } from "node:child_process";
+
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createReadStream, createWriteStream } from "node:fs";
 import { Transform } from "node:stream";
@@ -14,6 +15,19 @@ import {
   iosVerificationSchema,
 } from "./contract.mjs";
 import { validateIosProfile, validateSignedEntitlements } from "./ios-policy.mjs";
+
+let signingAbortSignal;
+
+export function setSigningAbortSignal(signal) {
+  signingAbortSignal = signal;
+  signal?.addEventListener(
+    "abort",
+    () => {
+      if (signingAbortSignal === signal) signingAbortSignal = undefined;
+    },
+    { once: true }
+  );
+}
 
 const require = createRequire(import.meta.url);
 const yauzl = require("yauzl");
@@ -128,7 +142,11 @@ export function classifyIdentityImportFailure(stderr) {
 function command(file, args, options = {}) {
   return new Promise((resolve, reject) => {
     const { timeout = 120_000, failureClass, ...spawnOptions } = options;
-    const child = spawn(file, args, { ...spawnOptions, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(file, args, {
+      ...spawnOptions,
+      signal: spawnOptions.signal ?? signingAbortSignal,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     const stdout = [],
       stderr = [];
     let total = 0,

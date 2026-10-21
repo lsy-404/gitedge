@@ -492,35 +492,60 @@ async function validateOutput(outputDir, manifest) {
   return verification;
 }
 
-async function executePlatform(manifest, inputFile, outputDir, credentialsProvider, templateFile) {
+async function executePlatform(
+  manifest,
+  inputFile,
+  outputDir,
+  credentialsProvider,
+  templateFile,
+  signal
+) {
   const family = stageFamily(manifest.stage);
   const credentials = manifest.stage.endsWith("finalize") ? undefined : credentialsProvider;
   if (family.windows) {
     if (process.platform !== "win32") throw new ClientError("NATIVE_HOST_REQUIRED");
-    return (await import("./windows.mjs")).executeWindows(
-      manifest,
-      inputFile,
-      outputDir,
-      credentials
-    );
+    const executor = await import("./windows.mjs");
+    executor.setSigningAbortSignal(signal);
+    try {
+      return await executor.executeWindows(manifest, inputFile, outputDir, credentials, signal);
+    } finally {
+      executor.setSigningAbortSignal(undefined);
+    }
   }
   if (process.platform !== "darwin") throw new ClientError("NATIVE_HOST_REQUIRED");
-  if (family.ios)
-    return (await import("./ios-sign.mjs")).executeIos(manifest, inputFile, outputDir, credentials);
-  if (family.dmg)
-    return (await import("./dmg.mjs")).executeDmg(
-      manifest,
-      inputFile,
-      outputDir,
-      credentials,
-      templateFile
-    );
-  return (await import("./macos-sign.mjs")).executeMacos(
-    manifest,
-    inputFile,
-    outputDir,
-    credentials
-  );
+  if (family.ios) {
+    const executor = await import("./ios-sign.mjs");
+    executor.setSigningAbortSignal(signal);
+    try {
+      return await executor.executeIos(manifest, inputFile, outputDir, credentials, signal);
+    } finally {
+      executor.setSigningAbortSignal(undefined);
+    }
+  }
+  if (family.dmg) {
+    const executor = await import("./dmg.mjs");
+    const macos = await import("./macos-sign.mjs");
+    macos.setSigningAbortSignal(signal);
+    try {
+      return await executor.executeDmg(
+        manifest,
+        inputFile,
+        outputDir,
+        credentials,
+        templateFile,
+        signal
+      );
+    } finally {
+      macos.setSigningAbortSignal(undefined);
+    }
+  }
+  const executor = await import("./macos-sign.mjs");
+  executor.setSigningAbortSignal(signal);
+  try {
+    return await executor.executeMacos(manifest, inputFile, outputDir, credentials, signal);
+  } finally {
+    executor.setSigningAbortSignal(undefined);
+  }
 }
 
 export async function runSigning({
@@ -531,6 +556,7 @@ export async function runSigning({
   platformExecutor,
   bundleBuilder = bundleOutput,
   contextReader = readSigningContext,
+  heartbeatIntervalMs = 30_000,
 } = {}) {
   if (
     typeof contextFile !== "string" ||
@@ -545,6 +571,7 @@ export async function runSigning({
   let heartbeatPromise;
   let heartbeatError;
   let work;
+  const abortController = new AbortController();
   try {
     context = await contextReader(contextFile);
     const client = createSigningClient({ context, fetchImpl, sleep });
@@ -561,7 +588,10 @@ export async function runSigning({
       heartbeatPromise = client
         .heartbeat()
         .catch((error) => {
-          heartbeatError = error;
+          if (!heartbeatError) {
+            heartbeatError = error;
+            abortController.abort(error);
+          }
         })
         .finally(() => {
           heartbeatBusy = false;
@@ -570,7 +600,7 @@ export async function runSigning({
     };
     timer = setInterval(() => {
       void pulse();
-    }, 30_000);
+    }, heartbeatIntervalMs);
     timer.unref?.();
     if (manifest.stage === "windows_sign") {
       const identityMode = manifest.identity_mode;
@@ -626,9 +656,18 @@ export async function runSigning({
         inputFile,
         outputDir,
         manifest.stage.endsWith("finalize") ? undefined : credentialsProvider,
-        templateFile
+        templateFile,
+        abortController.signal
       );
-    else await executePlatform(manifest, inputFile, outputDir, credentialsProvider, templateFile);
+    else
+      await executePlatform(
+        manifest,
+        inputFile,
+        outputDir,
+        credentialsProvider,
+        templateFile,
+        abortController.signal
+      );
     if (heartbeatError) throw new ClientError("HEARTBEAT_FAILED");
     const verification = await validateOutput(outputDir, manifest);
     const bundle = await bundleBuilder(outputDir, verification, work, manifest.max_artifact_bytes);
