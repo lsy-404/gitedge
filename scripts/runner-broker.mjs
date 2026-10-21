@@ -212,7 +212,10 @@ async function loadProfile(state, id) {
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
-  return { ...profile, directory, credential };
+  const executionClass = profile.executionClass ?? "ordinary";
+  if (profile.kind === "gitedge" && !["ordinary", "signing"].includes(executionClass))
+    throw new Error(`Profile ${id} has an invalid execution class.`);
+  return { ...profile, executionClass, directory, credential };
 }
 
 async function apiRequest(origin, token, route, options = {}) {
@@ -279,6 +282,9 @@ async function addGitEdge(state, values) {
     );
   repositorySegment(owner, "--owner");
   if (repository) repositorySegment(repository, "--repository");
+  const executionClass = values.signing ? "signing" : "ordinary";
+  if (executionClass === "signing" && repository !== "runner")
+    throw new Error("Signing profiles must register against the private account Runner repository.");
   validateLabels(labels);
   validateProfileHostLabels(labels);
   const budget = parseRunnerBudget(values);
@@ -334,6 +340,7 @@ async function addGitEdge(state, values) {
           origin,
           owner,
           repository,
+          executionClass,
           labels: runnerLabels,
           ...(budget ? { budget } : {}),
           runnerPath,
@@ -347,7 +354,7 @@ async function addGitEdge(state, values) {
     await writePrivate(path.join(staging, "credential"), runnerToken);
     await rename(staging, directory);
     console.log(
-      `Registered GitEdge profile ${id} (${owner}${repository ? `/${repository}` : " organization scope"}).`
+      `Registered ${executionClass} GitEdge profile ${id} (${owner}${repository ? `/${repository}` : " organization scope"}).${executionClass === "signing" ? " A recently authenticated account owner must approve this dedicated host in the browser before it can receive signing jobs." : ""}`
     );
   } catch (error) {
     if (runnerId)
@@ -1024,6 +1031,71 @@ async function runClaimedGitHub(profile, claim, signal) {
   if (executionError && conclusion === "failure" && !signal.aborted) throw executionError;
 }
 
+async function secureSigningPath(target, directory = false) {
+  if (process.platform !== "win32") {
+    await chmod(target, directory ? 0o700 : 0o600);
+    return;
+  }
+  const helper = path.join(root, "scripts", "secure-runner-context.ps1");
+  const child = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", helper, "-Path", target, ...(directory ? ["-Directory"] : [])], { stdio: "inherit" });
+  await waitChild(child, new AbortController().signal);
+}
+
+async function runClaimedSigning(profile, claim, signal) {
+  const { run } = claim;
+  if (profile.executionClass !== "signing" ||
+      typeof run.id !== "string" || !/^[0-9a-f-]{36}$/i.test(run.id) ||
+      typeof run.requestId !== "string" || !/^[0-9a-f-]{36}$/i.test(run.requestId) ||
+      typeof run.ownerId !== "string" || typeof run.repositoryId !== "string" ||
+      typeof run.workflowOid !== "string" || !/^[0-9a-f]{40}$/.test(run.workflowOid) ||
+      typeof run.profileRevision !== "string" || !/^[0-9a-f]{40}$/.test(run.profileRevision) ||
+      typeof run.generation !== "number" || typeof run.nonce !== "string" ||
+      !["windows", "macos", "ios"].includes(run.platform) || run.operatorApproved !== true ||
+      typeof run.approvedBy !== "string" || typeof run.approvedAt !== "number" ||
+      typeof claim.runnerId !== "string" || String(claim.runnerId) !== String(profile.runnerId) ||
+      typeof claim.leaseToken !== "string" || typeof claim.leaseExpiresAt !== "number")
+    throw new Error("Signing lease identity is incomplete or does not match the approved runner.");
+  const secret = await readFile(path.join(profile.directory, "credential"), "utf8");
+  const runDirectory = await mkdtemp(path.join(profile.directory, "signing-"));
+  await secureSigningPath(runDirectory, true);
+  const contextFile = path.join(runDirectory, "context.json");
+  const context = {
+    schemaVersion: 1,
+    baseUrl: new URL("/api/actions", profile.origin).toString().replace(/\/$/, ""),
+    ownerId: run.ownerId,
+    repositoryId: run.repositoryId,
+    runnerId: String(claim.runnerId),
+    runId: run.id,
+    requestId: run.requestId,
+    platform: run.platform,
+    workflowOid: run.workflowOid,
+    profileRevision: run.profileRevision,
+    generation: run.generation,
+    nonce: run.nonce,
+    leaseToken: claim.leaseToken,
+    leaseExpiresAt: claim.leaseExpiresAt,
+    runnerToken: secret.trim(),
+    operatorApproved: true,
+    approvedBy: run.approvedBy,
+    approvedAt: run.approvedAt,
+  };
+  let child;
+  try {
+    await writePrivate(contextFile, JSON.stringify(context));
+    await secureSigningPath(contextFile);
+    child = spawn(process.execPath, [path.join(root, "scripts", "signing", "client.mjs"), "execute", "--context-file", contextFile, "--output-parent", runDirectory], {
+      cwd: root,
+      detached: process.platform !== "win32",
+      stdio: "inherit",
+      windowsHide: true,
+    });
+    await waitChild(child, signal);
+  } finally {
+    if (child?.exitCode === null) await killChild(child);
+    await rm(runDirectory, { recursive: true, force: true });
+  }
+}
+
 async function monitorJitAssignment(profile, queued, jit, signal) {
   const runnerId = safeRunId(jit.runner?.id);
   const runnerPath =
@@ -1366,7 +1438,10 @@ async function claimGitEdge(profile, signal) {
     "/api/actions/runner/claim",
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Runner-Execution-Class": profile.executionClass,
+      },
       body: JSON.stringify({
         capacity,
         ...(profile.budget ? { budget: profile.budget } : {}),
@@ -1400,6 +1475,20 @@ async function claimGitEdge(profile, signal) {
     !Number.isFinite(claim.leaseExpiresAt)
   )
     throw new Error("GitEdge returned an incomplete runner lease.");
+  if (
+    claim.run.executionClass !== profile.executionClass ||
+    (profile.executionClass === "signing" &&
+      (claim.run.operatorApproved !== true ||
+        claim.run.approvedBy !== claim.run.ownerId ||
+        !Number.isSafeInteger(claim.run.approvedAt) ||
+        typeof claim.run.requestId !== "string" ||
+        !/^[0-9a-f-]{36}$/i.test(claim.run.requestId) ||
+        typeof claim.run.stage !== "string" ||
+        typeof claim.run.inputDigest !== "string" ||
+        typeof claim.runnerId !== "string" ||
+        !/^[0-9a-f-]{36}$/i.test(claim.runnerId)))
+  )
+    throw new Error("GitEdge returned a runner lease for a different execution class.");
   return claim;
 }
 
@@ -1415,6 +1504,12 @@ async function serve(state, { once, pollSeconds }) {
       .map((entry) => loadProfile(state, entry.name))
   );
   if (!profiles.length) throw new Error("Register at least one profile before serving.");
+  const executionClasses = new Set(
+    profiles.filter((profile) => profile.kind === "gitedge").map((profile) => profile.executionClass)
+  );
+  if (profiles.some((profile) => profile.kind === "github")) executionClasses.add("ordinary");
+  if (executionClasses.size > 1)
+    throw new Error("Ordinary and signing profiles require separate broker services and OS identities.");
   for (const profile of profiles) {
     if (profile.kind === "github" || profile.kind === "gitedge")
       validateProfileHostLabels(profile.labels);
@@ -1479,6 +1574,13 @@ async function serve(state, { once, pollSeconds }) {
                   `GitEdge profile ${profile.id}: running GitHub job ${claim.run.jobId}.`
                 );
                 await runClaimedGitHub(profile, claim, controller.signal);
+              } else if (claim.run.executionClass === "signing") {
+                console.log(
+                  `GitEdge profile ${profile.id}: running dedicated signing stage ${claim.run.stage}.`
+                );
+                await runClaimedSigning(profile, claim, controller.signal);
+              } else if (profile.executionClass === "signing") {
+                throw new Error("A signing-only broker received an ordinary execution lease.");
               } else {
                 console.log(`GitEdge profile ${profile.id}: running ${claim.run.id}.`);
                 await runGitEdge(profile, claim.run, claim.leaseToken, controller.signal);
@@ -1600,6 +1702,7 @@ async function main() {
       "daily-minutes": { type: "string" },
       cost: { type: "string" },
       "run-as-user": { type: "string" },
+      signing: { type: "boolean" },
       once: { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
@@ -1608,7 +1711,7 @@ async function main() {
   const state = path.resolve(values["state-dir"] ?? stateDefault);
   if (!action || values.help) {
     console.log(
-      "Usage: pnpm run runner-broker -- init|register-gitedge|register-github|list|remove|serve|service [options]\n\nGitEdge: register-gitedge --origin URL --owner OWNER [--repository REPO] --label LABEL --runner-path DIR [--max-job-minutes N] [--daily-minutes N] [--cost N]\nGitHub: register-github --host HOST --owner OWNER --scope repo|org [--repository REPO] --label LABEL --runner-path DIR [--allow-repository OWNER/REPO] [--group-id ID|--group-name NAME]\nServe: serve [--once] [--poll-seconds 30]\nService: service install|start|stop|status --install-dir DIR [--state-dir DIR] [--run-as-user USER]\nAll commands accept --state-dir DIR. GitEdge registration reads GITEDGE_TOKEN; standalone GitHub profiles use gh CLI authentication."
+      "Usage: pnpm run runner-broker -- init|register-gitedge|register-github|list|remove|serve|service [options]\n\nGitEdge: register-gitedge --origin URL --owner OWNER [--repository REPO] --label LABEL --runner-path DIR [--signing] [--max-job-minutes N] [--daily-minutes N] [--cost N]\nSigning profiles require a separate broker service and OS identity; --signing records the expected execution class only.\nGitHub: register-github --host HOST --owner OWNER --scope repo|org [--repository REPO] --label LABEL --runner-path DIR [--allow-repository OWNER/REPO] [--group-id ID|--group-name NAME]\nServe: serve [--once] [--poll-seconds 30]\nService: service install|start|stop|status --install-dir DIR [--state-dir DIR] [--run-as-user USER]\nAll commands accept --state-dir DIR. GitEdge registration reads GITEDGE_TOKEN; standalone GitHub profiles use gh CLI authentication."
     );
     return;
   }
