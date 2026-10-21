@@ -8,6 +8,4 @@
 - Official GitHub Actions runner Linux x64 release checked for parent deployment: v2.338.0, published 2026-10-06; asset `actions-runner-linux-x64-2.338.0.tar.gz`, 227,660,598 bytes, release digest `sha256:af4b794c1bc41d73d40535e3fe092a39f9679cd8d965954c2aca25a05ca41d32`. Release notes move runner internal Node operations to Node 24. Official dependency installer includes libkrb5-3, zlib1g, LTTng UST, OpenSSL 3 and ICU; Ubuntu 24.04 uses libicu74.
 - Existing broker runtime requires Node >=24 and `yaml@2.9.1` (lockfile resolution); capacity and scheduling parser use Node built-ins plus the shared parser module.
 - The repo-wide global ignore excludes `/agents`; task audit files must be force-added explicitly to keep the required records in the branch.
-
-- The local Runner.Server receives the complete validated union of GitEdge workflow uns-on labels, including 
-eed-*, in addition to profile host labels; this preserves Runner.Server's routing semantics after broker-side validation.
+- The local Runner.Server receives the complete validated union of GitEdge workflow runs-on labels, including need-* labels, in addition to profile host labels. This preserves Runner.Server routing semantics after broker-side validation.
