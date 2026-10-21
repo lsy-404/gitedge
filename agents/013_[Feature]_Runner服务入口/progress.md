@@ -1,0 +1,9 @@
+- Loaded the agent-mode workflow and read repository `AGENTS.md`, `PRODUCT.md`, and `docs/account-runner-repository.md`.
+- Confirmed this worktree is clean on `codex/account-runner-ui`; existing Runners view already contains machine, queue, and history status.
+- Core agent confirmed the response envelopes, optional `systemKind: "account_runner"`, and default manual workflow file.
+- Added Forge API client methods and the private service-center card; the existing machine overview remains below it.
+- The card redirects after provisioning to Runner Actions, and existing owners can open repository code, the workflow directory, Actions/results, or metadata-locked settings.
+- Added English/Chinese workflow-only service copy, API envelope tests, account service-center behavior tests, and a Runner-specific settings lock test.
+- Focused web UI tests: 12 passed. `vue-tsc --noEmit` passed. Initial Prettier check identified touched-file formatting; formatted those files before final rerun.
+- Added UI display and coverage for UTC cron expressions, manual-dispatch unavailability, default-branch scheduling, and coalesced queued runs.
+- Final focused web UI tests: 18 passed across four files. `vue-tsc --noEmit` and Prettier checks passed.

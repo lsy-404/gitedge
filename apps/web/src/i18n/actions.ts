@@ -4,6 +4,7 @@ export const actionsMessages = {
     auditAction_actions_runner_revoked: "撤销了本机 runner",
     actionsTitle: "Actions",
     actionsIntro: "在选定提交上运行仓库工作流。",
+    actionsCronSchedule: "UTC Cron：{schedules}（使用默认分支；重复的排队运行会合并）。",
     actionsRunnerNotice:
       "此工作流需要已注册且所有作业标签均匹配的本机 runner。网络访问使用主机环境。",
     actionsInputs: "运行参数",
@@ -33,11 +34,11 @@ export const actionsMessages = {
     actionsConclusion_cancelled: "已取消",
     actionsConclusionPending: "等待结果",
     actionsNetworkDisabled: "此仓库的 Actions 网络访问已关闭。",
-    actionsPushOnly: "此工作流仅由仓库推送触发，手动运行不可用。",
+    actionsPushOnly: "此工作流未启用手动运行。",
     actionsWorkflows: "工作流",
     actionsSyntaxTitle: "容器工作流语法",
     actionsSyntaxTriggers:
-      "工作流可放在 .gitedge/workflows/ 或受限的 .github/workflows/。触发器：push、workflow_dispatch、pull_request 与 merge_group；push 和 pull_request 支持 branches 与 branches-ignore。",
+      "工作流可放在 .gitedge/workflows/ 或受限的 .github/workflows/。触发器：push、workflow_dispatch、pull_request 与 merge_group；push 和 pull_request 支持 branches 与 branches-ignore。账户 Runner 仓库的原生本机 runner 工作流还可设置最多 5 个五字段 UTC Cron 表达式。",
     actionsSyntaxSteps:
       "步骤：每个步骤必须有 run，可选 name、shell（sh 或 bash）、working-directory 和 env；不支持 uses、表达式、条件或矩阵。工作流可声明 lockfile 缓存，作业可声明可下载制品。",
     actionsSyntaxLimits:
@@ -73,6 +74,8 @@ export const actionsMessages = {
     auditAction_actions_runner_revoked: "Revoked a local runner",
     actionsTitle: "Actions",
     actionsIntro: "Run a supported repository workflow at a selected commit.",
+    actionsCronSchedule:
+      "UTC cron: {schedules} (uses the default branch; duplicate queued runs are coalesced).",
     actionsRunnerNotice:
       "This workflow requires a registered local runner matching every job label. Network access follows the host environment.",
     actionsInputs: "Run inputs",
@@ -102,11 +105,11 @@ export const actionsMessages = {
     actionsConclusion_cancelled: "Cancelled",
     actionsConclusionPending: "Waiting for result",
     actionsNetworkDisabled: "Actions network access is disabled for this repository.",
-    actionsPushOnly: "This workflow runs on repository pushes and cannot be started manually.",
+    actionsPushOnly: "Manual dispatch is not enabled for this workflow.",
     actionsWorkflows: "Workflows",
     actionsSyntaxTitle: "Container workflow syntax",
     actionsSyntaxTriggers:
-      "Use .gitedge/workflows/ or the supported .github/workflows/ subset. Triggers: push, workflow_dispatch, pull_request and merge_group. push and pull_request support branches and branches-ignore.",
+      "Use .gitedge/workflows/ or the supported .github/workflows/ subset. Triggers: push, workflow_dispatch, pull_request and merge_group. push and pull_request support branches and branches-ignore. Native self-hosted workflows in the account Runner repository can declare up to five five-field UTC cron expressions.",
     actionsSyntaxSteps:
       "Each step needs run, with optional name, shell (sh or bash), working-directory and env. uses, expressions, conditions and matrices are unsupported. Workflows can declare lockfile caches; jobs can declare downloadable artifacts.",
     actionsSyntaxLimits:

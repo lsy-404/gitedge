@@ -113,6 +113,32 @@ afterEach(async () => {
 });
 
 describe("RepositorySettings", () => {
+  it("locks account Runner metadata and points owners to editable workflow files", async () => {
+    vi.spyOn(api, "repositorySettings").mockResolvedValue({
+      ...settings,
+      name: "Runner",
+      slug: "runner",
+      visibility: "private",
+    });
+    const runnerRepository: Repository & { systemKind: "account_runner" } = {
+      ...repository,
+      name: "Runner",
+      slug: "runner",
+      visibility: "private",
+      systemKind: "account_runner",
+    };
+    const mounted = await mountSettings(runnerRepository);
+
+    expect(mounted.root.textContent).toContain(
+      "The account Runner repository identity and metadata are fixed"
+    );
+    expect(mounted.root.querySelector("form")).toBeNull();
+    expect(
+      mounted.root.querySelector('a[href="/acme/runner/tree/.github/workflows"]')
+    ).toBeTruthy();
+    mounted.unmount();
+  });
+
   it("shows fetched branches and keeps public memory unavailable for private repositories", async () => {
     vi.spyOn(api, "repositorySettings").mockResolvedValue({ ...settings, visibility: "private" });
     const mounted = await mountSettings({ ...repository, visibility: "private" });

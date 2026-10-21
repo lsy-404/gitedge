@@ -70,6 +70,31 @@ afterEach(async () => {
 });
 
 describe("RepositoryActions", () => {
+  it("shows UTC cron details for a scheduled workflow that cannot be manually dispatched", async () => {
+    i18n.global.locale.value = "en";
+    const scheduled = {
+      ...workflow,
+      triggers: ["push"] as Array<"workflow_dispatch" | "push">,
+      schedules: ["0 * * * *"],
+    };
+    vi.spyOn(api, "refs").mockResolvedValue([{ name: "refs/heads/main", oid: "a".repeat(40) }]);
+    vi.spyOn(api, "actionWorkflows").mockResolvedValue({
+      oid: "a".repeat(40),
+      workflows: [scheduled],
+    });
+    vi.spyOn(api, "actionRuns").mockResolvedValue([]);
+    const mounted = await mountAt("/_verify/actions-cron", "/_verify/actions-cron", () =>
+      h(RepositoryActions, { repositoryId: "repo-1", defaultBranch: "main", canWrite: true })
+    );
+
+    expect(mounted.root.textContent).toContain(
+      "UTC cron: 0 * * * * (uses the default branch; duplicate queued runs are coalesced)."
+    );
+    expect(mounted.root.textContent).toContain("Manual dispatch is not enabled for this workflow.");
+    expect(isDisabled(findButton(mounted.root, "Run workflow"))).toBe(true);
+    mounted.unmount();
+  });
+
   it("dispatches the exact listed commit, displays logs and cancels a live run", async () => {
     i18n.global.locale.value = "en";
     vi.spyOn(api, "refs").mockResolvedValue([{ name: "refs/heads/main", oid: "a".repeat(40) }]);

@@ -1,0 +1,4 @@
+- [x] Inspect repository UI/API contracts and identify existing code, Actions, and settings routes.
+- [x] Add the account Runner service card, API methods, English/Chinese copy, and locked metadata presentation.
+- [x] Add behavior-focused UI coverage for owner state, provisioning, failure states, and scheduled workflow display.
+- [x] Run focused checks and review the diff for this task's changes.

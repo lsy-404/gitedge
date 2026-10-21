@@ -68,6 +68,20 @@ export const runnerMessages = {
     runnerConclusion_running: "运行中",
     runnerConclusion_queued: "排队中",
     runnerUsedMinutes: "已用 {used} / {limit} 分钟",
+    accountRunnerTitle: "账户服务中心",
+    accountRunnerDescription: "Runner 是完全私有的中心服务处理器，可在此配置各种工作流服务。",
+    accountRunnerCreate: "创建 Runner 服务仓库",
+    accountRunnerPrivateLock: "此仓库始终仅账户本人可访问；仓库身份、私有状态和所有权已锁定。",
+    accountRunnerOpenCode: "打开代码",
+    accountRunnerOpenActions: "打开 Actions 与运行结果",
+    accountRunnerEditWorkflows: "编辑或添加服务工作流",
+    accountRunnerSettings: "查看仓库设置",
+    accountRunnerSettingsLocked:
+      "账户 Runner 的仓库身份和配置元数据固定不变；代码与工作流文件仍可正常编辑。",
+    accountRunnerLinks: "Runner 服务入口",
+    accountRunnerEmpty: "尚未创建账户 Runner 仓库。创建后即可编辑工作流并手动运行服务。",
+    accountRunnerServiceScope:
+      "服务以工作流配置。账户 Runner 支持手动运行和最多 5 个五字段 UTC Cron 定时表达式；定时任务使用默认分支，重复排队运行会合并。",
   },
   en: {
     runnerDashboardTitle: "Runners",
@@ -138,5 +152,22 @@ export const runnerMessages = {
     runnerConclusion_running: "Running",
     runnerConclusion_queued: "Queued",
     runnerUsedMinutes: "Used {used} / {limit} minutes",
+    accountRunnerTitle: "Account service center",
+    accountRunnerDescription:
+      "Runner is a fully private central service handler where you can configure different workflow services.",
+    accountRunnerCreate: "Create Runner repository",
+    accountRunnerPrivateLock:
+      "Only this account owner can access the repository. Its identity, private visibility, and ownership are locked.",
+    accountRunnerOpenCode: "Open code",
+    accountRunnerOpenActions: "Open Actions and run results",
+    accountRunnerEditWorkflows: "Edit or add service workflows",
+    accountRunnerSettings: "Repository settings",
+    accountRunnerSettingsLocked:
+      "The account Runner repository identity and metadata are fixed. Code and workflow files remain editable.",
+    accountRunnerLinks: "Runner service links",
+    accountRunnerEmpty:
+      "No account Runner repository exists yet. Create one to edit workflows and run services manually.",
+    accountRunnerServiceScope:
+      "Services are configured as workflows. Runner workflows support manual runs and up to five UTC cron schedules (five-field syntax); schedules use the default branch and duplicate queued runs are coalesced.",
   },
 } as const;
