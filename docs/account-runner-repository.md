@@ -1,5 +1,7 @@
 # Per-account Runner repository
 
+For provisioning, service configuration and cron operation, see [runner-services.md](runner-services.md).
+
 ## Decision
 
 Each account gets one GitEdge-owned special repository named **Runner** at the canonical path `<personal-namespace>/runner`. It is private and owned by the account's personal namespace. The stable identity is the account `users.id`, personal `namespaces.id`, and the special `repositories.id`; usernames and namespace slugs are presentation and routing values that can change.
