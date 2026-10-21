@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
-import { access, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, readFile, stat, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { buildRunnerBrokerUnit } from "./runner-systemd-unit.mjs";
 
 const label = "com.gitedge.runner-broker";
 const [action, ...args] = process.argv.slice(2);
@@ -13,6 +14,7 @@ const { values } = parseArgs({
   options: {
     "install-dir": { type: "string" },
     "state-dir": { type: "string" },
+    "run-as-user": { type: "string" },
   },
 });
 
@@ -38,6 +40,7 @@ function launchctl(args) {
 }
 
 async function main() {
+  if (process.platform === "linux") return linuxMain();
   if (process.platform !== "darwin")
     throw new Error("launchd service management is available only on macOS.");
   if (!values["install-dir"]) throw new Error("--install-dir is required.");
@@ -98,6 +101,74 @@ async function main() {
   }
   if (action === "status") {
     await launchctl(["print", `gui/${uid}/${label}`]);
+    return;
+  }
+  throw new Error("Expected service install, start, stop, or status.");
+}
+
+function systemctl(args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("/usr/bin/systemctl", args, { stdio: "inherit" });
+    child.once("error", reject);
+    child.once("close", (code) =>
+      code === 0
+        ? resolve()
+        : reject(new Error(`systemctl ${args[0]} failed with status ${code ?? 1}.`))
+    );
+  });
+}
+
+async function linuxMain() {
+  if (!values["install-dir"]) throw new Error("--install-dir is required.");
+  if (action === "install" && process.getuid?.() !== 0)
+    throw new Error(
+      "Linux system service installation requires root; execution uses --run-as-user."
+    );
+  const installDir = path.resolve(values["install-dir"]);
+  const broker = path.join(installDir, "scripts", "runner-broker.mjs");
+  const node = process.execPath;
+  const state = path.resolve(values["state-dir"] ?? path.join(installDir, "work", "runner-broker"));
+  const unitPath = "/etc/systemd/system/gitedge-runner-broker.service";
+  if (action === "install") {
+    const username = values["run-as-user"];
+    if (!username || !/^[a-z_][a-z0-9_-]{0,31}$/.test(username))
+      throw new Error("Linux service install requires a valid --run-as-user account.");
+    const passwd = (await readFile("/etc/passwd", "utf8"))
+      .split("\n")
+      .map((line) => line.split(":"))
+      .find((fields) => fields[0] === username);
+    if (!passwd || !/^\d+$/.test(passwd[3])) throw new Error("The service user was not found.");
+    await Promise.all([access(broker), access(node, constants.X_OK)]);
+    const stateInfo = await stat(state);
+    if (
+      !stateInfo.isDirectory() ||
+      stateInfo.uid !== Number(passwd[2]) ||
+      stateInfo.gid !== Number(passwd[3]) ||
+      (stateInfo.mode & 0o077) !== 0
+    )
+      throw new Error("The broker state directory must be private and owned by --run-as-user.");
+    const unit = buildRunnerBrokerUnit({
+      username,
+      groupId: passwd[3],
+      installDir,
+      stateDir: state,
+      nodePath: node,
+    });
+    await writeFile(unitPath, unit, { mode: 0o644 });
+    await systemctl(["daemon-reload"]);
+    console.log(`Installed ${label} at ${unitPath}. Run service start to enable it.`);
+    return;
+  }
+  if (action === "start") {
+    await systemctl(["enable", "--now", "gitedge-runner-broker.service"]);
+    return;
+  }
+  if (action === "stop") {
+    await systemctl(["disable", "--now", "gitedge-runner-broker.service"]);
+    return;
+  }
+  if (action === "status") {
+    await systemctl(["status", "gitedge-runner-broker.service"]);
     return;
   }
   throw new Error("Expected service install, start, stop, or status.");

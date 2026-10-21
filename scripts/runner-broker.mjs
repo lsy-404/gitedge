@@ -18,6 +18,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { parseDocument } from "yaml";
+import { parseJobClaim, matchesLabels } from "../packages/contracts/runner-scheduling.mjs";
+import {
+  getRunnerCapacity,
+  localExecutionMinutes,
+  parseRunnerBudget,
+  validateCapacityClaim,
+  validateLocalJobClaim,
+} from "./runner-capacity.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const executable = (name) => `${name}${process.platform === "win32" ? ".exe" : ""}`;
@@ -271,6 +279,7 @@ async function addGitEdge(state, values) {
   if (repository) repositorySegment(repository, "--repository");
   validateLabels(labels);
   validateProfileHostLabels(labels);
+  const budget = parseRunnerBudget(values);
   const runnerLabels = mergeLabels([...hostLabels()], labels);
   const adminToken = process.env.GITEDGE_TOKEN;
   if (!adminToken) throw new Error("Set GITEDGE_TOKEN to an admin-scoped GitEdge access token.");
@@ -324,6 +333,7 @@ async function addGitEdge(state, values) {
           owner,
           repository,
           labels: runnerLabels,
+          ...(budget ? { budget } : {}),
           runnerPath,
           runnerId: runner.id,
           createdAt: new Date().toISOString(),
@@ -531,10 +541,14 @@ const orgPollOffsets = new Map();
 const githubRunPages = new Map();
 
 function eligible(labels, profile) {
-  const requested = new Set(labels.map((label) => String(label).toLowerCase()));
+  const claim = parseJobClaim(labels);
   const available = hostLabels();
   for (const label of profile.labels) available.add(label.toLowerCase());
-  return requested.has("self-hosted") && [...requested].every((label) => available.has(label));
+  return (
+    claim.valid &&
+    claim.labels.includes("self-hosted") &&
+    matchesLabels(claim.labels, [...available])
+  );
 }
 
 async function queuedGitHubJob(profile, fullScan = false) {
@@ -740,7 +754,14 @@ async function acquireActionsSlot() {
 }
 
 async function runGitHub(profile, queued, signal) {
-  const executionSignal = AbortSignal.any([signal, AbortSignal.timeout(360 * 60_000)]);
+  const capacity = await getRunnerCapacity({
+    workDirectories: [profile.directory, path.join(root, "work", "actions")],
+  });
+  const jobClaim = validateLocalJobClaim(queued.labels, capacity, 360);
+  const executionSignal = AbortSignal.any([
+    signal,
+    AbortSignal.timeout(localExecutionMinutes(jobClaim, 360) * 60_000),
+  ]);
   const releaseSlot = await acquireActionsSlot();
   if (!releaseSlot) return false;
   let jit;
@@ -840,7 +861,9 @@ async function runClaimedGitHub(profile, claim, signal) {
     Buffer.byteLength(run.encodedJitConfig) > 1024 * 1024 ||
     !Number.isSafeInteger(run.githubRunnerId) ||
     run.githubRunnerId < 1 ||
-    run.timeoutMinutes !== 360 ||
+    !Number.isInteger(run.timeoutMinutes) ||
+    run.timeoutMinutes < 1 ||
+    run.timeoutMinutes > 360 ||
     typeof leaseToken !== "string" ||
     !leaseToken
   )
@@ -851,10 +874,18 @@ async function runClaimedGitHub(profile, claim, signal) {
       run.scope?.repository?.toLowerCase() !== profile.repository.toLowerCase())
   )
     throw new Error("GitEdge returned a GitHub repository outside this runner profile.");
+  const jobClaim = parseJobClaim(run.labels);
   if (!eligible(run.labels, profile))
     throw new Error("GitHub job labels do not match this runner host.");
+  const capacity = await getRunnerCapacity({
+    workDirectories: [profile.directory, path.join(root, "work", "actions")],
+  });
+  validateLocalJobClaim(run.labels, capacity, 360);
   const runId = run.id;
-  const execution = AbortSignal.any([signal, AbortSignal.timeout(360 * 60_000)]);
+  const execution = AbortSignal.any([
+    signal,
+    AbortSignal.timeout(localExecutionMinutes(jobClaim, run.timeoutMinutes) * 60_000),
+  ]);
   const runRoot = path.join(profile.directory, "runs");
   await mkdir(runRoot, { recursive: true, mode: 0o700 });
   await chmod(runRoot, 0o700);
@@ -1017,6 +1048,13 @@ function validateGitEdgeWorkflow(source, profile) {
   const workflow = document.toJS({ maxAliasCount: 100 });
   if (!workflow?.jobs || typeof workflow.jobs !== "object")
     throw new Error("The queued workflow has no jobs.");
+  const workflowMaximum = Math.min(
+    360,
+    Object.values(workflow.jobs).reduce((total, job) => total + (job?.["timeout-minutes"] ?? 60), 0)
+  );
+  if (!Number.isInteger(workflowMaximum) || workflowMaximum < 1)
+    throw new Error("The queued workflow has an invalid total timeout.");
+  const claims = [];
   for (const [name, job] of Object.entries(workflow.jobs)) {
     const labels = typeof job?.["runs-on"] === "string" ? [job["runs-on"]] : job?.["runs-on"];
     if (
@@ -1027,7 +1065,25 @@ function validateGitEdgeWorkflow(source, profile) {
       throw new Error(
         `Job ${name} does not target this host's self-hosted operating system, architecture, and labels.`
       );
+    const timeout = job?.["timeout-minutes"] ?? 60;
+    if (!Number.isInteger(timeout) || timeout < 1 || timeout > 360)
+      throw new Error(`Job ${name} has an invalid timeout-minutes value.`);
+    const claim = parseJobClaim(labels, workflowMaximum);
+    if (!claim.valid) throw new Error(`Job ${name} has an invalid runner resource requirement.`);
+    claims.push(claim);
   }
+  return claims.reduce(
+    (maximum, claim) => ({
+      labels: [...new Set([...maximum.labels, ...claim.labels])],
+      memMb: Math.max(maximum.memMb, claim.memMb),
+      cpus: Math.max(maximum.cpus, claim.cpus),
+      diskMb: Math.max(maximum.diskMb, claim.diskMb),
+      tools: [...new Set([...maximum.tools, ...claim.tools])],
+      minutes: Math.min(maximum.minutes, claim.minutes),
+      valid: maximum.valid && claim.valid,
+    }),
+    { labels: [], memMb: 512, cpus: 1, diskMb: 0, tools: [], minutes: 360, valid: true }
+  );
 }
 
 function waitChild(child, signal) {
@@ -1147,7 +1203,11 @@ async function runGitEdge(profile, run, leaseToken, signal) {
     if (!["push", "workflow_dispatch"].includes(run.event))
       throw new Error(`GitEdge event ${run.event} is not supported by the local broker.`);
     validateProfileHostLabels(profile.labels);
-    validateGitEdgeWorkflow(run.workflowSource, profile);
+    const jobClaim = validateGitEdgeWorkflow(run.workflowSource, profile);
+    const capacity = await getRunnerCapacity({
+      workDirectories: [profile.directory, path.join(root, "work", "actions")],
+    });
+    validateCapacityClaim(jobClaim, capacity);
     if (typeof eventPayload === "string") {
       if (Buffer.byteLength(eventPayload) > 1024 * 1024)
         throw new Error("GitEdge event payload exceeds 1 MiB.");
@@ -1208,7 +1268,7 @@ async function runGitEdge(profile, run, leaseToken, signal) {
     "--event",
     run.event,
     "--timeout-minutes",
-    String(run.timeoutMinutes),
+    String(localExecutionMinutes(jobClaim, run.timeoutMinutes)),
     "--state-dir",
     actionsState,
   ];
@@ -1316,6 +1376,9 @@ async function runGitEdge(profile, run, leaseToken, signal) {
 }
 
 async function claimGitEdge(profile, signal) {
+  const capacity = await getRunnerCapacity({
+    workDirectories: [profile.directory, path.join(root, "work", "actions")],
+  });
   const response = await apiRequest(
     profile.origin,
     profile.credential,
@@ -1323,7 +1386,10 @@ async function claimGitEdge(profile, signal) {
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: "{}",
+      body: JSON.stringify({
+        capacity,
+        ...(profile.budget ? { budget: profile.budget } : {}),
+      }),
       signal,
     }
   );
@@ -1535,6 +1601,10 @@ async function main() {
       "group-id": { type: "string" },
       "group-name": { type: "string" },
       "poll-seconds": { type: "string" },
+      "max-job-minutes": { type: "string" },
+      "daily-minutes": { type: "string" },
+      cost: { type: "string" },
+      "run-as-user": { type: "string" },
       once: { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
@@ -1543,7 +1613,7 @@ async function main() {
   const state = path.resolve(values["state-dir"] ?? stateDefault);
   if (!action || values.help) {
     console.log(
-      "Usage: pnpm run runner-broker -- init|register-gitedge|register-github|list|remove|serve|service [options]\n\nGitEdge: register-gitedge --origin URL --owner OWNER [--repository REPO] --label LABEL --runner-path DIR\nGitHub: register-github --host HOST --owner OWNER --scope repo|org [--repository REPO] --label LABEL --runner-path DIR [--allow-repository OWNER/REPO] [--group-id ID|--group-name NAME]\nServe: serve [--once] [--poll-seconds 30]\nService: service install|start|stop|status --install-dir DIR [--state-dir DIR]\nAll commands accept --state-dir DIR. GitEdge registration reads GITEDGE_TOKEN; standalone GitHub profiles use gh CLI authentication."
+      "Usage: pnpm run runner-broker -- init|register-gitedge|register-github|list|remove|serve|service [options]\n\nGitEdge: register-gitedge --origin URL --owner OWNER [--repository REPO] --label LABEL --runner-path DIR [--max-job-minutes N] [--daily-minutes N] [--cost N]\nGitHub: register-github --host HOST --owner OWNER --scope repo|org [--repository REPO] --label LABEL --runner-path DIR [--allow-repository OWNER/REPO] [--group-id ID|--group-name NAME]\nServe: serve [--once] [--poll-seconds 30]\nService: service install|start|stop|status --install-dir DIR [--state-dir DIR] [--run-as-user USER]\nAll commands accept --state-dir DIR. GitEdge registration reads GITEDGE_TOKEN; standalone GitHub profiles use gh CLI authentication."
     );
     return;
   }
@@ -1591,6 +1661,7 @@ async function main() {
           values["install-dir"],
           "--state-dir",
           state,
+          ...(values["run-as-user"] ? ["--run-as-user", values["run-as-user"]] : []),
         ],
         { stdio: "inherit" }
       );
