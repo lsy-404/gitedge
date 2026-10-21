@@ -222,6 +222,16 @@ describe("runner overview and history", () => {
     };
     expect(ownerView.data.runners.some((runner) => runner.id === accountRunnerId)).toBe(true);
     expect(ownerView.data.queue.some((job) => job.id === runId)).toBe(true);
+
+    await env.DB.prepare("DELETE FROM actions_runs WHERE id=?").bind(runId).run();
+    await env.DB.prepare("DELETE FROM actions_runners WHERE id=?").bind(accountRunnerId).run();
+    await env.DB.prepare("DELETE FROM repository_collaborators WHERE repository_id=?")
+      .bind(runnerRepositoryId)
+      .run();
+    await env.DB.prepare("DELETE FROM namespace_memberships WHERE namespace_id=? AND user_id=?")
+      .bind(namespaceId, stranger.id)
+      .run();
+    await env.DB.prepare("DELETE FROM repositories WHERE id=?").bind(runnerRepositoryId).run();
   });
 
   it("uses claim labels and combines GitEdge and GitHub usage in minute-based budgets", async () => {

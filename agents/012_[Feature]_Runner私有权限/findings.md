@@ -8,3 +8,4 @@
 - controls 阻止 Runner collaboration/invitations 和 metadata mutations；lifecycle 阻止 individual delete/transfer；fork/GitHub sync 拒绝 Runner；import/create 阻止 personal `runner` 路径，包括旧别名仍占用路径时由 existing path conflict 拒绝。
 - 不应改 `workers/forge/src/index.ts`、`workers/forge/src/common.ts`、contracts/forge.ts 或 migration 0048；这些由 core 提交维护。Index 需直接读/按名字读做 account owner 检查，列表隐藏 `system_kind='account_runner'`，settings 和 rename 身份修改返回明确 409，normal personal name `runner` 拒绝；旧 live repo/retained alias provisioning fail-closed。
 - Worker 开发文档已按技能要求检索 Cloudflare 官方 best-practices 页面；本变更不引入平台 API/配置。
+- Migration review 发现 repositories UPDATE trigger 原本只验证新 namespace/creator 组成合法 owner pair，未比较 OLD identity；可将既有 Runner 原子迁移给另一个合法账号。现 trigger 明确禁止 namespace_id 或 created_by 改变，并以 Worker D1 测试覆盖组合变更与单独 creator 变更。

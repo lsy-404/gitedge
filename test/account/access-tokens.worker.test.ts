@@ -12,10 +12,7 @@ import {
 } from "../../packages/contracts/src/trust";
 import actions from "../../workers/actions/src/index";
 import auth from "../../workers/auth/src/index";
-import {
-  authenticateAgentSession,
-  parseGitAuthorization,
-} from "../../workers/auth/src/agents";
+import { authenticateAgentSession, parseGitAuthorization } from "../../workers/auth/src/agents";
 import { handleAccessTokenManagement } from "../../workers/auth/src/access-tokens";
 import { repositoryRole } from "../../src/worker/common/repositories";
 import { hashToken, issueSession } from "../../workers/auth/src/session";
@@ -365,8 +362,12 @@ INSERT INTO auth_agent_sessions (id,agent_id,user_id,repository_id,token_hash,gi
 VALUES ('runner-owner-session','runner-owner-agent','alice-id','runner-r1','${await sha256Hex(`ge_session_${"1".repeat(64)}`)}','git-owner','owner-workspace','artifact://runner','main','write','active',1,9999999999999),
 ('runner-member-session','runner-member-agent','eve-id','runner-r1','${await sha256Hex(`ge_session_${"2".repeat(64)}`)}','git-member','member-workspace','artifact://runner','main','write','active',1,9999999999999);`
     );
-    expect(await authenticateAgentSession({ DB: env.DB }, `ge_session_${"1".repeat(64)}`)).not.toBeNull();
-    expect(await authenticateAgentSession({ DB: env.DB }, `ge_session_${"2".repeat(64)}`)).toBeNull();
+    expect(
+      await authenticateAgentSession({ DB: env.DB }, `ge_session_${"1".repeat(64)}`)
+    ).not.toBeNull();
+    expect(
+      await authenticateAgentSession({ DB: env.DB }, `ge_session_${"2".repeat(64)}`)
+    ).toBeNull();
 
     const refused = await account("/access-tokens", "POST", eveCookie, {
       name: "runner access",
