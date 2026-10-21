@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
+
 import { constants } from "node:fs";
 import { createReadStream } from "node:fs";
 import {
@@ -29,6 +30,19 @@ import {
   windowsVerificationSchema,
 } from "./contract.mjs";
 import { approvedAzureIdentityMode } from "./windows-identity.mjs";
+
+let signingAbortSignal;
+
+export function setSigningAbortSignal(signal) {
+  signingAbortSignal = signal;
+  signal?.addEventListener(
+    "abort",
+    () => {
+      if (signingAbortSignal === signal) signingAbortSignal = undefined;
+    },
+    { once: true }
+  );
+}
 
 const TIMESTAMP_URL = "http://timestamp.acs.microsoft.com";
 const SIGNABLE_EXTENSIONS = new Set([".exe", ".dll", ".node"]);
@@ -88,6 +102,7 @@ async function run(file, args, { timeout = 300_000, maxOutput = 8 * 1024 * 1024,
     const child = spawn(file, args, {
       cwd,
       env,
+      signal: signingAbortSignal,
       timeout,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],

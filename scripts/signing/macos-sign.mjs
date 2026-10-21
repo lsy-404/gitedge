@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
+
 import { createReadStream } from "node:fs";
 import { constants } from "node:fs";
 import {
@@ -25,6 +26,19 @@ import {
   sourceMetadataSchema,
   macosVerificationSchema as verificationSchema,
 } from "./contract.mjs";
+
+let signingAbortSignal;
+
+export function setSigningAbortSignal(signal) {
+  signingAbortSignal = signal;
+  signal?.addEventListener(
+    "abort",
+    () => {
+      if (signingAbortSignal === signal) signingAbortSignal = undefined;
+    },
+    { once: true }
+  );
+}
 
 delete process.env.DEBUG;
 const require = createRequire(import.meta.url);
@@ -105,6 +119,7 @@ async function command(file, args, options = {}) {
     return await new Promise((resolve, reject) => {
       const child = spawn(file, args, {
         ...spawnOptions,
+        signal: spawnOptions.signal ?? signingAbortSignal,
         timeout,
         stdio: ["ignore", "pipe", "pipe"],
       });
