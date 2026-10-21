@@ -61,6 +61,7 @@ import type {
   GitHubSyncInput,
   GitHubSyncState,
 } from "../../../../packages/contracts/src/github-sync";
+import type { RunnerHistory, RunnerOverview } from "../../../../packages/contracts/src/runners";
 import type { PagesSettings, UpdatePagesInput } from "../../../../packages/contracts/src/pages";
 import type {
   ListNotificationsQuery,
@@ -685,6 +686,13 @@ export const api = {
   logoutAllBrowserAccounts: () =>
     request<{ loggedOut: boolean }>("/api/auth/accounts/logout-all", { method: "POST" }),
   usage: () => request<Usage>("/api/forge/usage"),
+  runnerOverview: (signal?: AbortSignal) =>
+    request<RunnerOverview>("/api/actions/runners/overview", { signal }),
+  runnerHistory: (runnerId: string, before?: string | number, signal?: AbortSignal) => {
+    const params = new URLSearchParams({ runner: runnerId, limit: "50" });
+    if (before !== undefined) params.set("before", String(before));
+    return request<RunnerHistory>(`/api/actions/runners/history?${params}`, { signal });
+  },
   accountProfile: () => request<AccountProfile>("/api/auth/profile"),
   updateAccountProfile: (
     payload: Partial<Omit<AccountProfile, "preferences">> & {

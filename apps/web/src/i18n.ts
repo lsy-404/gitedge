@@ -29,6 +29,7 @@ import { pagesMessages } from "./i18n/pages";
 import { apiDocsMessages } from "./i18n/apiDocs";
 import { githubSyncMessages } from "./i18n/githubSync";
 import { landingMessages } from "./i18n/landing";
+import { runnerMessages } from "./i18n/runners";
 
 const messages = {
   "zh-CN": {
@@ -955,6 +956,7 @@ export const i18n = createI18n({
       ...apiDocsMessages["zh-CN"],
       ...githubSyncMessages["zh-CN"],
       ...landingMessages["zh-CN"],
+      ...runnerMessages["zh-CN"],
     },
     en: {
       ...messages.en,
@@ -988,6 +990,7 @@ export const i18n = createI18n({
       ...apiDocsMessages.en,
       ...githubSyncMessages.en,
       ...landingMessages.en,
+      ...runnerMessages.en,
     },
   },
 });
