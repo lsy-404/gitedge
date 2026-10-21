@@ -27,11 +27,22 @@ import type { RunnerEnv, RunnerRow } from "./runners";
 
 export interface RunnerCandidate {
   kind: RunnerJobKind;
+  execution_class: "ordinary" | "signing";
   id: string;
   repository_id: string;
   created_at: number;
   labels_json: string;
   default_minutes: number;
+  request_id: string | null;
+  stage: string | null;
+  input_digest: string | null;
+  workflow_oid: string | null;
+  profile_revision: string | null;
+  generation: number | null;
+  nonce: string | null;
+  platform: "macos" | "windows" | "ios" | null;
+  operator_approved_at: number | null;
+  operator_approved_by: string | null;
 }
 
 export interface RunnerPeer {
@@ -40,6 +51,8 @@ export interface RunnerPeer {
   labels_json: string;
   capacity_json: string;
   budget_json: string | null;
+  execution_class: "ordinary" | "signing";
+  signing_platform: "macos" | "windows" | "ios" | null;
   used_minutes_24h: number;
 }
 
@@ -119,21 +132,30 @@ export async function listRunnerCandidates(
   const runnerLabels = JSON.stringify(parseLabels(runner.labels_json) ?? []);
   const rows = await env.DB.prepare(
     `SELECT * FROM (
-      SELECT 'gitedge' AS kind,j.run_id AS id,p.id AS repository_id,a.created_at,j.labels_json,
-        j.timeout_minutes AS default_minutes
+      SELECT 'gitedge' AS kind,CASE WHEN s.run_id IS NULL THEN 'ordinary' ELSE 'signing' END AS execution_class,
+        j.run_id AS id,p.id AS repository_id,a.created_at,j.labels_json,j.timeout_minutes AS default_minutes,
+        s.request_id,s.stage,s.input_digest,s.workflow_oid,s.profile_revision,s.generation,s.nonce,s.platform,
+        s.operator_approved_at,s.operator_approved_by
       FROM actions_runner_runs j JOIN actions_runs a ON a.id=j.run_id
         JOIN repositories p ON p.id=a.repository_id JOIN users u ON u.id=a.created_by
+        LEFT JOIN actions_signing_runs s ON s.run_id=j.run_id
       WHERE j.status='queued' AND p.namespace_id=? AND (? IS NULL OR p.id=?)
         AND p.deleted_at IS NULL AND p.archived=0 AND p.actions_enabled=1
         AND p.actions_runner_enabled=1 AND u.disabled_at IS NULL
+        AND ((?='ordinary' AND s.run_id IS NULL) OR (?='signing' AND s.run_id IS NOT NULL
+          AND s.owner_id=? AND s.repository_id=p.id AND s.platform=?))
+        AND (s.run_id IS NULL OR (s.operator_approved_by=? AND s.operator_approved_at=?))
         AND NOT EXISTS (SELECT 1 FROM json_each(j.labels_json) required
           WHERE lower(required.value) NOT LIKE 'need-%'
             AND lower(required.value) NOT IN (SELECT lower(value) FROM json_each(?)))
       UNION ALL
-      SELECT 'github' AS kind,j.id,p.id AS repository_id,j.created_at,j.labels_json,360 AS default_minutes
+      SELECT 'github' AS kind,'ordinary' AS execution_class,j.id,p.id AS repository_id,j.created_at,
+        j.labels_json,360 AS default_minutes,NULL AS request_id,NULL AS workflow_oid,
+        NULL AS stage,NULL AS input_digest,NULL AS profile_revision,NULL AS generation,NULL AS nonce,NULL AS platform,
+        NULL AS operator_approved_at,NULL AS operator_approved_by
       FROM actions_github_runner_jobs j JOIN forge_github_connections c ON c.id=j.connection_id
         JOIN repositories p ON p.id=c.repository_id JOIN users u ON u.id=c.created_by
-      WHERE j.status='queued' AND c.enabled=1 AND c.runner_enabled=1
+      WHERE j.status='queued' AND ?='ordinary' AND c.enabled=1 AND c.runner_enabled=1
         AND p.namespace_id=? AND (? IS NULL OR p.id=?)
         AND p.deleted_at IS NULL AND p.archived=0 AND p.actions_enabled=1 AND u.disabled_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM json_each(j.labels_json) required
@@ -145,7 +167,14 @@ export async function listRunnerCandidates(
       runner.namespace_id,
       runner.repository_id,
       runner.repository_id,
+      runner.execution_class,
+      runner.execution_class,
+      runner.created_by,
+      runner.signing_platform,
+      runner.operator_approved_by,
+      runner.operator_approved_at,
       runnerLabels,
+      runner.execution_class,
       runner.namespace_id,
       runner.repository_id,
       runner.repository_id,
@@ -166,9 +195,35 @@ export function evaluateRunnerCandidate(
   const labels = parseLabels(candidate.labels_json);
   const claim = parseJobClaim(labels, candidate.default_minutes);
   const reasons = new Set<string>();
+  if (candidate.execution_class !== runner.execution_class) reasons.add("execution-class");
   if (!labels || !claim.valid) reasons.add("claim-invalid");
   if (runner.repository_id !== null && candidate.repository_id !== runner.repository_id)
     reasons.add("scope");
+  if (candidate.execution_class === "signing") {
+    if (
+      !candidate.request_id ||
+      !candidate.stage ||
+      !candidate.input_digest ||
+      !candidate.workflow_oid ||
+      !candidate.profile_revision ||
+      candidate.generation === null ||
+      !candidate.nonce ||
+      candidate.platform !== runner.signing_platform ||
+      candidate.operator_approved_at !== runner.operator_approved_at ||
+      candidate.operator_approved_by !== runner.operator_approved_by ||
+      runner.dedicated_host_confirmed !== 1 ||
+      runner.operator_approved_at === null ||
+      runner.operator_approved_by !== runner.created_by
+    )
+      reasons.add("signing-approval");
+    if (
+      !capacity ||
+      (candidate.platform === "windows" && capacity.os !== "windows") ||
+      (candidate.platform === "macos" && capacity.os !== "macos") ||
+      (candidate.platform === "ios" && (capacity.os !== "macos" || capacity.arch !== "arm64"))
+    )
+      reasons.add("signing-platform");
+  }
   if (labels) {
     const available = parseLabels(runner.labels_json) ?? [];
     for (const label of claim.labels) {
@@ -187,14 +242,18 @@ export async function runnerPeersForJob(
   env: RunnerEnv,
   runner: RunnerRow,
   repositoryId: string,
+  executionClass: "ordinary" | "signing",
+  signingPlatform: "macos" | "windows" | "ios" | null,
   now: number
 ): Promise<RunnerPeer[]> {
   const cutoff = now - RUNNER_CAPACITY_STALE_MS;
   const used = usageExpression("r", now, now - RUNNER_SAMPLE_RETENTION_MS);
   const rows = await env.DB.prepare(
-    `SELECT r.id,r.repository_id,r.labels_json,r.capacity_json,r.budget_json,${used} AS used_minutes_24h
+    `SELECT r.id,r.repository_id,r.labels_json,r.capacity_json,r.budget_json,r.execution_class,
+      r.signing_platform,${used} AS used_minutes_24h
      FROM actions_runners r JOIN users u ON u.id=r.created_by
      WHERE r.id!=? AND r.namespace_id=? AND (r.repository_id IS NULL OR r.repository_id=?)
+       AND r.execution_class=? AND r.signing_platform IS ?
        AND r.revoked_at IS NULL AND u.disabled_at IS NULL
        AND (r.held_until IS NULL OR r.held_until<=?) AND r.capacity_reported_at>=?
        AND json_extract(r.capacity_json,'$.busy')=0
@@ -202,7 +261,15 @@ export async function runnerPeersForJob(
        AND NOT EXISTS (SELECT 1 FROM actions_github_runner_jobs busy WHERE busy.runner_id=r.id AND busy.status='running')
      ORDER BY r.last_seen_at DESC LIMIT 100`
   )
-    .bind(runner.id, runner.namespace_id, repositoryId, now, cutoff)
+    .bind(
+      runner.id,
+      runner.namespace_id,
+      repositoryId,
+      executionClass,
+      signingPlatform,
+      now,
+      cutoff
+    )
     .all<RunnerPeer>();
   return rows.results;
 }
@@ -304,7 +371,18 @@ export async function claimRunnerCandidate(
 ): Promise<boolean> {
   const cutoff = now - RUNNER_SAMPLE_RETENTION_MS;
   const usage = usageExpression("r", now, cutoff);
+  const signingJobGuard = `AND ((?='ordinary' AND NOT EXISTS (
+      SELECT 1 FROM actions_signing_runs s WHERE s.run_id=actions_runner_runs.run_id
+    )) OR (?='signing' AND EXISTS (
+      SELECT 1 FROM actions_signing_runs s WHERE s.run_id=actions_runner_runs.run_id
+        AND s.request_id=? AND s.stage=? AND s.input_digest=? AND s.owner_id=? AND s.repository_id=? AND s.workflow_oid=?
+        AND s.profile_revision=? AND s.generation=? AND s.nonce=? AND s.platform=?
+        AND s.operator_approved_by=? AND s.operator_approved_at=?
+    )))`;
   const runnerGuard = `EXISTS (SELECT 1 FROM actions_runners r WHERE r.id=? AND r.revoked_at IS NULL
+    AND r.execution_class=? AND r.signing_platform IS ? AND r.repository_id IS ?
+    AND (?='ordinary' OR (r.dedicated_host_confirmed=1 AND r.operator_approved_at IS NOT NULL
+      AND r.operator_approved_by=r.created_by))
     AND (r.held_until IS NULL OR r.held_until<=?) AND r.capacity_reported_at IS ?
     AND r.capacity_json IS ? AND r.budget_json IS ?
     AND (json_extract(r.budget_json,'$.maxJobMinutes') IS NULL OR ?<=json_extract(r.budget_json,'$.maxJobMinutes'))
@@ -315,6 +393,7 @@ export async function claimRunnerCandidate(
       `UPDATE actions_runner_runs SET status='running',runner_id=?,lease_hash=?,
         lease_expires_at=MIN(?,?+MIN(timeout_minutes,?)*60000),timeout_minutes=MIN(timeout_minutes,?),started_at=?
        WHERE run_id=? AND status='queued'
+         ${signingJobGuard}
          AND NOT EXISTS (SELECT 1 FROM actions_runner_runs busy WHERE busy.runner_id=? AND busy.status='running')
          AND NOT EXISTS (SELECT 1 FROM actions_github_runner_jobs busy WHERE busy.runner_id=? AND busy.status='running')
          AND ${runnerGuard}
@@ -329,9 +408,27 @@ export async function claimRunnerCandidate(
         minutes,
         now,
         candidate.id,
+        candidate.execution_class,
+        candidate.execution_class,
+        candidate.request_id,
+        candidate.stage,
+        candidate.input_digest,
+        runner.created_by,
+        candidate.repository_id,
+        candidate.workflow_oid,
+        candidate.profile_revision,
+        candidate.generation,
+        candidate.nonce,
+        candidate.platform,
+        runner.operator_approved_by,
+        runner.operator_approved_at,
         runner.id,
         runner.id,
         runner.id,
+        runner.execution_class,
+        runner.signing_platform,
+        runner.repository_id,
+        runner.execution_class,
         now,
         capacityReportedAt,
         runner.capacity_json,
@@ -359,6 +456,10 @@ export async function claimRunnerCandidate(
         runner.id,
         runner.id,
         runner.id,
+        runner.execution_class,
+        runner.signing_platform,
+        runner.repository_id,
+        runner.execution_class,
         now,
         capacityReportedAt,
         runner.capacity_json,

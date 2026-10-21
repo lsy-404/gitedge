@@ -39,6 +39,11 @@ interface RunnerDbRow {
   created_at: number;
   last_seen_at: number | null;
   revoked_at: number | null;
+  execution_class: "ordinary" | "signing";
+  signing_platform: "macos" | "windows" | "ios" | null;
+  dedicated_host_confirmed: number;
+  operator_approved_at: number | null;
+  operator_approved_by: string | null;
   capacity_json: string | null;
   capacity_reported_at: number | null;
   budget_json: string | null;
@@ -129,6 +134,11 @@ function parseRunner(row: RunnerDbRow): RegisteredRunner {
     name: row.name,
     scope: { owner: row.owner, ...(row.repository === null ? {} : { repository: row.repository }) },
     labels: safeLabels(row.labels_json),
+    executionClass: row.execution_class,
+    signingPlatform: row.signing_platform,
+    dedicatedHostConfirmed: row.dedicated_host_confirmed === 1,
+    operatorApprovedAt: row.operator_approved_at,
+    operatorApprovedBy: row.operator_approved_by,
     createdAt: row.created_at,
     lastSeenAt: row.last_seen_at,
     revokedAt: row.revoked_at,
@@ -137,7 +147,8 @@ function parseRunner(row: RunnerDbRow): RegisteredRunner {
 
 const runnerSelect = `SELECT r.id,r.name,r.namespace_id,r.repository_id,r.created_by,r.labels_json,r.created_at,
   r.last_seen_at,r.revoked_at,r.capacity_json,r.capacity_reported_at,r.budget_json,r.held_until,
-  r.consecutive_failures,n.slug AS owner,p.slug AS repository
+  r.consecutive_failures,r.execution_class,r.signing_platform,r.dedicated_host_confirmed,
+  r.operator_approved_at,r.operator_approved_by,n.slug AS owner,p.slug AS repository
   FROM actions_runners r JOIN namespaces n ON n.id=r.namespace_id
   LEFT JOIN repositories p ON p.id=r.repository_id`;
 

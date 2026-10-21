@@ -93,10 +93,23 @@ export interface RegisteredRunner {
   name: string;
   scope: RunnerScope;
   labels: string[];
+  executionClass: "ordinary" | "signing";
+  signingPlatform: "macos" | "windows" | "ios" | null;
+  dedicatedHostConfirmed: boolean;
+  operatorApprovedAt: number | null;
+  operatorApprovedBy: string | null;
   createdAt: number;
   lastSeenAt: number | null;
   revokedAt: number | null;
 }
+export const SigningRunnerApprovalSchema = z
+  .object({
+    platform: z.enum(["macos", "windows", "ios"]),
+    dedicatedHostConfirmed: z.literal(true),
+  })
+  .strict();
+export type SigningRunnerApproval = z.infer<typeof SigningRunnerApprovalSchema>;
+export type RunnerExecutionClass = RegisteredRunner["executionClass"];
 export type RunnerJobKind = "gitedge" | "github";
 export type RunnerJobConclusion = "success" | "failure" | "cancelled" | null;
 export interface RunnerOverviewRunner extends RegisteredRunner {
