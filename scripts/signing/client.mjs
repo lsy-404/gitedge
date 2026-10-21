@@ -149,6 +149,7 @@ async function requestJson(
 
 export function createSigningClient({ context, fetchImpl = fetch, sleep = defaultSleep } = {}) {
   const identity = parseSigningContext(context);
+  let currentLeaseExpiresAt = identity.leaseExpiresAt;
   const request = (action, fields, options) =>
     requestJson(identity, action, fields, { fetchImpl, sleep, ...options });
 
@@ -170,7 +171,13 @@ export function createSigningClient({ context, fetchImpl = fetch, sleep = defaul
     return { ...result, manifest: parsed };
   };
 
-  const heartbeat = () => request("heartbeat", {}, { retry: true });
+  const heartbeat = async () => {
+    const result = await request("heartbeat", {}, { retry: true });
+    if (!Number.isSafeInteger(result.leaseExpiresAt) || result.leaseExpiresAt <= Date.now())
+      throw new ClientError("INVALID_RESPONSE");
+    currentLeaseExpiresAt = result.leaseExpiresAt;
+    return result;
+  };
   const authorizeSign = async (operation) => {
     if (typeof operation !== "string" || !/^[a-z][a-z0-9_-]{0,63}$/.test(operation))
       throw new ClientError("INVALID_OPERATION");
@@ -350,6 +357,7 @@ export function createSigningClient({ context, fetchImpl = fetch, sleep = defaul
     heartbeat,
     download,
     authorizeSign,
+    getLeaseExpiresAt: () => currentLeaseExpiresAt,
     beginOutput,
     uploadOutput,
     complete,
@@ -547,6 +555,23 @@ export async function runSigning({
     await mkdir(outputDir, { mode: 0o700 });
     const started = await client.start();
     const manifest = started.manifest;
+    const pulse = async () => {
+      if (heartbeatBusy) return;
+      heartbeatBusy = true;
+      heartbeatPromise = client
+        .heartbeat()
+        .catch((error) => {
+          heartbeatError = error;
+        })
+        .finally(() => {
+          heartbeatBusy = false;
+        });
+      await heartbeatPromise;
+    };
+    timer = setInterval(() => {
+      void pulse();
+    }, 30_000);
+    timer.unref?.();
     if (manifest.stage === "windows_sign") {
       const identityMode = manifest.identity_mode;
       if (!new Set(["azure-managed-identity", "azure-workload-identity"]).has(identityMode))
@@ -565,23 +590,6 @@ export async function runSigning({
         maxBytes: manifest.max_artifact_bytes,
       });
     }
-    const pulse = async () => {
-      if (heartbeatBusy) return;
-      heartbeatBusy = true;
-      heartbeatPromise = client
-        .heartbeat()
-        .catch((error) => {
-          heartbeatError = error;
-        })
-        .finally(() => {
-          heartbeatBusy = false;
-        });
-      await heartbeatPromise;
-    };
-    timer = setInterval(() => {
-      void pulse();
-    }, 30_000);
-    timer.unref?.();
     const family = stageFamily(manifest.stage);
     let credentialsProvided = false;
     const credentialsProvider = async () => {
@@ -592,7 +600,7 @@ export async function runSigning({
       if (
         !Number.isSafeInteger(authorization.expiresAt) ||
         authorization.expiresAt <= Date.now() ||
-        authorization.expiresAt > context.leaseExpiresAt
+        authorization.expiresAt > client.getLeaseExpiresAt()
       )
         throw new ClientError("INVALID_RESPONSE");
       if (family.windows) {
