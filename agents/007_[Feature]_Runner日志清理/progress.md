@@ -21,3 +21,8 @@
 - 针对性 Vitest：1 个测试文件、4 项通过。
 - Prettier 检查、三份 MJS 语法检查和 `git diff --check` 均通过。
 - 仅提交本地 `codex/runner-retention` 分支；不合并或推送。
+
+## Review follow-up
+
+- Fixed broker root derivation, canonical path handling, and hourly scan throttling.
+- Expanded retention tests to six cases; the complete targeted suite and formatting checks pass.

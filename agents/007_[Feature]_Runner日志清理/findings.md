@@ -8,3 +8,10 @@
 - 真实清理路径由 broker 的 `active.lock` 与共享 actions `active.lock` 串行化；直接 CLI 也必须持有后者才能清理和启动工作流。过期目录不会与正在执行的 broker 或直接 CLI 工作流并发删除。
 - 目标根目录及每个候选项均以 `lstat` 验证；候选只允许根目录的直接子项，递归容量统计跳过符号链接，删除不跟随链接目标。
 - 初次运行时依赖 junction 尚未就绪，Vitest 无法启动；依赖就绪后同一针对性套件通过（4 项）。
+
+## Review corrections
+
+- Pass broker `work/actions` explicitly; custom broker state directories do not determine the shared actions state location.
+- Resolve owned roots before enumerating candidates and resolve each candidate again before deletion, checking direct-child containment both times. Legitimate symlinked ancestors now work while a symlink at the owned root remains excluded.
+- Broker scans retained data at most once per hour and records a successful scan time only after it acquires the shared actions lock.
+- Added regression coverage for explicit custom-state paths and a valid symlinked ancestor.

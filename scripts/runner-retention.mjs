@@ -23,12 +23,12 @@ async function listCandidates(root, predicate) {
   if (!info || !info.isDirectory() || info.isSymbolicLink()) return [];
   const canonicalRoot = await realpath(root);
   const candidates = [];
-  for (const entry of await readdir(root, { withFileTypes: true })) {
+  for (const entry of await readdir(canonicalRoot, { withFileTypes: true })) {
     if (entry.isSymbolicLink() || !(entry.isDirectory() || entry.isFile())) continue;
     if (!predicate(entry)) continue;
-    const target = path.resolve(root, entry.name);
+    const target = path.join(canonicalRoot, entry.name);
     const relative = path.relative(canonicalRoot, target);
-    if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) continue;
+    if (!isDirectChild(relative)) continue;
     const targetInfo = await lstat(target);
     if (targetInfo.isSymbolicLink() || !(targetInfo.isDirectory() || targetInfo.isFile())) continue;
     candidates.push({
@@ -39,6 +39,15 @@ async function listCandidates(root, predicate) {
     });
   }
   return candidates;
+}
+
+function isDirectChild(relative) {
+  return (
+    Boolean(relative) &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative) &&
+    path.dirname(relative) === "."
+  );
 }
 
 export async function pruneRunArtifacts(roots, options = {}) {
@@ -56,18 +65,23 @@ export async function pruneRunArtifacts(roots, options = {}) {
     const resolvedRoot = item.root;
     const resolvedTarget = path.resolve(item.path);
     const relative = path.relative(resolvedRoot, resolvedTarget);
-    if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) continue;
+    if (!isDirectChild(relative)) continue;
     const targetInfo = await lstat(resolvedTarget).catch((error) => {
       if (error.code === "ENOENT") return undefined;
       throw error;
     });
     if (!targetInfo || targetInfo.isSymbolicLink()) continue;
-    await rm(resolvedTarget, { recursive: targetInfo.isDirectory(), force: true });
+    const canonicalTarget = await realpath(resolvedTarget).catch((error) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (!canonicalTarget || !isDirectChild(path.relative(resolvedRoot, canonicalTarget))) continue;
+    await rm(canonicalTarget, { recursive: targetInfo.isDirectory(), force: true });
     totalBytes -= item.bytes;
   }
 }
 
-export function runArtifactRoots(state, profiles) {
+export function runArtifactRoots(state, profiles, actionsState) {
   return [
     {
       directory: path.join(state, "runs"),
@@ -81,7 +95,7 @@ export function runArtifactRoots(state, profiles) {
       },
     ]),
     {
-      directory: path.join(state, "..", "actions", "runs"),
+      directory: path.join(actionsState, "runs"),
       match: (entry) => entry.isDirectory() && entry.name.startsWith("run-"),
     },
   ];

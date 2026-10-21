@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { pruneRunArtifacts } from "../../scripts/runner-retention.mjs";
+import { pruneRunArtifacts, runArtifactRoots } from "../../scripts/runner-retention.mjs";
 
 const temporaryDirectories: string[] = [];
 
@@ -95,6 +95,37 @@ describe("runner artifact retention", () => {
 
     await expect(access(path.join(external, "keep"))).resolves.toBeUndefined();
     await expect(access(link)).resolves.toBeUndefined();
+  });
+
+  it("uses the explicit actions state path even with a custom broker state", async () => {
+    const parent = await temporaryDirectory();
+    const brokerState = path.join(parent, "custom-broker-state");
+    const profile = { directory: path.join(parent, "profiles", "one") };
+    const actionsState = path.join(parent, "shared-actions-state");
+
+    const roots = runArtifactRoots(brokerState, [profile], actionsState);
+
+    expect(roots.at(-1)?.directory).toBe(path.join(actionsState, "runs"));
+  });
+
+  it("cleans run data beneath a legitimate symlinked ancestor", async () => {
+    const parent = await temporaryDirectory();
+    const actualRoot = path.join(parent, "actual");
+    const linkedRoot = path.join(parent, "linked");
+    const runs = path.join(linkedRoot, "work", "actions", "runs");
+    const expired = path.join(actualRoot, "work", "actions", "runs", "run-expired");
+    await mkdir(expired, { recursive: true });
+    await writeFile(path.join(expired, "log"), "old");
+    await symlink(actualRoot, linkedRoot, "junction");
+    const now = Date.now();
+    await age(path.join(actualRoot, "work", "actions", "runs", "run-expired"), now - 8 * 86400000);
+
+    await pruneRunArtifacts(
+      [{ directory: runs, match: (entry) => entry.name.startsWith("run-") }],
+      { now }
+    );
+
+    await expect(access(expired)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("leaves run data untouched when another process holds the execution lock", async () => {
