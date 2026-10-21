@@ -212,9 +212,11 @@ async function loadProfile(state, id) {
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
-  const executionClass = profile.executionClass ?? "ordinary";
+  const executionClass = profile.kind === "gitedge" ? profile.executionClass : "ordinary";
   if (profile.kind === "gitedge" && !["ordinary", "signing"].includes(executionClass))
-    throw new Error(`Profile ${id} has an invalid execution class.`);
+    throw new Error(
+      `GitEdge profile ${id} has no valid execution class. Re-register it with the current broker before starting the service.`
+    );
   return { ...profile, executionClass, directory, credential };
 }
 
@@ -296,13 +298,19 @@ async function addGitEdge(state, values) {
     values.name ?? defaultProfileId("gitedge", origin, owner, repository)
   );
   const runnerPath = values["runner-path"] ? path.resolve(values["runner-path"]) : "";
-  if (!runnerPath)
-    throw new Error(
-      "register-gitedge requires --runner-path to an installed official runner directory."
+  if (executionClass === "ordinary") {
+    if (!runnerPath)
+      throw new Error(
+        "Ordinary register-gitedge requires --runner-path to an installed official runner directory."
+      );
+    await import("node:fs/promises").then(({ access }) =>
+      access(path.join(runnerPath, "bin", executable("Runner.Listener")), constants.X_OK)
     );
-  await import("node:fs/promises").then(({ access }) =>
-    access(path.join(runnerPath, "bin", executable("Runner.Listener")), constants.X_OK)
-  );
+  } else {
+    if (runnerPath)
+      throw new Error("Signing profiles use the native signing SDK and must not set --runner-path.");
+    await access(path.join(root, "scripts", "signing", "client.mjs"), constants.R_OK);
+  }
   const directory = path.join(state, "profiles", id);
   try {
     await access(directory);
@@ -778,6 +786,10 @@ async function runGitHub(profile, queued, signal) {
   let runDir;
   let runner;
   let child;
+  const heartbeatController = new AbortController();
+  const runSignal = AbortSignal.any([signal, heartbeatController.signal]);
+  let heartbeatFailure;
+  let renew;
   try {
     jit = await generateJit(profile);
     console.log(
@@ -1059,6 +1071,10 @@ async function runClaimedSigning(profile, claim, signal) {
   const runDirectory = await mkdtemp(path.join(profile.directory, "signing-"));
   await secureSigningPath(runDirectory, true);
   const contextFile = path.join(runDirectory, "context.json");
+  const heartbeatController = new AbortController();
+  const runSignal = AbortSignal.any([signal, heartbeatController.signal]);
+  let heartbeatFailure;
+  let renew;
   const context = {
     schemaVersion: 1,
     baseUrl: new URL("/api/actions", profile.origin).toString().replace(/\/$/, ""),
@@ -1089,8 +1105,61 @@ async function runClaimedSigning(profile, claim, signal) {
       stdio: "inherit",
       windowsHide: true,
     });
-    await waitChild(child, signal);
+    const heartbeat = async () => {
+      while (!runSignal.aborted && childRunning(child)) {
+        await sleep(30_000, runSignal);
+        if (!childRunning(child)) return;
+        const result = await apiRequest(
+          profile.origin,
+          secret.trim(),
+          `/api/actions/runner/signing/requests/${encodeURIComponent(run.requestId)}/heartbeat`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Runner-Run-Id": run.id,
+              "X-Runner-Lease-Token": claim.leaseToken,
+            },
+            signal: runSignal,
+          }
+        );
+        if (!Number.isFinite(result?.data?.leaseExpiresAt) || result.data.leaseExpiresAt <= Date.now())
+          throw new Error("GitEdge returned an invalid signing lease heartbeat response.");
+      }
+    };
+    renew = heartbeat().catch((error) => {
+      if (heartbeatController.signal.aborted || signal.aborted || !childRunning(child)) return;
+      heartbeatFailure = error;
+      heartbeatController.abort(error);
+    });
+    try {
+      await waitChild(child, runSignal);
+      if (heartbeatFailure) throw heartbeatFailure;
+    } catch (error) {
+      if (childRunning(child)) await killChild(child);
+      if (!signal.aborted) {
+        await apiRequest(
+          profile.origin,
+          secret.trim(),
+          `/api/actions/runner/signing/requests/${encodeURIComponent(run.requestId)}/fail`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Runner-Run-Id": run.id,
+              "X-Runner-Lease-Token": claim.leaseToken,
+            },
+            body: JSON.stringify({ code: "execution_failed" }),
+          }
+        ).catch((reportError) => {
+          console.error(`Could not report failed signing stage ${run.id}: ${reportError.message}`);
+        });
+      }
+      throw error;
+    }
   } finally {
+    heartbeatController.abort();
+    await renew?.catch(() => {});
     if (child?.exitCode === null) await killChild(child);
     await rm(runDirectory, { recursive: true, force: true });
   }
@@ -1711,7 +1780,7 @@ async function main() {
   const state = path.resolve(values["state-dir"] ?? stateDefault);
   if (!action || values.help) {
     console.log(
-      "Usage: pnpm run runner-broker -- init|register-gitedge|register-github|list|remove|serve|service [options]\n\nGitEdge: register-gitedge --origin URL --owner OWNER [--repository REPO] --label LABEL --runner-path DIR [--signing] [--max-job-minutes N] [--daily-minutes N] [--cost N]\nSigning profiles require a separate broker service and OS identity; --signing records the expected execution class only.\nGitHub: register-github --host HOST --owner OWNER --scope repo|org [--repository REPO] --label LABEL --runner-path DIR [--allow-repository OWNER/REPO] [--group-id ID|--group-name NAME]\nServe: serve [--once] [--poll-seconds 30]\nService: service install|start|stop|status --install-dir DIR [--state-dir DIR] [--run-as-user USER]\nAll commands accept --state-dir DIR. GitEdge registration reads GITEDGE_TOKEN; standalone GitHub profiles use gh CLI authentication."
+      "Usage: pnpm run runner-broker -- init|register-gitedge|register-github|list|remove|serve|service [options]\n\nGitEdge ordinary: register-gitedge --origin URL --owner OWNER --repository runner --label LABEL --runner-path DIR [--max-job-minutes N] [--daily-minutes N] [--cost N]\nGitEdge signing: register-gitedge --origin URL --owner OWNER --repository runner --label LABEL --signing [--max-job-minutes N] [--daily-minutes N] [--cost N]\nSigning uses the native SDK and does not install an official runner listener. It requires its own broker service and OS identity; the account owner must approve the registration in the dashboard.\nGitHub: register-github --host HOST --owner OWNER --scope repo|org [--repository REPO] --label LABEL --runner-path DIR [--allow-repository OWNER/REPO] [--group-id ID|--group-name NAME]\nServe: serve [--once] [--poll-seconds 30]\nService: service install|start|stop|status --install-dir DIR [--state-dir DIR] [--run-as-user USER]\nAll commands accept --state-dir DIR. GitEdge registration reads GITEDGE_TOKEN; standalone GitHub profiles use gh CLI authentication."
     );
     return;
   }

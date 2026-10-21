@@ -20,7 +20,7 @@ export async function handleSigningMachineCallback(
 ): Promise<Response> {
   const url = new URL(request.url);
   const match =
-    /^\/runner\/signing\/requests\/([0-9a-f-]{36})\/(start|heartbeat|download|authorize-sign|output(?:\/parts\/\d+|\/complete)?|complete)$/.exec(
+    /^\/runner\/signing\/requests\/([0-9a-f-]{36})\/(start|heartbeat|download|authorize-sign|output(?:\/parts\/\d+|\/complete)?|complete|fail)$/.exec(
       url.pathname
     );
   if (!match)
@@ -105,12 +105,14 @@ export async function handleSigningMachineCallback(
       namespace_owner: string;
       disabled_at: number | null;
     }>();
-  const completedSuccessReplay =
-    match[2] === "complete" && row?.status === "completed" && row.conclusion === "success";
+  const completedReplay =
+    row?.status === "completed" &&
+    ((match[2] === "complete" && row.conclusion === "success") ||
+      (match[2] === "fail" && (row.conclusion === "failure" || row.conclusion === "cancelled")));
   if (
     !row ||
     row.run_id !== runId ||
-    (row.status !== "running" && !completedSuccessReplay) ||
+    (row.status !== "running" && !completedReplay) ||
     row.runner_id !== runnerId ||
     row.lease_hash !== leaseHash ||
     row.lease_expires_at === null ||
@@ -255,6 +257,7 @@ export async function enqueueNativeSigningRun(
     .bind(input.repositoryId, input.ownerId, input.ownerId)
     .first<{ id: string; namespace_id: string; slug: string; owner: string }>();
   const approval = await verifySigningHost(env, input.ownerId, input.repositoryId, input.platform);
+  const initialStage = ["sign", "windows_sign", "ios_sign"].includes(input.stage);
   if (
     !repository ||
     !approval ||
@@ -262,6 +265,25 @@ export async function enqueueNativeSigningRun(
     approval.approvedAt !== input.operatorApproval.approvedAt
   )
     throw new Error("signing_host_unavailable");
+  if (!initialStage) {
+    const admittedRequest = await env.DB.prepare(
+      `SELECT 1 FROM actions_signing_runs WHERE request_id=? AND owner_id=? AND repository_id=?
+       AND profile_revision=? AND workflow_oid=? AND platform=? AND operator_approved_by=?
+       AND operator_approved_at=? AND stage IN ('sign','windows_sign','ios_sign') LIMIT 1`
+    )
+      .bind(
+        input.requestId,
+        input.ownerId,
+        repository.id,
+        input.profileRevision,
+        input.workflowOid,
+        input.platform,
+        approval.approvedBy,
+        approval.approvedAt
+      )
+      .first();
+    if (!admittedRequest) throw new Error("signing_initial_stage_not_admitted");
+  }
 
   const findExistingRun = async () => {
     const existing = await env.DB.prepare(
@@ -323,7 +345,10 @@ export async function enqueueNativeSigningRun(
       `INSERT INTO actions_runs
        (id,repository_id,commit_oid,workflow,path,source_ref,created_by,created_at,trigger_kind,executor)
        SELECT ?,?,?,?,?,?,?,?,?, 'runner'
-       WHERE (SELECT COUNT(*) FROM actions_runs WHERE repository_id=? AND created_at>?)<6
+       WHERE (?=0 OR (SELECT COUNT(*) FROM actions_runs a
+         LEFT JOIN actions_signing_runs s ON s.run_id=a.id
+         WHERE a.repository_id=? AND a.created_at>?
+           AND (s.run_id IS NULL OR s.stage IN ('sign','windows_sign','ios_sign'))) < 6)
          AND EXISTS (SELECT 1 FROM actions_runners WHERE created_by=? AND repository_id=?
            AND execution_class='signing' AND signing_platform=? AND operator_approved_by=? AND operator_approved_at=?
            AND revoked_at IS NULL)`
@@ -337,6 +362,7 @@ export async function enqueueNativeSigningRun(
       input.ownerId,
       now,
       "workflow_dispatch",
+      initialStage ? 1 : 0,
       repository.id,
       now - 3_600_000,
       input.ownerId,

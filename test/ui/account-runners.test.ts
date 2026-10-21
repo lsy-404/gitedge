@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { h } from "vue";
 import AccountRunners from "../../apps/web/src/components/AccountRunners.vue";
+import AccountRunnerSigningProfiles from "../../apps/web/src/components/AccountRunnerSigningProfiles.vue";
 import { api } from "../../apps/web/src/lib/api";
 import { i18n } from "../../apps/web/src/i18n";
 import { router } from "../../apps/web/src/router";
@@ -22,6 +23,11 @@ function overview(overrides: Partial<RunnerOverview> = {}): RunnerOverview {
         name: "amd-small",
         scope: { owner: "ada" },
         labels: ["linux", "x64"],
+        executionClass: "ordinary",
+        signingPlatform: null,
+        dedicatedHostConfirmed: false,
+        operatorApprovedAt: null,
+        operatorApprovedBy: null,
         createdAt: Date.now() - 10_000,
         lastSeenAt: Date.now(),
         revokedAt: null,
@@ -185,6 +191,116 @@ describe("AccountRunners", () => {
     expect(
       mounted.root.querySelector('a[href="/ada/runner/tree/.github/workflows"]')?.textContent
     ).toContain("Edit or add service workflows");
+  });
+
+  it("offers signing approval only for the owner's private Runner registration", async () => {
+    const runner = {
+      ...overview().runners[0]!,
+      scope: { owner: "ada", repository: "runner" },
+    };
+    const repository = {
+      ...baseRepository,
+      id: "account-runner",
+      owner: "ada",
+      name: "Runner",
+      slug: "runner",
+      visibility: "private" as const,
+      systemKind: "account_runner" as const,
+    };
+    vi.spyOn(api, "runnerOverview").mockResolvedValue(
+      overview({ runners: [runner], github: [], queue: [] })
+    );
+    vi.spyOn(api, "accountRunner").mockResolvedValue({ repository });
+    const approve = vi.spyOn(api, "approveRunnerSigning").mockResolvedValue({
+      runner: {
+        id: runner.id,
+        name: runner.name,
+        scope: runner.scope,
+        labels: runner.labels,
+        executionClass: "signing",
+        signingPlatform: "windows",
+        dedicatedHostConfirmed: true,
+        operatorApprovedAt: Date.now(),
+        operatorApprovedBy: "user-1",
+        createdAt: runner.createdAt,
+        lastSeenAt: runner.lastSeenAt,
+        revokedAt: runner.revokedAt,
+      },
+    });
+    const mounted = await mountAt("/_verify/signing-approval", "/_verify/signing-approval", () =>
+      h(AccountRunners)
+    );
+    await settle();
+    expect(mounted.root.textContent).toContain("Signing execution approval");
+    expect(mounted.root.textContent).toContain("operator declaration, not hardware proof");
+    const confirm = mounted.root.querySelector<HTMLInputElement>(
+      ".runner-signing-confirm input[type=checkbox]"
+    );
+    expect(confirm).not.toBeNull();
+    confirm!.checked = true;
+    confirm!.dispatchEvent(new Event("input", { bubbles: true }));
+    confirm!.dispatchEvent(new Event("change", { bubbles: true }));
+    await settle();
+    findButton(mounted.root, "Approve signing node").click();
+    await settle();
+    expect(approve).toHaveBeenCalledWith(runner.id, {
+      platform: "windows",
+      dedicatedHostConfirmed: true,
+    });
+  });
+
+  it("approves a named Runner profile and installs source credentials without rendering the token", async () => {
+    const profile = {
+      name: "release",
+      revision: "a".repeat(40),
+      platform: "windows" as const,
+      workflowOid: "b".repeat(40),
+      workflowPath: ".github/workflows/sign.yml",
+      enabled: true,
+      approvedAt: Date.now(),
+    };
+    vi.spyOn(api, "signingProfiles").mockResolvedValue({ profiles: [profile] });
+    vi.spyOn(api, "signingCredentialStatus").mockImplementation(async (_id, name, platform) => ({
+      name,
+      revision: profile.revision,
+      platform,
+      configured: false,
+      updatedAt: null,
+    }));
+    const approveProfile = vi.spyOn(api, "approveSigningProfile").mockResolvedValue(profile);
+    const install = vi.spyOn(api, "installSigningCredentials").mockResolvedValue({
+      name: profile.name,
+      revision: profile.revision,
+      platform: "github-source",
+      configured: true,
+      updatedAt: Date.now(),
+    });
+    const mounted = await mountAt("/_verify/signing-profiles", "/_verify/signing-profiles", () =>
+      h(AccountRunnerSigningProfiles, { repositoryId: "runner-repository" })
+    );
+    await settle();
+    expect(mounted.root.textContent).toContain(".github/workflows/sign.yml");
+
+    const name = mounted.root.querySelector<HTMLInputElement>("#runner-signing-profile-name")!;
+    name.value = "release";
+    name.dispatchEvent(new Event("input", { bubbles: true }));
+    name.dispatchEvent(new Event("change", { bubbles: true }));
+    await settle();
+    findButton(mounted.root, "Approve profile").click();
+    await settle();
+    expect(approveProfile).toHaveBeenCalledWith("runner-repository", "release");
+
+    const fileInput = Array.from(mounted.root.querySelectorAll<HTMLInputElement>('input[type="file"]'))[1]!;
+    const secretFile = new File([JSON.stringify({ token: "source-token-not-rendered" })], "source.json", {
+      type: "application/json",
+    });
+    Object.defineProperty(fileInput, "files", { value: [secretFile], configurable: true });
+    fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+    await settle();
+    expect(install).toHaveBeenCalledWith("runner-repository", "release", "github-source", {
+      token: "source-token-not-rendered",
+    });
+    expect(mounted.root.textContent).not.toContain("source-token-not-rendered");
   });
 
   it("shows an account Runner load error and retries the owner lookup", async () => {

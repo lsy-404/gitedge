@@ -61,7 +61,17 @@ import type {
   GitHubSyncInput,
   GitHubSyncState,
 } from "../../../../packages/contracts/src/github-sync";
-import type { RunnerHistory, RunnerOverview } from "../../../../packages/contracts/src/runners";
+import type {
+  RegisteredRunner,
+  RunnerHistory,
+  RunnerOverview,
+  SigningRunnerApproval,
+} from "../../../../packages/contracts/src/runners";
+import type {
+  SigningCredentialStatus,
+  SigningCredentialPlatform,
+  SigningProfileMetadata,
+} from "../../../../packages/contracts/src/signing";
 import type { PagesSettings, UpdatePagesInput } from "../../../../packages/contracts/src/pages";
 import type {
   ListNotificationsQuery,
@@ -688,6 +698,52 @@ export const api = {
   usage: () => request<Usage>("/api/forge/usage"),
   runnerOverview: (signal?: AbortSignal) =>
     request<RunnerOverview>("/api/actions/runners/overview", { signal }),
+  approveRunnerSigning: (runnerId: string, approval: SigningRunnerApproval) =>
+    request<{ runner: RegisteredRunner }>(`/api/actions/runners/${encodeURIComponent(runnerId)}/signing`, {
+      method: "POST",
+      body: JSON.stringify(approval),
+    }),
+  revokeRunnerSigning: (runnerId: string) =>
+    request<{ revoked: boolean }>(`/api/actions/runners/${encodeURIComponent(runnerId)}/signing`, {
+      method: "DELETE",
+    }),
+  signingProfiles: (repositoryId: string, signal?: AbortSignal) =>
+    request<{ profiles: SigningProfileMetadata[] }>(
+      `/api/actions/signing/profiles?repositoryId=${encodeURIComponent(repositoryId)}`,
+      { signal }
+    ),
+  approveSigningProfile: (repositoryId: string, name: string) =>
+    request<Omit<SigningProfileMetadata, "approvedAt">>(
+      `/api/actions/signing/profiles?repositoryId=${encodeURIComponent(repositoryId)}`,
+      { method: "POST", body: JSON.stringify({ name }) }
+    ),
+  signingCredentialStatus: (
+    repositoryId: string,
+    name: string,
+    platform: SigningCredentialPlatform
+  ) =>
+    request<SigningCredentialStatus>(
+      `/api/actions/signing/profiles/${encodeURIComponent(name)}/credentials?repositoryId=${encodeURIComponent(repositoryId)}&platform=${encodeURIComponent(platform)}`
+    ),
+  installSigningCredentials: (
+    repositoryId: string,
+    name: string,
+    platform: SigningCredentialPlatform,
+    credentials: unknown
+  ) =>
+    request<SigningCredentialStatus>(
+      `/api/actions/signing/profiles/${encodeURIComponent(name)}/credentials?repositoryId=${encodeURIComponent(repositoryId)}`,
+      { method: "POST", body: JSON.stringify({ platform, credentials }) }
+    ),
+  removeSigningCredentials: (
+    repositoryId: string,
+    name: string,
+    platform: SigningCredentialPlatform
+  ) =>
+    request<SigningCredentialStatus>(
+      `/api/actions/signing/profiles/${encodeURIComponent(name)}/credentials?repositoryId=${encodeURIComponent(repositoryId)}`,
+      { method: "DELETE", body: JSON.stringify({ platform }) }
+    ),
   accountRunner: (signal?: AbortSignal) =>
     request<{ repository: Repository | null }>("/api/forge/account-runner", { signal }),
   createAccountRunner: () => request<Repository>("/api/forge/account-runner", { method: "POST" }),
