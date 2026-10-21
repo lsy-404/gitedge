@@ -26,8 +26,17 @@ import { z } from "zod";
 import type { SigningEnv, SigningExecutionHooks } from "./types";
 import { parseRunnerWorkflow } from "../runner-workflow";
 import { readJsonLimited } from "../../../../src/worker/common/readText";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 
 const sha = /^[a-f0-9]{40}$/;
+const githubOidcIssuer = "https://token.actions.githubusercontent.com";
+let githubOidcKeys: ReturnType<typeof createRemoteJWKSet> | null = null;
+function githubOidcKeySet() {
+  githubOidcKeys ??= createRemoteJWKSet(new URL(`${githubOidcIssuer}/.well-known/jwks`), {
+    timeoutDuration: 5000,
+  });
+  return githubOidcKeys;
+}
 const digest = (bytes: Uint8Array) =>
   crypto.subtle
     .digest("SHA-256", new Uint8Array(bytes).buffer)
@@ -105,12 +114,106 @@ const githubArtifactSchema = z
   })
   .passthrough();
 
+const githubRunIdentitySchema = z.object({
+  repository_id: z.string(),
+  run_id: z.string(),
+  run_attempt: z.string(),
+  actor_id: z.string(),
+  ref: z.string(),
+  event_name: z.string(),
+  workflow_ref: z.string(),
+  workflow_sha: z.string(),
+});
+
+async function verifyGitHubRunIdentity(
+  token: string,
+  audience: string,
+  repo: SigningProfile["policy"]["sourceRepositories"][number],
+  input: SigningSubmission,
+  actorId: number,
+  tag: string
+): Promise<boolean> {
+  try {
+    const verified = await jwtVerify(token, githubOidcKeySet(), {
+      issuer: githubOidcIssuer,
+      audience,
+      algorithms: ["RS256"],
+      clockTolerance: 30,
+    });
+    const claims = githubRunIdentitySchema.parse(verified.payload);
+    const ref = `refs/tags/${tag}`;
+    const workflowRef = `${repo.fullName}/${repo.workflowPath}@${ref}`;
+    return (
+      claims.repository_id === repo.id &&
+      claims.run_id === input.sourceRunId &&
+      claims.run_attempt === "1" &&
+      claims.actor_id === String(actorId) &&
+      claims.ref === ref &&
+      claims.event_name === "push" &&
+      claims.workflow_sha === input.sourceCommitOid &&
+      claims.workflow_ref.toLowerCase() === workflowRef.toLowerCase()
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function githubTagCommit(
+  token: string,
+  fullName: string,
+  tag: string
+): Promise<string | null> {
+  const objectSchema = z.object({ type: z.enum(["commit", "tag"]), sha: z.string().regex(sha) });
+  const reference = z.object({ object: objectSchema }).passthrough();
+  const initial = reference.safeParse(
+    await githubJson(token, `/repos/${fullName}/git/ref/tags/${encodeURIComponent(tag)}`)
+  );
+  if (!initial.success) return null;
+  let object = initial.data.object;
+  for (let depth = 0; object.type === "tag" && depth < 4; depth++) {
+    const annotated = z
+      .object({ object: objectSchema })
+      .passthrough()
+      .safeParse(await githubJson(token, `/repos/${fullName}/git/tags/${object.sha}`));
+    if (!annotated.success) return null;
+    object = annotated.data.object;
+  }
+  return object.type === "commit" ? object.sha : null;
+}
+
+async function githubCommitOnDefaultBranch(
+  token: string,
+  fullName: string,
+  defaultBranch: string,
+  shaValue: string
+): Promise<boolean> {
+  const comparison = z
+    .object({
+      status: z.enum(["ahead", "behind", "identical", "diverged"]),
+      ahead_by: z.number().int().nonnegative(),
+    })
+    .passthrough()
+    .safeParse(
+      await githubJson(
+        token,
+        `/repos/${fullName}/compare/${encodeURIComponent(defaultBranch)}...${shaValue}`
+      )
+    );
+  return (
+    comparison.success &&
+    (comparison.data.status === "identical" ||
+      (comparison.data.status === "behind" && comparison.data.ahead_by === 0))
+  );
+}
+
 async function verifySource(
   env: SigningEnv,
   ownerId: string,
   repositoryId: string,
   input: SigningSubmission,
-  profile: SigningProfile
+  profile: SigningProfile,
+  runIdentity: string | null = null,
+  audience = ""
 ): Promise<{ body: ReadableStream<Uint8Array> } | null> {
   const token = await storedSourceCredential(env, ownerId, repositoryId, profile.revision);
   if (!token) return null;
@@ -126,6 +229,8 @@ async function verifySource(
     !Array.isArray(repo.refs)
   )
     return null;
+  if (!/^[1-9]\d*$/.test(input.sourceRunId) || !/^[1-9]\d*$/.test(input.sourceArtifactId))
+    return null;
   const run = githubRunSchema.safeParse(
     await githubJson(
       token,
@@ -139,11 +244,40 @@ async function verifySource(
     run.data.status !== "completed" ||
     run.data.conclusion !== "success" ||
     run.data.path.split("@")[0] !== repo.workflowPath ||
-    !repo.events.includes(run.data.event) ||
-    !repo.refs.includes(run.data.head_branch) ||
     !repo.actorIds.includes(run.data.actor.id)
   )
     return null;
+  const repositoryInfo = z
+    .object({ default_branch: z.string().min(1).max(256) })
+    .passthrough()
+    .safeParse(await githubJson(token, `/repos/${repo.fullName}`));
+  if (!repositoryInfo.success) return null;
+  const defaultBranch = repositoryInfo.data.default_branch;
+  if (repo.releaseTagPattern) {
+    const tag = `v${input.version}`;
+    if (
+      run.data.event !== "push" ||
+      run.data.head_branch !== tag ||
+      !new RegExp(repo.releaseTagPattern).test(tag) ||
+      !repo.events.includes("push") ||
+      !runIdentity ||
+      runIdentity.length > 16_384 ||
+      !(await verifyGitHubRunIdentity(runIdentity, audience, repo, input, run.data.actor.id, tag))
+    )
+      return null;
+    const tagCommit = await githubTagCommit(token, repo.fullName, tag);
+    if (
+      tagCommit !== run.data.head_sha ||
+      !(await githubCommitOnDefaultBranch(token, repo.fullName, defaultBranch, run.data.head_sha))
+    )
+      return null;
+  } else if (
+    run.data.head_branch !== defaultBranch ||
+    !repo.events.includes(run.data.event) ||
+    !repo.refs.includes(run.data.head_branch)
+  ) {
+    return null;
+  }
   const artifact = githubArtifactSchema.safeParse(
     await githubJson(
       token,
@@ -896,8 +1030,8 @@ export function createSigningExecutionHooks(
       verifyNotarization(env, ownerId, repositoryId, profile, report),
     loadApprovedProfile: (user, repositoryId, name) =>
       readProfile(env, user.id, repositoryId, name),
-    verifySource: async (user, repositoryId, profile, submission) =>
-      verifySource(env, user.id, repositoryId, submission, profile),
+    verifySource: async (user, repositoryId, profile, submission, runIdentity, audience) =>
+      verifySource(env, user.id, repositoryId, submission, profile, runIdentity, audience),
     authorizeCredentials: (context, profile) => grantCredentials(env, context, profile),
     verifyOutput: ({
       context,
