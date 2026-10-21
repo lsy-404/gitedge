@@ -50,7 +50,7 @@ export async function dashboardAttention(
   if (url.searchParams.has("cursor") && !cursor)
     return errorResponse(400, "bad_request", "Invalid cursor.");
 
-  const accessible = `EXISTS (SELECT 1 FROM namespace_memberships m WHERE m.namespace_id = r.namespace_id AND m.user_id = ?) OR EXISTS (SELECT 1 FROM repository_collaborators c WHERE c.repository_id = r.id AND c.user_id = ? AND c.role IN ('read', 'write', 'admin'))`;
+  const accessible = `(r.system_kind = 'account_runner' AND r.created_by = ?) OR (r.system_kind IS NULL AND (EXISTS (SELECT 1 FROM namespace_memberships m WHERE m.namespace_id = r.namespace_id AND m.user_id = ?) OR EXISTS (SELECT 1 FROM repository_collaborators c WHERE c.repository_id = r.id AND c.user_id = ? AND c.role IN ('read', 'write', 'admin'))))`;
   const now = Date.now();
   const zeroOid = "0".repeat(40);
   const cursorSql = cursor ? "WHERE updatedAt > ? OR (updatedAt = ? AND id > ?)" : "";
@@ -116,6 +116,7 @@ export async function dashboardAttention(
       .bind(
         user.id,
         user.id,
+        user.id,
         zeroOid,
         user.id,
         user.id,
@@ -155,6 +156,7 @@ export async function dashboardAttention(
         (SELECT COUNT(*) FROM auth_agent_sessions s JOIN accessible_repositories ar ON ar.id = s.repository_id WHERE s.user_id = ? AND s.status = 'active' AND s.expires_at > ? AND s.expires_at <= ?) AS expiring_session`
     )
       .bind(
+        user.id,
         user.id,
         user.id,
         zeroOid,

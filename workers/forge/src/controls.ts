@@ -15,7 +15,7 @@ import {
   recordAudit,
 } from "../../../src/worker/common/audit";
 import { scopedInvitations } from "./invitations";
-import { repositoryRole } from "../../../src/worker/common/repositories";
+import { isAccountRunnerRepository, repositoryRole } from "../../../src/worker/common/repositories";
 import { createLogger } from "../../../src/worker/common/logger";
 import { revokeAgentSessions } from "./agent-events";
 import { detachForks } from "./forks";
@@ -33,6 +33,15 @@ export async function repositoryControls(
     id = parts[3];
   if (!["branch-rules", "collaborators", "invitations", "audit-log"].includes(resource ?? ""))
     return null;
+  if (
+    (await isAccountRunnerRepository(env.DB, repo.id)) &&
+    (resource === "collaborators" || resource === "invitations" || request.method !== "GET")
+  )
+    return errorResponse(
+      409,
+      "system_repository_locked",
+      "Runner collaboration and repository settings are locked."
+    );
   if (user.agentSession || (await repositoryRole(env.DB, repo.id, user.id)) !== "admin")
     return errorResponse(403, "forbidden", "Repository administrator access is required.");
   const logger = createLogger(env.LOG_LEVEL, {

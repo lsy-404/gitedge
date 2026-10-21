@@ -356,7 +356,7 @@ async function listRepositories(env: AdminEnv, url: URL): Promise<Response> {
   if (cursor === "invalid") return errorResponse(400, "bad_request", "Invalid cursor.");
   const limit = pageSize(url);
   const rows = await env.DB.prepare(
-    "SELECT r.id, n.slug AS owner, COALESCE(r.deleted_slug, r.slug) AS name, r.visibility, r.archived, u.identifier AS createdBy, r.created_at AS createdAt, r.deleted_at AS deletedAt FROM repositories r JOIN namespaces n ON n.id = r.namespace_id JOIN users u ON u.id = r.created_by WHERE (n.slug || '/' || COALESCE(r.deleted_slug, r.slug)) LIKE ?1 ESCAPE '\\' AND (?2 IS NULL OR r.created_at < ?2 OR (r.created_at = ?2 AND r.id < ?3)) ORDER BY r.created_at DESC, r.id DESC LIMIT ?4"
+    "SELECT r.id, n.slug AS owner, COALESCE(r.deleted_slug, r.slug) AS name, r.visibility, r.archived, u.identifier AS createdBy, r.created_at AS createdAt, r.deleted_at AS deletedAt FROM repositories r JOIN namespaces n ON n.id = r.namespace_id JOIN users u ON u.id = r.created_by WHERE r.system_kind IS NULL AND (n.slug || '/' || COALESCE(r.deleted_slug, r.slug)) LIKE ?1 ESCAPE '\\' AND (?2 IS NULL OR r.created_at < ?2 OR (r.created_at = ?2 AND r.id < ?3)) ORDER BY r.created_at DESC, r.id DESC LIMIT ?4"
   )
     .bind(searchPattern(url), cursor.at, cursor.id, limit + 1)
     .all<RepositoryRow>();

@@ -32,11 +32,11 @@ const PARTICIPANT_LIMIT = 500;
 const PURGE_BATCH = 500;
 
 /** Read access to repository `r` for user `u`: public, namespace member or collaborator. */
-const USER_CAN_READ = `(r.visibility = 'public' OR EXISTS (SELECT 1 FROM namespace_memberships m WHERE m.namespace_id = r.namespace_id AND m.user_id = u.id) OR EXISTS (SELECT 1 FROM repository_collaborators c WHERE c.repository_id = r.id AND c.user_id = u.id))`;
+const USER_CAN_READ = `((r.system_kind = 'account_runner' AND r.created_by = u.id) OR (r.system_kind IS NULL AND (r.visibility = 'public' OR EXISTS (SELECT 1 FROM namespace_memberships m WHERE m.namespace_id = r.namespace_id AND m.user_id = u.id) OR EXISTS (SELECT 1 FROM repository_collaborators c WHERE c.repository_id = r.id AND c.user_id = u.id))))`;
 /** A pending, unexpired invitation of user `u` to repository `r`, which lets them see that one notification. */
 const PENDING_INVITATION = `EXISTS (SELECT 1 FROM invitations iv WHERE iv.repository_id = r.id AND iv.invitee_user_id = u.id AND iv.status = 'pending' AND iv.expires_at > CAST(strftime('%s', 'now') AS INTEGER) * 1000)`;
 /** Listing access: readable repositories, plus invitations the user has not answered yet. */
-const USER_CAN_SEE = `(${USER_CAN_READ} OR (n.reason = 'invited' AND ${PENDING_INVITATION}))`;
+const USER_CAN_SEE = `(${USER_CAN_READ} OR (r.system_kind IS NULL AND n.reason = 'invited' AND ${PENDING_INVITATION}))`;
 const REASON_NOT_MUTED = `NOT EXISTS (SELECT 1 FROM forge_notification_preferences p, json_each(p.muted_reasons_json) j WHERE p.user_id = u.id AND j.value = ?)`;
 /** Users who silenced the repository receive nothing but invitations. */
 const NOT_IGNORING = `NOT EXISTS (SELECT 1 FROM repository_watches w WHERE w.repository_id = r.id AND w.user_id = u.id AND w.level = 'ignore')`;

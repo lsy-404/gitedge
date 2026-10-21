@@ -11,7 +11,7 @@ import { randomHex } from "../../../src/worker/common/encoding";
 import { dataResponse, errorResponse, requireRecentAuth } from "../../../src/worker/common/http";
 import { createLogger } from "../../../src/worker/common/logger";
 import { readTextLimited } from "../../../src/worker/common/readText";
-import { repositoryRole } from "../../../src/worker/common/repositories";
+import { isAccountRunnerRepository, repositoryRole } from "../../../src/worker/common/repositories";
 import { importSealingKey, sealText } from "../../../src/worker/common/secret-box";
 import { parseJson, type ForgeEnv, type RepositoryRow } from "./common";
 import {
@@ -265,6 +265,12 @@ export async function handleGithubSyncSettings(
   parts: string[]
 ): Promise<Response | null> {
   if (parts[2] !== "github-sync") return null;
+  if (await isAccountRunnerRepository(env.DB, repository.id))
+    return errorResponse(
+      409,
+      "system_repository_locked",
+      "GitHub synchronization cannot change Runner identity or ownership."
+    );
   if (
     user.agentSession ||
     user.token ||

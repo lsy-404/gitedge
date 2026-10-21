@@ -127,7 +127,7 @@ async function tokenRepositories(
   tokenId: string | null
 ): Promise<Map<string, AccessTokenRepository[]>> {
   const rows = await env.DB.prepare(
-    `SELECT t.id AS tokenId, r.id, n.slug AS owner, r.slug FROM auth_access_tokens t, json_each(t.repository_ids_json) j JOIN repositories r ON r.id = j.value JOIN namespaces n ON n.id = r.namespace_id WHERE t.id IN (SELECT id FROM auth_access_tokens WHERE user_id = ? AND (? IS NULL OR id = ?) ORDER BY created_at DESC LIMIT ${LIST_LIMIT}) AND t.repository_ids_json IS NOT NULL`
+    `SELECT t.id AS tokenId, r.id, n.slug AS owner, r.slug FROM auth_access_tokens t, json_each(t.repository_ids_json) j JOIN repositories r ON r.id = j.value JOIN namespaces n ON n.id = r.namespace_id WHERE t.id IN (SELECT id FROM auth_access_tokens WHERE user_id = ? AND (? IS NULL OR id = ?) ORDER BY created_at DESC LIMIT ${LIST_LIMIT}) AND t.repository_ids_json IS NOT NULL AND (r.system_kind IS NULL OR n.created_by = t.user_id)`
   )
     .bind(userId, tokenId, tokenId)
     .all<TokenRepositoryRow>();
@@ -160,9 +160,9 @@ async function createToken(
   const repositoryIdsJson = input.repositoryIds ? JSON.stringify(input.repositoryIds) : null;
   if (repositoryIdsJson && input.repositoryIds) {
     const accessible = await env.DB.prepare(
-      "SELECT COUNT(DISTINCT r.id) AS total FROM json_each(?) j JOIN repositories r ON r.id = j.value LEFT JOIN namespace_memberships m ON m.namespace_id = r.namespace_id AND m.user_id = ? LEFT JOIN repository_collaborators c ON c.repository_id = r.id AND c.user_id = ? WHERE m.role IN ('owner', 'member') OR c.role IN ('admin', 'write', 'read')"
+      "SELECT COUNT(DISTINCT r.id) AS total FROM json_each(?) j JOIN repositories r ON r.id = j.value JOIN namespaces n ON n.id = r.namespace_id LEFT JOIN namespace_memberships m ON m.namespace_id = r.namespace_id AND m.user_id = ? LEFT JOIN repository_collaborators c ON c.repository_id = r.id AND c.user_id = ? WHERE (r.system_kind = 'account_runner' AND n.kind = 'personal' AND n.created_by = ?) OR (r.system_kind IS NULL AND (m.role IN ('owner', 'member') OR c.role IN ('admin', 'write', 'read')))"
     )
-      .bind(repositoryIdsJson, user.id, user.id)
+      .bind(repositoryIdsJson, user.id, user.id, user.id)
       .first<{ total: number }>();
     if ((accessible?.total ?? 0) !== input.repositoryIds.length)
       return errorResponse(404, "not_found", "Repository was not found.");

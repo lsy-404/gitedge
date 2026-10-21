@@ -134,6 +134,96 @@ describe("runner overview and history", () => {
     expect(body.data.queue.some((job) => job.repository.includes("private-queue"))).toBe(false);
   });
 
+  it("keeps account Runner execution metadata private from namespace members and repo admins", async () => {
+    const runnerRepositoryId = crypto.randomUUID();
+    await env.DB.prepare(
+      `INSERT INTO repositories (id,namespace_id,created_by,slug,do_name,visibility,description,created_at,updated_at,system_kind)
+      VALUES (?,?,?,'runner',?,'private','',?,?, 'account_runner')`
+    )
+      .bind(
+        runnerRepositoryId,
+        namespaceId,
+        owner.id,
+        `repo:${runnerRepositoryId}`,
+        Date.now(),
+        Date.now()
+      )
+      .run();
+    await env.DB.prepare(
+      "INSERT INTO namespace_memberships (namespace_id,user_id,role,created_at) VALUES (?,?,'member',?)"
+    )
+      .bind(namespaceId, stranger.id, Date.now())
+      .run();
+    await env.DB.prepare(
+      "INSERT INTO repository_collaborators (repository_id,user_id,role,created_at) VALUES (?,?,'admin',?)"
+    )
+      .bind(runnerRepositoryId, stranger.id, Date.now())
+      .run();
+
+    const accountRunnerId = crypto.randomUUID();
+    await env.DB.prepare(
+      `INSERT INTO actions_runners (id,name,namespace_id,repository_id,created_by,labels_json,token_hash,created_at)
+      VALUES (?,?,?,?,?,?,?,?)`
+    )
+      .bind(
+        accountRunnerId,
+        "account-runner",
+        namespaceId,
+        runnerRepositoryId,
+        stranger.id,
+        "[]",
+        `hash-${accountRunnerId}`,
+        Date.now()
+      )
+      .run();
+
+    const runId = crypto.randomUUID();
+    await env.DB.prepare(
+      `INSERT INTO actions_runs (id,repository_id,commit_oid,workflow,path,source_ref,created_by,created_at)
+      VALUES (?,?,?,?,?,?,?,?)`
+    )
+      .bind(
+        runId,
+        runnerRepositoryId,
+        "c".repeat(40),
+        "Runner",
+        ".github/workflows/ci.yml",
+        "main",
+        owner.id,
+        Date.now()
+      )
+      .run();
+    await env.DB.prepare(
+      `INSERT INTO actions_runner_runs (run_id,workflow_source,labels_json,permission,timeout_minutes,event_json,status)
+      VALUES (?,'git','[]','read',30,'{}','queued')`
+    )
+      .bind(runId)
+      .run();
+
+    const outsiderResponse = await handleRunnerOverview(
+      trusted(stranger),
+      { DB: env.DB },
+      url("/api/actions/runners/overview")
+    );
+    expect(outsiderResponse.status).toBe(200);
+    const outsider = (await outsiderResponse.json()) as {
+      data: { runners: Array<{ id: string }>; queue: Array<{ id: string }> };
+    };
+    expect(outsider.data.runners.some((runner) => runner.id === accountRunnerId)).toBe(false);
+    expect(outsider.data.queue.some((job) => job.id === runId)).toBe(false);
+
+    const ownerResponse = await handleRunnerOverview(
+      trusted(owner),
+      { DB: env.DB },
+      url("/api/actions/runners/overview")
+    );
+    const ownerView = (await ownerResponse.json()) as {
+      data: { runners: Array<{ id: string }>; queue: Array<{ id: string }> };
+    };
+    expect(ownerView.data.runners.some((runner) => runner.id === accountRunnerId)).toBe(true);
+    expect(ownerView.data.queue.some((job) => job.id === runId)).toBe(true);
+  });
+
   it("uses claim labels and combines GitEdge and GitHub usage in minute-based budgets", async () => {
     const now = Date.now();
     const capacity = {

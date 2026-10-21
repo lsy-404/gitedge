@@ -18,7 +18,7 @@ import {
 } from "../../../src/worker/common/http";
 import { auditActor, recordAudit } from "../../../src/worker/common/audit";
 import { createLogger } from "../../../src/worker/common/logger";
-import { repositoryRole } from "../../../src/worker/common/repositories";
+import { isAccountRunnerRepository, repositoryRole } from "../../../src/worker/common/repositories";
 import { revokeAgentSessions } from "./agent-events";
 import { closeForkPullRequests, detachForks, namespaceMayHoldFork } from "./forks";
 import { purgeReleaseAssets } from "./releases";
@@ -98,6 +98,12 @@ export async function repositoryLifecycle(
   const isDelete = request.method === "DELETE" && parts.length === 2;
   const isTransfer = request.method === "POST" && parts.length === 3 && parts[2] === "transfer";
   if (!isDelete && !isTransfer) return null;
+  if (await isAccountRunnerRepository(env.DB, repository.id))
+    return errorResponse(
+      409,
+      "system_repository_locked",
+      "The Runner repository cannot be deleted or transferred individually."
+    );
   if (user.agentSession || (await repositoryRole(env.DB, repository.id, user.id)) !== "admin")
     return errorResponse(403, "forbidden", "Repository administrator access is required.");
   const logger = createLogger(env.LOG_LEVEL, {
