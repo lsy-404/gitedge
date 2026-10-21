@@ -10,3 +10,9 @@
 - AMD2 profile 为 owner 作用域，附加 oci-light 标签，预算 maxJobMinutes=60 / dailyMinutes=240 / cost=10，私有状态由专用用户持有。服务已安装并通过 systemd-analyze verify，尚未启动。
 - 共享两个队列的原子申领、预算、排序老化、隔离以及概览权限和分页 D1 定向测试合并后通过；Web/i18n 9 项定向测试通过，Web production build 通过。全量 Worker 585 项在最后面板补充前通过；后续完整测试将再验证新增回归。
 - 本机 build 聚合脚本受 Windows pnpm spawn 限制，逐项验证 Web 与 7 个非容器 Worker dry-run 成功，Actions 使用 containers-rollout=none 验证 Worker bundle 成功；未重建既有容器镜像。
+- 再次确认 main 未保护；保留 F: 原设计检出，在独立 delivery worktree 将任务分支 fast-forward 到 main 后推送。初次创建 delivery 后误在原 worktree 合并自身，无内容变更；随后在正确 delivery 路径合并并推送成功。
+- Actions 部署版本 0c2b0ce9-4292-48df-9cb7-3089829d1718；Gateway 部署版本 154ce57e-f397-4b30-8a22-e2fc0860cd29。两者确认实际上传和 trigger 更新成功；Actions 使用 none 保留现有容器镜像。
+- 启动 AMD2 systemd 服务，active/running、NRestarts=0、凭据权限600且由专用用户所有。线上面板显示 Linux/X64、2逻辑核、可用571MB/总954MB、预算0/240；旧Mac仍按设计允许容量未知状态。
+- GitHub 实机手动验证 run 39669739838 / job119464146819 成功：真实 checkout、Node24/Linux/x64、Git commit 检查全部通过。D1 历史完成、conclusion=success、cleanup_pending=0；面板历史显示1成功、0失败、0取消。实际约90秒，受5分钟截止与单槽约束。
+- 最终 typecheck 通过；Worker 全套43文件/587测试通过；Web/i18n 定向9项通过；新增探针语法检查与实际执行通过。实现提交690ad7b的 GitHub Linux CI39669255719 全套 success，包含全部单元、Worker、Web、Docker dry-run与格式检查，覆盖本地Windows基线限制。
+- 生产验证截图保存在本次工作区 outputs/runner-center-success.png，浏览器保留在线Runners页。A1 launcher仍active/running，未改变其重试配置。
