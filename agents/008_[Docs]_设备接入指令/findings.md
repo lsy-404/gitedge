@@ -1,5 +1,7 @@
 # Findings
 
+- Final review: only Tokyo02 has authorized budget removal; other devices preserve existing budgets/cost. Windows Task Scheduler needs absolute executable/script paths, working/state directories and workflow-tool PATH. GitEdge profiles do not require gh authentication. Missing local profile recovery has no CLI reattach/update command and must not create duplicate registrations.
+
 - Broker entry point is `pnpm run runner-broker --`; it requires Node.js >=24 and loads the repository's `yaml` package.
 - GitEdge registration requires an installed official Actions runner and an admin-scoped `GITEDGE_TOKEN`; profile credential files are created private. Registration is owner/repository scoped and names are unique in local broker state.
 - Broker capacity probes report actual OS, architecture, CPUs, load, memory, work-directory disk, and supported tools. Tool probes include node, pnpm, git, docker, python, go, and rust.
