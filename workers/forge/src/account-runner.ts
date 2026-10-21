@@ -4,11 +4,13 @@ import {
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
+import { createLogger } from "../../../src/worker/common/logger";
 import { activeImportPath } from "./imports";
 import { parseJson, repoResponse, type ForgeEnv, type RepositoryRow } from "./common";
 
 const README = `# Account Runner\n\nThis private repository is the account-owned source for workflows and service configuration. GitEdge Actions workflows in this repository can coordinate the account's services. Edit files and commit them to configure services.\n`;
 const WORKFLOW = `name: Runner\non:\n  workflow_dispatch: {}\njobs:\n  node:\n    runs-on:\n      - self-hosted\n      - need-tool-node\n      - need-time-5m\n    timeout-minutes: 5\n    steps:\n      - name: Show Node.js version\n        run: node --version\n      - name: Confirm runner is available\n        run: echo "Runner job succeeded."\n`;
+const PROVISIONING_LEASE_MS = 30_000;
 
 function unavailable(message: string): Response {
   return errorResponse(503, "provisioning_pending", message);
@@ -26,6 +28,123 @@ async function accountRunnerRow(env: ForgeEnv, namespaceId: string): Promise<Rep
   )
     .bind(namespaceId)
     .first<RepositoryRow>();
+}
+
+function artifactsErrorCode(cause: unknown): string {
+  return cause instanceof Error &&
+    cause.name === "ArtifactsError" &&
+    "code" in cause &&
+    typeof cause.code === "string"
+    ? cause.code
+    : "UNKNOWN";
+}
+
+function logProvisionFailure(
+  env: ForgeEnv,
+  repositoryId: string,
+  phase: string,
+  cause: unknown
+): void {
+  createLogger(env.LOG_LEVEL, { service: "forge", repoId: repositoryId }).error(
+    "forge:account-runner-provision-failed",
+    { phase, code: artifactsErrorCode(cause) }
+  );
+}
+
+async function provisionArtifact(
+  env: ForgeEnv,
+  repositoryId: string,
+  leaseAt: number
+): Promise<{ name: string; remote: string } | null> {
+  const name = `repo-${repositoryId}`;
+  let handle: ArtifactsRepo;
+  try {
+    handle = await env.ARTIFACTS.get(name);
+  } catch (cause) {
+    if (artifactsErrorCode(cause) !== "NOT_FOUND") {
+      logProvisionFailure(env, repositoryId, "lookup", cause);
+      return null;
+    }
+    try {
+      await env.ARTIFACTS.create(name, {
+        setDefaultBranch: "main",
+        description: "Private account workflows and service configuration",
+      });
+      handle = await env.ARTIFACTS.get(name);
+    } catch (createCause) {
+      logProvisionFailure(env, repositoryId, "create-or-attach", createCause);
+      return null;
+    }
+  }
+
+  using repository = handle;
+  try {
+    const info = await repository.info();
+    if (info.name !== name || !info.remote) throw new Error("Artifacts metadata is incomplete.");
+    const listed = await repository.listTokens();
+    if (listed.tokens.length < listed.total)
+      throw new Error("Artifacts bootstrap token list is incomplete.");
+    for (const token of listed.tokens) {
+      if (token.state === "active" && !(await repository.revokeToken(token.id)))
+        throw new Error("Artifacts bootstrap token revocation failed.");
+    }
+    const published = await env.DB.prepare(
+      "UPDATE repositories SET artifact_name = ?, remote = ?, updated_at = ? WHERE id = ? AND system_kind = 'account_runner' AND artifact_name IS NULL AND updated_at = ?"
+    )
+      .bind(info.name, info.remote, leaseAt, repositoryId, leaseAt)
+      .run();
+    if (!published.meta.changes) return null;
+    await env.DB.prepare("INSERT OR IGNORE INTO forge_counters (repository_id) VALUES (?)")
+      .bind(repositoryId)
+      .run();
+    return { name: info.name, remote: info.remote };
+  } catch (cause) {
+    logProvisionFailure(env, repositoryId, "finalize", cause);
+    return null;
+  }
+}
+
+async function finishProvision(
+  env: ForgeEnv,
+  request: Request,
+  user: TrustedUser,
+  row: RepositoryRow,
+  leaseAt: number,
+  status: 200 | 201
+): Promise<Response> {
+  const storage = await provisionArtifact(env, row.id, leaseAt);
+  if (!storage) return unavailable("Runner storage provisioning is pending. Retry shortly.");
+  const repository: RepositoryRow = {
+    ...row,
+    artifact_name: storage.name,
+    remote: storage.remote,
+    updated_at: leaseAt,
+  };
+  if (
+    !(await initializeFile(
+      env,
+      request,
+      user,
+      row.id,
+      "README.md",
+      README,
+      "Initialize Runner README"
+    ))
+  )
+    return unavailable("Runner was created but README initialization is pending. Retry shortly.");
+  if (
+    !(await initializeFile(
+      env,
+      request,
+      user,
+      row.id,
+      ".github/workflows/runner.yml",
+      WORKFLOW,
+      "Initialize Runner workflow"
+    ))
+  )
+    return unavailable("Runner was created but workflow initialization is pending. Retry shortly.");
+  return dataResponse(repoResponse(repository, "admin", true) satisfies Repository, status);
 }
 
 async function initializeFile(
@@ -105,7 +224,27 @@ async function provision(env: ForgeEnv, request: Request, user: TrustedUser): Pr
 
   const current = await accountRunnerRow(env, namespace.id);
   if (current) {
-    if (!current.artifact_name || !current.remote) return responseFor(current);
+    if (!current.artifact_name || !current.remote) {
+      if (current.artifact_name) return responseFor(current);
+      const now = Date.now();
+      if (current.updated_at > now - PROVISIONING_LEASE_MS) return responseFor(current);
+      const claim = await env.DB.prepare(
+        "UPDATE repositories SET updated_at = ? WHERE id = ? AND system_kind = 'account_runner' AND artifact_name IS NULL AND updated_at <= ?"
+      )
+        .bind(now, current.id, now - PROVISIONING_LEASE_MS)
+        .run();
+      if (!claim.meta.changes)
+        return responseFor((await accountRunnerRow(env, namespace.id)) ?? current);
+      return finishProvision(env, request, user, { ...current, updated_at: now }, now, 200);
+    }
+    try {
+      await env.DB.prepare("INSERT OR IGNORE INTO forge_counters (repository_id) VALUES (?)")
+        .bind(current.id)
+        .run();
+    } catch (cause) {
+      logProvisionFailure(env, current.id, "counter-repair", cause);
+      return unavailable("Runner repository is ready but setup is still pending. Retry shortly.");
+    }
     const initialized = await initializeFile(
       env,
       request,
@@ -170,26 +309,6 @@ async function provision(env: ForgeEnv, request: Request, user: TrustedUser): Pr
     throw cause;
   }
 
-  let created: { name: string; remote: string };
-  try {
-    const artifact = await env.ARTIFACTS.create(`repo-${id}`, {
-      setDefaultBranch: "main",
-      description: "Private account workflows and service configuration",
-    });
-    using handle = await env.ARTIFACTS.get(artifact.name);
-    if (!(await handle.revokeToken(artifact.token)))
-      throw new Error("Initial artifact token revocation failed.");
-    created = { name: artifact.name, remote: artifact.remote };
-    await env.DB.prepare(
-      "UPDATE repositories SET artifact_name = ?, remote = ?, updated_at = ? WHERE id = ? AND system_kind = 'account_runner'"
-    )
-      .bind(created.name, created.remote, Date.now(), id)
-      .run();
-    await env.DB.prepare("INSERT INTO forge_counters (repository_id) VALUES (?)").bind(id).run();
-  } catch {
-    return unavailable("Runner storage provisioning is pending. Retry shortly.");
-  }
-
   const repository: RepositoryRow = {
     id,
     namespace_id: namespace.id,
@@ -201,28 +320,12 @@ async function provision(env: ForgeEnv, request: Request, user: TrustedUser): Pr
     actions_enabled: 1,
     actions_runner_enabled: 1,
     system_kind: "account_runner",
-    artifact_name: created.name,
-    remote: created.remote,
+    artifact_name: null,
+    remote: null,
     created_at: now,
-    updated_at: Date.now(),
+    updated_at: now,
   };
-  if (
-    !(await initializeFile(env, request, user, id, "README.md", README, "Initialize Runner README"))
-  )
-    return unavailable("Runner was created but README initialization is pending. Retry shortly.");
-  if (
-    !(await initializeFile(
-      env,
-      request,
-      user,
-      id,
-      ".github/workflows/runner.yml",
-      WORKFLOW,
-      "Initialize Runner workflow"
-    ))
-  )
-    return unavailable("Runner was created but workflow initialization is pending. Retry shortly.");
-  return dataResponse(repoResponse(repository, "admin", true) satisfies Repository, 201);
+  return finishProvision(env, request, user, repository, now, 201);
 }
 
 export async function handleAccountRunner(
