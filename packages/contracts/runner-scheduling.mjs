@@ -10,7 +10,10 @@ function invalidClaim(labels, minutes) {
 }
 
 export function hasNeedLabels(labels) {
-  return Array.isArray(labels) && labels.some((label) => typeof label === "string" && /^need-/i.test(label));
+  return (
+    Array.isArray(labels) &&
+    labels.some((label) => typeof label === "string" && /^need-/i.test(label))
+  );
 }
 
 export function parseJobClaim(labels, defaultMinutes = 360) {
@@ -124,27 +127,22 @@ export function eligibilityReasons(capacity, budget, usedMinutes24h, claim, opti
     if (capacity.diskFreeMb < claim.diskMb) reasons.push("disk");
     const tools = new Set(capacity.tools.map((tool) => tool.toLowerCase()));
     for (const tool of claim.tools) if (!tools.has(tool)) reasons.push(`tool:${tool}`);
-    if (capacity.load1 !== null && capacity.load1 / capacity.cpus > 1.5)
-      reasons.push("load");
+    if (capacity.load1 !== null && capacity.load1 / capacity.cpus > 1.5) reasons.push("load");
   }
   if (budget?.maxJobMinutes !== undefined && claim.minutes > budget.maxJobMinutes)
     reasons.push("budget-job");
-  if (
-    budget?.dailyMinutes !== undefined &&
-    usedMinutes24h + claim.minutes > budget.dailyMinutes
-  )
+  if (budget?.dailyMinutes !== undefined && usedMinutes24h + claim.minutes > budget.dailyMinutes)
     reasons.push("budget-daily");
   return reasons;
 }
 
 export function scoreRunner(capacity, budget, usedMinutes24h, claim) {
-  if (!capacity || !claim?.valid || !matchesCapacity(capacity, claim)) return Number.POSITIVE_INFINITY;
+  if (!capacity || !claim?.valid || !matchesCapacity(capacity, claim))
+    return Number.POSITIVE_INFINITY;
   const memSurplus = (capacity.memFreeMb - claim.memMb) / capacity.memTotalMb;
   const cpuSurplus = (capacity.cpus - claim.cpus) / capacity.cpus;
   const loadRatio = Math.min((capacity.load1 ?? 0) / capacity.cpus, 1.5) / 1.5;
-  const budgetUsedRatio = budget?.dailyMinutes
-    ? usedMinutes24h / budget.dailyMinutes
-    : 0;
+  const budgetUsedRatio = budget?.dailyMinutes ? usedMinutes24h / budget.dailyMinutes : 0;
   return (
     40 * memSurplus +
     25 * cpuSurplus +

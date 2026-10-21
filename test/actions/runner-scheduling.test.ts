@@ -87,9 +87,9 @@ describe("runner scheduling contracts", () => {
     expect(matchesCapacity(null, plain, { allowUnknownLegacy: true, explicitNeeds: false })).toBe(
       true
     );
-    expect(
-      matchesCapacity(null, required, { allowUnknownLegacy: true, explicitNeeds: true })
-    ).toBe(false);
+    expect(matchesCapacity(null, required, { allowUnknownLegacy: true, explicitNeeds: true })).toBe(
+      false
+    );
     expect(hasNeedLabels(["Linux", "NEED-MEM-512M"])).toBe(true);
   });
 
@@ -126,9 +126,7 @@ describe("runner scheduling contracts", () => {
       used_minutes_24h: 0,
     };
     const own = capacity({ memTotalMb: 8192, memFreeMb: 7000, cpus: 8 });
-    expect(
-      betterPeerExists([peer], ["self-hosted"], claim, own, null, 0, 0, 10_000)
-    ).toBe(true);
+    expect(betterPeerExists([peer], ["self-hosted"], claim, own, null, 0, 0, 10_000)).toBe(true);
     expect(
       betterPeerExists(
         [peer],

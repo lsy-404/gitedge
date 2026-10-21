@@ -9,6 +9,7 @@ import {
 import { parseRunnerWorkflow, runnerDispatchInputs } from "./runner-workflow";
 import { queueGithubRunner, expireGithubRunners } from "./github-runners";
 import { cleanRunnerSchedulingData } from "./runner-scheduler";
+import { handleRunnerHistory, handleRunnerOverview } from "./runner-overview";
 import { deliverCheck, publishCheck } from "./check-delivery";
 import type { MergeCandidateRecord } from "../../../packages/contracts/src/merge-candidates";
 import { readJsonLimited } from "../../../src/worker/common/readText";
@@ -1691,6 +1692,10 @@ export default {
       )
         return await runnerMachineRequest(request, env);
       const user = readTrustedUser(request);
+      if (request.method === "GET" && url.pathname === "/runners/overview")
+        return await handleRunnerOverview(user, env, request);
+      if (request.method === "GET" && url.pathname === "/runners/history")
+        return await handleRunnerHistory(user, env, request);
       if (url.pathname === "/runners" || url.pathname.startsWith("/runners/"))
         return await runnerManagement(request, env, user);
       if (user?.job)

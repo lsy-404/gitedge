@@ -243,10 +243,11 @@ describe("single-registration GitHub runner bridge", () => {
     expect(
       await data<{ run: unknown }>(await machine(small, "claim", { capacity: capacity(8192) }))
     ).toMatchObject({ run: null });
-    expect((await queueGithubRunner(demand(connectionId, 901, "queued", labels), machineEnv)).status).toBe(202);
     expect(
-      await machine(small, "claim", {})
-        .then((response) => data<{ run: unknown }>(response))
+      (await queueGithubRunner(demand(connectionId, 901, "queued", labels), machineEnv)).status
+    ).toBe(202);
+    expect(
+      await machine(small, "claim", {}).then((response) => data<{ run: unknown }>(response))
     ).toMatchObject({ run: null });
     expect(
       await data<{ run: unknown }>(await machine(small, "claim", { capacity: capacity(630) }))
@@ -266,10 +267,14 @@ describe("single-registration GitHub runner bridge", () => {
       )
     ).toMatchObject({ run: null });
     expect(
-      await env.DB.prepare("SELECT status FROM actions_github_runner_jobs WHERE github_job_id=901")
-        .first<{ status: string }>()
+      await env.DB.prepare(
+        "SELECT status FROM actions_github_runner_jobs WHERE github_job_id=901"
+      ).first<{ status: string }>()
     ).toEqual({ status: "queued" });
-    const claimed = await data<{ run: { id: string; labels: string[]; timeoutMinutes: number } | null; leaseToken: string }>(
+    const claimed = await data<{
+      run: { id: string; labels: string[]; timeoutMinutes: number } | null;
+      leaseToken: string;
+    }>(
       await machine(large, "claim", {
         capacity: capacity(4096),
         budget: { dailyMinutes: 1440 },
@@ -278,18 +283,19 @@ describe("single-registration GitHub runner bridge", () => {
     expect(claimed.run).toMatchObject({ labels, timeoutMinutes: 360 });
     if (!claimed.run) throw new Error("The capable runner did not claim its job.");
     expect(
-      (
-        await env.DB.prepare("SELECT consecutive_failures,held_until FROM actions_runners WHERE name='large-linux'")
-          .first<{ consecutive_failures: number; held_until: number | null }>()
-      )
+      await env.DB.prepare(
+        "SELECT consecutive_failures,held_until FROM actions_runners WHERE name='large-linux'"
+      ).first<{ consecutive_failures: number; held_until: number | null }>()
     ).toEqual({ consecutive_failures: 0, held_until: null });
     expect(
-      (await machine(large, "github/complete", {
-        runId: claimed.run.id,
-        leaseToken: claimed.leaseToken,
-        conclusion: "success",
-        log: "",
-      })).status
+      (
+        await machine(large, "github/complete", {
+          runId: claimed.run.id,
+          leaseToken: claimed.leaseToken,
+          conclusion: "success",
+          log: "",
+        })
+      ).status
     ).toBe(200);
     expect(
       (await queueGithubRunner(demand(connectionId, 903, "queued", labels), machineEnv)).status
@@ -308,13 +314,16 @@ describe("single-registration GitHub runner bridge", () => {
       .bind(Date.now() - 1, leaseExpiry.run.id)
       .run();
     expect(
-      await data(await machine(large, "github/heartbeat", {
-        runId: leaseExpiry.run.id,
-        leaseToken: leaseExpiry.leaseToken,
-      }))
+      await data(
+        await machine(large, "github/heartbeat", {
+          runId: leaseExpiry.run.id,
+          leaseToken: leaseExpiry.leaseToken,
+        })
+      )
     ).toMatchObject({ cancelled: true });
-    const runnerId = await env.DB.prepare("SELECT id FROM actions_runners WHERE name='large-linux'")
-      .first<{ id: string }>();
+    const runnerId = await env.DB.prepare(
+      "SELECT id FROM actions_runners WHERE name='large-linux'"
+    ).first<{ id: string }>();
     if (!runnerId) throw new Error("Runner fixture is missing.");
     const now = Date.now();
     expect(
@@ -358,14 +367,13 @@ describe("single-registration GitHub runner bridge", () => {
       slots: 1,
       busy: 0,
     };
-    expect(
-      (await machine(token, "claim", { capacity })).status
-    ).toBe(200);
+    expect((await machine(token, "claim", { capacity })).status).toBe(200);
     const createdAt = Date.now() - 60_000;
     const gitedgeId = crypto.randomUUID();
     await env.DB.batch([
-      env.DB.prepare("UPDATE repositories SET actions_enabled=1,actions_runner_enabled=1 WHERE id=?")
-        .bind(repositoryA),
+      env.DB.prepare(
+        "UPDATE repositories SET actions_enabled=1,actions_runner_enabled=1 WHERE id=?"
+      ).bind(repositoryA),
       env.DB.prepare(
         `INSERT INTO actions_runs (id,repository_id,commit_oid,workflow,path,source_ref,created_by,created_at,executor)
          VALUES (?,?,?,'build','ci.yml','refs/heads/main',?,?,'runner')`

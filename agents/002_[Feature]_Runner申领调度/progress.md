@@ -1,2 +1,12 @@
 # Progress
 - 创建隔离实现分支 codex/runner-scheduling，基于 5697d93，未改变原设计分支。
+- 后端、broker、面板分别在独立 worktree 实现。合并共享申领契约与稳定历史游标，11 项解析/适配单元测试通过。
+- 安装根目录和 Web 锁定依赖，并为子 worktree 提供忽略的依赖 junction。
+- 通过 GitHub branches/main API 确认 protected=false，当前远端 main 为 e6a6957；验证后按用户规则合并并推送 main。
+- AMD2 安装 Node v24.22.1 与官方 runner v2.338.0，下载包分别通过官方 SHA-256 校验；Runner.Listener --version 返回 2.338.0。服务尚未注册启动。
+- 当前仓库与本机 Development 未找到生产 operator 配置；用户提示可能在 MacBook。等待可用连接/配置位置，不以 dry-run 代替生产验证。
+- 用户提供生产 operator 文件，核对域名正确并确认本机已有相同 Cloudflare 账户 OAuth 权限。生产 D1 仅待 0047，已成功执行 8 条语句，17.46ms。
+- 用户批准临时 admin PAT 接入。通过现有 SSO 正常刷新 recent auth 后创建临时令牌，注册 AMD2 profile；只在严格 ACL 临时文件和 SSH stdin 传递，未输出令牌值。注册完成立即撤销；验证旧令牌 HTTP 401，删除临时文件。
+- AMD2 profile 为 owner 作用域，附加 oci-light 标签，预算 maxJobMinutes=60 / dailyMinutes=240 / cost=10，私有状态由专用用户持有。服务已安装并通过 systemd-analyze verify，尚未启动。
+- 共享两个队列的原子申领、预算、排序老化、隔离以及概览权限和分页 D1 定向测试合并后通过；Web/i18n 9 项定向测试通过，Web production build 通过。全量 Worker 585 项在最后面板补充前通过；后续完整测试将再验证新增回归。
+- 本机 build 聚合脚本受 Windows pnpm spawn 限制，逐项验证 Web 与 7 个非容器 Worker dry-run 成功，Actions 使用 containers-rollout=none 验证 Worker bundle 成功；未重建既有容器镜像。

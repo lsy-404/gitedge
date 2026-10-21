@@ -167,10 +167,7 @@ export function evaluateRunnerCandidate(
   const claim = parseJobClaim(labels, candidate.default_minutes);
   const reasons = new Set<string>();
   if (!labels || !claim.valid) reasons.add("claim-invalid");
-  if (
-    runner.repository_id !== null &&
-    candidate.repository_id !== runner.repository_id
-  )
+  if (runner.repository_id !== null && candidate.repository_id !== runner.repository_id)
     reasons.add("scope");
   if (labels) {
     const available = parseLabels(runner.labels_json) ?? [];

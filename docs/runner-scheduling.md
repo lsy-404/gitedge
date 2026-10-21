@@ -1,6 +1,6 @@
 # Runner 申领分配算法与查看面板 — 设计稿
 
-> 状态：设计已确认（尚未实现） · 2026-10-21
+> 状态：已实现，部署验证中 · 2026-10-21
 
 ## 1. 现状
 
@@ -21,14 +21,14 @@
 
 唯一同时适用于 GitEdge workflow 与 GitHub webhook 作业的通道是 `runs-on` 标签，因此用**保留前缀标签**表达申领，其余标签仍按原规则做子集匹配。
 
-| 标签 | 含义 | 判定 |
-| --- | --- | --- |
-| `self-hosted`、`linux`、`x64`、`arm64`、`macos`、`windows`、自定义标签 | 普通标签（系统、架构、用途） | 必须 ⊆ runner 标签（不变） |
-| `need-mem-<n>g` / `need-mem-<n>m` | 最少**可用**内存 | `capacity.memFreeMb ≥ n` |
-| `need-cpu-<n>` | 最少逻辑核 | `capacity.cpus ≥ n` |
-| `need-disk-<n>g` | 工作目录所在盘最少可用空间 | `capacity.diskFreeMb ≥ n` |
-| `need-tool-<name>` | 工具链，如 `docker`、`node`、`pnpm`、`python`、`go`、`rust` | `name ∈ capacity.tools` |
-| `need-time-<n>m` | 预计最长耗时（预算用），GitHub 作业也可声明 | 参见预算约束；同时作为本地执行截止时间 |
+| 标签                                                                   | 含义                                                        | 判定                                   |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------- | -------------------------------------- |
+| `self-hosted`、`linux`、`x64`、`arm64`、`macos`、`windows`、自定义标签 | 普通标签（系统、架构、用途）                                | 必须 ⊆ runner 标签（不变）             |
+| `need-mem-<n>g` / `need-mem-<n>m`                                      | 最少**可用**内存                                            | `capacity.memFreeMb ≥ n`               |
+| `need-cpu-<n>`                                                         | 最少逻辑核                                                  | `capacity.cpus ≥ n`                    |
+| `need-disk-<n>g`                                                       | 工作目录所在盘最少可用空间                                  | `capacity.diskFreeMb ≥ n`              |
+| `need-tool-<name>`                                                     | 工具链，如 `docker`、`node`、`pnpm`、`python`、`go`、`rust` | `name ∈ capacity.tools`                |
+| `need-time-<n>m`                                                       | 预计最长耗时（预算用），GitHub 作业也可声明                 | 参见预算约束；同时作为本地执行截止时间 |
 
 - 解析为纯函数 `parseJobClaim(labels) → { labels, memMb, cpus, diskMb, tools, minutes }`；无法解析的 `need-*` 标签视为**不可满足**（作业等待并显示“无法识别的申领”），不静默忽略。
 - 默认值：未声明内存时按 `512 MB` 申领（低于此的节点视为不可用）；未声明时间时 GitEdge 用 workflow 的 `timeoutMinutes`，GitHub 作业用 360。
@@ -42,18 +42,23 @@ broker 每次 `claim` 时上报（新增 `RunnerClaimInputSchema`，全部可选
 ```jsonc
 {
   "capacity": {
-    "os": "linux", "arch": "x64",
-    "cpus": 4, "load1": 0.42,            // os.loadavg()[0]，Windows 为 null
-    "memTotalMb": 3900, "memFreeMb": 630,// os.freemem()（Linux 读 MemAvailable）
-    "diskFreeMb": 18000,                 // statfs(工作目录)
+    "os": "linux",
+    "arch": "x64",
+    "cpus": 4,
+    "load1": 0.42, // os.loadavg()[0]，Windows 为 null
+    "memTotalMb": 3900,
+    "memFreeMb": 630, // os.freemem()（Linux 读 MemAvailable）
+    "diskFreeMb": 18000, // statfs(工作目录)
     "tools": ["node", "pnpm", "docker"], // 启动时探测 + 每 10 分钟刷新
-    "slots": 1, "busy": 0
+    "slots": 1,
+    "busy": 0,
   },
-  "budget": {                            // 来自 broker profile 配置，可选
-    "maxJobMinutes": 60,                 // 单作业上限
-    "dailyMinutes": 240,                 // 滚动 24 小时累计执行上限
-    "cost": 10                           // 相对成本 0–100，越低越优先
-  }
+  "budget": {
+    // 来自 broker profile 配置，可选
+    "maxJobMinutes": 60, // 单作业上限
+    "dailyMinutes": 240, // 滚动 24 小时累计执行上限
+    "cost": 10, // 相对成本 0–100，越低越优先
+  },
 }
 ```
 
@@ -168,24 +173,53 @@ CREATE TABLE actions_runner_deferrals (  -- 作业等待原因快照（每作业
 ```ts
 interface RunnerOverview {
   generatedAt: number;
-  runners: Array<RegisteredRunner & {
-    state: "idle" | "busy" | "held" | "offline" | "revoked"; // offline: lastSeen > 60 s
-    capacity: RunnerCapacity | null; capacityReportedAt: number | null;
-    budget: RunnerBudget | null; usedMinutes24h: number;
-    heldUntil: number | null; consecutiveFailures: number;
-    current: { kind: "gitedge" | "github"; id: string; repository: string; startedAt: number } | null;
-    stats24h: { success: number; failure: number; cancelled: number; busyMinutes: number };
-    samples: Array<{ minute: number; load1: number | null; memFreeMb: number | null; busy: boolean }>; // ≤ 96 点（15 min 聚合）
-  }>;
+  runners: Array<
+    RegisteredRunner & {
+      state: "idle" | "busy" | "held" | "offline" | "revoked"; // offline: lastSeen > 60 s
+      capacity: RunnerCapacity | null;
+      capacityReportedAt: number | null;
+      budget: RunnerBudget | null;
+      usedMinutes24h: number;
+      heldUntil: number | null;
+      consecutiveFailures: number;
+      current: {
+        kind: "gitedge" | "github";
+        id: string;
+        repository: string;
+        startedAt: number;
+      } | null;
+      stats24h: { success: number; failure: number; cancelled: number; busyMinutes: number };
+      samples: Array<{
+        minute: number;
+        load1: number | null;
+        memFreeMb: number | null;
+        busy: boolean;
+      }>; // ≤ 96 点（15 min 聚合）
+    }
+  >;
   github: Array<{
-    connectionId: string; repository: string; remote: string;   // owner/name
-    enabled: boolean; runnerEnabled: boolean;
-    errorCode: string | null; failureCount: number; lastSyncedAt: number | null;
-    queued: number; oldestQueuedAt: number | null; pendingCleanup: number;
+    connectionId: string;
+    repository: string;
+    remote: string; // owner/name
+    enabled: boolean;
+    runnerEnabled: boolean;
+    errorCode: string | null;
+    failureCount: number;
+    lastSyncedAt: number | null;
+    queued: number;
+    oldestQueuedAt: number | null;
+    pendingCleanup: number;
     lastJobAt: number | null;
   }>;
-  queue: Array<{ kind; id; repository; labels: string[]; claim: JobClaim; createdAt: number;
-                 blockedBy: Record<string /*runnerId*/, string[] /*reason codes*/> }>;
+  queue: Array<{
+    kind;
+    id;
+    repository;
+    labels: string[];
+    claim: JobClaim;
+    createdAt: number;
+    blockedBy: Record<string /*runnerId*/, string[] /*reason codes*/>;
+  }>;
   truncated: boolean;
 }
 ```

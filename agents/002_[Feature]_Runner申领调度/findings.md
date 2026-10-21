@@ -2,4 +2,10 @@
 - 唯一执行依据为 docs/runner-scheduling.md，源提交 5697d93；当前设计 budget 是 maxJobMinutes / dailyMinutes / relative cost，不额外添加未在稿内确认的真实月费账本。
 - 稿内旧 broker 的无申领兼容规则是用户明确批准的局部例外。
 - 原 F: 主检出处于 design/runner-scheduling，保留其未跟踪 agents 审计；实现从设计提交另建 worktree。
-- AMD2 已有 gitedge-runner 用户及基础依赖，无 Node 与 runner 注册。GitEdge 已登录，注册需要现有 admin API。
+- AMD2 已有 gitedge-runner 用户、基础依赖、Node 24 与官方 runner。GitEdge 已登录，尚未创建注册凭据。
+- 历史页使用 timestamp/kind/id 复合不透明游标避免同毫秒记录跨页丢失，保留初次数字 before 参数；这是实现确定分页所需的契约细化。
+- PowerShell 同时给 Get-Content 传位置 Path 和 LiteralPath 导致读取失败，改为仅 LiteralPath；未影响源码。运行环境安装脚本保存为 LF 后通过 scp 执行，避免此前嵌套 heredoc 的 CRLF 结束符问题。
+- 全套单元测试 421 passed / 1 failed：Git transfer truncated response 恢复测试收到 Windows Git 的 end of response with 96 bytes missing。独立 detached e6a6957 基线 worktree 定向重现完全相同失败，未修改该无关路径或降低断言。
+- 合并 broker 后发现 GitEdge jobClaim 的 try 块作用域错误以及原始 need-* 标签未传给 Runner.Server，要求原实现分支修复；已合并回归测试与修复。通用 systemd 单元不硬编码小机器 CPU/内存限制，目标机可单独设置。
+- test:web 全套出现既有 Windows file:///logo.svg createRequire 错误，面板 agent 在独立 e6a6957 基线复现；另有本次新增动态 i18n key 断言失败，属于本次应修复内容，已交原实现分支处理。
+- pnpm run build 的 Node spawnSync('pnpm') 在 Windows 不能启动；独立 e6a6957 基线相同失败。手动运行 Web production build 成功、7 个非容器 Worker dry-run 成功。Actions dry-run 因本机没有 Docker CLI 不能构建未变动的镜像；不擅自安装 Docker，继续尝试仅验证 Worker 的官方 containers-rollout=none 选项。

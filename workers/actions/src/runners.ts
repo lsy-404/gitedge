@@ -534,9 +534,7 @@ async function claim(request: Request, env: RunnerEnv, runner: RunnerRow): Promi
   if (!input.success) return errorResponse(400, "bad_request", "Invalid runner capacity report.");
   if (!env.AUTH) return errorResponse(503, "internal_error", "Job authentication is unavailable.");
   const now = Date.now();
-  const capacity = input.data.capacity
-    ? RunnerCapacitySchema.parse(input.data.capacity)
-    : null;
+  const capacity = input.data.capacity ? RunnerCapacitySchema.parse(input.data.capacity) : null;
   const budget = input.data.budget ? RunnerBudgetSchema.parse(input.data.budget) : null;
   if (capacity || budget) {
     await env.DB.prepare(
@@ -601,8 +599,26 @@ async function claim(request: Request, env: RunnerEnv, runner: RunnerRow): Promi
       peers = await runnerPeersForJob(env, fresh, candidate.repository_id, now);
       peerCache.set(candidate.repository_id, peers);
     }
-    if (betterPeerExists(peers, evaluated.claim.labels, evaluated.claim, cap, budgetData, used, candidate.created_at, now)) {
-      await saveRunnerDeferral(env, candidate.kind, candidate.id, fresh.id, ["peer-preferred"], now);
+    if (
+      betterPeerExists(
+        peers,
+        evaluated.claim.labels,
+        evaluated.claim,
+        cap,
+        budgetData,
+        used,
+        candidate.created_at,
+        now
+      )
+    ) {
+      await saveRunnerDeferral(
+        env,
+        candidate.kind,
+        candidate.id,
+        fresh.id,
+        ["peer-preferred"],
+        now
+      );
       continue;
     }
     const leaseToken = randomHex(32);
@@ -619,7 +635,15 @@ async function claim(request: Request, env: RunnerEnv, runner: RunnerRow): Promi
     if (!claimed) continue;
     await clearRunnerDeferral(env, candidate.kind, candidate.id);
     if (candidate.kind === "github") {
-      const response = await claimGithubRunner(env, fresh, candidate.id, evaluated.claim, leaseToken, leaseHash, now);
+      const response = await claimGithubRunner(
+        env,
+        fresh,
+        candidate.id,
+        evaluated.claim,
+        leaseToken,
+        leaseHash,
+        now
+      );
       if (response) return response;
       continue;
     }
@@ -639,7 +663,8 @@ async function claim(request: Request, env: RunnerEnv, runner: RunnerRow): Promi
       const credential = z
         .object({ data: z.object({ token: z.string().regex(/^ge_job_[0-9a-f]{64}$/) }) })
         .safeParse(body);
-      if (!response.ok || !credential.success) throw new Error("Job credential could not be issued.");
+      if (!response.ok || !credential.success)
+        throw new Error("Job credential could not be issued.");
       await publishCheck(env, runDetails(row));
       return dataResponse({
         run: {
@@ -663,14 +688,18 @@ async function claim(request: Request, env: RunnerEnv, runner: RunnerRow): Promi
       const failedAt = Date.now();
       const failed = await env.DB.prepare(
         "UPDATE actions_runner_runs SET status='completed',conclusion='failure',completed_at=?,log='The job credential could not be issued.' WHERE run_id=? AND lease_hash=? AND status='running' RETURNING run_id"
-      ).bind(failedAt, row.id, leaseHash).first();
+      )
+        .bind(failedAt, row.id, leaseHash)
+        .first();
       if (failed) await recordRunnerFailure(env, fresh.id, failedAt);
       await env.DB.prepare("UPDATE actions_job_tokens SET revoked_at=? WHERE run_id=?")
-        .bind(failedAt, row.id).run();
+        .bind(failedAt, row.id)
+        .run();
       const completed = await getRunnerRun(env, row.id);
       if (completed) await publishCheck(env, completed);
       createLogger(env.LOG_LEVEL, { service: "runner-broker" }).error(
-        "runner:job-credential-failed", { runId: row.id }
+        "runner:job-credential-failed",
+        { runId: row.id }
       );
       return errorResponse(503, "internal_error", "The job credential could not be issued.");
     }
