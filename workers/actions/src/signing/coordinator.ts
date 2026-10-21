@@ -13,6 +13,7 @@ import {
   macosVerificationSchema,
 } from "../../../../packages/contracts/signing-native.mjs";
 import { readJsonLimited } from "../../../../src/worker/common/readText";
+import { createLogger } from "../../../../src/worker/common/logger";
 import type {
   SigningEnv,
   SigningExecutionHooks,
@@ -109,12 +110,12 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
       "UPDATE signing_requests SET expires_at=created_at+? WHERE expires_at=0",
       6 * 24 * 60 * 60 * 1000
     );
-    void this.scheduleExpiry().catch((error) =>
-      console.warn(
-        JSON.stringify({
-          event: "signing_expiry_schedule_failed",
-          errorType: error instanceof Error ? error.name : "unknown",
-        })
+    ctx.waitUntil?.(
+      this.scheduleExpiry().catch((error) =>
+        createLogger(undefined, { service: "actions-signing", doId: ctx.id.toString() }).warn(
+          "signing:expiry-schedule-failed",
+          { errorType: error instanceof Error ? error.name : "unknown" }
+        )
       )
     );
   }
@@ -244,9 +245,7 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
     return saved ? macosVerificationSchema.parse(JSON.parse(saved.verification_json)) : null;
   }
 
-  async create(
-    raw: unknown
-  ): Promise<{
+  async create(raw: unknown): Promise<{
     request: ReturnType<SigningCoordinator["public"]>;
     created: boolean;
     dispatch: ReturnType<SigningCoordinator["dispatch"]>;
@@ -302,11 +301,13 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
         now,
         now + 6 * 24 * 60 * 60 * 1000
       );
-      void this.scheduleExpiry().catch((error) =>
-        console.warn(
-          JSON.stringify({
-            event: "signing_expiry_schedule_failed",
+      this.ctx.waitUntil?.(
+        this.scheduleExpiry().catch((error) =>
+          createLogger(undefined, {
+            service: "actions-signing",
+            doId: this.ctx.id.toString(),
             requestId: input.requestId,
+          }).warn("signing:expiry-schedule-failed", {
             errorType: error instanceof Error ? error.name : "unknown",
           })
         )
@@ -779,7 +780,7 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
     const key = `signing/${row.owner_id}/${row.repository_id}/${id}/${row.current_stage}.zip`;
     const completed = await this.env.SIGNING_ARTIFACTS.get(key);
     if (completed) {
-      const hash = new crypto.DigestStream("SHA-256");
+      const hash = new DigestStream("SHA-256");
       await completed.body.pipeTo(hash);
       const actual = `sha256:${Array.from(new Uint8Array(await hash.digest), (value) => value.toString(16).padStart(2, "0")).join("")}`;
       if (completed.size === upload.size && actual === upload.digest) {
@@ -818,7 +819,7 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
       await this.env.SIGNING_ARTIFACTS.delete(key);
       throw new Error("signing_output_invalid");
     }
-    const digest = new crypto.DigestStream("SHA-256");
+    const digest = new DigestStream("SHA-256");
     await object.body.pipeTo(digest);
     const actual = Array.from(new Uint8Array(await digest.digest), (value) =>
       value.toString(16).padStart(2, "0")

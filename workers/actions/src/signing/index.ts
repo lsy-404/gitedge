@@ -67,7 +67,7 @@ export async function reconcileSigningRequests(
 ): Promise<{ queued: number; skipped: number; failed: number }> {
   const candidates = await env.DB.prepare(
     `SELECT s.request_id AS requestId,s.owner_id AS ownerId,s.repository_id AS repositoryId,s.run_id AS runId,
-    s.profile_revision AS profileRevision,s.platform
+    s.profile_revision AS profileRevision,s.platform,s.last_reconciled_at AS lastReconciledAt
     FROM actions_signing_runs s JOIN actions_runner_runs r ON r.run_id=s.run_id
     JOIN actions_signing_profiles p ON p.owner_id=s.owner_id AND p.repository_id=s.repository_id AND p.revision=s.profile_revision
     WHERE s.platform='macos' AND s.reconcile_state='pending' AND p.revoked_at IS NULL AND (
@@ -78,7 +78,7 @@ export async function reconcileSigningRequests(
       )
       AND NOT EXISTS (SELECT 1 FROM actions_signing_runs newer WHERE newer.request_id=s.request_id AND newer.owner_id=s.owner_id
         AND (newer.generation>s.generation OR (newer.generation=s.generation AND newer.created_at>s.created_at)))
-  ORDER BY s.created_at DESC LIMIT 100`
+  ORDER BY COALESCE(s.last_reconciled_at,0),s.created_at DESC LIMIT 20`
   ).all<{
     requestId: string;
     ownerId: string;
@@ -86,6 +86,7 @@ export async function reconcileSigningRequests(
     runId: string;
     profileRevision: string;
     platform: string;
+    lastReconciledAt: number | null;
   }>();
   const seen = new Set<string>();
   let queued = 0,
@@ -96,6 +97,21 @@ export async function reconcileSigningRequests(
     if (seen.has(key)) continue;
     seen.add(key);
     try {
+      const touched = await env.DB.prepare(
+        `UPDATE actions_signing_runs SET last_reconciled_at=?
+        WHERE request_id=? AND owner_id=? AND last_reconciled_at IS ? AND reconcile_state='pending'`
+      )
+        .bind(
+          Date.now(),
+          candidate.requestId,
+          candidate.ownerId,
+          candidate.lastReconciledAt ?? null
+        )
+        .run();
+      if (touched.meta.changes === 0) {
+        skipped++;
+        continue;
+      }
       const profileRow = await env.DB.prepare(
         `SELECT 1 AS active FROM actions_signing_profiles
         WHERE owner_id=? AND repository_id=? AND revision=? AND revoked_at IS NULL`
@@ -330,7 +346,7 @@ async function verifiedObject(
     await object?.body.cancel();
     return false;
   }
-  const sink = new crypto.DigestStream("SHA-256");
+  const sink = new DigestStream("SHA-256");
   await object.body.pipeTo(sink);
   const actual = Array.from(new Uint8Array(await sink.digest), (value) =>
     value.toString(16).padStart(2, "0")
@@ -488,7 +504,14 @@ export async function handleSigningRoute(
           "signing_host_unverified",
           "No owner-approved dedicated signing host is available."
         );
-      const source = await executionHooks.verifySource(user, repository.id, profile, submission);
+      const source = await executionHooks.verifySource(
+        user,
+        repository.id,
+        profile,
+        submission,
+        request.headers.get("X-Run-Identity"),
+        new URL(request.url).origin
+      );
       if (!source)
         return errorResponse(
           422,
@@ -873,10 +896,18 @@ export async function handleSigningMachineRoute(
         .object({
           digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
           size: z.number().int().positive().max(2_000_000_000),
+          runId: z.string().uuid(),
+          leaseToken: z.string().min(1).max(4096),
         })
         .strict()
         .parse(await readJsonLimited(request, 4096));
       const { digest, size } = body;
+      if (body.runId !== context.runId)
+        return errorResponse(
+          403,
+          "forbidden",
+          "The output lease does not match the active signing run."
+        );
       const transfer = await machineRpc(
         env,
         context.ownerId,
@@ -919,7 +950,7 @@ export async function handleSigningMachineRoute(
         return errorResponse(400, "bad_request", "Output part range and digest are required.");
       const { readable, writable } = new FixedLengthStream(target.expected);
       let received = 0;
-      const hasher = new crypto.DigestStream("SHA-256");
+      const hasher = new DigestStream("SHA-256");
       const [toUpload, toHash] = request.body.tee();
       const hashDone = toHash.pipeTo(hasher);
       const counted = toUpload.pipeThrough(
