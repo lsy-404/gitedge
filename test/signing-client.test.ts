@@ -3,7 +3,7 @@ import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { signingRequestClient } from "../scripts/signing/request.mjs";
+import { githubSourceIdentity, signingRequestClient } from "../scripts/signing/request.mjs";
 
 const repositoryId = "a9daf3ca-68c5-46eb-bc75-fd8250e9cd6c";
 const request = {
@@ -21,6 +21,7 @@ const request = {
   outputDigest: null,
   outputSize: null,
   createdAt: 1,
+  expiresAt: Date.now() + 86_400_000,
   completedAt: 2,
 };
 
@@ -31,11 +32,13 @@ describe("signing submission client", () => {
       origin: "https://forge.example.com",
       repositoryId,
       token: "scoped-secret",
+      sourceIdentity: async () => "signed.source.identity",
       fetcher: async (url, options) => {
         calls++;
         expect(url.searchParams.get("repositoryId")).toBe(repositoryId);
         expect(options.headers.Authorization).toBe("Bearer scoped-secret");
         expect(options.headers["Idempotency-Key"]).toBe("repeatable-request-001");
+        expect(options.headers["X-Run-Identity"]).toBe("signed.source.identity");
         return Response.json({ data: { request } });
       },
     });
@@ -63,6 +66,61 @@ describe("signing submission client", () => {
     expect(() =>
       signingRequestClient({ origin: "http://forge.example.com", repositoryId, token: "secret" })
     ).toThrow("HTTPS");
+  });
+
+  it("requests source identity for the exact Gateway audience", async () => {
+    const value = await githubSourceIdentity(
+      "https://forge.example.com",
+      {
+        ACTIONS_ID_TOKEN_REQUEST_URL:
+          "https://run-actions-1.actions.githubusercontent.com/token?api-version=2",
+        ACTIONS_ID_TOKEN_REQUEST_TOKEN: "runtime-secret",
+      },
+      async (url, options) => {
+        expect(url.searchParams.get("audience")).toBe("https://forge.example.com");
+        expect(options.headers.Authorization).toBe("Bearer runtime-secret");
+        expect(options.redirect).toBe("error");
+        return Response.json({ value: "signed.source.identity" });
+      }
+    );
+    expect(value).toBe("signed.source.identity");
+  });
+
+  it("rejects an untrusted identity endpoint before sending the runtime token", async () => {
+    let called = false;
+    await expect(
+      githubSourceIdentity(
+        "https://forge.example.com",
+        {
+          ACTIONS_ID_TOKEN_REQUEST_URL:
+            "https://actions.githubusercontent.com.attacker.example/token",
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: "runtime-secret",
+        },
+        async () => {
+          called = true;
+          return Response.json({ value: "signed.source.identity" });
+        }
+      )
+    ).rejects.toThrow("endpoint");
+    expect(called).toBe(false);
+  });
+
+  it("fails closed when identity configuration or its bounded response is invalid", async () => {
+    await expect(
+      githubSourceIdentity("https://forge.example.com", {
+        ACTIONS_ID_TOKEN_REQUEST_TOKEN: "secret",
+      })
+    ).rejects.toThrow("incomplete");
+    await expect(
+      githubSourceIdentity(
+        "https://forge.example.com",
+        {
+          ACTIONS_ID_TOKEN_REQUEST_URL: "https://token.actions.githubusercontent.com/token",
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: "secret",
+        },
+        async () => new Response("x".repeat(65_537))
+      )
+    ).rejects.toThrow("invalid");
   });
 
   it.each([true, false])(

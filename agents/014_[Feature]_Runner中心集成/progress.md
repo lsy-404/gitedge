@@ -16,3 +16,4 @@
 - 已通过真实API确认匿名仓库/文件均404，临时cron已移除且D1 schedules=0；已保存浏览器cron成功证据，main最新7d6c023 CI 39692813429全部成功。
 - 新增CI签名请求客户端，校验canonical提交结构、幂等键、精确Runner范围及下载digest/size；4项行为测试通过，Node24直接执行确认环境凭据门槛。
 - 集成签名阶段审阅发现queued→start、success→lease完成、profile policyDigest遗漏、全局source token多租户授权等实际断点，已委派分别修复并增加真实DO/D1/R2流程覆盖；未以孤立mock测试代替切换验证。
+Source client now forwards fresh GitHub OIDC source proof with exact Gateway audience; bounded JSON responses reuse the shared reader. Seven client tests pass. Added new signing bucket lifecycle configuration and per-request expiry fixtures.

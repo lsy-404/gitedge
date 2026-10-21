@@ -1,0 +1,11 @@
+{
+  "rules": [
+    {
+      "id": "signing-artifact-retention",
+      "enabled": true,
+      "conditions": { "prefix": "signing/" },
+      "deleteObjectsTransition": { "condition": { "type": "Age", "maxAge": 604800 } },
+      "abortMultipartUploadsTransition": { "condition": { "type": "Age", "maxAge": 86400 } }
+    }
+  ]
+}

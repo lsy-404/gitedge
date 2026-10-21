@@ -39,6 +39,9 @@ importers:
       isomorphic-git:
         specifier: ^1.42.6
         version: 1.42.6
+      jose:
+        specifier: 6.2.10
+        version: 6.2.10
       memfs:
         specifier: ^4.80.0
         version: 4.80.0

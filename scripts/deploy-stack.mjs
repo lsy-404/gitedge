@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   dryRunOperatorConfig,
   loadOperatorConfig,
@@ -133,7 +133,25 @@ function ensureAssetBuckets(configs) {
     )
       return false;
   }
-  return true;
+  const signingBucket = readConfig(configs.actions).r2_buckets.find(
+    (entry) => entry.binding === "SIGNING_ARTIFACTS"
+  );
+  return run(
+    "pnpm",
+    [
+      "exec",
+      "wrangler",
+      "r2",
+      "bucket",
+      "lifecycle",
+      "set",
+      signingBucket.bucket_name,
+      "--file",
+      fileURLToPath(new URL("../workers/actions/signing-artifact-lifecycle.json", import.meta.url)),
+      "--force",
+    ],
+    { cloudflare: true }
+  );
 }
 
 function ensureGithubSyncQueue(configs) {

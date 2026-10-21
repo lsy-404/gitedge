@@ -12,8 +12,59 @@ import {
   SigningRequestSchema,
   SigningSubmissionSchema,
 } from "../../packages/contracts/src/signing.ts";
+import { readJsonLimited } from "../../src/worker/common/readText.ts";
 
-export function signingRequestClient({ origin, repositoryId, token, fetcher = fetch }) {
+export async function githubSourceIdentity(origin, env = process.env, fetcher = fetch) {
+  const configured = env.GITEDGE_SOURCE_IDENTITY;
+  if (configured) {
+    if (configured.length > 20_000 || /\s/.test(configured))
+      throw new Error("Invalid source identity.");
+    return configured;
+  }
+  const endpoint = env.ACTIONS_ID_TOKEN_REQUEST_URL;
+  const token = env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+  if (!endpoint && !token) return undefined;
+  if (!endpoint || !token) throw new Error("GitHub source identity configuration is incomplete.");
+  const url = new URL(endpoint);
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.port ||
+    url.hash ||
+    !url.hostname.endsWith(".actions.githubusercontent.com")
+  )
+    throw new Error("Invalid GitHub source identity endpoint.");
+  url.searchParams.set("audience", new URL(origin).origin);
+  const response = await fetcher(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    redirect: "error",
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error(`GitHub source identity failed (HTTP ${response.status}).`);
+  }
+  const identity = await readJsonLimited(response, 65_536);
+  if (
+    !identity ||
+    typeof identity !== "object" ||
+    typeof identity.value !== "string" ||
+    !identity.value ||
+    identity.value.length > 20_000 ||
+    /\s/.test(identity.value)
+  )
+    throw new Error("GitHub returned an invalid source identity.");
+  return identity.value;
+}
+
+export function signingRequestClient({
+  origin,
+  repositoryId,
+  token,
+  fetcher = fetch,
+  sourceIdentity = async () => undefined,
+}) {
   const base = new URL(origin);
   if (
     base.protocol !== "https:" ||
@@ -42,25 +93,9 @@ export function signingRequestClient({ origin, repositoryId, token, fetcher = fe
       await response.body?.cancel();
       throw new Error(`Signing request failed (HTTP ${response.status}).`);
     }
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error("Signing returned no response.");
-    const chunks = [];
-    let bytes = 0;
-    try {
-      while (true) {
-        const item = await reader.read();
-        if (item.done) break;
-        bytes += item.value.byteLength;
-        if (bytes > 65_536) {
-          await reader.cancel();
-          throw new Error("Signing response exceeds its limit.");
-        }
-        chunks.push(item.value);
-      }
-    } finally {
-      reader.releaseLock();
-    }
-    const value = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    const value = await readJsonLimited(response, 65_536);
+    if (!value || typeof value !== "object")
+      throw new Error("Signing returned an invalid response.");
     return value.data;
   }
   function requestId(id) {
@@ -72,12 +107,19 @@ export function signingRequestClient({ origin, repositoryId, token, fetcher = fe
       const input = SigningSubmissionSchema.parse(raw);
       if (!/^[A-Za-z0-9_.-]{16,128}$/.test(idempotencyKey))
         throw new Error("Invalid idempotency key.");
+      const identity = await sourceIdentity();
+      if (
+        identity &&
+        (typeof identity !== "string" || identity.length > 20_000 || /\s/.test(identity))
+      )
+        throw new Error("Invalid source identity.");
       const result = await json(endpoint(""), {
         method: "POST",
         headers: {
           ...headers(),
           "Content-Type": "application/json",
           "Idempotency-Key": idempotencyKey,
+          ...(identity ? { "X-Run-Identity": identity } : {}),
         },
         body: JSON.stringify(input),
       });
@@ -161,6 +203,7 @@ export async function main(args = process.argv.slice(2)) {
     origin: values.origin,
     repositoryId: values.repository,
     token: process.env.GITEDGE_SIGNING_TOKEN,
+    sourceIdentity: () => githubSourceIdentity(values.origin),
   });
   const command = positionals[0];
   let state;

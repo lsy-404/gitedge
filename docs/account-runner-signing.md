@@ -22,6 +22,8 @@ Keep signing profiles in `.gitedge/signing/<name>.yml` within Runner. The profil
 
 Source policy identifies permitted GitHub repository IDs, workflow path, artifact name, actor IDs, events and branch/tag names. GitHub is used to validate the source build and download its archive. Signing execution does not dispatch a GitHub workflow.
 
+Without `releaseTagPattern`, a source build must come from its repository's default branch. A release profile additionally checks its approved tag pattern, the exact `v<version>` tag and default-branch ancestry. Release submissions require GitHub Actions OIDC proof for that source run. Grant the source job `id-token: write`; the CLI obtains a fresh identity with the Gateway origin as its audience. A caller integrating the client directly supplies `sourceIdentity`, or sets `GITEDGE_SOURCE_IDENTITY` for the CLI. Identity tokens are never part of the stored request.
+
 Use the signing profile panel to approve a profile and install platform credential JSON. Install a separate GitHub source credential for the same profile with purpose `github-source` and JSON `{ "token": "..." }`. This credential must have read access to the approved source repositories; another account's source integration is never used. Credential writes and removal require recent human authentication. The panel exposes configuration metadata, never stored secret values. Certificate material is encrypted by Actions and is issued only to the approved machine with a current request/run/lease binding. Finalization does not receive the signing certificate.
 
 ## Submit from a workflow
@@ -81,3 +83,5 @@ All paths below are under `/api/actions` on the Gateway. Pass the private Runner
 | GET    | `/signing/requests/:id/download`      | Download verified final output                            |
 
 Machine callbacks are separate. They require the registered runner credential and matching native run lease; caller tokens and ordinary job credentials cannot authorize them. Existing account-runner capacity, cancellation, history and repository admission limits apply to signing stages.
+
+Signing requests have a six-day deadline. The dedicated signing artifact bucket retains source and output objects for seven days and aborts unfinished multipart uploads after one day. Request metadata remains in history; expired downloads return 410. Import verified outputs into release storage before their retention period ends.
