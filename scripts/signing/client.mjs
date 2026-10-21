@@ -117,11 +117,23 @@ function actionBody(context, fields = {}) {
   return { runId: context.runId, leaseToken: context.leaseToken, ...fields };
 }
 
+function requestSignal(signal) {
+  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
 async function requestJson(
   context,
   action,
   fields,
-  { fetchImpl, method = "POST", expectedStatus = 200, sleep = defaultSleep, retry = false } = {}
+  {
+    fetchImpl,
+    method = "POST",
+    expectedStatus = 200,
+    sleep = defaultSleep,
+    retry = false,
+    signal,
+  } = {}
 ) {
   const send = async () => {
     const response = await fetchImpl(requestPath(context, action), {
@@ -129,7 +141,7 @@ async function requestJson(
       redirect: "error",
       headers: { ...identityHeaders(context), "content-type": "application/json" },
       body: method === "GET" ? undefined : JSON.stringify(actionBody(context, fields)),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: requestSignal(signal),
     });
     return readAction(response, expectedStatus);
   };
@@ -147,11 +159,16 @@ async function requestJson(
   }
 }
 
-export function createSigningClient({ context, fetchImpl = fetch, sleep = defaultSleep } = {}) {
+export function createSigningClient({
+  context,
+  fetchImpl = fetch,
+  sleep = defaultSleep,
+  signal,
+} = {}) {
   const identity = parseSigningContext(context);
   let currentLeaseExpiresAt = identity.leaseExpiresAt;
   const request = (action, fields, options) =>
-    requestJson(identity, action, fields, { fetchImpl, sleep, ...options });
+    requestJson(identity, action, fields, { fetchImpl, sleep, signal, ...options });
 
   const start = async () => {
     const result = await request("start", {});
@@ -207,7 +224,7 @@ export function createSigningClient({ context, fetchImpl = fetch, sleep = defaul
             method: "GET",
             redirect: "error",
             headers,
-            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+            signal: requestSignal(signal),
           });
           if (!response.ok) {
             if (transientStatus(response.status)) throw new Error("transient");
@@ -314,7 +331,7 @@ export function createSigningClient({ context, fetchImpl = fetch, sleep = defaul
             method: "PUT",
             redirect: "error",
             duplex: "half",
-            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+            signal: requestSignal(signal),
             headers: {
               ...identityHeaders(identity),
               "content-type": "application/octet-stream",
@@ -574,7 +591,12 @@ export async function runSigning({
   const abortController = new AbortController();
   try {
     context = await contextReader(contextFile);
-    const client = createSigningClient({ context, fetchImpl, sleep });
+    const client = createSigningClient({
+      context,
+      fetchImpl,
+      sleep,
+      signal: abortController.signal,
+    });
     await mkdir(outputParent, { recursive: true, mode: 0o700 });
     work = await mkdtemp(path.join(outputParent, "gitedge-signing-"));
     await chmod(work, 0o700);
@@ -676,6 +698,7 @@ export async function runSigning({
     await client.complete(bundle, verification);
     return { requestId: context.requestId, outputDigest: bundle.digest, outputSize: bundle.size };
   } catch (error) {
+    if (heartbeatError) throw new ClientError("HEARTBEAT_FAILED");
     if (error instanceof ClientError) throw error;
     const failure = new ClientError("SIGNING_FAILED");
     failure.cause = error;
