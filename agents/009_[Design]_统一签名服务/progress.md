@@ -1,6 +1,6 @@
 # 操作记录
 
-- 2026-10-21：读取 `C:\Users\User\.codex\skills\agent-mode\SKILL.md`、仓库 `AGENTS.md`、`agents/project.md` 与 `agents/tasks.md`；检查 worktree 和 git 状态。工作树初始干净，分支 `codex/sign-service-planning`，HEAD `7d5cdda82b97eb7accf46ac96ef326e98caa1fe9`。
-- 2026-10-21：检查本地 GitEdge 的用户 Git 签名钥匙管理/验证入口；核对 `F:\Development\lsy-404`，路径不存在。
-- 2026-10-21：通过 GitHub connector 查询 signing-center、public/private executor 的协调器、runner workflow、策略和调用脚本。只读；没有查询运行日志、派发 workflow、读取 secrets 或变更远端状态。
-- 2026-10-21：创建本任务 `/agents` 的 task_plan.md、findings.md、progress.md；未运行测试（只读调查且未改产品代码）。
+- 2026-10-21：按只读方式调查 GitEdge 基线 `7d5cdda82b97eb7accf46ac96ef326e98caa1fe9`、signing-center 默认分支 `d1f97fb0635ab770851e0f69bfbce8a6fe10956c` 和已确认调用方；只记录凭据名称/职责，不读取秘密值。
+- 2026-10-21：响应后续架构选择，目标改为 GitEdge Actions 拥有签名策略、请求状态、传输、凭据授权与产物验证；每账户私有 Runner 仓库承载批准的非发现签名定义，专用账户 runner 执行。最终移除独立 signing-center 和 GitHub executor。
+- 2026-10-21：与 account-runner-repository 设计对齐：Runner 只跑自身 personal push/manual 工作流，既有项目 CI 保持原位；跨仓 source grant 精确审计，输入为已验证 archive；同 UID broker 不满足签名密钥隔离。
+- 只读方案变更：仅编辑 `docs/sign-executor-cutover.md` 与本 `/agents` 审计目录。无源代码、服务、仓库设置、凭据、runner 注册或签名请求修改；未运行测试/dispatch/deployment；提交前运行 `git diff --check`。

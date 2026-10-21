@@ -1,7 +1,8 @@
-# 统一签名服务调研计划
+# GitEdge Account Runner 签名迁移方案
 
-- [x] 读取 GitEdge 仓库说明、现有 agents 索引和 agent-mode 要求。
-- [x] 查明当前签名中心、公开/私有执行器仓库及服务端执行选择边界。
-- [x] 追踪可确认的真实调用方、传输契约和密钥/凭据归属。
-- [x] 整理需要产品决策的边界；不修改应用代码、服务、凭据或其他仓库。
-- [x] 记录来源、版本和未能访问的本地路径；不运行测试。
+- [x] 读取 agent-mode 与仓库规则，按只读审计流程调查。
+- [x] 核对现有 signing-center 契约、三平台执行要求及 IRIS-Build、Epilogue、Oblivionis 的实际调用点。
+- [x] 核对 GitEdge Actions runner 注册、调度、workflow 发现、执行 broker、token/lease 与 artifact 限制。
+- [x] 按最新目标编写 GitEdge Actions + per-account private Runner 的最终架构、依赖缺口、跨仓改动和切换计划。
+- [x] 明确 dedicated runner host/OS 隔离是前置条件；不实施跨仓生产切换。
+- [ ] 父任务审阅后再决定后续实施拆分。
