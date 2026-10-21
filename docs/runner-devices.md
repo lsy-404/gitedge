@@ -1,44 +1,27 @@
 # GitEdge runner device handoff
 
-Copy the common prompt and one device block to Codex on that device. It authorizes local inspection and configuration only; do not send credentials or messages.
-
-## Common prompt
+Copy this prompt to Codex on the target device and set `DEVICE` to `IONOS`, `localwin`, or `localmac`.
 
 ```text
-Configure the GitEdge Actions broker on this device using the device block below. Work on this host only; do not SSH to other hosts or send messages.
+DEVICE=IONOS
 
-GitEdge: https://gitedge.voidcarve.com, owner lsy-404
+Configure or verify the GitEdge Actions broker on this device only. Do not SSH to another host, send messages, or expose credentials.
+
+GitEdge origin: https://gitedge.voidcarve.com
+Namespace owner: lsy-404
 Source: https://github.com/lsy-404/gitedge.git, branch main
 
-Inspect the existing checkout, broker state/profile, registration, official Actions runner, service/task, capacity, and CLI help first. Preserve local work. Upgrade the existing checkout by fast-forwarding origin/main only when clean and safe; never reset, stash, overwrite, or create a duplicate registration. Use Node.js 24+ and the repository's YAML dependency. Use the official runner matching the actual OS/architecture; report actual OS, architecture, CPUs, load, memory, work-disk space, and tools detected by broker probes. Keep one execution slot and exactly one active broker for this host; never spoof host labels.
+Inspect the existing checkout, broker profile/state, server registration, official GitHub Actions runner, service/task, capacity, and current CLI before changing anything. Preserve local work; fast-forward origin/main only when the checkout is clean and safe. Never reset, stash, overwrite, or create a duplicate registration. Use Node.js 24+ and the repository's YAML dependency. Use the official runner matching the actual OS and architecture, report the broker's real capacity and detected tools, and keep one execution slot and one active broker for this host. Do not spoof host labels.
 
-Reuse the current owner registration/profile. If a change requires re-registration, establish a safe reuse/revoke sequence before acting. A short-lived admin-scoped bootstrap PAT may be used only through a protected local input/environment; never print or paste secrets, and revoke it after successful verification. Keep state, credentials, and logs private: 0600 files/0700 directories on Unix, equivalent current-user-only ACL on Windows. Do not register ordinary CI with a signing key.
+Reuse the existing owner registration/profile. If re-registration is required, determine a safe reuse/revoke sequence first. Use a short-lived admin-scoped bootstrap PAT only through protected local input/environment; never print or paste secrets, and revoke it after successful verification. Keep broker state, credentials, and logs private (0600 files/0700 directories on Unix; equivalent current-user-only ACL on Windows). Ordinary runners must not receive signing credentials or signing-service private keys. Signing work is planned for one private execution repository; leave server signing configuration unchanged.
 
-This is an ordinary runner. Do not create or restore public/private exec profiles, place signing-service private keys here, or alter server signing configuration. A dedicated signing pool will be handled separately.
+Honor broker retention of retired artifacts/logs for 7 days and 1 GiB combined. Active directories, credentials, and runtime data are excluded. Confirm this behavior exists in the checked-out release; do not invent a retention flag or manually prune files. Do not set max-job or daily-minute quotas unless explicitly requested. For a new or changed profile, report an explicit supported relative `--cost` value of 0 or 10, chosen from measured comparative capacity; do not alter unrelated profiles.
 
-Use the broker's supported current retention behavior: retire logs/artifacts after 7 days and keep their combined retired total at or below 1 GiB; leave active directories, credentials, and runtime data untouched. If this checkout/release does not implement that policy, do not invent a flag or clean files manually; report it. Do not set max-job or daily-minute quotas unless explicitly requested. Send an explicit relative `--cost` value of 0 or 10 for new/updated profile reporting; choose based on measured comparative capacity, report the choice, and preserve unrelated registrations. Never reduce existing larger swap/pagefile settings.
+For DEVICE=IONOS: this is the separate existing IONOS VPS, not Tokyo02. Inspect its existing state and never apply Tokyo02-only settings. Confirm the upgraded main checkout contains `scripts/runner-host-setup.sh`, then run `sudo bash scripts/runner-host-setup.sh` to apply Linux defaults: 8 GiB swap and journald capped at 128 MiB / 7 days. The script requires root, needs at least 12 GiB free to add swap, and preserves existing swap of 8 GiB or more. If the script is absent, stop and report it; do not guess a substitute. Do not pass `--oci-idle-load`; that optional policy is for Tokyo02 only. Reuse systemd if already configured.
 
-Use only implemented service commands: `pnpm run runner-broker -- service install|start|stop|status ...` supports systemd on Linux and LaunchAgent on macOS. On Windows, inspect existing service/task state; the broker has no Windows service command. If persistence is needed, use native Task Scheduler for the logged-in user with a safe logon/restart policy and current-user-only credential ACL. Do not invent broker service commands.
+For DEVICE=localwin: verify actual Windows/architecture labels. Preserve any existing service or scheduled task. The broker has no Windows service command; if persistence is needed, use native Task Scheduler for the logged-in user with a safe logon/restart policy and current-user-only credential ACL. Consider an 8–16 GiB pagefile only when applicable, never reducing a larger managed setting.
 
-For a persistent service, configure journald limits of 128 MiB and 7 days where applicable. Prepare capacity only as specified in the device block. Verify one dashboard entry with matching real labels/capacity/tools/cost, then run one small matching job and complete or cancel it within 5 minutes. Confirm the run used this host and logs contain no secrets. Report checkout revision, profile identity (no secrets), probes/capacity, retention behavior, service/task, dashboard, smoke-job and bootstrap-token revocation results. Do not commit or push host configuration or secret/state files. Stop and report before overwriting state, revoking unrelated registrations, changing server policy, or exposing secrets.
-```
+For DEVICE=localmac: verify actual macOS/architecture labels and preserve the existing lsy-404 registration, checkout, state, and LaunchAgent. Keep historical signing-specific labels until the separate signing migration is verified; do not create duplicate registrations or signing profiles. Keep OS-managed swap.
 
-## Device blocks
-
-### IONOS Linux VPS
-
-```text
-Device: IONOS Linux VPS, node02; keep it online full-time. Verify actual labels are linux/x64. Do not set a time or daily quota. Configure 8 GiB swap if disk space permits, and set journald to 128 MiB / 7 days. Reuse the existing systemd broker service and state.
-```
-
-### localwin Windows
-
-```text
-Device: localwin Windows. Verify actual labels are windows/x64. Inspect and preserve existing service/task configuration. If persistence is needed, use Task Scheduler for the logged-in user; do not claim broker Windows-service support. Consider an 8–16 GiB pagefile only when applicable, preserving larger managed settings.
-```
-
-### localmac existing macOS broker
-
-```text
-Device: localmac, existing macOS broker. Verify actual labels are macos/arm64. Preserve the current lsy-404 owner registration, checkout, state, and LaunchAgent; inspect and safely update the existing identity to remove historical signing-specific labels only if supported. Do not create duplicate registrations or signing profiles. Keep OS-managed swap.
+Linux systemd and macOS LaunchAgent use the supported `pnpm run runner-broker -- service install|start|stop|status ...` commands. Do not claim Windows service support or invent broker commands. After configuration, verify the dashboard shows exactly one broker for this host with matching real labels, capacity, tools, and cost. Run one small matching job and complete or cancel it within 5 minutes; confirm it ran on this host and logs contain no secrets. Return checkout revision, profile identity (no secrets), probes/capacity, retention, service/task, dashboard, smoke-job, and bootstrap-token revocation results. Do not commit or push host configuration or secret/state files. Stop and report before destructive state changes, unrelated revocation, server policy changes, or secret exposure.
 ```
