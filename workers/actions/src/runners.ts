@@ -887,8 +887,44 @@ export async function runnerMachineRequest(request: Request, env: RunnerEnv): Pr
   )
     .bind(now, runner.id, now - 30_000)
     .run();
-  if (signingMachineRoute)
-    return handleSigningMachineCallback(request, env as RunnerEnv & SigningEnv, runner.id);
+  if (signingMachineRoute) {
+    const response = await handleSigningMachineCallback(
+      request,
+      env as RunnerEnv & SigningEnv,
+      runner.id
+    );
+    const signingComplete =
+      request.method === "POST" && /\/runner\/signing\/requests\/[0-9a-f-]{36}\/complete$/i.test(pathname);
+    if (signingComplete && response.status === 202) {
+      const runId = request.headers.get("X-Runner-Run-Id") ?? "";
+      const leaseToken = request.headers.get("X-Runner-Lease-Token") ?? "";
+      const hash = await sha256Hex(leaseToken);
+      const now = Date.now();
+      const updated = await env.DB.prepare(
+        `UPDATE actions_runner_runs SET status='completed',conclusion='success',completed_at=?,
+          log='Signing stage output verified by coordinator.',log_truncated=0
+         WHERE run_id=? AND runner_id=? AND lease_hash=? AND status='running' AND cancel_requested=0
+           AND lease_expires_at>? AND started_at+timeout_minutes*60000>? RETURNING run_id`
+      )
+        .bind(now, runId, runner.id, hash, now, now)
+        .first();
+      if (!updated) {
+        const prior = await env.DB.prepare(
+          `SELECT 1 FROM actions_runner_runs WHERE run_id=? AND runner_id=? AND lease_hash=?
+           AND status='completed' AND conclusion='success'`
+        )
+          .bind(runId, runner.id, hash)
+          .first();
+        if (!prior)
+          return errorResponse(409, "conflict", "The signing runner lease is no longer active.");
+      } else {
+        await clearRunnerFailures(env, runner.id);
+      }
+      const run = await getRunnerRun(env, runId);
+      if (run) await publishCheck(env, run);
+    }
+    return response;
+  }
   const operation = new URL(request.url).pathname.split("/")[2];
   if (operation === "github") return githubRunnerLease(request, env, runner);
   if (operation === "claim") {

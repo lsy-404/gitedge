@@ -7,4 +7,5 @@
 - [x] 增加 signing-only machine route，按 token、registration、数据库 lease 和审批上下文验证后调用 signing DO。
 - [x] 更新 Runner broker 处理普通/签名响应与签名专用执行路径，拒绝标签自选 class 和普通工作流冒充签名。
 - [x] 在 `/test` 覆盖 owner/outsider/label spoof/错误 class/错误 repo/platform/过期 lease/撤销/普通 queue 正例。
-- [x] 运行相关 Worker tests、类型检查与 broker checks，审查差异并本地提交。
+- [ ] 为签名阶段增加可信失败回执，保证 SDK 执行错误也结束 Actions lease。
+- [ ] 与父级完成 Actions/gateway 路由及 binding 接线后运行集成测试并本地提交最终改动。

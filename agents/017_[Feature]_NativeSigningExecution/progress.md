@@ -6,3 +6,5 @@
 - 2026-10-21：完成 runner execution class、owner recent-auth 批准与撤销 API、签名队列绑定和原子 claim、可信 machine callback、签名专用 broker 分流及私有 context ACL。
 - 2026-10-21：验证 `typecheck:actions` 通过；runner claim/callback worker tests 6/6、signing coordinator tests 6/6、scheduler tests 9/9、signing SDK protocol tests 9/9 通过；`node --check scripts/runner-broker.mjs` 及 `--help` 通过。
 - 2026-10-21：Actions 与 gateway 入口仍需父线程接入签名 callback path 和 signing bindings；当前阶段未在真实专用 host 执行签名。
+- 2026-10-21：签名 Coordinator 接受 `/complete` 的 202 后，Actions 同步结束对应 stage lease 并发布检查；相同 lease 的成功 complete 可幂等重放。真实 D1 Worker 测试覆盖首次提交和重放。
+- 2026-10-21：待 core 增加签名失败操作并在 Worker/broker 间闭环；父级负责 Actions/gateway 路由和 signing binding 接线。

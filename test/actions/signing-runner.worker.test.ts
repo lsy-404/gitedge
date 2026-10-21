@@ -230,7 +230,7 @@ describe("owner-approved signing runner execution class", () => {
       env.DB.prepare(
         `INSERT INTO actions_signing_runs(run_id,request_id,owner_id,repository_id,profile_revision,workflow_oid,platform,stage,input_digest,
           operator_approved_by,operator_approved_at,generation,nonce,created_at)
-         VALUES(?,?,?,?,?,?,'windows','sign',?,?,?,1,?,?)`
+         VALUES(?,?,?,?,?,?,'windows','windows_sign',?,?,?,1,?,?)`
       ).bind(
         signingRunId,
         requestId,
@@ -337,22 +337,53 @@ describe("owner-approved signing runner execution class", () => {
         null
       )
     ).toBe(true);
+    const outputBytes = new TextEncoder().encode("verified signing archive");
+    const outputDigest = `sha256:${await sha256Hex(new TextDecoder().decode(outputBytes))}`;
+    const outputKey = `signing/${owner.id}/${repositoryId}/${requestId}/output.zip`;
+    const profileRevision = "d".repeat(40);
+    const signingProfile = {
+      platform: "windows",
+      workflowOid: "e".repeat(40),
+      policyDigest: `sha256:${"f".repeat(64)}`,
+      policy: {
+        project: {
+          max_artifact_bytes: 1024,
+          windows: { bundle_id: "com.example.app", architecture: "x64", installer: "none", portable: false },
+        },
+        azure: { subject: "CN=Example Publisher" },
+      },
+    };
     const machineEnv = {
       ...actionEnv,
       SIGNING_COORDINATORS: {
         getByName: () => ({
           fetch: async (rpc: Request) => {
             const operation = new URL(rpc.url).pathname.split("/").at(-1);
+            const body = (await rpc.json()) as { context?: { requestId: string }; payload?: unknown };
+            if (operation === "profile")
+              return Response.json({
+                data: {
+                  profile: signingProfile,
+                  sourceDigest: digest,
+                  sourceCommitOid: "e".repeat(40),
+                  version: "1.2.3",
+                },
+              });
+            if (operation === "output-target")
+              return Response.json({ data: { key: outputKey, digest: outputDigest, size: outputBytes.length } });
+            if (operation === "complete") return Response.json({ data: { state: "awaiting_source" } });
             return Response.json({
-              data:
-                operation === "profile"
-                  ? { profile: { platform: "windows" } }
-                  : { state: "running", manifest: { requestId } },
+              data: { state: "running", manifest: { requestId } },
             });
           },
         }),
       },
-      SIGNING_ARTIFACTS: {} as R2Bucket,
+      SIGNING_ARTIFACTS: {
+        get: async (key: string) =>
+          key === outputKey
+            ? { size: outputBytes.length, body: new Blob([outputBytes]).stream() }
+            : null,
+      } as unknown as R2Bucket,
       SIGNING_ENCRYPTION_KEY: "unused",
     } as RunnerEnv;
     const signingUrl = `https://actions.internal/runner/signing/requests/${requestId}/start`;
@@ -384,6 +415,60 @@ describe("owner-approved signing runner execution class", () => {
       machineEnv
     );
     expect(validLease.status).toBe(200);
+    const report = {
+      schema_version: 1,
+      request_id: requestId,
+      generation: 1,
+      stage: "windows_sign",
+      input_digest: digest,
+      recipe_sha: signingProfile.workflowOid,
+      policy_digest: signingProfile.policyDigest,
+      bundle_id: "com.example.app",
+      version: "1.2.3",
+      architecture: "x64",
+      subject: "CN=Example Publisher",
+      authenticode_verified: true,
+      timestamp_verified: true,
+      nested_signatures_verified: true,
+      files: [
+        { path: "product.exe", size: 1, sha256: "1".repeat(64) },
+      ],
+    };
+    const completed = await runnerMachineRequest(
+      new Request(`https://actions.internal/runner/signing/requests/${requestId}/complete`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${runnerToken}`,
+          "X-Runner-Run-Id": signingRunId,
+          "X-Runner-Lease-Token": signingLeaseToken,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ digest: outputDigest, size: outputBytes.length, verificationReport: report }),
+      }),
+      machineEnv
+    );
+    expect(completed.status).toBe(202);
+    const completedReplay = await runnerMachineRequest(
+      new Request(`https://actions.internal/runner/signing/requests/${requestId}/complete`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${runnerToken}`,
+          "X-Runner-Run-Id": signingRunId,
+          "X-Runner-Lease-Token": signingLeaseToken,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ digest: outputDigest, size: outputBytes.length, verificationReport: report }),
+      }),
+      machineEnv
+    );
+    expect(completedReplay.status).toBe(202);
+    const persisted = await env.DB.prepare(
+      "SELECT status,conclusion,completed_at FROM actions_runner_runs WHERE run_id=?"
+    )
+      .bind(signingRunId)
+      .first<{ status: string; conclusion: string; completed_at: number | null }>();
+    expect(persisted).toMatchObject({ status: "completed", conclusion: "success" });
+    expect(persisted?.completed_at).toBeTypeOf("number");
     const revoked = await runnerManagement(
       request(`/runners/${runnerId}/signing`, "DELETE"),
       actionEnv,

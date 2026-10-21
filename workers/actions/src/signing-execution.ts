@@ -51,7 +51,7 @@ export async function handleSigningMachineCallback(
   const now = Date.now();
   const row = await env.DB.prepare(
     `SELECT a.id AS run_id,a.repository_id,a.created_by AS owner_id,
-       j.status,j.runner_id,j.lease_hash,j.lease_expires_at,j.started_at,j.timeout_minutes,j.cancel_requested,
+       j.status,j.conclusion,j.runner_id,j.lease_hash,j.lease_expires_at,j.started_at,j.timeout_minutes,j.cancel_requested,
        s.request_id,s.stage,s.input_digest,s.workflow_oid,s.profile_revision,s.platform,s.generation,s.nonce,
        s.operator_approved_by,s.operator_approved_at,
        r.execution_class,r.signing_platform,r.dedicated_host_confirmed,r.operator_approved_by AS current_approved_by,
@@ -71,6 +71,7 @@ export async function handleSigningMachineCallback(
       repository_id: string;
       owner_id: string;
       status: string;
+      conclusion: string | null;
       runner_id: string;
       lease_hash: string;
       lease_expires_at: number | null;
@@ -104,10 +105,12 @@ export async function handleSigningMachineCallback(
       namespace_owner: string;
       disabled_at: number | null;
     }>();
+  const completedSuccessReplay =
+    match[2] === "complete" && row?.status === "completed" && row.conclusion === "success";
   if (
     !row ||
     row.run_id !== runId ||
-    row.status !== "running" ||
+    (row.status !== "running" && !completedSuccessReplay) ||
     row.runner_id !== runnerId ||
     row.lease_hash !== leaseHash ||
     row.lease_expires_at === null ||
