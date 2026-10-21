@@ -1,6 +1,6 @@
 import { runSqlScript } from "../support/database";
 import { env } from "cloudflare:workers";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import forge from "../../workers/forge/src/index";
 import { parseRunnerWorkflow } from "../../workers/actions/src/runner-workflow";
 import { FixtureArtifacts } from "../support/artifacts";
@@ -83,7 +83,127 @@ beforeAll(async () => {
   );
 });
 
+afterEach(() => vi.restoreAllMocks());
+
+beforeEach(() => {
+  const originalGet = FixtureArtifacts.prototype.get.bind(artifacts);
+  vi.spyOn(artifacts, "get").mockImplementation(async (name) => {
+    try {
+      return await originalGet(name);
+    } catch {
+      throw artifactsError("NOT_FOUND");
+    }
+  });
+});
+
+async function addOwner(id: string): Promise<void> {
+  await runSqlScript(
+    env.DB,
+    `INSERT INTO users (id, identifier, password_salt, password_hash, created_at) VALUES ('${id}','${id}','x','x',1);
+     INSERT INTO namespaces (id, slug, created_by, created_at, kind, display_name, description) VALUES ('${id}-ns','${id}','${id}',1,'personal','${id}','');
+     INSERT INTO namespace_memberships (namespace_id,user_id,created_at,role) VALUES ('${id}-ns','${id}',1,'owner');`
+  );
+}
+
+function artifactsError(code: "NOT_FOUND" | "INTERNAL_ERROR"): Error {
+  return Object.assign(new Error(code), { name: "ArtifactsError", code, numericCode: 1 });
+}
+
 describe("account Runner repository", () => {
+  it("recovers a failed creation after the lease expires and revokes the bootstrap token", async () => {
+    await addOwner("retry-owner");
+    const create = vi
+      .spyOn(artifacts, "create")
+      .mockRejectedValueOnce(artifactsError("INTERNAL_ERROR"));
+    expect((await call("/account-runner", "POST", "retry-owner", "retry-owner")).status).toBe(503);
+    expect((await call("/account-runner", "POST", "retry-owner", "retry-owner")).status).toBe(503);
+    expect(create).toHaveBeenCalledTimes(1);
+    await env.DB.prepare(
+      "UPDATE repositories SET updated_at = 1 WHERE namespace_id = 'retry-owner-ns'"
+    ).run();
+
+    // The first create failed before making a repository; let the fixture handle future calls.
+    create.mockRestore();
+    const recovered = await call("/account-runner", "POST", "retry-owner", "retry-owner");
+    expect(recovered.status).toBe(200);
+    const row = await env.DB.prepare(
+      "SELECT id FROM repositories WHERE namespace_id='retry-owner-ns'"
+    ).first<{ id: string }>();
+    const snapshot = artifacts.snapshot(`repo-${row!.id}`);
+    expect(snapshot.tokens).toHaveLength(1);
+    expect(snapshot.tokens[0].state).toBe("revoked");
+  });
+
+  it("reconciles an unknown create success by name without creating a duplicate", async () => {
+    await addOwner("unknown-owner");
+    vi.spyOn(artifacts, "create").mockRejectedValueOnce(artifactsError("INTERNAL_ERROR"));
+    vi.spyOn(artifacts, "get").mockImplementation(async (name) => {
+      const repository = artifacts.repositories.get(name);
+      if (repository) return FixtureArtifacts.prototype.get.call(artifacts, name);
+      throw artifactsError("NOT_FOUND");
+    });
+
+    expect((await call("/account-runner", "POST", "unknown-owner", "unknown-owner")).status).toBe(
+      503
+    );
+    const row = await env.DB.prepare(
+      "SELECT id FROM repositories WHERE namespace_id='unknown-owner-ns'"
+    ).first<{ id: string }>();
+    vi.restoreAllMocks();
+    await artifacts.create(`repo-${row!.id}`, { setDefaultBranch: "main" });
+    const create = vi.spyOn(artifacts, "create");
+    vi.spyOn(artifacts, "get").mockImplementation(async (name) => {
+      const repository = artifacts.repositories.get(name);
+      if (repository) return FixtureArtifacts.prototype.get.call(artifacts, name);
+      throw artifactsError("NOT_FOUND");
+    });
+    await env.DB.prepare("UPDATE repositories SET updated_at = 1 WHERE id = ?").bind(row!.id).run();
+    const recovered = await call("/account-runner", "POST", "unknown-owner", "unknown-owner");
+    expect(recovered.status).toBe(200);
+    expect(create).not.toHaveBeenCalled();
+    expect(artifacts.snapshot(`repo-${row!.id}`).tokens[0].state).toBe("revoked");
+  });
+
+  it("does not treat a generic not-found message as permission to create", async () => {
+    await addOwner("lookup-owner");
+    vi.spyOn(artifacts, "get").mockRejectedValue(new Error("Artifact repo not found"));
+    const create = vi.spyOn(artifacts, "create");
+    expect((await call("/account-runner", "POST", "lookup-owner", "lookup-owner")).status).toBe(
+      503
+    );
+    await env.DB.prepare(
+      "UPDATE repositories SET updated_at = 1 WHERE namespace_id='lookup-owner-ns'"
+    ).run();
+    expect((await call("/account-runner", "POST", "lookup-owner", "lookup-owner")).status).toBe(
+      503
+    );
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("does not publish metadata when bootstrap token revocation fails", async () => {
+    await addOwner("revoke-owner");
+    const originalGet = FixtureArtifacts.prototype.get.bind(artifacts);
+    vi.spyOn(artifacts, "get").mockImplementation(async (name) => {
+      const repository = artifacts.repositories.get(name);
+      if (!repository) throw artifactsError("NOT_FOUND");
+      const handle = await originalGet(name);
+      return new Proxy(handle, {
+        get(target, property, receiver) {
+          if (property === "revokeToken") return async () => false;
+          const value = Reflect.get(target, property, receiver);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    });
+    expect((await call("/account-runner", "POST", "revoke-owner", "revoke-owner")).status).toBe(
+      503
+    );
+    const row = await env.DB.prepare(
+      "SELECT id,artifact_name,remote FROM repositories WHERE namespace_id='revoke-owner-ns'"
+    ).first<{ id: string; artifact_name: string | null; remote: string | null }>();
+    expect(row).toMatchObject({ artifact_name: null, remote: null });
+    expect(artifacts.snapshot(`repo-${row!.id}`).tokens[0].state).toBe("active");
+  });
   it("reports an absent Runner and hides the owner’s state from other accounts", async () => {
     expect(await (await call("/account-runner", "GET")).json()).toMatchObject({
       data: { repository: null },

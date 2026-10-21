@@ -8,3 +8,6 @@
 - Actions workflow 仅 `workflow_dispatch`，用 `self-hosted`, `need-tool-node`, `need-time-5m` 通用标签；模板由运行时 `parseRunnerWorkflow` 解析通过。
 - Git 文件初始化先读取 main ref 并以其当前 OID 作 compare-and-swap；并发重复请求只在文件已存在时接受 Git 409，避免重复提交和无头覆盖。
 - 首轮测试暴露空 POST 体被误当作 JSON null（400），改为区分空体与非空 JSON；另修复测试 Git 服务对 `/repositories/:id/...` 路径段的解析。最终针对性 Worker suite 通过。
+- Pending account Runner rows use `updated_at` as a 30-second lease. A stale POST must atomically advance that timestamp before recovery; a fresh pending row remains unavailable.
+- Recovery uses `repo-${repositoryId}` as the deterministic Artifacts name. It calls `get` first, creates only after a standard Artifacts `NOT_FOUND`, revokes active tokens returned by `listTokens`, then conditionally publishes metadata for the lease it claimed.
+- Artifacts failures are logged with the repository ID, recovery phase and error code/name, without logging token values. A ready repository path never invokes token revocation. GET remains read-only.

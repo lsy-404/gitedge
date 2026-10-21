@@ -7,3 +7,5 @@
 - 2026-10-21：新增 Worker 行为测试覆盖空状态、并发 provision、重试复用、token 拒绝、个人名保留、组织仓库同名兼容、live/historical/import 冲突、数据库 invariant 和模板 workflow 实际解析。
 - 2026-10-21：`pnpm exec tsc --noEmit -p workers/forge/tsconfig.json` 通过；`pnpm exec vitest run --config vitest.config.ts test/forge/account-runner.worker.test.ts` 通过（6 tests）；`pnpm run check:migrations` 通过；`git diff --check` 通过。
 - 2026-10-21：本地提交 `464786fe160acbb2f5c21e827b1e4ddd03798255`，提交前扫描未发现被禁止的任务编号、署名或模型标记；分支领先 origin/main 1 个提交且工作区干净。
+- 2026-10-21：在恢复分支重构 Runner provisioning：30 秒 `updated_at` 租约与条件更新阻止并发接管；按 `repo-${id}` 先查找，只有标准 Artifacts `NOT_FOUND` 才创建；清理列表中的 active token 后才发布 metadata，已 ready 仓库走既有路径并修复计数器。
+- 2026-10-21：扩充账户 Runner Worker 测试，覆盖活动租约、创建失败重试、未知创建结果对账、不认可通用错误文本作为 NOT_FOUND，以及 token 吊销失败不发布 metadata。`pnpm exec vitest run --config vitest.config.ts test/forge/account-runner.worker.test.ts` 通过（10 tests）；`pnpm exec tsc --noEmit -p workers/forge/tsconfig.json` 与 `git diff --check` 通过。

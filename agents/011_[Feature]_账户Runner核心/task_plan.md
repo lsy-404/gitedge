@@ -7,3 +7,10 @@
 - [x] 在 `/test` 覆盖权限、并发、幂等与 slug/导入冲突。
 - [x] 运行有针对性的 Worker 测试与类型检查，修复本任务引入的问题。
 - [x] 提交本分支变更，不推送或合并。
+
+## Provision retry recovery
+
+- [x] Add a bounded provisioning lease and atomically claim expired pending records.
+- [x] Reconcile deterministic Artifacts names with `get` before `create`, revoke listed bootstrap tokens, then publish metadata.
+- [x] Cover transient failure/retry, unknown success, active-lease rejection, generic lookup errors, and token-revoke failure.
+- [x] Run focused worker tests, Forge typecheck and diff checks; commit locally without pushing.
