@@ -48,6 +48,7 @@ export const RepositorySchema = z.object({
   description: z.string(),
   visibility: z.enum(["public", "private"]),
   defaultBranch: z.string(),
+  systemKind: z.literal("account_runner").optional(),
   archived: z.boolean(),
   issuesEnabled: z.boolean(),
   pullsEnabled: z.boolean(),
