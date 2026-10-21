@@ -5,4 +5,5 @@
 - 02在原子执行锁保护下更新broker和预算，保留专用用户、profile ownership/mode；服务端D1确认cost10无时间额度，内存容量仍报告真实954MiB。
 - 远程验证低优先级openssl在runner槽占用时暂停，释放后恢复；常驻附加内存约3MiB。
 - 合并日志清理和设备文档分支；相关Vitest四文件44项通过，Node和Bash语法检查通过。
-- 提交GitHub轻量任务39673154832验证更新后的broker；最终结果待记录。
+- GitHub轻量任务39673154832成功，job119476010974；02 broker日志确认run e3dab534-6770-450b-bde7-484213d96acd success，执行后服务仍active。
+- GitHub API核实main protected=false，远端起始7d5cdda；本地按独立任务分支合并至main后推送。
