@@ -1,0 +1,15 @@
+name: Light runner verification
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: [self-hosted, linux, x64, oci-light, need-mem-512m, need-tool-node, need-time-5m]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: node test/runner-light.mjs
