@@ -56,6 +56,7 @@ describe("deployment isolation", () => {
       if (service === "actions")
         expect(config.r2_buckets).toEqual([
           { binding: "RELEASE_ASSETS", bucket_name: "gitedge-release-assets" },
+          { binding: "SIGNING_ARTIFACTS", bucket_name: "gitedge-signing-artifacts" },
         ]);
       if (service === "gateway") {
         expect(config.routes).toHaveLength(1);
