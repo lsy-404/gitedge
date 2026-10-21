@@ -1,13 +1,79 @@
-import { SigningMachineContextSchema, SigningSubmissionSchema, type SigningRequest, type SigningPlatform } from "../../../../packages/contracts/src/signing";
+import { SigningMachineContextSchema, SigningPlatformSchema, SigningProfileSchema, SigningReconcileDispatchSchema, SigningRequestSchema, SigningStageSchema, SigningSubmissionSchema, type SigningRequest } from "../../../../packages/contracts/src/signing";
 import { z } from "zod";
 import type { TrustedUser } from "../../../../packages/contracts/src/index";
 import { dataResponse, errorResponse } from "../../../../src/worker/common/http";
 import { SigningCoordinator, coordinator } from "./coordinator";
-import type { ApprovedSigningProfile, SigningEnv, SigningExecutionHooks } from "./types";
-export { createSigningExecutionHooks, installSigningCredentials, saveApprovedProfile } from "./services";
+import type { SigningEnv, SigningExecutionHooks } from "./types";
+import { installSigningCredentials, listApprovedProfiles, removeSigningCredentials, saveApprovedProfile, signingCredentialStatus } from "./services";
+export { createSigningExecutionHooks, installSigningCredentials, listApprovedProfiles, removeSigningCredentials, saveApprovedProfile } from "./services";
 
 export { SigningCoordinator };
 export type { SigningEnv, SigningExecutionHooks, SigningQueueInput } from "./types";
+
+const createdResponseSchema = z.object({
+  request: SigningRequestSchema,
+  created: z.boolean(),
+  dispatch: z.object({ profile: SigningProfileSchema, submission: SigningSubmissionSchema,
+    generation: z.number().int().positive(), nonce: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+    operatorApproval: z.object({ operatorApproved: z.literal(true), approvedBy: z.string().min(1), approvedAt: z.number().int().positive() }).strict() }).strict(),
+}).strict();
+const boundResponseSchema = z.object({ bound: z.boolean() }).strict();
+
+export async function reconcileSigningRequests(env: SigningEnv, hooks: SigningExecutionHooks): Promise<{ queued: number; skipped: number; failed: number }> {
+  const candidates = await env.DB.prepare(`SELECT s.request_id AS requestId,s.owner_id AS ownerId,s.repository_id AS repositoryId,
+    s.profile_revision AS profileRevision,s.platform
+    FROM actions_signing_runs s JOIN actions_runner_runs r ON r.run_id=s.run_id
+    WHERE s.platform='macos' AND (
+        (s.stage='sign' AND r.status='completed' AND r.conclusion='success')
+        OR (s.stage='finalize' AND r.status IN ('queued','running'))
+      )
+      AND NOT EXISTS (SELECT 1 FROM actions_signing_runs newer WHERE newer.request_id=s.request_id AND newer.owner_id=s.owner_id AND newer.run_id!=s.run_id)
+    ORDER BY s.created_at DESC LIMIT 100`).all<{ requestId: string; ownerId: string; repositoryId: string; profileRevision: string; platform: string }>();
+  const seen = new Set<string>();
+  let queued = 0, skipped = 0, failed = 0;
+  for (const candidate of candidates.results ?? []) {
+    const key = `${candidate.ownerId}:${candidate.requestId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    try {
+      const profileRow = await env.DB.prepare(`SELECT 1 AS active FROM actions_signing_profiles
+        WHERE owner_id=? AND repository_id=? AND revision=? AND revoked_at IS NULL`)
+        .bind(candidate.ownerId, candidate.repositoryId, candidate.profileRevision).first<{ active: number }>();
+      const platform = SigningPlatformSchema.parse(candidate.platform);
+      const approval = await hooks.verifySigningHost(candidate.ownerId, candidate.repositoryId, platform);
+      if (!profileRow || !approval?.operatorApproved || approval.approvedBy !== candidate.ownerId) { skipped++; continue; }
+      const nonce = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
+        .replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+      const stub = coordinator(env, candidate.ownerId);
+      const preparedResponse = await stub.fetch(new Request(`https://signing.internal/prepare-next-stage/${encodeURIComponent(candidate.requestId)}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...candidate, nonce }),
+      }));
+      const preparedBody = z.object({ data: z.object({ dispatch: SigningReconcileDispatchSchema.nullable() }).strict().nullable() }).strict().parse(await preparedResponse.json());
+      if (!preparedResponse.ok) throw new Error("signing_stage_prepare_failed");
+      const dispatch = preparedBody.data?.dispatch;
+      if (!dispatch) { skipped++; continue; }
+      if (dispatch.operatorApproval.approvedAt !== approval.approvedAt) { skipped++; continue; }
+      const run = await hooks.enqueue({
+        requestId: candidate.requestId, ownerId: candidate.ownerId, repositoryId: candidate.repositoryId,
+        workflowOid: dispatch.profile.workflowOid, workflowPath: dispatch.profile.workflowPath,
+        workflowSource: dispatch.profile.workflowSource, stage: dispatch.stage,
+        inputDigest: dispatch.inputDigest, platform: dispatch.profile.platform, generation: dispatch.generation,
+        nonce: dispatch.nonce, timeoutMinutes: dispatch.profile.timeoutMinutes,
+        sourceDigest: dispatch.submission.sourceDigest, profileRevision: dispatch.profile.revision,
+        operatorApproval: dispatch.operatorApproval,
+      });
+      const boundResponse = await stub.fetch(new Request(`https://signing.internal/bind-run/${encodeURIComponent(candidate.requestId)}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...candidate, runId: run.runId }),
+      }));
+      const bound = z.object({ bound: z.boolean() }).parse(await boundResponse.json());
+      if (!bound.bound) throw new Error("signing_stage_bind_failed");
+      queued++;
+    } catch { failed++; }
+  }
+  return { queued, skipped, failed };
+}
 
 async function ownedRunnerRepository(env: SigningEnv, userId: string, repositoryId?: string) {
   const sql = `SELECT r.id,r.namespace_id,r.created_by,r.visibility,r.archived,r.deleted_at,
@@ -21,13 +87,26 @@ async function ownedRunnerRepository(env: SigningEnv, userId: string, repository
     : env.DB.prepare(sql).bind(userId).first<{ id: string; namespace_id: string }>();
 }
 
-function bodyResponse<T>(response: Response): Promise<T> {
+async function bodyResponse<T>(response: Response, schema: z.ZodType<T>): Promise<T> {
   if (!response.ok) throw new Error("signing_state_unavailable");
-  return response.json() as Promise<T>;
+  return schema.parse(await response.json());
 }
 
-function signingObjectKey(ownerId: string, repositoryId: string, requestId: string, object: "source" | "output") {
+function signingObjectKey(ownerId: string, repositoryId: string, requestId: string, object: string) {
   return `signing/${ownerId}/${repositoryId}/${requestId}/${object}.zip`;
+}
+
+function recentHuman(user: TrustedUser): boolean {
+  return !user.job && !user.agentSession && !user.token && Number.isSafeInteger(user.recentAuthAt)
+    && user.recentAuthAt! <= Date.now() && Date.now() - user.recentAuthAt! <= 10 * 60_000;
+}
+
+function runnerAccess(user: TrustedUser, repositoryId: string, write: boolean): boolean {
+  if (user.agentSession) return false;
+  if (user.job) return user.job.repositoryId === repositoryId;
+  if (!user.token) return true;
+  const needed = write ? "repo:write" : "repo:read";
+  return user.token.scopes.includes(needed) && (!user.token.repositoryIds || user.token.repositoryIds.includes(repositoryId));
 }
 
 async function verifiedObject(env: SigningEnv, key: string, digest: string, size: number): Promise<boolean> {
@@ -36,8 +115,7 @@ async function verifiedObject(env: SigningEnv, key: string, digest: string, size
     await object?.body.cancel();
     return false;
   }
-  const DigestStream = (crypto as unknown as { DigestStream: new (algorithm: string) => WritableStream<Uint8Array> & { digest: Promise<ArrayBuffer> } }).DigestStream;
-  const sink = new DigestStream("SHA-256");
+  const sink = new crypto.DigestStream("SHA-256");
   await object.body.pipeTo(sink);
   const actual = Array.from(new Uint8Array(await sink.digest), value => value.toString(16).padStart(2, "0")).join("");
   return `sha256:${actual}` === digest;
@@ -51,15 +129,49 @@ export async function handleSigningRoute(
 ): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname.split("/").filter(Boolean);
-  if (path[0] !== "signing" || path[1] !== "requests")
+  if (path[0] !== "signing")
     return errorResponse(404, "not_found", "Signing endpoint was not found.");
-  if (!user || user.job || user.agentSession)
+  if (!user || user.agentSession)
     return errorResponse(403, "forbidden", "An account owner session is required.");
   try {
+    if (path[1] === "profiles") {
+      const repositoryId = url.searchParams.get("repositoryId") ?? "";
+      const repository = repositoryId ? await ownedRunnerRepository(env, user.id, repositoryId) : null;
+      if (!repository || !runnerAccess(user, repository.id, false)) return errorResponse(404, "not_found", "Signing profile was not found.");
+      if (request.method === "GET" && path.length === 2)
+        return dataResponse({ profiles: await listApprovedProfiles(env, user.id, repository.id) });
+      if (request.method === "POST" && path.length === 2) {
+        if (!recentHuman(user)) return errorResponse(403, "forbidden", "Recent owner authentication is required.");
+        const body = z.object({ name: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/) }).strict().parse(await request.json());
+        const profile = await saveApprovedProfile(env, user, repository.id, body.name);
+        return dataResponse({ name: profile.name, revision: profile.revision, platform: profile.platform, workflowOid: profile.workflowOid,
+          workflowPath: profile.workflowPath, workflowSource: profile.workflowSource, enabled: profile.enabled }, 201);
+      }
+      if (path.length === 4 && path[3] === "credentials" && (request.method === "GET" || request.method === "POST" || request.method === "DELETE")) {
+        const profileName = path[2]!;
+        if (request.method === "GET") {
+          const status = await signingCredentialStatus(env, user.id, repository.id, profileName);
+          return status ? dataResponse(status) : errorResponse(404, "not_found", "Signing profile was not found.");
+        }
+        if (!recentHuman(user)) return errorResponse(403, "forbidden", "Recent owner authentication is required.");
+        if (request.method === "POST") {
+          const body = z.object({ platform: SigningPlatformSchema, credentials: z.unknown() }).strict().parse(await request.json());
+          await installSigningCredentials(env, user.id, repository.id, profileName, body.platform, body.credentials);
+        } else {
+          const body = z.object({ platform: SigningPlatformSchema }).strict().parse(await request.json());
+          await removeSigningCredentials(env, user.id, repository.id, profileName, body.platform);
+        }
+        const status = await signingCredentialStatus(env, user.id, repository.id, profileName);
+        return status ? dataResponse(status) : errorResponse(404, "not_found", "Signing profile was not found.");
+      }
+      return errorResponse(405, "method_not_allowed", "Signing profile operation is not supported.");
+    }
+    if (path[1] !== "requests") return errorResponse(404, "not_found", "Signing endpoint was not found.");
     if (request.method === "POST" && path.length === 2) {
-      const repositoryId = url.searchParams.get("repositoryId") ?? undefined;
+      const repositoryId = url.searchParams.get("repositoryId") ?? user.job?.repositoryId;
+      if ((user.job || user.token) && !repositoryId) return errorResponse(400, "bad_request", "repositoryId is required.");
       const repository = await ownedRunnerRepository(env, user.id, repositoryId);
-      if (!repository) return errorResponse(503, "signing_runner_unavailable", "The private account Runner is unavailable.");
+      if (!repository || !runnerAccess(user, repository.id, true)) return errorResponse(503, "signing_runner_unavailable", "The private account Runner is unavailable.");
       const idempotencyKey = request.headers.get("Idempotency-Key") ?? "";
       if (!/^[A-Za-z0-9_.-]{16,128}$/.test(idempotencyKey))
         return errorResponse(400, "bad_request", "A valid idempotency key is required.");
@@ -70,23 +182,19 @@ export async function handleSigningRoute(
       const operatorApproval = await executionHooks.verifySigningHost(user.id, repository.id, profile.platform);
       if (!operatorApproval?.operatorApproved || operatorApproval.approvedBy !== user.id || !Number.isSafeInteger(operatorApproval.approvedAt))
         return errorResponse(503, "signing_host_unverified", "No owner-approved dedicated signing host is available.");
-      const source = await executionHooks.verifySource(user, submission);
+      const source = await executionHooks.verifySource(user, repository.id, profile, submission);
       if (!source)
         return errorResponse(422, "signing_source_not_allowed", "The source run is not authorized by the approved profile.");
       const generation = 1;
       const nonce = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
         .replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
       const stub = coordinator(env, user.id);
-      const created = await bodyResponse<{
-        request: SigningRequest;
-        created: boolean;
-        dispatch: { profile: ApprovedSigningProfile; submission: typeof submission; generation: number; nonce: string; operatorApproval: NonNullable<typeof operatorApproval> };
-      }>(await stub.fetch(new Request("https://signing.internal/create", {
+      const created = await bodyResponse(await stub.fetch(new Request("https://signing.internal/create", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
           requestId: crypto.randomUUID(), ownerId: user.id, repositoryId: repository.id,
-          idempotencyKey, profile, submission, generation, nonce,
+          idempotencyKey, profile, submission, generation, nonce, operatorApproval,
         }),
-      })));
+      })), createdResponseSchema);
       if (!created.created && created.request.state !== "accepted") return dataResponse({ request: created.request }, 200);
       const accepted = created.dispatch;
       if (created.request.profileRevision !== profile.revision || accepted.profile.revision !== profile.revision)
@@ -98,7 +206,7 @@ export async function handleSigningRoute(
           await env.SIGNING_ARTIFACTS.put(sourceKey, source.body, {
             customMetadata: { ownerId: user.id, repositoryId: repository.id, requestId: created.request.id, sha256: submission.sourceDigest, size: String(submission.sourceSize) },
           });
-        }
+        } else await source.body.cancel();
         if (!await verifiedObject(env, sourceKey, submission.sourceDigest, submission.sourceSize)) {
           await env.SIGNING_ARTIFACTS.delete(sourceKey);
           return errorResponse(422, "signing_source_digest_mismatch", "The source artifact did not match its validated digest and size.");
@@ -113,7 +221,7 @@ export async function handleSigningRoute(
         workflowOid: accepted.profile.workflowOid,
         workflowPath: accepted.profile.workflowPath,
         workflowSource: accepted.profile.workflowSource,
-        stage: accepted.profile.policy.stage as import("../../../../packages/contracts/src/signing").SigningStage,
+        stage: SigningStageSchema.parse(accepted.profile.policy.stage),
         inputDigest: accepted.submission.sourceDigest,
         platform: accepted.profile.platform,
         generation: accepted.generation,
@@ -123,10 +231,10 @@ export async function handleSigningRoute(
         profileRevision: accepted.profile.revision,
         operatorApproval: accepted.operatorApproval,
       });
-      const bound = await bodyResponse<{ bound: boolean }>(await stub.fetch(new Request(`https://signing.internal/bind-run/${created.request.id}`, {
+      const bound = await bodyResponse(await stub.fetch(new Request(`https://signing.internal/bind-run/${created.request.id}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ownerId: user.id, repositoryId: repository.id, runId: queued.runId }),
-      })));
+      })), boundResponseSchema);
       if (!bound.bound) return errorResponse(404, "not_found", "Signing request was not found.");
       return dataResponse({ request: { ...created.request, runId: queued.runId, state: "queued" } }, created.created ? 202 : 200);
     }
@@ -134,7 +242,7 @@ export async function handleSigningRoute(
       const repoParam = url.searchParams.get("repositoryId");
       if (!repoParam) return errorResponse(400, "bad_request", "repositoryId is required.");
       const repository = await ownedRunnerRepository(env, user.id, repoParam);
-      if (!repository) return errorResponse(404, "not_found", "Signing request was not found.");
+      if (!repository || !runnerAccess(user, repository.id, false)) return errorResponse(404, "not_found", "Signing request was not found.");
       const response = await coordinator(env, user.id).fetch(new Request(`https://signing.internal/requests/${encodeURIComponent(path[2]!)}`, {
         headers: { "X-Signing-Owner": user.id, "X-Signing-Repository": repository.id },
       }));
@@ -145,7 +253,7 @@ export async function handleSigningRoute(
       const repoParam = url.searchParams.get("repositoryId");
       if (!repoParam) return errorResponse(400, "bad_request", "repositoryId is required.");
       const repository = await ownedRunnerRepository(env, user.id, repoParam);
-      if (!repository) return errorResponse(404, "not_found", "Signing request was not found.");
+      if (!repository || !runnerAccess(user, repository.id, false)) return errorResponse(404, "not_found", "Signing request was not found.");
       const response = await coordinator(env, user.id).fetch(new Request(`https://signing.internal/requests/${encodeURIComponent(path[2]!)}`, {
         headers: { "X-Signing-Owner": user.id, "X-Signing-Repository": repository.id },
       }));
@@ -153,7 +261,7 @@ export async function handleSigningRoute(
       const state = value.request;
       if (!response.ok || !state || state.state !== "succeeded" || !state.outputDigest || !state.outputSize)
         return errorResponse(404, "not_found", "Signing output was not found.");
-      const key = signingObjectKey(user.id, repository.id, state.id, "output");
+      const key = signingObjectKey(user.id, repository.id, state.id, state.stage);
       const object = await env.SIGNING_ARTIFACTS.get(key);
       if (!object || object.size !== state.outputSize) return errorResponse(410, "gone", "Signing output is no longer available.");
       return new Response(object.body, { headers: objectHeaders(state.outputDigest, object.size) });
@@ -168,20 +276,25 @@ export async function handleSigningRoute(
   }
 }
 
-async function machineRpc<T>(env: SigningEnv, ownerId: string, id: string, operation: string, context: unknown, payload?: unknown): Promise<T> {
+async function machineRpc<T>(env: SigningEnv, ownerId: string, id: string, operation: string, context: unknown, schema: z.ZodType<T>, payload?: unknown): Promise<T> {
   const response = await coordinator(env, ownerId).fetch(new Request(`https://signing.internal/machine/${encodeURIComponent(id)}/${operation}`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ context, payload }),
   }));
-  const body = await response.json() as { data?: T; error?: string };
-  if (!response.ok || !body.data) throw new Error(body.error ?? "signing_state_unavailable");
-  return body.data;
+  const envelope = z.object({ data: z.unknown().optional(), error: z.string().optional() }).parse(await response.json());
+  if (!response.ok || envelope.data === undefined) throw new Error(envelope.error ?? "signing_state_unavailable");
+  return schema.parse(envelope.data);
 }
+
+const profileRpcSchema = z.object({ profile: SigningProfileSchema });
+const profileContextRpcSchema = profileRpcSchema.extend({ sourceDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/), sourceCommitOid: z.string().regex(/^[a-f0-9]{40}$/), version: z.string() });
+const objectTargetSchema = z.object({ key: z.string().min(1), digest: z.string().regex(/^sha256:[a-f0-9]{64}$/), size: z.number().int().positive() });
+const outputPartTargetSchema = z.object({ key: z.string().min(1), uploadId: z.string().min(1), expected: z.number().int().positive(), total: z.number().int().positive() });
 
 async function authorizeMachine(raw: unknown, id: string, env: SigningEnv, hooks: SigningExecutionHooks) {
   const parsed = SigningMachineContextSchema.safeParse(raw);
   if (!parsed.success || parsed.data.requestId !== id || parsed.data.leaseExpiresAt <= Date.now()) return null;
   try {
-    await machineRpc<{ profile: ApprovedSigningProfile }>(env, parsed.data.ownerId, id, "profile", parsed.data);
+    await machineRpc(env, parsed.data.ownerId, id, "profile", parsed.data, profileRpcSchema);
   } catch { return null; }
   const current = await hooks.verifySigningHost(parsed.data.ownerId, parsed.data.repositoryId, parsed.data.platform);
   if (!current?.operatorApproved || current.approvedBy !== parsed.data.ownerId
@@ -224,23 +337,23 @@ export async function handleSigningMachineRoute(
   if (!context) return errorResponse(403, "forbidden", "The active owner-approved signing lease is required.");
   try {
     if (operation === "start" && request.method === "POST") {
-      return dataResponse(await machineRpc(env, context.ownerId, id, "start", context));
+      return dataResponse(await machineRpc(env, context.ownerId, id, "start", context, z.object({ state: z.literal("running"), manifest: z.record(z.string(), z.unknown()) })));
     }
     if (operation === "heartbeat" && request.method === "POST") {
-      return dataResponse(await machineRpc(env, context.ownerId, id, "heartbeat", context));
+      return dataResponse(await machineRpc(env, context.ownerId, id, "heartbeat", context, z.object({ leaseExpiresAt: z.number().int().positive() })));
     }
     if (operation === "download" && request.method === "GET") {
       const objectName = new URL(request.url).searchParams.get("object") ?? "input";
       if (objectName !== "input" && objectName !== "template") return errorResponse(400, "bad_request", "Requested signing input object is invalid.");
-      const target = await machineRpc<{ key: string; digest: string; size: number }>(env, context.ownerId, id, "download", context, { object: objectName });
+      const target = await machineRpc(env, context.ownerId, id, "download", context, objectTargetSchema, { object: objectName });
       const start = parseRange(request.headers.get("Range"), target.size);
       const object = await env.SIGNING_ARTIFACTS.get(target.key, start ? { range: { offset: start } } : undefined);
       if (!object || object.size !== target.size) return errorResponse(409, "signing_object_unavailable", "The validated source archive is unavailable.");
       return new Response(object.body, { status: start ? 206 : 200, headers: objectHeaders(target.digest, target.size, start) });
     }
     if (operation === "authorize-sign" && request.method === "POST") {
-      const { profile } = await machineRpc<{ profile: ApprovedSigningProfile }>(env, context.ownerId, id, "profile", context);
-      await machineRpc(env, context.ownerId, id, "authorize-sign", context);
+      const { profile } = await machineRpc(env, context.ownerId, id, "profile", context, profileRpcSchema);
+      await machineRpc(env, context.ownerId, id, "authorize-sign", context, z.object({ authorized: z.literal(true) }));
       const grant = await hooks.authorizeCredentials(context, profile);
       if (!grant || grant.expiresAt <= Date.now() || grant.expiresAt > context.leaseExpiresAt || grant.expiresAt > Date.now() + 10 * 60_000)
         return errorResponse(503, "signing_credentials_unavailable", "A request-scoped signing credential grant is unavailable.");
@@ -253,7 +366,7 @@ export async function handleSigningMachineRoute(
       const size = body.size;
       if (!/^sha256:[a-f0-9]{64}$/.test(digest) || !Number.isSafeInteger(size) || !size || size < 1 || size > 2_000_000_000)
         return errorResponse(400, "bad_request", "Output digest and size are required.");
-      const transfer = await machineRpc(env, context.ownerId, id, "output-begin", context, { digest, size });
+      const transfer = await machineRpc(env, context.ownerId, id, "output-begin", context, z.object({ partSize: z.number().int().positive(), partCount: z.number().int().positive(), receivedParts: z.array(z.number().int().positive()), verified: z.boolean() }), { digest, size });
       return dataResponse(transfer);
     }
     if (operation === "output" && parts[5] === "parts" && parts[6] && request.method === "PUT") {
@@ -262,7 +375,7 @@ export async function handleSigningMachineRoute(
       if (!/^\d{1,10}$/.test(sizeHeader) || !request.body) return errorResponse(411, "length_required", "Output content length is required.");
       const size = Number(sizeHeader);
       const part = Number(parts[6]);
-      const target = await machineRpc<{ key: string; uploadId: string; expected: number; total: number }>(env, context.ownerId, id, "output-part", context, { part, length: size });
+      const target = await machineRpc(env, context.ownerId, id, "output-part", context, outputPartTargetSchema, { part, length: size });
       const start = (part - 1) * 8 * 1024 * 1024;
       const end = start + target.expected - 1;
       if (request.headers.get("Content-Range") !== `bytes ${start}-${end}/${target.total}`
@@ -270,8 +383,7 @@ export async function handleSigningMachineRoute(
         return errorResponse(400, "bad_request", "Output part range and digest are required.");
       const { readable, writable } = new FixedLengthStream(target.expected);
       let received = 0;
-      const DigestStream = (crypto as unknown as { DigestStream: new (algorithm: string) => WritableStream<Uint8Array> & { digest: Promise<ArrayBuffer> } }).DigestStream;
-      const hasher = new DigestStream("SHA-256");
+      const hasher = new crypto.DigestStream("SHA-256");
       const [toUpload, toHash] = request.body.tee();
       const hashDone = toHash.pipeTo(hasher);
       const counted = toUpload.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
@@ -289,21 +401,25 @@ export async function handleSigningMachineRoute(
       await hashDone;
       const partDigest = `sha256:${Array.from(new Uint8Array(await hasher.digest), value => value.toString(16).padStart(2, "0")).join("")}`;
       if (partDigest !== request.headers.get("X-Part-Digest")) return errorResponse(422, "signing_part_digest_mismatch", "Output part digest did not match.");
-      return dataResponse(await machineRpc(env, context.ownerId, id, "output-record", context, { part, etag: uploaded.etag, size }));
+      return dataResponse(await machineRpc(env, context.ownerId, id, "output-record", context, z.object({ part: z.number().int().positive(), receivedParts: z.array(z.number().int().positive()) }), { part, etag: uploaded.etag, size }));
     }
     if (operation === "output" && parts[5] === "complete" && request.method === "POST") {
-      const result = await machineRpc(env, context.ownerId, id, "output-complete", context);
+      const result = await machineRpc(env, context.ownerId, id, "output-complete", context, z.object({ digest: z.string().regex(/^sha256:[a-f0-9]{64}$/), size: z.number().int().positive(), verified: z.literal(true) }));
       return dataResponse(result);
     }
     if (operation === "complete" && request.method === "POST") {
       const body = await request.json() as { digest?: string; size?: number; verificationReport?: unknown };
-      const output = await machineRpc<{ key: string; digest: string; size: number }>(env, context.ownerId, id, "output-target", context);
+      const output = await machineRpc(env, context.ownerId, id, "output-target", context, objectTargetSchema);
       if (body.digest !== output.digest || body.size !== output.size || !await verifiedObject(env, output.key, output.digest, output.size))
         return errorResponse(422, "signing_output_invalid", "The output archive is missing or does not match its declared digest.");
-      const { profile, sourceDigest, sourceCommitOid, version } = await machineRpc<{ profile: ApprovedSigningProfile; sourceDigest: string; sourceCommitOid: string; version: string }>(env, context.ownerId, id, "profile", context);
-      if (!await hooks.verifyOutput({ context, profile, platform: profile.platform as SigningPlatform, sourceDigest, sourceCommitOid, version, outputDigest: output.digest, outputSize: output.size, report: body.verificationReport }))
+      const { profile, sourceDigest, sourceCommitOid, version } = await machineRpc(env, context.ownerId, id, "profile", context, profileContextRpcSchema);
+      if (!await hooks.verifyOutput({ context, profile, platform: profile.platform, sourceDigest, sourceCommitOid, version, outputDigest: output.digest, outputSize: output.size, report: body.verificationReport }))
         return errorResponse(422, "signing_verification_failed", "The platform verification report was rejected.");
-      return dataResponse(await machineRpc(env, context.ownerId, id, "complete", context, { digest: body.digest, size: body.size, verificationReport: body.verificationReport }), 202);
+      return dataResponse(await machineRpc(env, context.ownerId, id, "complete", context, z.object({ state: SigningRequestSchema.shape.state }), { digest: body.digest, size: body.size, verificationReport: body.verificationReport }), 202);
+    }
+    if (operation === "fail" && request.method === "POST") {
+      const body = z.object({ code: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/).optional() }).strict().parse(await request.json());
+      return dataResponse(await machineRpc(env, context.ownerId, id, "fail", context, z.object({ state: z.literal("failed") }), body));
     }
     return errorResponse(405, "method_not_allowed", "Signing operation is not supported.");
   } catch (error) {
