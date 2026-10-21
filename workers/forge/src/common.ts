@@ -42,6 +42,7 @@ export type RepositoryRow = {
   owner: string;
   slug: string;
   visibility: "public" | "private";
+  system_kind?: "account_runner" | null;
   description: string;
   artifact_name?: string | null;
   remote?: string | null;
@@ -57,6 +58,7 @@ export type RepositoryRow = {
   pages_enabled?: number;
   graph_enabled?: number;
   actions_enabled?: number;
+  actions_runner_enabled?: number;
   actions_network_enabled?: number;
   online_editing_enabled?: number;
   ai_summaries_enabled?: number;
@@ -160,6 +162,7 @@ export function repoResponse(
     slug: row.slug,
     defaultBranch: row.default_branch ?? "main",
     visibility: row.visibility,
+    ...(row.system_kind === "account_runner" ? { systemKind: "account_runner" as const } : {}),
     description: row.description,
     archived: row.archived === 1,
     issuesEnabled: row.issues_enabled !== 0,

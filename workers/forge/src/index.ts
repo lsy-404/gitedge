@@ -121,6 +121,7 @@ import {
 } from "../../../src/worker/common/audit";
 import { myInvitations, scopedInvitations } from "./invitations";
 import { activeImportPath, handleRepositoryImports } from "./imports";
+import { handleAccountRunner } from "./account-runner";
 import { assignmentsColumn, parseAssignments, replaceAssignments } from "./assignments";
 import {
   canWriteSession,
@@ -2239,6 +2240,8 @@ const worker = {
       if (repository.visibility !== "public") return repositoryAccessDenied();
       return publicRepositoryRead(env, repository, parts.slice(byName ? 4 : 2), request);
     }
+    const accountRunner = await handleAccountRunner(env, request, user);
+    if (accountRunner) return accountRunner;
     const sessionError = await activeAgentSession(env, user);
     if (sessionError) return sessionError;
     if (
@@ -2509,7 +2512,7 @@ const worker = {
     }
     if (request.method === "GET" && url.pathname === "/repositories") {
       const rows = await env.DB.prepare(
-        "SELECT repositories.*, namespaces.slug AS owner, CASE WHEN m.user_id IS NOT NULL OR c.role IN ('write','admin') THEN 1 ELSE 0 END AS can_write FROM repositories JOIN namespaces ON namespaces.id = repositories.namespace_id LEFT JOIN namespace_memberships m ON m.namespace_id=repositories.namespace_id AND m.user_id=? LEFT JOIN repository_collaborators c ON c.repository_id=repositories.id AND c.user_id=? WHERE repositories.deleted_at IS NULL AND (m.user_id IS NOT NULL OR c.user_id IS NOT NULL) ORDER BY repositories.updated_at DESC LIMIT 1001"
+        "SELECT repositories.*, namespaces.slug AS owner, CASE WHEN m.user_id IS NOT NULL OR c.role IN ('write','admin') THEN 1 ELSE 0 END AS can_write FROM repositories JOIN namespaces ON namespaces.id = repositories.namespace_id LEFT JOIN namespace_memberships m ON m.namespace_id=repositories.namespace_id AND m.user_id=? LEFT JOIN repository_collaborators c ON c.repository_id=repositories.id AND c.user_id=? WHERE repositories.deleted_at IS NULL AND repositories.system_kind IS NULL AND (m.user_id IS NOT NULL OR c.user_id IS NOT NULL) ORDER BY repositories.updated_at DESC LIMIT 1001"
       )
         .bind(user.id, user.id)
         .all<RepositoryRow>();
@@ -2547,6 +2550,12 @@ const worker = {
           403,
           "forbidden",
           "Repository creation requires namespace owner access."
+        );
+      if (namespace.kind === "personal" && parsed.data.slug.toLowerCase() === "runner")
+        return errorResponse(
+          409,
+          "runner_path_reserved",
+          "The runner name is reserved for the account Runner repository."
         );
       if (await activeImportPath(env, namespace.id, parsed.data.slug))
         return errorResponse(
