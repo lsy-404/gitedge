@@ -6,6 +6,60 @@ export const RUNNER_TOKEN_PREFIX = "ge_runner_";
 export const ACTION_JOB_TOKEN_PREFIX = "ge_job_";
 export const RUNNER_LEASE_MS = 120_000;
 export const RUNNER_LOG_BYTES = 16_384;
+export const RUNNER_CAPACITY_STALE_MS = 45_000;
+export const RUNNER_OFFLINE_MS = 60_000;
+export const RUNNER_PEER_SCORE_MARGIN = 5;
+export const RUNNER_DEFERRAL_AGE_MS = 120_000;
+export const RUNNER_FAILURE_HOLD_THRESHOLD = 3;
+export const RUNNER_FAILURE_HOLD_BASE_MS = 10 * 60_000;
+export const RUNNER_FAILURE_HOLD_MAX_MS = 60 * 60_000;
+export const RUNNER_SAMPLE_RETENTION_MS = 24 * 60 * 60_000;
+export const RUNNER_CLAIM_CANDIDATE_LIMIT = 25;
+export const RUNNER_SAMPLE_CLEANUP_LIMIT = 500;
+
+export const RunnerCapacitySchema = z
+  .object({
+    os: z.enum(["linux", "macos", "windows"]),
+    arch: z.enum(["x64", "arm64"]),
+    cpus: z.number().int().min(1).max(512),
+    load1: z.number().finite().nonnegative().nullable(),
+    memTotalMb: z.number().int().positive().max(1_048_576),
+    memFreeMb: z.number().int().nonnegative().max(1_048_576),
+    diskFreeMb: z.number().int().nonnegative().max(1_048_576_000),
+    tools: z.array(z.string().trim().min(1).max(100)).max(128),
+    slots: z.literal(1),
+    busy: z.union([z.literal(0), z.literal(1)]),
+  })
+  .strict()
+  .refine((capacity) => capacity.memFreeMb <= capacity.memTotalMb);
+export type RunnerCapacity = z.infer<typeof RunnerCapacitySchema>;
+
+export const RunnerBudgetSchema = z
+  .object({
+    maxJobMinutes: z.number().int().min(1).max(360).optional(),
+    dailyMinutes: z.number().int().min(1).max(1440).optional(),
+    cost: z.number().int().min(0).max(100).optional(),
+  })
+  .strict();
+export type RunnerBudget = z.infer<typeof RunnerBudgetSchema>;
+
+export interface JobClaim {
+  labels: string[];
+  memMb: number;
+  cpus: number;
+  diskMb: number;
+  tools: string[];
+  minutes: number;
+  valid: boolean;
+}
+
+export const RunnerClaimInputSchema = z
+  .object({
+    capacity: RunnerCapacitySchema.optional(),
+    budget: RunnerBudgetSchema.optional(),
+  })
+  .strict();
+export type RunnerClaimInput = z.infer<typeof RunnerClaimInputSchema>;
 
 export const RunnerScopeSchema = z
   .object({
@@ -42,6 +96,80 @@ export interface RegisteredRunner {
   createdAt: number;
   lastSeenAt: number | null;
   revokedAt: number | null;
+}
+export type RunnerJobKind = "gitedge" | "github";
+export type RunnerJobConclusion = "success" | "failure" | "cancelled" | null;
+export interface RunnerOverviewRunner extends RegisteredRunner {
+  state: "idle" | "busy" | "held" | "offline" | "revoked";
+  capacity: RunnerCapacity | null;
+  capacityReportedAt: number | null;
+  budget: RunnerBudget | null;
+  usedMinutes24h: number;
+  heldUntil: number | null;
+  consecutiveFailures: number;
+  current: {
+    kind: RunnerJobKind;
+    id: string;
+    repository: string;
+    startedAt: number;
+  } | null;
+  stats24h: {
+    success: number;
+    failure: number;
+    cancelled: number;
+    busyMinutes: number;
+  };
+  samples: Array<{
+    minute: number;
+    load1: number | null;
+    memFreeMb: number | null;
+    busy: boolean;
+  }>;
+}
+export interface RunnerOverviewGithubConnection {
+  connectionId: string;
+  repository: string;
+  remote: string;
+  enabled: boolean;
+  runnerEnabled: boolean;
+  errorCode: string | null;
+  failureCount: number;
+  lastSyncedAt: number | null;
+  queued: number;
+  oldestQueuedAt: number | null;
+  pendingCleanup: number;
+  lastJobAt: number | null;
+}
+export interface RunnerOverviewQueueItem {
+  kind: RunnerJobKind;
+  id: string;
+  repository: string;
+  labels: string[];
+  claim: JobClaim;
+  createdAt: number;
+  blockedBy: Record<string, string[]>;
+}
+export interface RunnerOverview {
+  generatedAt: number;
+  runners: RunnerOverviewRunner[];
+  github: RunnerOverviewGithubConnection[];
+  queue: RunnerOverviewQueueItem[];
+  truncated: boolean;
+}
+export interface RunnerHistoryItem {
+  kind: RunnerJobKind;
+  id: string;
+  runnerId: string | null;
+  repository: string;
+  labels: string[];
+  startedAt: number | null;
+  completedAt: number | null;
+  conclusion: RunnerJobConclusion;
+  durationMs: number | null;
+}
+export interface RunnerHistory {
+  items: RunnerHistoryItem[];
+  nextBefore: number | null;
 }
 export const ActionJobIdentitySchema = z.object({
   runId: z.string().min(1),
