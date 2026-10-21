@@ -20,6 +20,7 @@ import { parseArgs } from "node:util";
 import { parseDocument } from "yaml";
 import { parseJobClaim, matchesLabels } from "../packages/contracts/runner-scheduling.mjs";
 import { createGitEdgeExecutionArgs } from "./runner-broker-execution.mjs";
+import { pruneRunArtifacts, runArtifactRoots } from "./runner-retention.mjs";
 import {
   getRunnerCapacity,
   localExecutionMinutes,
@@ -1445,6 +1446,14 @@ async function serve(state, { once, pollSeconds }) {
   console.log(`Runner broker serving ${profiles.length} profiles with one execution slot.`);
   let processed = false;
   while (!controller.signal.aborted) {
+    const cleanupSlot = await acquireActionsSlot();
+    if (cleanupSlot) {
+      try {
+        await pruneRunArtifacts(runArtifactRoots(state, profiles));
+      } finally {
+        await cleanupSlot();
+      }
+    }
     for (const profile of profiles) {
       if (controller.signal.aborted) break;
       try {

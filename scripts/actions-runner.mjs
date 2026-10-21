@@ -20,6 +20,7 @@ import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { parseDocument, stringify } from "yaml";
+import { actionRunRoots, pruneRunArtifacts } from "./runner-retention.mjs";
 
 const VERSION = "3.14.0";
 const RELEASE = `https://github.com/ChristopherHX/runner.server/releases/download/v${VERSION}`;
@@ -570,6 +571,7 @@ async function main() {
       await lock.writeFile(
         JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })
       );
+    await pruneRunArtifacts(actionRunRoots(state));
     if (action === "setup") console.log(`Runtime ready: ${await installRuntime(state)}`);
     else await runWorkflow(values, state);
   } finally {
