@@ -102,18 +102,18 @@ describe("runner capacity probes", () => {
       workflowFile: "/var/lib/gitedge/runs/lease/.github/workflows/check.yml",
       actionsState: "/opt/gitedge/work/actions",
       jobClaim,
+      demandLabels: ["self-hosted", "ubuntu24-1gb-light", "need-time-45m", "need-tool-docker"],
     });
     expect(args).toContain("--timeout-minutes");
     expect(args[args.indexOf("--timeout-minutes") + 1]).toBe("45");
-    expect(args.slice(-8)).toEqual([
-      "--label",
+    const labels = args.flatMap((arg, index) => (arg === "--label" ? [args[index + 1]] : []));
+    expect(labels).toEqual([
       "self-hosted",
-      "--label",
       "ubuntu24",
-      "--label",
       "x64",
-      "--label",
       "ubuntu24-1gb-light",
+      "need-time-45m",
+      "need-tool-docker",
     ]);
   });
 

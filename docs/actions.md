@@ -102,7 +102,7 @@ GitEdge runner workflows currently support:
 
 - Human `push` and `workflow_dispatch` triggers. Push supports `branches` and `branches-ignore`; path and tag filters, PRs, merge groups and other trigger types are refused. Event payloads contain the repository, ref, source SHA and triggering identity; full GitHub commit metadata and history are not synthesized.
 - `string`, `number`, `boolean` and `choice` dispatch inputs, including defaults and required values, through the Actions page or native API.
-- Literal `runs-on` labels including `self-hosted`. All jobs in the workflow execute on one host matching the union of their labels. Expressions, `uses` packages and matrices are interpreted by Runner.Server; unsupported dependencies fail visibly in the runner output.
+- Literal `runs-on` labels including `self-hosted`. All jobs in the workflow execute on one host matching the union of their labels. The local runner receives the complete union, including `need-*` labels, so Runner.Server can match the same job requirements. Expressions, `uses` packages and matrices are interpreted by Runner.Server; unsupported dependencies fail visibly in the runner output.
 - Top-level `permissions: {contents: read}` or `write`; read is the default. Other permissions, job-level permissions, environments and concurrency groups are refused. The short-lived job token permits only the current repository's contents and Releases; it cannot manage runners, change repository settings, access Issues, or publish CI checks.
 - At most 64 KiB of YAML, 16 job definitions, 128 steps per job and 40 required labels. Each job declares a 1–360 minute timeout, defaulting to 60; the workflow deadline is their sum capped at 360 minutes. The repository limit remains six runs per hour.
 
