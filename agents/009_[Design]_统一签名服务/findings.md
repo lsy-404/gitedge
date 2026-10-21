@@ -21,15 +21,17 @@
 - executor 配置（`src/macos-executors.json`, `src/windows-executors.json`, `src/ios-executors.json`）固定允许的 repository id、workflow 路径/ref、提交 SHA 和 token hash；macOS/Windows 分别保存 public/private 配置；iOS 仅 private。policy digest 将 executor 与产品策略绑定在 request snapshot，运行中配置更改会终止未完成请求。
 - 服务对 public source 的 public execution 与 private source 的获批 public execution 分别建模；private source 默认不能送到 public executor。中心在来源运行和执行器运行的多个阶段复验仓库、run、ref、SHA、actor 和策略。改成一个 executor repo 时，需决定它的 GitHub privacy、环境保护、runner 承载方式和允许的源仓/产品集合；不能单纯删除 lane 选择并绕开 fail-closed 校验。
 
-## 迁移前需要确定
+## 用户定案与切换决策
 
-1. “一个 sign 服务”表示一个 coordinator API/部署（现状已经如此）、一个 executor GitHub 仓库，还是一个共享 runner pool？公开与私有是 GitHub executor 仓隐私属性及授权 lane，不只是服务命名。
-2. 单 executor 仓的隐私属性和 GitHub environment 政策是什么？单一 private repo 会使公开源也可安全送入但扩大私密代码/凭据边界；单一 public repo 则须确保 private-source 的 Apple/Windows 凭据不可由公开仓工作流或 PR 取出，并保留中心对 private-source 的额外授权。
-3. 平台拆分是否仍保留：iOS 需要 private ARM64 + Xcode；macOS 当前 workflow 使用 hosted `macos-15`（另有 broker self-hosted 验收路径）；Windows 要 self-hosted Windows x64 + Azure workload identity。一个仓库不等于一种执行主机。
-4. 公开源策略能否仍显式选择 private executor，或 `auto` 是否继续跟随 source visibility？`execution_visibility` 被 UI、API、客户端及 policy 使用，移除前需为 IRIS-Build / Epilogue / Oblivionis 给出目标行为。
-5. 哪些项目仍用 artifact pull，哪些已用 push？请求幂等、run-identity/OIDC、精确 source SHA、签名流水阶段、输出保留与过期语义都在中心契约内，切换执行仓不应误改它们。
-6. 操作迁移顺序与回滚 owner（中心 pins、执行器 repo workflow/tag/environment/runner、各消费者）由父任务结合 runner/retention/handoff 证据决定；本调查不触碰其状态。
+用户已明确选择：保留现有 signing-center，不创建新 API/服务；执行统一迁到一个独立私有仓库 `lsy-404/signing-exec-private`。公开 source workflow 仍可提交，但执行一定落在该私有仓库。macOS、Windows、iOS 继续使用各自 workflow 和 runner 主机条件。
 
+执行选择字段没有必要保留为 caller 输入。切换完成的 API 直接移除 `execution_visibility`，并从所有真实调用脚本删除；`public_execution_allowed` 也因没有公开 executor 而删除。admin `resolved_execution_visibility` 可作为已存请求的只读历史字段，绝不可参与路由。处理旧请求 body 的历史读取时只保留管理页面所需字段，不接受旧 selector 作为 API 兼容路径。
+
+现有 private 配置已含三平台候选 immutable refs：macOS `runner-token-2026-10-15-3`、Windows `windows-runner-2026-10-15-14`、iOS `ios-runner-2026-10-21-3`。切换前仍需在线确认 tag->SHA、workflow路径和 runner readiness。先冻结并清空所有以 public executor snapshot 运行的非终态请求，再部署单 private center 配置；旧 public token/工作流仅在 drain 与三平台验收通过后退役。不删除旧仓库。
+
+**重要**：`signing-center` Durable Object 内已有请求会持久保存 submit body 与 execution snapshot。不要通过破坏性清空来简化模式更换；以全量非终态请求归零作为移除旧 pins 的条件，并保留历史 status 查询语义。
+
+**调查局限更新**：前文记录的 `F:\Development\lsy-404` 路径仍不可访问；这次由 GitHub connector 查询 signing-center 与调用仓库。未改源代码/服务/远端状态，未派发签名任务。
 ## 来源与限制
 
 以下 GitHub 文件通过已连接 GitHub connector 只读查询，SHA 为 connector 返回 blob SHA 或 commit ref；没有访问或读取秘密值。
