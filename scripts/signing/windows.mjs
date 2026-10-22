@@ -15,7 +15,6 @@ import {
   readdir,
   realpath,
   rm,
-  symlink,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
@@ -99,8 +98,21 @@ async function fileSha256(file) {
 
 function credentialEnvironment(credentials) {
   const parsed = windowsCredentialsSchema.parse(credentials);
+  const excluded = new Set([
+    "IDENTITY_ENDPOINT",
+    "IDENTITY_HEADER",
+    "IDENTITY_SERVER_THUMBPRINT",
+    "IMDS_ENDPOINT",
+    "MSI_ENDPOINT",
+    "MSI_SECRET",
+  ]);
+  const inherited = Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([name]) => !name.toUpperCase().startsWith("AZURE_") && !excluded.has(name.toUpperCase())
+    )
+  );
   return {
-    ...process.env,
+    ...inherited,
     AZURE_TENANT_ID: parsed.tenant_id,
     AZURE_CLIENT_ID: parsed.client_id,
     AZURE_CLIENT_SECRET: parsed.client_secret,
@@ -181,12 +193,6 @@ function powerShellDiagnostic(output, exitCode) {
   if (Number.isInteger(exitCode) && exitCode >= 0 && exitCode <= 255)
     return `powershell_exit_${exitCode}`;
   return "powershell_failed";
-}
-
-function isSafePowerShellDiagnostic(value) {
-  return /^(?:aadsts_\d{5,9}|hresult_0x[0-9a-f]{8}|http_status_[45]\d{2}|ps_(?:product_version_missing|authenticode_invalid|signer_missing|subject_unexpected|timestamp_missing|path_outside_root|inspection_outside_app|directory_outside_app|directory_missing|file_missing|file_type_unsupported|module_missing|command_missing|no_files_to_sign|dotnet8_missing)|signtool_exit_(?:0|[1-9]\d?|1\d{2}|2[0-4]\d|25[0-5])|signcli_exit_(?:0|[1-9]\d?|1\d{2}|2[0-4]\d|25[0-5])|powershell_exit_(?:0|[1-9]\d?|1\d{2}|2[0-4]\d|25[0-5])|powershell_failed|process_unavailable|output_limit|response_invalid)$/.test(
-    value
-  );
 }
 
 function nsisBuilderTool(error) {
@@ -296,12 +302,6 @@ function squirrelInstallerDiagnostic(error) {
     return "squirrel_sea_sentinel_missing";
   if (message.startsWith('Multiple occurences of sentinel "NODE_SEA_FUSE_'))
     return "squirrel_sea_sentinel_multiple";
-  if (
-    message.startsWith(
-      "In order to use windowsSign options, @electron/windows-sign must be installed as a dependency."
-    )
-  )
-    return "squirrel_dependency_unavailable";
   const exit = /Failed with exit code\s*:\s*(-?\d{1,10})\b/i.exec(message);
   const exitCode = exit ? Number(exit[1]) : null;
   if (Number.isInteger(exitCode) && exitCode >= -0x80000000 && exitCode <= 0xffffffff) {
@@ -642,34 +642,11 @@ async function copyOutput(source, output, name, maxBytes) {
   return { path: name, size: metadata.size, sha256: await fileSha256(target) };
 }
 
-function trustedHookSource(script, config, failureMarker, credentials) {
-  const scriptArg = JSON.stringify(script);
-  const configArg = JSON.stringify(config);
-  const markerArg = JSON.stringify(failureMarker);
-  const environmentArg = JSON.stringify({
-    AZURE_TENANT_ID: credentials.tenant_id,
-    AZURE_CLIENT_ID: credentials.client_id,
-    AZURE_CLIENT_SECRET: credentials.client_secret,
-  });
-  const diagnosticSource = `const powerShellDiagnostic=${powerShellDiagnostic.toString()};\n`;
-  return `const { spawnSync } = require('node:child_process');\nconst { writeFileSync } = require('node:fs');\n${diagnosticSource}module.exports = function(file) {\n  const base = ['-NoLogo','-NoProfile','-NonInteractive','-File',${scriptArg},'-ConfigPath',${configArg},'-FilePath',file];\n  const options = { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, stdio: ['ignore','pipe','pipe'], windowsHide: true, timeout: 300000 };\n  const fail = diagnostic => { try { writeFileSync(${markerArg}, 'Sign:' + diagnostic, { flag: 'wx' }); } catch { throw 'Windows signature operation failed'; } };\n  try {\n    const verify = spawnSync('pwsh.exe', [...base.slice(0, 5), '-Mode', 'Verify', ...base.slice(5)], options);\n    if (!verify.error && verify.status === 0) return;\n    const sign = spawnSync('pwsh.exe', [...base.slice(0, 5), '-Mode', 'Sign', ...base.slice(5)], { ...options, env: { ...process.env, ...${environmentArg} } });\n    if (sign.error || sign.status !== 0) {\n      fail(sign.error ? 'process_unavailable' : powerShellDiagnostic(sign, sign.status));\n    }\n  } catch {\n    fail('powershell_failed');\n  }\n};\n`;
-}
-
 async function prepareSquirrelVendor(work, installerModule) {
   const packageDir = path.dirname(installerModule);
   const vendorSource = path.join(packageDir, "..", "vendor");
   const vendorTarget = path.join(work, "squirrel-vendor");
   await cp(vendorSource, vendorTarget, { recursive: true, dereference: false, errorOnExist: true });
-  const dependencyScope = path.resolve(packageDir, "..", "..");
-  if (path.basename(dependencyScope) !== "node_modules")
-    throw new Error("Squirrel dependency scope rejected");
-  await symlink(dependencyScope, path.join(vendorTarget, "node_modules"), "junction");
-  const requireVendor = createRequire(path.join(vendorTarget, "sea-receiver.js"));
-  const requireInstaller = createRequire(installerModule);
-  for (const dependency of ["@electron/windows-sign", "fs-extra"]) {
-    if (requireVendor.resolve(dependency) !== requireInstaller.resolve(dependency))
-      throw new Error("Squirrel signing dependency resolution rejected");
-  }
   const archSuffix = process.arch === "arm64" ? "arm64" : process.arch === "x64" ? "x64" : null;
   if (!archSuffix) throw new Error("unsupported Windows runner architecture");
   await copyFile(
@@ -849,13 +826,6 @@ async function signSquirrel(manifest, appDir, work, output, signScript, configPa
     const packageName = `${manifest.windows.product_name}-${manifest.architecture}`;
     const buildDir = path.join(work, "squirrel-output");
     await mkdir(buildDir, { recursive: false, mode: 0o700 });
-    const hookModule = path.join(work, "squirrel-sign-hook.cjs");
-    const hookFailureMarker = path.join(work, "squirrel-signing-failed");
-    await writeFile(
-      hookModule,
-      trustedHookSource(signScript, configPath, hookFailureMarker, credentials),
-      { flag: "wx", mode: 0o600 }
-    );
     const tempDirectory = path.join(work, "squirrel-temp");
     await mkdir(tempDirectory, { recursive: false, mode: 0o700 });
     const installerModule = createRequire(import.meta.url).resolve("electron-winstaller");
@@ -913,7 +883,7 @@ async function signSquirrel(manifest, appDir, work, output, signScript, configPa
           noDelta: true,
           usePackageJson: false,
           fixUpPaths: false,
-          windowsSign: { hookModulePath: hookModule },
+          skipUpdateIcon: true,
         });
       } catch (error) {
         installerError = error;
@@ -925,17 +895,6 @@ async function signSquirrel(manifest, appDir, work, output, signScript, configPa
       else process.env.TMP = previousTmp;
       if (previousSquirrelTemp === undefined) delete process.env.SQUIRREL_TEMP;
       else process.env.SQUIRREL_TEMP = previousSquirrelTemp;
-    }
-    if ((await readdir(work)).includes(path.basename(hookFailureMarker))) {
-      const failure = (await readFile(hookFailureMarker, "utf8")).trim().split(":");
-      if (
-        failure.length === 2 &&
-        ["Sign", "Verify"].includes(failure[0]) &&
-        isSafePowerShellDiagnostic(failure[1])
-      ) {
-        throw new PowerShellFailure("squirrel", failure[0], failure[1]);
-      }
-      throw new PackagingFailure("squirrel_hook_failed");
     }
     if (installerError) throw new PackagingFailure(squirrelInstallerDiagnostic(installerError));
     phase = "squirrel_output_validate";
@@ -966,6 +925,14 @@ async function signSquirrel(manifest, appDir, work, output, signScript, configPa
       throw new Error("Squirrel package digest mismatch");
 
     phase = "squirrel_setup_verify";
+    await invokePowerShell(
+      signScript,
+      "Sign",
+      configPath,
+      path.join(buildDir, "Setup.exe"),
+      "squirrel",
+      credentials
+    );
     await invokePowerShell(
       signScript,
       "Verify",
