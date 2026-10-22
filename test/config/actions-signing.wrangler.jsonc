@@ -1,0 +1,28 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "gitedge-actions-signing-test",
+  "main": "../../workers/actions/src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      { "name": "SIGNING_COORDINATORS", "class_name": "SigningCoordinator" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["SigningCoordinator"] }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "gitedge-actions-signing-test",
+      "database_id": "00000000-0000-0000-0000-000000000001",
+      "migrations_dir": "../../migrations"
+    }
+  ],
+  "r2_buckets": [
+    { "binding": "SIGNING_ARTIFACTS", "bucket_name": "gitedge-actions-signing-test" },
+    { "binding": "RELEASE_ASSETS", "bucket_name": "gitedge-actions-signing-test-release" }
+  ],
+  "vars": { "SIGNING_ENCRYPTION_KEY": "test-only-signing-encryption-key" }
+}
