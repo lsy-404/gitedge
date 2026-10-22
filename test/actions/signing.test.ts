@@ -1345,6 +1345,7 @@ describe("native signing stage reconciliation", () => {
     const queued: unknown[] = [];
     const calls: string[] = [];
     const attempts: unknown[] = [];
+    let preparePayload: unknown;
     let failBindOnce = true;
     let boundRunId: string | null = null;
     const nextDispatch = {
@@ -1406,7 +1407,8 @@ describe("native signing stage reconciliation", () => {
       fetch: vi.fn(async (request: Request) => {
         const path = new URL(request.url).pathname;
         calls.push(path);
-        if (path.startsWith("/prepare-next-stage/"))
+        if (path.startsWith("/prepare-next-stage/")) {
+          preparePayload = await request.json();
           return Response.json({
             data: {
               request: {
@@ -1430,6 +1432,7 @@ describe("native signing stage reconciliation", () => {
               dispatch: nextDispatch,
             },
           });
+        }
         if (path.startsWith("/bind-run/")) {
           const body = (await request.json()) as { runId: string };
           if (failBindOnce) {
@@ -1505,6 +1508,11 @@ describe("native signing stage reconciliation", () => {
       generation: 2,
     });
     expect(calls.filter((path) => path.startsWith("/prepare-next-stage/"))).toHaveLength(2);
+    expect(preparePayload).toEqual({
+      nonce: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+      ownerId: owner.id,
+      repositoryId: "runner-repo",
+    });
     expect(calls.some((path) => path.startsWith("/bind-run/"))).toBe(true);
   });
 

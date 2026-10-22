@@ -12,6 +12,7 @@ import {
 import { z } from "zod";
 import type { TrustedUser } from "../../../../packages/contracts/src/index";
 import { dataResponse, errorResponse } from "../../../../src/worker/common/http";
+import { createLogger } from "../../../../src/worker/common/logger";
 import { SigningCoordinator, coordinator } from "./coordinator";
 import type { SigningEnv, SigningExecutionHooks } from "./types";
 import {
@@ -184,7 +185,11 @@ export async function reconcileSigningRequests(
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ...candidate, nonce }),
+            body: JSON.stringify({
+              ownerId: candidate.ownerId,
+              repositoryId: candidate.repositoryId,
+              nonce,
+            }),
           }
         )
       );
@@ -894,6 +899,10 @@ export async function handleSigningMachineRoute(
     return errorResponse(404, "not_found", "Signing runner endpoint was not found.");
   const id = parts[3];
   const operation = parts[4];
+  const logger = createLogger(env.LOG_LEVEL, {
+    service: "actions-signing",
+    requestId: id,
+  });
   const context = await authorizeMachine(trustedContext, id, env, hooks);
   if (!context)
     return errorResponse(403, "forbidden", "The active owner-approved signing lease is required.");
@@ -1288,6 +1297,12 @@ export async function handleSigningMachineRoute(
     return errorResponse(405, "method_not_allowed", "Signing operation is not supported.");
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
+    const errorCode = /^[a-z][a-z0-9_]{0,63}$/.test(message) ? message : "unclassified";
+    logger.warn("signing:machine-operation-failed", {
+      operation,
+      errorCode,
+      errorType: error instanceof Error ? error.name : "unknown",
+    });
     if (message === "invalid_range")
       return errorResponse(416, "range_not_satisfiable", "Requested source range is invalid.");
     if (message === "signing_lease_invalid")
