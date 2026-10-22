@@ -352,7 +352,11 @@ export async function reconcileSigningRequests(
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ...candidate, runId: run.runId }),
+            body: JSON.stringify({
+              ownerId: candidate.ownerId,
+              repositoryId: candidate.repositoryId,
+              runId: run.runId,
+            }),
           }
         )
       );
