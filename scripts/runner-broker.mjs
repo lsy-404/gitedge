@@ -1091,13 +1091,6 @@ async function runClaimedSigning(profile, claim, signal) {
       "Signing lease identity is incomplete or does not match the registered runner."
     );
   const secret = await readFile(path.join(profile.directory, "credential"), "utf8");
-  const runDirectory = await mkdtemp(path.join(profile.directory, "signing-"));
-  await secureSigningPath(runDirectory, true);
-  const contextFile = path.join(runDirectory, "context.json");
-  const heartbeatController = new AbortController();
-  const runSignal = AbortSignal.any([signal, heartbeatController.signal]);
-  let heartbeatFailure;
-  let renew;
   const context = {
     schemaVersion: 1,
     baseUrl: new URL("/api/actions", profile.origin).toString().replace(/\/$/, ""),
@@ -1115,62 +1108,73 @@ async function runClaimedSigning(profile, claim, signal) {
     leaseExpiresAt: claim.leaseExpiresAt,
     runnerToken: secret.trim(),
   };
+  const runDirectory = await mkdtemp(path.join(profile.directory, "signing-"));
+  const contextFile = path.join(runDirectory, "context.json");
+  const heartbeatController = new AbortController();
+  const runSignal = AbortSignal.any([signal, heartbeatController.signal]);
+  let heartbeatFailure;
+  let renew;
   let child;
   try {
-    await writePrivate(contextFile, JSON.stringify(context));
-    await secureSigningPath(contextFile);
-    child = spawn(
-      process.execPath,
-      [
-        path.join(root, "scripts", "signing", "client.mjs"),
-        "execute",
-        "--context-file",
-        contextFile,
-        "--output-parent",
-        runDirectory,
-      ],
-      {
-        cwd: root,
-        detached: process.platform !== "win32",
-        stdio: "inherit",
-        windowsHide: true,
-      }
-    );
-    const heartbeat = async () => {
-      while (!runSignal.aborted && childRunning(child)) {
-        await sleep(30_000, runSignal);
-        if (!childRunning(child)) return;
-        const result = await apiRequest(
-          profile.origin,
-          secret.trim(),
-          `/api/actions/runner/signing/requests/${encodeURIComponent(run.requestId)}/heartbeat`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-Runner-Run-Id": run.id,
-              "X-Runner-Lease-Token": claim.leaseToken,
-            },
-            signal: runSignal,
-          }
-        );
-        if (
-          !Number.isFinite(result?.data?.leaseExpiresAt) ||
-          result.data.leaseExpiresAt <= Date.now()
-        )
-          throw new Error("GitEdge returned an invalid signing lease heartbeat response.");
-      }
-    };
-    renew = heartbeat().catch((error) => {
-      if (heartbeatController.signal.aborted || signal.aborted || !childRunning(child)) return;
-      heartbeatFailure = error;
-      heartbeatController.abort(error);
-    });
     try {
+      const capacity = await getRunnerCapacity({
+        workDirectories: [profile.directory, path.join(root, "work", "actions")],
+      });
+      validateLocalJobClaim(run.labels, capacity, run.timeoutMinutes);
+      await secureSigningPath(runDirectory, true);
+      await writePrivate(contextFile, JSON.stringify(context));
+      await secureSigningPath(contextFile);
+      child = spawn(
+        process.execPath,
+        [
+          path.join(root, "scripts", "signing", "client.mjs"),
+          "execute",
+          "--context-file",
+          contextFile,
+          "--output-parent",
+          runDirectory,
+        ],
+        {
+          cwd: root,
+          detached: process.platform !== "win32",
+          stdio: "inherit",
+          windowsHide: true,
+        }
+      );
+      const heartbeat = async () => {
+        while (!runSignal.aborted && childRunning(child)) {
+          await sleep(30_000, runSignal);
+          if (!childRunning(child)) return;
+          const result = await apiRequest(
+            profile.origin,
+            secret.trim(),
+            `/api/actions/runner/signing/requests/${encodeURIComponent(run.requestId)}/heartbeat`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-Runner-Run-Id": run.id,
+                "X-Runner-Lease-Token": claim.leaseToken,
+              },
+              signal: runSignal,
+            }
+          );
+          if (
+            !Number.isFinite(result?.data?.leaseExpiresAt) ||
+            result.data.leaseExpiresAt <= Date.now()
+          )
+            throw new Error("GitEdge returned an invalid signing lease heartbeat response.");
+        }
+      };
+      renew = heartbeat().catch((error) => {
+        if (heartbeatController.signal.aborted || signal.aborted || !childRunning(child)) return;
+        heartbeatFailure = error;
+        heartbeatController.abort(error);
+      });
       await waitChild(child, runSignal);
       if (heartbeatFailure) throw heartbeatFailure;
     } catch (error) {
-      if (childRunning(child)) await killChild(child);
+      if (child && childRunning(child)) await killChild(child);
       if (!signal.aborted) {
         await apiRequest(
           profile.origin,
