@@ -324,9 +324,12 @@ export function safeFileMode(zipMode) {
   return 0o600 | (zipMode & 0o111 ? 0o100 : 0);
 }
 
+export function pythonRuntimeCommand(env = process.env) {
+  return env.PYTHON || "python3";
+}
+
 async function plist(file) {
-  const python = process.env.PYTHON;
-  if (typeof python !== "string" || !python.trim()) throw new RunnerFailure("python_runtime");
+  const python = pythonRuntimeCommand();
   const parser = [
     "import base64, datetime, json, plistlib, sys",
     "def encode(value):",
