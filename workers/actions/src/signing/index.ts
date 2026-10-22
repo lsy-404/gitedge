@@ -49,13 +49,6 @@ const createdResponseSchema = z
         submission: SigningSubmissionSchema,
         generation: z.number().int().positive(),
         nonce: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
-        operatorApproval: z
-          .object({
-            operatorApproved: z.literal(true),
-            approvedBy: z.string().min(1),
-            approvedAt: z.number().int().positive(),
-          })
-          .strict(),
       })
       .strict(),
   })
@@ -165,13 +158,8 @@ export async function reconcileSigningRequests(
       )
         .bind(candidate.ownerId, candidate.repositoryId, candidate.profileRevision)
         .first<{ active: number }>();
-      const platform = SigningPlatformSchema.parse(candidate.platform);
-      const approval = await hooks.verifySigningHost(
-        candidate.ownerId,
-        candidate.repositoryId,
-        platform
-      );
-      if (!profileRow || !approval?.operatorApproved || approval.approvedBy !== candidate.ownerId) {
+      SigningPlatformSchema.parse(candidate.platform);
+      if (!profileRow) {
         skipped++;
         continue;
       }
@@ -289,10 +277,6 @@ export async function reconcileSigningRequests(
         failed++;
         continue;
       }
-      if (dispatch.operatorApproval.approvedAt !== approval.approvedAt) {
-        skipped++;
-        continue;
-      }
       if (dispatch.stage === "finalize" || dispatch.stage === "dmg_finalize") {
         const status = await hooks.verifyNotarization(
           candidate.ownerId,
@@ -344,7 +328,6 @@ export async function reconcileSigningRequests(
         timeoutMinutes: dispatch.profile.timeoutMinutes,
         sourceDigest: dispatch.submission.sourceDigest,
         profileRevision: dispatch.profile.revision,
-        operatorApproval: dispatch.operatorApproval,
       });
       const boundResponse = await stub.fetch(
         new Request(
@@ -584,21 +567,6 @@ export async function handleSigningRoute(
           "signing_source_too_large",
           "The source artifact exceeds the approved profile limit."
         );
-      const operatorApproval = await executionHooks.verifySigningHost(
-        user.id,
-        repository.id,
-        profile.platform
-      );
-      if (
-        !operatorApproval?.operatorApproved ||
-        operatorApproval.approvedBy !== user.id ||
-        !Number.isSafeInteger(operatorApproval.approvedAt)
-      )
-        return errorResponse(
-          503,
-          "signing_host_unverified",
-          "No owner-approved dedicated signing host is available."
-        );
       const source = await executionHooks.verifySource(
         user,
         repository.id,
@@ -633,7 +601,6 @@ export async function handleSigningRoute(
               submission,
               generation,
               nonce,
-              operatorApproval,
             }),
           })
         ),
@@ -701,7 +668,6 @@ export async function handleSigningRoute(
         timeoutMinutes: accepted.profile.timeoutMinutes,
         sourceDigest: accepted.submission.sourceDigest,
         profileRevision: accepted.profile.revision,
-        operatorApproval: accepted.operatorApproval,
       });
       const bound = await bodyResponse(
         await stub.fetch(
@@ -838,12 +804,7 @@ const outputPartTargetSchema = z.object({
   total: z.number().int().positive(),
 });
 
-async function authorizeMachine(
-  raw: unknown,
-  id: string,
-  env: SigningEnv,
-  hooks: SigningExecutionHooks
-) {
+async function authorizeMachine(raw: unknown, id: string, env: SigningEnv) {
   const parsed = SigningMachineContextSchema.safeParse(raw);
   if (!parsed.success || parsed.data.requestId !== id || parsed.data.leaseExpiresAt <= Date.now())
     return null;
@@ -852,18 +813,22 @@ async function authorizeMachine(
   } catch {
     return null;
   }
-  const current = await hooks.verifySigningHost(
-    parsed.data.ownerId,
-    parsed.data.repositoryId,
-    parsed.data.platform
-  );
-  if (
-    !current?.operatorApproved ||
-    current.approvedBy !== parsed.data.ownerId ||
-    current.approvedBy !== parsed.data.operatorApproval.approvedBy ||
-    current.approvedAt !== parsed.data.operatorApproval.approvedAt
+  const current = await env.DB.prepare(
+    `SELECT 1 AS active FROM actions_signing_profiles
+     WHERE owner_id=? AND repository_id=? AND revision=? AND approved_by=?
+       AND revoked_at IS NULL AND json_extract(profile_json,'$.workflowOid')=?
+       AND json_extract(profile_json,'$.platform')=?`
   )
-    return null;
+    .bind(
+      parsed.data.ownerId,
+      parsed.data.repositoryId,
+      parsed.data.profileRevision,
+      parsed.data.ownerId,
+      parsed.data.workflowOid,
+      parsed.data.platform
+    )
+    .first<{ active: number }>();
+  if (!current) return null;
   return parsed.data;
 }
 
@@ -907,9 +872,8 @@ export async function handleSigningMachineRoute(
     service: "actions-signing",
     requestId: id,
   });
-  const context = await authorizeMachine(trustedContext, id, env, hooks);
-  if (!context)
-    return errorResponse(403, "forbidden", "The active owner-approved signing lease is required.");
+  const context = await authorizeMachine(trustedContext, id, env);
+  if (!context) return errorResponse(403, "forbidden", "The active signing job lease is required.");
   try {
     if (operation === "start" && request.method === "POST") {
       return dataResponse(

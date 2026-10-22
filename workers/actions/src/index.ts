@@ -61,7 +61,7 @@ import {
   handleSigningRoute,
   reconcileSigningRequests,
 } from "./signing";
-import { enqueueNativeSigningRun, verifySigningHost } from "./signing-execution";
+import { enqueueNativeSigningRun } from "./signing-execution";
 
 export { ActionRunDurableObject as ActionRun };
 export { GitTransfer } from "./git-transfer";
@@ -90,8 +90,6 @@ interface ActionsEnv extends Cloudflare.Env {
 function signingExecutionHooks(env: ActionsEnv) {
   return createSigningExecutionHooks(env, {
     enqueue: (input) => enqueueNativeSigningRun(env, input),
-    verifySigningHost: (ownerId, repositoryId, platform) =>
-      verifySigningHost(env, ownerId, repositoryId, platform),
   });
 }
 

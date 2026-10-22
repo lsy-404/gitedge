@@ -4,7 +4,6 @@ import {
   RunnerCompleteInputSchema,
   RunnerLeaseInputSchema,
   RunnerClaimInputSchema,
-  SigningRunnerApprovalSchema,
   RunnerCapacitySchema,
   RunnerBudgetSchema,
   RUNNER_TOKEN_PREFIX,
@@ -23,7 +22,7 @@ import type {
   ActionRunSummary,
 } from "../../../packages/contracts/src/actions";
 import { readJsonLimited, readTextLimited } from "../../../src/worker/common/readText";
-import { dataResponse, errorResponse, requireRecentAuth } from "../../../src/worker/common/http";
+import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 import { randomHex } from "../../../src/worker/common/encoding";
 import { repositoryRole, writableRole } from "../../../src/worker/common/repositories";
 import { auditActor, recordAudit } from "../../../src/worker/common/audit";
@@ -71,11 +70,6 @@ export interface RunnerRow {
   capacity_reported_at: number | null;
   consecutive_failures: number;
   held_until: number | null;
-  execution_class: "ordinary" | "signing";
-  signing_platform: "macos" | "windows" | "ios" | null;
-  dedicated_host_confirmed: number;
-  operator_approved_at: number | null;
-  operator_approved_by: string | null;
 }
 interface RunRow {
   id: string;
@@ -125,11 +119,6 @@ function presentedRunner(row: RunnerRow): RegisteredRunner {
     name: row.name,
     scope: scope(row),
     labels: labels(row.labels_json),
-    executionClass: row.execution_class,
-    signingPlatform: row.signing_platform,
-    dedicatedHostConfirmed: row.dedicated_host_confirmed === 1,
-    operatorApprovedAt: row.operator_approved_at,
-    operatorApprovedBy: row.operator_approved_by,
     createdAt: row.created_at,
     lastSeenAt: row.last_seen_at,
     revokedAt: row.revoked_at,
@@ -195,83 +184,6 @@ export async function runnerManagement(
       "A human repository administrator is required to manage runners."
     );
   const parts = new URL(request.url).pathname.split("/").filter(Boolean);
-  if (parts.length === 3 && parts[2] === "signing" && request.method === "POST") {
-    if (user.token || user.job || user.agentSession)
-      return errorResponse(403, "forbidden", "A recently confirmed browser owner is required.");
-    const recent = requireRecentAuth(user);
-    if (recent) return recent;
-    const approval = SigningRunnerApprovalSchema.safeParse(await readJsonLimited(request, 4096));
-    if (!approval.success)
-      return errorResponse(400, "bad_request", "Invalid dedicated signing host approval.");
-    const row = await env.DB.prepare(
-      `${runnersSelect} JOIN repositories approved_repo ON approved_repo.id=r.repository_id
-       JOIN namespaces owner_ns ON owner_ns.id=approved_repo.namespace_id
-       WHERE r.id=? AND r.created_by=? AND r.namespace_id=approved_repo.namespace_id
-         AND owner_ns.created_by=? AND owner_ns.kind='personal'
-         AND approved_repo.system_kind='account_runner' AND approved_repo.visibility='private'
-         AND approved_repo.deleted_at IS NULL AND r.revoked_at IS NULL`
-    )
-      .bind(parts[1], user.id, user.id)
-      .first<RunnerRow>();
-    if (!row) return errorResponse(404, "not_found", "Runner registration was not found.");
-    const now = Date.now();
-    const changed = await env.DB.prepare(
-      `UPDATE actions_runners SET execution_class='signing',signing_platform=?,
-        dedicated_host_confirmed=1,operator_approved_at=?,operator_approved_by=?
-       WHERE id=? AND created_by=? AND revoked_at IS NULL`
-    )
-      .bind(approval.data.platform, now, user.id, row.id, user.id)
-      .run();
-    if (changed.meta.changes !== 1)
-      return errorResponse(409, "conflict", "Runner registration changed during approval.");
-    await recordAudit(env, {
-      action: "actions.runner_signing_approved",
-      actor: auditActor(user),
-      target: { type: "runner", id: row.id, label: row.name },
-      repositoryId: row.repository_id,
-      namespaceId: row.namespace_id,
-      metadata: { platform: approval.data.platform },
-    });
-    const approved = await env.DB.prepare(`${runnersSelect} WHERE r.id=?`)
-      .bind(row.id)
-      .first<RunnerRow>();
-    return dataResponse({ runner: approved ? presentedRunner(approved) : null });
-  }
-  if (parts.length === 3 && parts[2] === "signing" && request.method === "DELETE") {
-    if (user.token || user.job || user.agentSession)
-      return errorResponse(403, "forbidden", "A recently confirmed browser owner is required.");
-    const recent = requireRecentAuth(user);
-    if (recent) return recent;
-    const row = await env.DB.prepare(`${runnersSelect} WHERE r.id=? AND r.created_by=?`)
-      .bind(parts[1], user.id)
-      .first<RunnerRow>();
-    if (!row || row.execution_class !== "signing")
-      return errorResponse(404, "not_found", "Signing runner approval was not found.");
-    const now = Date.now();
-    await env.DB.batch([
-      env.DB.prepare(
-        `UPDATE actions_runners SET execution_class='ordinary',signing_platform=NULL,
-          dedicated_host_confirmed=0,operator_approved_at=NULL,operator_approved_by=NULL
-         WHERE id=? AND created_by=? AND execution_class='signing'`
-      ).bind(row.id, user.id),
-      env.DB.prepare(
-        `UPDATE actions_runner_runs SET status='completed',conclusion='cancelled',cancel_requested=1,completed_at=?
-         WHERE runner_id=? AND status!='completed' AND run_id IN (SELECT run_id FROM actions_signing_runs)`
-      ).bind(now, row.id),
-      env.DB.prepare(
-        `UPDATE actions_job_tokens SET revoked_at=COALESCE(revoked_at,?)
-         WHERE run_id IN (SELECT run_id FROM actions_runner_runs WHERE runner_id=? AND run_id IN (SELECT run_id FROM actions_signing_runs))`
-      ).bind(now, row.id),
-    ]);
-    await recordAudit(env, {
-      action: "actions.runner_signing_revoked",
-      actor: auditActor(user),
-      target: { type: "runner", id: row.id, label: row.name },
-      repositoryId: row.repository_id,
-      namespaceId: row.namespace_id,
-    });
-    return dataResponse({ revoked: true });
-  }
   if (parts.length === 1 && request.method === "GET") {
     const rows = await env.DB.prepare(
       `${runnersSelect} WHERE r.created_by = ? ORDER BY r.created_at DESC LIMIT 101`
@@ -681,14 +593,7 @@ async function claim(request: Request, env: RunnerEnv, runner: RunnerRow): Promi
     }
     let peers = peerCache.get(candidate.repository_id);
     if (!peers) {
-      peers = await runnerPeersForJob(
-        env,
-        fresh,
-        candidate.repository_id,
-        candidate.execution_class,
-        candidate.platform,
-        now
-      );
+      peers = await runnerPeersForJob(env, fresh, candidate.repository_id, now);
       peerCache.set(candidate.repository_id, peers);
     }
     if (
@@ -743,45 +648,17 @@ async function claim(request: Request, env: RunnerEnv, runner: RunnerRow): Promi
       .bind(candidate.id)
       .first<RunRow>();
     if (!row) return errorResponse(409, "conflict", "Claimed run is unavailable.");
-    if (candidate.execution_class === "signing") {
-      const registration = await env.DB.prepare(
-        `SELECT execution_class,signing_platform,dedicated_host_confirmed,operator_approved_at,
-          operator_approved_by,repository_id,created_by FROM actions_runners WHERE id=? AND revoked_at IS NULL`
-      )
-        .bind(fresh.id)
-        .first<{
-          execution_class: string;
-          signing_platform: string | null;
-          dedicated_host_confirmed: number;
-          operator_approved_at: number | null;
-          operator_approved_by: string | null;
-          repository_id: string | null;
-          created_by: string;
-        }>();
-      if (
-        !registration ||
-        registration.execution_class !== "signing" ||
-        registration.signing_platform !== candidate.platform ||
-        registration.dedicated_host_confirmed !== 1 ||
-        registration.operator_approved_at === null ||
-        registration.operator_approved_by !== registration.created_by ||
-        registration.repository_id !== candidate.repository_id
-      ) {
-        await cancelRunnerRun(env, row.id);
-        return errorResponse(409, "conflict", "The signing host approval is no longer active.");
-      }
+    if (candidate.execution_kind === "signing") {
       await publishCheck(env, runDetails(row));
       return dataResponse({
         run: {
           id: row.id,
-          executionClass: "signing",
+          kind: "signing",
+          labels: evaluated.labels,
           requestId: candidate.request_id,
           stage: candidate.stage,
           inputDigest: candidate.input_digest,
-          operatorApproved: true,
-          approvedBy: registration.operator_approved_by,
-          approvedAt: registration.operator_approved_at,
-          ownerId: registration.created_by,
+          ownerId: row.created_by,
           repositoryId: row.repository_id,
           repository: `${row.owner}/${row.repository}`,
           workflowPath: row.path,
@@ -823,7 +700,7 @@ async function claim(request: Request, env: RunnerEnv, runner: RunnerRow): Promi
       return dataResponse({
         run: {
           id: row.id,
-          executionClass: "ordinary",
+          kind: "workflow",
           repositoryId: row.repository_id,
           repository: `${row.owner}/${row.repository}`,
           workflowPath: row.path,
@@ -947,13 +824,6 @@ export async function runnerMachineRequest(request: Request, env: RunnerEnv): Pr
   const operation = new URL(request.url).pathname.split("/")[2];
   if (operation === "github") return githubRunnerLease(request, env, runner);
   if (operation === "claim") {
-    const declaredClass = request.headers.get("X-Runner-Execution-Class");
-    if (declaredClass !== runner.execution_class)
-      return errorResponse(
-        409,
-        "conflict",
-        "The broker execution class does not match this registration."
-      );
     return claim(request, env, runner);
   }
   const body = await readJsonLimited(

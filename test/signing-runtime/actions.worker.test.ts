@@ -16,11 +16,7 @@ import {
   reconcileSigningRequests,
 } from "../../workers/actions/src/signing";
 import type { SigningEnv, SigningExecutionHooks } from "../../workers/actions/src/signing/types";
-import {
-  enqueueNativeSigningRun,
-  verifySigningHost,
-} from "../../workers/actions/src/signing-execution";
-import { runnerManagement } from "../../workers/actions/src/runners";
+import { enqueueNativeSigningRun } from "../../workers/actions/src/signing-execution";
 import { createPerson, migrate, type Person } from "../support/stack";
 import { runSigning } from "../../scripts/signing/client.mjs";
 
@@ -115,7 +111,6 @@ function profile(
         },
       ],
       teamId: "ABCDE12345",
-      windowsIdentity: "azure-managed-identity",
       azure: {
         endpoint: "https://example.codesigning.azure.net/",
         account: "test-account",
@@ -201,21 +196,15 @@ async function createRunner(platform: "macos" | "windows" | "ios") {
       repo!.namespace_id,
       repositoryId,
       owner.id,
-      JSON.stringify([platform, "signing"]),
+      JSON.stringify([
+        "self-hosted",
+        platform === "windows" ? "Windows" : "macOS",
+        ...(platform === "ios" ? ["ARM64"] : []),
+      ]),
       createHash("sha256").update(runnerToken).digest("hex"),
       Date.now()
     )
     .run();
-  const approval = await runnerManagement(
-    new Request(`https://actions.test/runners/${runnerId}/signing`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ platform, dedicatedHostConfirmed: true }),
-    }),
-    signingEnv,
-    trusted(owner)
-  );
-  expect(approval.status).toBe(200);
   return { runnerId, runnerToken };
 }
 
@@ -229,7 +218,6 @@ async function executeStage(input: {
   leaseToken: string;
   generation: number;
   nonce: string;
-  approvedAt: number;
 }) {
   const machineContext: SigningMachineContext = {
     ownerId: owner.id,
@@ -244,27 +232,21 @@ async function executeStage(input: {
     stage: input.stage ?? (input.profile.policy.stage as SigningStage),
     generation: input.generation,
     nonce: input.nonce,
-    operatorApproval: {
-      operatorApproved: true,
-      approvedBy: owner.id,
-      approvedAt: input.approvedAt,
-    },
   };
   const hooks: SigningExecutionHooks = {
     loadApprovedProfile: async () => input.profile,
     verifySource: async () => null,
     verifySourceCurrent: async () => true,
     enqueue: async () => ({ runId: input.runId }),
-    verifySigningHost: async () => ({
-      operatorApproved: true,
-      approvedBy: owner.id,
-      approvedAt: input.approvedAt,
-    }),
     authorizeCredentials: async (context) => ({
       expiresAt: Math.min(context.leaseExpiresAt, Date.now() + 5 * 60_000),
       credentials:
         input.profile.platform === "windows"
-          ? { identityMode: "azure-managed-identity" }
+          ? {
+              tenant_id: "11111111-1111-4111-8111-111111111111",
+              client_id: "22222222-2222-4222-8222-222222222222",
+              client_secret: "task-scoped-secret",
+            }
           : input.profile.platform === "ios"
             ? {
                 certificate_p12: "Y2VydA==",
@@ -315,9 +297,6 @@ async function executeStage(input: {
         leaseToken: input.leaseToken,
         leaseExpiresAt: machineContext.leaseExpiresAt,
         runnerToken: input.runnerToken,
-        operatorApproved: true,
-        approvedBy: owner.id,
-        approvedAt: input.approvedAt,
       }),
       platformExecutor: async (
         manifest,
@@ -391,8 +370,6 @@ describe("Actions signing Worker integration", () => {
     "creates, executes, uploads, verifies, and reconciles %s (%s) with the real DO and R2",
     async (platform, stage, outputFormat) => {
       const runner = await createRunner(platform);
-      const approved = await verifySigningHost(signingEnv, owner.id, repositoryId, platform);
-      expect(approved).not.toBeNull();
       const sourceBytes = new TextEncoder().encode(`validated source archive ${platform}`);
       const sourceDigest = digest(sourceBytes);
       const selectedProfile = profile(platform, stage, outputFormat);
@@ -416,7 +393,6 @@ describe("Actions signing Worker integration", () => {
         verifySource: async () => ({ body: new Blob([sourceBytes]).stream() }),
         verifySourceCurrent: async () => true,
         enqueue: (input) => enqueueNativeSigningRun(signingEnv, input),
-        verifySigningHost: async () => approved,
         verifyNotarization: async () => "Accepted",
         authorizeCredentials: async () => ({ credentials: {}, expiresAt: Date.now() + 5 * 60_000 }),
         verifyOutput: async () => true,
@@ -449,10 +425,10 @@ describe("Actions signing Worker integration", () => {
         data: { request: { id: string; runId: string } };
       };
       const signingRow = await signingEnv.DB.prepare(
-        "SELECT generation,nonce,operator_approved_at FROM actions_signing_runs WHERE run_id=?"
+        "SELECT generation,nonce FROM actions_signing_runs WHERE run_id=?"
       )
         .bind(created.data.request.runId)
-        .first<{ generation: number; nonce: string; operator_approved_at: number }>();
+        .first<{ generation: number; nonce: string }>();
       expect(signingRow).not.toBeNull();
       const output = await executeStage({
         profile: selectedProfile,
@@ -463,7 +439,6 @@ describe("Actions signing Worker integration", () => {
         leaseToken: "1".repeat(64),
         generation: signingRow!.generation,
         nonce: signingRow!.nonce,
-        approvedAt: signingRow!.operator_approved_at,
       });
       expect(output.requestId).toBe(created.data.request.id);
       const sourceObject = await signingEnv.SIGNING_ARTIFACTS.get(
@@ -500,14 +475,13 @@ describe("Actions signing Worker integration", () => {
           const reconciled = await reconcileSigningRequests(signingEnv, hooks);
           expect(reconciled.queued).toBe(1);
           const next = await signingEnv.DB.prepare(
-            "SELECT s.run_id,s.generation,s.nonce,s.operator_approved_at FROM actions_signing_runs s WHERE s.request_id=? AND s.stage=?"
+            "SELECT s.run_id,s.generation,s.nonce FROM actions_signing_runs s WHERE s.request_id=? AND s.stage=?"
           )
             .bind(created.data.request.id, nextStage)
             .first<{
               run_id: string;
               generation: number;
               nonce: string;
-              operator_approved_at: number;
             }>();
           expect(next).not.toBeNull();
           const finalOutput = await executeStage({
@@ -520,7 +494,6 @@ describe("Actions signing Worker integration", () => {
             leaseToken: `${index + 2}`.repeat(64),
             generation: next!.generation,
             nonce: next!.nonce,
-            approvedAt: next!.operator_approved_at,
           });
           expect(finalOutput.requestId).toBe(created.data.request.id);
           previousRunId = next!.run_id;

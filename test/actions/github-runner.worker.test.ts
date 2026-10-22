@@ -139,19 +139,13 @@ async function registration(): Promise<string> {
   return (await data<{ runner: RegisteredRunner; token: string }>(response)).token;
 }
 
-function machine(
-  token: string,
-  path = "claim",
-  body: unknown = {},
-  executionClass: "ordinary" | "signing" | null = "ordinary"
-): Promise<Response> {
+function machine(token: string, path = "claim", body: unknown = {}): Promise<Response> {
   return runnerMachineRequest(
     new Request(`https://actions.internal/runner/${path}`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
-        ...(executionClass ? { "X-Runner-Execution-Class": executionClass } : {}),
       },
       body: JSON.stringify(body),
     }),
@@ -217,12 +211,6 @@ function remoteApi(): void {
 }
 
 describe("single-registration GitHub runner bridge", () => {
-  it("requires the registered execution class on every claim", async () => {
-    const token = await registration();
-    expect((await machine(token, "claim", {}, null)).status).toBe(409);
-    expect((await machine(token, "claim", {}, "signing")).status).toBe(409);
-  });
-
   it("leaves a resource-incompatible job queued for a capable runner", async () => {
     remoteApi();
     const connectionId = await connection(repositoryA, "resource-claim");

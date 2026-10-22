@@ -226,7 +226,13 @@ describe("AccountRunners", () => {
       '.signing-profile input[type="file"]'
     )!;
     const windowsFile = new File(
-      [JSON.stringify({ tenant_id: "tenant", client_id: "client", client_secret: "secret" })],
+      [
+        JSON.stringify({
+          tenant_id: "11111111-1111-4111-8111-111111111111",
+          client_id: "22222222-2222-4222-8222-222222222222",
+          client_secret: "secret",
+        }),
+      ],
       "windows.json",
       { type: "application/json" }
     );
@@ -234,8 +240,8 @@ describe("AccountRunners", () => {
     credentialInput.dispatchEvent(new Event("change", { bubbles: true }));
     await settle();
     expect(install).toHaveBeenCalledWith("runner-repository", "release", "windows", {
-      tenant_id: "tenant",
-      client_id: "client",
+      tenant_id: "11111111-1111-4111-8111-111111111111",
+      client_id: "22222222-2222-4222-8222-222222222222",
       client_secret: "secret",
     });
 

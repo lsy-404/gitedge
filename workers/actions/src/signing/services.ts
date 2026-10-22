@@ -15,6 +15,7 @@ import {
 import {
   archiveDigest,
   credentialsSchema as macosCredentialsSchema,
+  windowsCredentialsSchema,
   iosCredentialsSchema,
   macosVerificationSchema,
   windowsVerificationSchema,
@@ -484,9 +485,7 @@ function credentialSchema(platform: string): (value: unknown) => Record<string, 
         notarization: parsed.notarization,
       };
     };
-  return () => {
-    throw new Error("signing_windows_uses_federated_identity");
-  };
+  return (value) => windowsCredentialsSchema.parse(value);
 }
 
 export async function installSigningCredentials(
@@ -683,8 +682,6 @@ export async function saveApprovedProfile(
   )
     throw new Error("signing_profile_stage_mismatch");
   if (parsed.name !== name) throw new Error("signing_profile_name_mismatch");
-  if (parsed.platform === "windows" && !policy.windowsIdentity)
-    throw new Error("signing_windows_identity_required");
   const repository = await env.DB.prepare(
     `SELECT r.id,n.created_by FROM repositories r JOIN namespaces n ON n.id=r.namespace_id WHERE r.id=? AND r.system_kind='account_runner' AND r.visibility='private' AND r.created_by=? AND n.kind='personal' AND n.created_by=? AND r.archived=0 AND r.deleted_at IS NULL`
   )
@@ -774,15 +771,6 @@ async function grantCredentials(
       credentials: {},
       expiresAt: Math.min(context.leaseExpiresAt, Date.now() + 5 * 60_000),
     };
-  if (profile.platform === "windows") {
-    const identityMode = profile.policy.windowsIdentity;
-    if (identityMode !== "azure-managed-identity" && identityMode !== "azure-workload-identity")
-      return null;
-    return {
-      credentials: { identityMode },
-      expiresAt: Math.min(context.leaseExpiresAt, Date.now() + 5 * 60_000),
-    };
-  }
   const credentials = await storedCredentials(env, context, profile);
   return credentials
     ? { credentials, expiresAt: Math.min(context.leaseExpiresAt, Date.now() + 5 * 60_000) }
@@ -1086,7 +1074,7 @@ async function verifyOutput(
 
 export function createSigningExecutionHooks(
   env: SigningEnv,
-  deps: Pick<SigningExecutionHooks, "enqueue" | "verifySigningHost">
+  deps: Pick<SigningExecutionHooks, "enqueue">
 ): SigningExecutionHooks {
   return {
     ...deps,

@@ -4,7 +4,7 @@ import {
   SigningCreateInputSchema,
   SigningMachineContextSchema,
   SigningRequestSchema,
-  SigningStoredProfileSchema,
+  SigningProfileSchema,
   SigningSubmissionSchema,
   type SigningMachineContext,
 } from "../../../../packages/contracts/src/signing";
@@ -185,7 +185,7 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
 
   private public(row: StoredRow) {
     const input = SigningSubmissionSchema.parse(JSON.parse(row.submission_json));
-    const profile = SigningStoredProfileSchema.parse(JSON.parse(row.profile_json));
+    const profile = SigningProfileSchema.parse(JSON.parse(row.profile_json));
     return SigningRequestSchema.parse({
       id: row.id,
       repositoryId: row.repository_id,
@@ -207,20 +207,17 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
   }
 
   private dispatch(row: StoredRow) {
-    const saved = SigningStoredProfileSchema.parse(JSON.parse(row.profile_json));
-    const { operatorApproval, ...profile } = saved;
+    const profile = SigningProfileSchema.parse(JSON.parse(row.profile_json));
     return {
       profile,
       submission: SigningSubmissionSchema.parse(JSON.parse(row.submission_json)),
       generation: row.generation,
       nonce: row.nonce,
-      operatorApproval,
     };
   }
 
   private previousVerification(row: StoredRow) {
-    if (SigningStoredProfileSchema.parse(JSON.parse(row.profile_json)).platform !== "macos")
-      return null;
+    if (SigningProfileSchema.parse(JSON.parse(row.profile_json)).platform !== "macos") return null;
     const stage = previousStage(row.current_stage);
     if (!stage) return null;
     const saved = this.ctx.storage.sql
@@ -279,7 +276,7 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
         input.repositoryId,
         input.ownerId,
         input.idempotencyKey,
-        JSON.stringify({ ...profile, operatorApproval: input.operatorApproval }),
+        JSON.stringify(profile),
         JSON.stringify(submission),
         String(profile.policy.stage),
         submission.sourceDigest,
@@ -336,18 +333,12 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
       (row.state !== "queued" && row.state !== "running" && !terminalRead)
     )
       throw new Error("signing_lease_invalid");
-    const { operatorApproval: approval, ...profile } = SigningStoredProfileSchema.parse(
-      JSON.parse(row.profile_json)
-    );
+    const profile = SigningProfileSchema.parse(JSON.parse(row.profile_json));
     if (
       profile.revision !== context.profileRevision ||
       profile.workflowOid !== context.workflowOid ||
       profile.platform !== context.platform ||
       row.current_stage !== context.stage ||
-      approval?.operatorApproved !== true ||
-      approval.approvedBy !== context.operatorApproval.approvedBy ||
-      approval.approvedAt !== context.operatorApproval.approvedAt ||
-      context.operatorApproval.approvedBy !== context.ownerId ||
       context.leaseExpiresAt <= Date.now()
     )
       throw new Error("signing_lease_invalid");
@@ -383,12 +374,10 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
       if (profile.platform === "windows") {
         const windows = project.windows;
         const azure = policy.azure;
-        if (!windows || !azure || !policy.windowsIdentity)
-          throw new Error("signing_windows_profile_invalid");
+        if (!windows || !azure) throw new Error("signing_windows_profile_invalid");
         manifest = {
           ...common,
           stage: "windows_sign",
-          identity_mode: policy.windowsIdentity,
           bundle_id: windows.bundle_id,
           architecture: windows.architecture,
           max_unpacked_bytes: windows.max_unpacked_bytes,
@@ -589,7 +578,7 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
         payload.verificationReport === null
       )
         throw new Error("signing_not_authorized");
-      const profile = SigningStoredProfileSchema.parse(JSON.parse(row.profile_json));
+      const profile = SigningProfileSchema.parse(JSON.parse(row.profile_json));
       const terminal =
         profile.platform === "windows" ||
         profile.platform === "ios" ||
@@ -842,9 +831,7 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
       };
     }
     if (row.state !== "awaiting_source") return { request: this.public(row), dispatch: null };
-    const { operatorApproval: _operatorApproval, ...profile } = SigningStoredProfileSchema.parse(
-      JSON.parse(row.profile_json)
-    );
+    const profile = SigningProfileSchema.parse(JSON.parse(row.profile_json));
     const next = nextStage(row.current_stage, profile.policy.project?.macos?.output_format);
     if (!next) return { request: this.public(row), dispatch: null };
     const output = this.ctx.storage.sql
@@ -1162,7 +1149,6 @@ export async function queueSigningRequest(
     timeoutMinutes: profile.timeoutMinutes,
     sourceDigest: request.sourceDigest,
     profileRevision: profile.revision,
-    operatorApproval: request.operatorApproval,
   };
   return hooks.enqueue(input);
 }

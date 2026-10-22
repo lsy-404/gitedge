@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { windowsCredentialsSchema } from "../../../../packages/contracts/signing-native.mjs";
+import { SigningSourceCredentialSchema } from "../../../../packages/contracts/src/signing";
 import { onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type {
@@ -99,22 +101,8 @@ async function install(
     credentials = JSON.parse(await file.text());
     if (!isCredentialObject(credentials)) throw new Error("invalid_credentials");
     const values = credentials;
-    if (platform === "github-source") {
-      if (
-        Object.keys(values).length !== 1 ||
-        typeof values.token !== "string" ||
-        !values.token.trim() ||
-        values.token.length > 512
-      )
-        throw new Error("invalid_source_token");
-    } else if (platform === "windows") {
-      const keys = ["tenant_id", "client_id", "client_secret"];
-      if (
-        Object.keys(values).length !== keys.length ||
-        keys.some((key) => typeof values[key] !== "string" || !values[key].trim())
-      )
-        throw new Error("invalid_windows_credentials");
-    }
+    if (platform === "github-source") credentials = SigningSourceCredentialSchema.parse(values);
+    else if (platform === "windows") credentials = windowsCredentialsSchema.parse(values);
   } catch {
     error.value = t("runnerSigningCredentialsFileInvalid");
     return;

@@ -94,7 +94,6 @@ export const SigningPolicySchema = z
       .string()
       .regex(/^[A-Z0-9]{10}$/)
       .optional(),
-    windowsIdentity: z.enum(["azure-managed-identity", "azure-workload-identity"]).optional(),
     azure: z
       .object({
         endpoint: z.url().refine((value) => {
@@ -125,10 +124,7 @@ export const SigningPolicySchema = z
       context.addIssue({ code: "custom", message: "signing_policy_platform_ambiguous" });
     if (policy.project.macos && (!policy.teamId || policy.stage !== "sign"))
       context.addIssue({ code: "custom", message: "signing_macos_policy_invalid" });
-    if (
-      policy.project.windows &&
-      (!policy.azure || !policy.windowsIdentity || policy.stage !== "windows_sign")
-    )
+    if (policy.project.windows && (!policy.azure || policy.stage !== "windows_sign"))
       context.addIssue({ code: "custom", message: "signing_windows_policy_invalid" });
     if (policy.project.ios && (!policy.teamId || policy.stage !== "ios_sign"))
       context.addIssue({ code: "custom", message: "signing_ios_policy_invalid" });
@@ -247,27 +243,10 @@ export const SigningMachineContextSchema = z
     stage: SigningStageSchema,
     generation: z.number().int().positive(),
     nonce: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
-    operatorApproval: z
-      .object({
-        operatorApproved: z.literal(true),
-        approvedBy: z.string().min(1),
-        approvedAt: z.number().int().positive(),
-      })
-      .strict(),
   })
   .strict();
 export type SigningMachineContext = z.infer<typeof SigningMachineContextSchema>;
 
-export const SigningHostApprovalSchema = z
-  .object({
-    operatorApproved: z.literal(true),
-    approvedBy: z.string().min(1),
-    approvedAt: z.number().int().positive(),
-  })
-  .strict();
-export const SigningStoredProfileSchema = SigningProfileSchema.extend({
-  operatorApproval: SigningHostApprovalSchema,
-}).strict();
 export const SigningCreateInputSchema = z
   .object({
     requestId: z.uuid(),
@@ -278,7 +257,6 @@ export const SigningCreateInputSchema = z
     submission: SigningSubmissionSchema,
     generation: z.number().int().positive(),
     nonce: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
-    operatorApproval: SigningHostApprovalSchema,
   })
   .strict();
 export type SigningCreateInput = z.infer<typeof SigningCreateInputSchema>;
@@ -289,7 +267,6 @@ export const SigningReconcileDispatchSchema = z
     submission: SigningSubmissionSchema,
     generation: z.number().int().positive(),
     nonce: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
-    operatorApproval: SigningHostApprovalSchema,
     stage: SigningStageSchema,
     inputDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
     inputSize: z.number().int().positive().max(SIGNING_MAX_ARCHIVE_BYTES),

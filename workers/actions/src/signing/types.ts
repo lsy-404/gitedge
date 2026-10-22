@@ -35,13 +35,6 @@ export interface SigningQueueInput {
   readonly timeoutMinutes: number;
   readonly sourceDigest: string;
   readonly profileRevision: string;
-  readonly operatorApproval: SigningHostApproval;
-}
-
-export interface SigningHostApproval {
-  readonly operatorApproved: true;
-  readonly approvedBy: string;
-  readonly approvedAt: number;
 }
 
 export interface SigningExecutionHooks {
@@ -65,11 +58,6 @@ export interface SigningExecutionHooks {
     audience?: string
   ): Promise<{ body: ReadableStream<Uint8Array> } | null>;
   enqueue(input: SigningQueueInput): Promise<{ runId: string }>;
-  verifySigningHost(
-    ownerId: string,
-    repositoryId: string,
-    platform: SigningPlatform
-  ): Promise<SigningHostApproval | null>;
   verifyNotarization(
     ownerId: string,
     repositoryId: string,
@@ -100,5 +88,4 @@ export interface SigningStoredRequest extends SigningRequest {
   readonly workflowOid: string;
   readonly generation: number;
   readonly nonce: string;
-  readonly operatorApproval: SigningHostApproval;
 }

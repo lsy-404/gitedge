@@ -40,7 +40,6 @@ const profile = {
   enabled: true,
   policy: {
     stage: "windows_sign",
-    windowsIdentity: "azure-managed-identity",
     azure: {
       endpoint: "https://example.codesigning.azure.net/",
       account: "acct",
@@ -167,7 +166,6 @@ function environment() {
             submission,
             generation: 1,
             nonce: "A".repeat(43),
-            operatorApproval: { operatorApproved: true, approvedBy: owner.id, approvedAt: 1 },
           },
         });
       }
@@ -219,14 +217,9 @@ function environment() {
     state: () => ({ created, enqueued, bound }),
     hooks(approved: boolean): SigningExecutionHooks {
       return {
-        loadApprovedProfile: vi.fn(async () => profile),
+        loadApprovedProfile: vi.fn(async () => (approved ? profile : null)),
         verifySource: vi.fn(async () => ({ body: new Response("abc").body! })),
         verifySourceCurrent: vi.fn(async () => true),
-        verifySigningHost: vi.fn(async () =>
-          approved
-            ? { operatorApproved: true as const, approvedBy: owner.id, approvedAt: Date.now() }
-            : null
-        ),
         verifyNotarization: vi.fn(async () => "Accepted" as const),
         enqueue: vi.fn(async (input) => {
           enqueued = input;
@@ -247,12 +240,12 @@ function request() {
 }
 
 describe("native signing admission", () => {
-  it("fails closed before persistence or queueing when no owner-approved host is available", async () => {
+  it("fails closed before persistence or queueing when no approved profile is available", async () => {
     const test = environment();
     const response = await handleSigningRoute(request(), test.env, owner, test.hooks(false));
 
     expect(response.status).toBe(503);
-    expect(await response.json()).toMatchObject({ error: { code: "signing_host_unverified" } });
+    expect(await response.json()).toMatchObject({ error: { code: "signing_profile_unavailable" } });
     expect(test.state()).toMatchObject({ created: false, enqueued: undefined, bound: undefined });
     expect(test.stub.fetch).not.toHaveBeenCalled();
   });
@@ -487,7 +480,6 @@ describe("native signing admission", () => {
     try {
       const hooks = createSigningExecutionHooks(env, {
         enqueue: vi.fn(async () => ({ runId: "22222222-2222-4222-8222-222222222222" })),
-        verifySigningHost: vi.fn(async () => null),
       });
       const tokenUser = { ...owner };
       const first = await hooks.verifySource(
@@ -634,7 +626,6 @@ describe("native signing admission", () => {
     try {
       const hooks = createSigningExecutionHooks(env, {
         enqueue: vi.fn(async () => ({ runId: "22222222-2222-4222-8222-222222222222" })),
-        verifySigningHost: vi.fn(async () => null),
       });
       const validIdentity = await mintIdentity("1");
       const source = await hooks.verifySource(
@@ -803,7 +794,6 @@ describe("native signing admission", () => {
     );
     const loaded = await createSigningExecutionHooks(env, {
       enqueue: vi.fn(async () => ({ runId: "22222222-2222-4222-8222-222222222222" })),
-      verifySigningHost: vi.fn(async () => null),
     }).loadApprovedProfile(owner, "runner-repo", "desktop-release");
 
     expect(rows).toHaveLength(1);
@@ -833,7 +823,6 @@ describe("native signing stage reconciliation", () => {
       owner_id: owner.id,
       profile_json: JSON.stringify({
         ...profile,
-        operatorApproval: { operatorApproved: true, approvedBy: owner.id, approvedAt: 10 },
       }),
       submission_json: JSON.stringify(submission),
       state: "accepted",
@@ -904,7 +893,6 @@ describe("native signing stage reconciliation", () => {
           },
           sourceRepositories: profile.policy.sourceRepositories,
         },
-        operatorApproval: { operatorApproved: true, approvedBy: owner.id, approvedAt: 10 },
       }),
       submission_json: JSON.stringify({ ...submission, platform: "macos" }),
       state: "awaiting_source",
@@ -1018,7 +1006,6 @@ describe("native signing stage reconciliation", () => {
           },
           sourceRepositories: profile.policy.sourceRepositories,
         },
-        operatorApproval: { operatorApproved: true, approvedBy: owner.id, approvedAt: 10 },
       }),
       submission_json: JSON.stringify({ ...submission, platform: "macos" }),
       state: "awaiting_source",
@@ -1137,7 +1124,6 @@ describe("native signing stage reconciliation", () => {
       owner_id: owner.id,
       profile_json: JSON.stringify({
         ...profile,
-        operatorApproval: { operatorApproved: true, approvedBy: owner.id, approvedAt: 10 },
       }),
       submission_json: JSON.stringify(submission),
       state: "running",
@@ -1182,7 +1168,6 @@ describe("native signing stage reconciliation", () => {
       stage: "windows_sign",
       generation: 1,
       nonce: row.nonce,
-      operatorApproval: { operatorApproved: true as const, approvedBy: owner.id, approvedAt: 10 },
     };
 
     expect(coordinator.machine(row.id, context, "fail", { code: "signing_tool_failed" })).toEqual({
@@ -1201,7 +1186,6 @@ describe("native signing stage reconciliation", () => {
       owner_id: owner.id,
       profile_json: JSON.stringify({
         ...profile,
-        operatorApproval: { operatorApproved: true, approvedBy: owner.id, approvedAt: 10 },
       }),
       submission_json: JSON.stringify(submission),
       state: "queued",
@@ -1238,7 +1222,6 @@ describe("native signing stage reconciliation", () => {
       stage: "windows_sign",
       generation: 1,
       nonce: row.nonce,
-      operatorApproval: { operatorApproved: true as const, approvedBy: owner.id, approvedAt: 10 },
     };
 
     expect(coordinator.machine(row.id, context, "profile")).toMatchObject({
@@ -1257,7 +1240,6 @@ describe("native signing stage reconciliation", () => {
       owner_id: owner.id,
       profile_json: JSON.stringify({
         ...profile,
-        operatorApproval: { operatorApproved: true, approvedBy: owner.id, approvedAt: 10 },
       }),
       submission_json: JSON.stringify(submission),
       state: "running",
@@ -1326,7 +1308,6 @@ describe("native signing stage reconciliation", () => {
       stage: "windows_sign",
       generation: 1,
       nonce: row.nonce,
-      operatorApproval: { operatorApproved: true as const, approvedBy: owner.id, approvedAt: 10 },
     };
 
     expect(coordinator.outputCompletionPlan(row.id, context)).toEqual({
@@ -1377,7 +1358,6 @@ describe("native signing stage reconciliation", () => {
       submission: { ...submission, platform: "macos" },
       generation: 2,
       nonce: "B".repeat(43),
-      operatorApproval: { operatorApproved: true as const, approvedBy: owner.id, approvedAt: 10 },
       stage: "finalize",
       inputDigest: "sha256:" + "f".repeat(64),
       inputSize: 12,
@@ -1485,11 +1465,6 @@ describe("native signing stage reconciliation", () => {
       SIGNING_COORDINATORS: { getByName: () => stub },
     } as unknown as SigningEnv;
     const hooks = {
-      verifySigningHost: vi.fn(async () => ({
-        operatorApproved: true as const,
-        approvedBy: owner.id,
-        approvedAt: 10,
-      })),
       verifySourceCurrent: vi.fn(async () => true),
       verifyNotarization: vi.fn(async () => "Accepted" as const),
       enqueue: vi.fn(async (input) => {
@@ -1580,7 +1555,6 @@ describe("native signing stage reconciliation", () => {
       submission: { ...submission, platform: "macos" },
       generation: 2,
       nonce: "B".repeat(43),
-      operatorApproval: { operatorApproved: true, approvedBy: owner.id, approvedAt: 10 },
       stage: "finalize",
       inputDigest: "sha256:" + "f".repeat(64),
       inputSize: 9,
@@ -1640,11 +1614,6 @@ describe("native signing stage reconciliation", () => {
     let notarization: "Accepted" | "In Progress" = "In Progress";
     const enqueue = vi.fn(async () => ({ runId: "22222222-2222-4222-8222-222222222222" }));
     const hooks = {
-      verifySigningHost: vi.fn(async () => ({
-        operatorApproved: true as const,
-        approvedBy: owner.id,
-        approvedAt: 10,
-      })),
       verifySourceCurrent: vi.fn(async () => true),
       verifyNotarization: vi.fn(async () => notarization),
       enqueue,
@@ -1679,7 +1648,6 @@ describe("native signing stage reconciliation", () => {
       },
     } as unknown as SigningEnv;
     const hooks = {
-      verifySigningHost: vi.fn(),
       enqueue: vi.fn(),
     } as unknown as SigningExecutionHooks;
 
@@ -1713,7 +1681,6 @@ describe("native signing stage reconciliation", () => {
       stage: "windows_sign",
       generation: 1,
       nonce: "A".repeat(43),
-      operatorApproval: { operatorApproved: true, approvedBy: owner.id, approvedAt: 1 },
     };
     const response = await handleSigningMachineRoute(
       new Request(
