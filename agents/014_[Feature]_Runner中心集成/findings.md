@@ -11,3 +11,4 @@
 - 首次查询不存在的历史文件路径无改动；已按 rg --files 发现真实 common/repositories 和 forge controls 等模块。
 
 - Existing ordinary broker configuration can be explicitly updated to executionClass=ordinary after verifying its server registration. This adds no signing authority and avoids revoking a valid ordinary identity merely to add local configuration; missing fields still fail closed at runtime. Production strict checks remain gated on all existing brokers being upgraded.
+Final provenance/task-marker scan found only required iOS get-task-allow entitlement keys and an incidental package-integrity base64 substring. These are runtime platform keys/checksum data, not task identifiers or attribution; preserved unchanged. All changed non-audit files pass Prettier, and git diff --check passes.
