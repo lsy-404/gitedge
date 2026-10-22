@@ -7,7 +7,7 @@ import {
   syncRunnerSchedules,
   type ScheduledDefinitions,
 } from "../../workers/actions/src/runner-schedules";
-import type { RunnerEnv } from "../../workers/actions/src/runners";
+import { queueRunnerRun, type RunnerEnv } from "../../workers/actions/src/runners";
 
 const runtime: RunnerEnv = {
   DB: env.DB,
@@ -90,6 +90,43 @@ describe("Runner schedule queue", () => {
       .bind(id)
       .first<{ event_json: string }>();
     expect(JSON.parse(job!.event_json).schedule).toBe("0 * * * *");
+  });
+  it("queues more than six self-hosted runs for the same repository", async () => {
+    const id = await repository();
+    const row = await env.DB.prepare("SELECT created_by FROM repositories WHERE id=?")
+      .bind(id)
+      .first<{ created_by: string }>();
+    const user = { id: row!.created_by, identifier: "scheduled-owner", groupKey: "free" };
+    const definition = parseRunnerWorkflow(
+      ".github/workflows/manual.yml",
+      [
+        "name: Manual runner",
+        "on: workflow_dispatch",
+        "jobs:",
+        "  task:",
+        "    runs-on: [self-hosted]",
+        "    timeout-minutes: 5",
+        "    steps:",
+        "      - run: echo ready",
+      ].join("\n")
+    );
+    const queued = [];
+    for (let index = 0; index < 7; index += 1) {
+      queued.push(
+        await queueRunnerRun(
+          runtime,
+          id,
+          user,
+          "main",
+          `${String(index).padStart(1, "0")}${"a".repeat(39)}`,
+          definition,
+          "workflow_dispatch"
+        )
+      );
+    }
+    expect(queued).toHaveLength(7);
+    expect(queued.every((run) => run !== null)).toBe(true);
+    expect(await runs(id)).toHaveLength(7);
   });
   it("removes deleted schedules without running an old definition", async () => {
     const id = await repository();

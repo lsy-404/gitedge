@@ -81,7 +81,7 @@ describe("Actions Worker workflow listing", () => {
   });
 
   it.each([0, 1])(
-    "queues a complete container snapshot when runner opt-in is %i",
+    "queues a container snapshot without charging seven runner runs to its limit when opt-in is %i",
     async (runnerEnabled) => {
       const files = [
         {
@@ -96,6 +96,7 @@ describe("Actions Worker workflow listing", () => {
       const writtenChunks: Array<{ index: number; value: string }> = [];
       let scheduled = false;
       let checkPayload: unknown;
+      const existingRecentRuns = Array.from({ length: 7 }, () => ({ executor: "runner" }));
       const run = {
         id: "run-1",
         repositoryId: "repository-1",
@@ -130,7 +131,15 @@ describe("Actions Worker workflow listing", () => {
                           actions_network_enabled: 0,
                           default_branch: "main",
                         },
-                  run: async () => ({ meta: { changes: 1 } }),
+                  run: async () => {
+                    if (sql.includes("INSERT INTO actions_runs")) {
+                      expect(sql).toContain("executor = 'container'");
+                      expect(
+                        existingRecentRuns.filter((existing) => existing.executor === "container")
+                      ).toHaveLength(0);
+                    }
+                    return { meta: { changes: 1 } };
+                  },
                 };
               },
             };
@@ -198,6 +207,7 @@ describe("Actions Worker workflow listing", () => {
       );
 
       expect(response.status).toBe(202);
+      expect(existingRecentRuns).toHaveLength(7);
       expect(queuedInput).toMatchObject({ commitOid: "b".repeat(40), enableInternet: false });
       expect(writtenChunks).toHaveLength(1);
       expect(JSON.parse(writtenChunks.map((chunk) => chunk.value).join(""))).toContainEqual({
@@ -331,11 +341,18 @@ jobs:
     });
   });
 
-  it("tells the caller when the hourly run limit frees a slot", async () => {
+  it("limits container runs and calculates Retry-After from container executions", async () => {
     const now = 1_800_000_000_000;
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
     const files = [
       { path: ".github/workflows/checks.yml", contentBase64: btoa(workflow), mode: "100644" },
+    ];
+    const existingRecentRuns = [
+      ...Array.from({ length: 6 }, () => ({
+        executor: "container",
+        created_at: now - 59 * 60 * 1000 - 500,
+      })),
+      ...Array.from({ length: 7 }, () => ({ executor: "runner", created_at: now - 1000 })),
     ];
     const env = {
       DB: {
@@ -343,21 +360,34 @@ jobs:
           return {
             bind() {
               return {
-                first: async () =>
-                  sql.includes("END AS role FROM repositories")
-                    ? { role: "admin" }
-                    : sql.includes("OFFSET")
-                      ? { created_at: now - 59 * 60 * 1000 - 500 }
-                      : {
-                          id: "repository-1",
-                          created_by: "user-1",
-                          visibility: "public",
-                          archived: 0,
-                          actions_enabled: 1,
-                          actions_network_enabled: 0,
-                          default_branch: "main",
-                        },
-                run: async () => ({ meta: { changes: 0 } }),
+                first: async () => {
+                  if (sql.includes("END AS role FROM repositories")) return { role: "admin" };
+                  if (sql.includes("OFFSET")) {
+                    expect(sql).toContain("executor = 'container'");
+                    return existingRecentRuns
+                      .filter((existing) => existing.executor === "container")
+                      .sort((left, right) => right.created_at - left.created_at)[5];
+                  }
+                  return {
+                    id: "repository-1",
+                    created_by: "user-1",
+                    visibility: "public",
+                    archived: 0,
+                    actions_enabled: 1,
+                    actions_network_enabled: 0,
+                    default_branch: "main",
+                  };
+                },
+                run: async () => {
+                  if (sql.includes("INSERT INTO actions_runs")) {
+                    expect(sql).toContain("executor = 'container'");
+                    const count = existingRecentRuns.filter(
+                      (existing) => existing.executor === "container"
+                    ).length;
+                    return { meta: { changes: count < 6 ? 1 : 0 } };
+                  }
+                  return { meta: { changes: 0 } };
+                },
               };
             },
           };

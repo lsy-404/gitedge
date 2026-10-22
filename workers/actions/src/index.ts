@@ -935,7 +935,7 @@ async function runLimitRetryAfter(
   now: number
 ): Promise<number> {
   const oldest = await env.DB.prepare(
-    "SELECT created_at FROM actions_runs WHERE repository_id = ? AND created_at > ? AND NOT EXISTS (SELECT 1 FROM actions_signing_runs signing WHERE signing.run_id = actions_runs.id AND signing.stage NOT IN ('sign','windows_sign','ios_sign')) ORDER BY created_at DESC LIMIT 1 OFFSET ?"
+    "SELECT created_at FROM actions_runs WHERE repository_id = ? AND executor = 'container' AND created_at > ? ORDER BY created_at DESC LIMIT 1 OFFSET ?"
   )
     .bind(repositoryId, now - RUN_LIMIT_WINDOW_MS, RUN_LIMIT_PER_HOUR - 1)
     .first<{ created_at: number }>();
@@ -1064,7 +1064,7 @@ async function queueActionRun(
   }
   const now = Date.now();
   const created = await env.DB.prepare(
-    "INSERT INTO actions_runs (id, repository_id, commit_oid, workflow, path, source_ref, created_by, created_at, pull_request_id, candidate_id, trigger_kind, cache_key, lockfile_hash, cache_event_type, cache_status) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM actions_runs WHERE repository_id = ? AND created_at > ? AND NOT EXISTS (SELECT 1 FROM actions_signing_runs signing WHERE signing.run_id = actions_runs.id AND signing.stage NOT IN ('sign','windows_sign','ios_sign'))) < ?"
+    "INSERT INTO actions_runs (id, repository_id, commit_oid, workflow, path, source_ref, created_by, created_at, pull_request_id, candidate_id, trigger_kind, cache_key, lockfile_hash, cache_event_type, cache_status) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM actions_runs WHERE repository_id = ? AND executor = 'container' AND created_at > ?) < ?"
   )
     .bind(
       id,

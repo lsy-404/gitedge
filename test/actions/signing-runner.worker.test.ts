@@ -174,7 +174,39 @@ describe("general-purpose native signing execution", () => {
       .run();
   });
 
-  it("does not count completed signing continuation stages against hourly admission", async () => {
+  it("admits more than six approved native signing requests in an hour", async () => {
+    const now = Date.now();
+    const runIds: string[] = [];
+    for (let index = 0; index < 7; index += 1) {
+      const requestId = crypto.randomUUID();
+      const result = await enqueueNativeSigningRun(actionEnv, {
+        requestId,
+        ownerId: owner.id,
+        repositoryId,
+        workflowOid: "e".repeat(40),
+        workflowPath: ".github/workflows/sign.yml",
+        workflowSource: signingWorkflowSource,
+        stage: "windows_sign",
+        inputDigest: `sha256:${String(index).padStart(64, "0")}`,
+        platform: "windows",
+        generation: 1,
+        nonce: `${String(index).padStart(1, "0")}${"c".repeat(42)}`,
+        timeoutMinutes: 60,
+        sourceDigest: `sha256:${String(index).padStart(64, "0")}`,
+        profileRevision,
+      });
+      runIds.push(result.runId);
+    }
+    const count = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM actions_signing_runs WHERE run_id IN (SELECT id FROM actions_runs WHERE repository_id=? AND created_at>=?) AND stage='windows_sign'"
+    )
+      .bind(repositoryId, now - 1000)
+      .first<{ count: number }>();
+    expect(new Set(runIds)).toHaveProperty("size", 7);
+    expect(count?.count).toBeGreaterThanOrEqual(7);
+  });
+
+  it("requires an admitted initial request before queueing a continuation stage", async () => {
     const now = Date.now();
     const admittedRequestId = crypto.randomUUID();
     for (let index = 0; index < 6; index += 1) {
@@ -223,6 +255,24 @@ describe("general-purpose native signing execution", () => {
       profileRevision: "d".repeat(40),
     });
     expect(run.runId).toMatch(/^[0-9a-f-]{36}$/i);
+    await expect(
+      enqueueNativeSigningRun(actionEnv, {
+        requestId: crypto.randomUUID(),
+        ownerId: owner.id,
+        repositoryId,
+        workflowOid: "e".repeat(40),
+        workflowPath: ".github/workflows/release.yml",
+        workflowSource: signingWorkflowSource,
+        stage: "finalize",
+        inputDigest: `sha256:${"c".repeat(64)}`,
+        platform: "windows",
+        generation: 2,
+        nonce: "g".repeat(43),
+        timeoutMinutes: 60,
+        sourceDigest: `sha256:${"c".repeat(64)}`,
+        profileRevision: "d".repeat(40),
+      })
+    ).rejects.toThrow("signing_initial_stage_not_admitted");
   });
 
   it("uses the same generic registrations for signing and normal work while binding each lease", async () => {

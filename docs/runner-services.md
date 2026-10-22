@@ -33,7 +33,7 @@ Use Actions to choose the workflow, run it manually, inspect its queue/execution
 - Schedules use the current default branch of the private Runner repository. Committing a changed definition updates its schedule; removing or invalidating the definition disables that schedule.
 - The service checks due work every minute. Worker scheduling or an unavailable machine can delay execution; cron is not an exact-time guarantee.
 - Duplicate scheduler ticks do not create duplicate runs for the same workflow occurrence. Missed intervals are coalesced into one queued run rather than replayed as a burst.
-- Existing repository limits and runner budgets still apply, including six runs per repository per hour. Queueing does not bypass a busy runner, disabled account, revoked machine, disabled execution or resource requirements.
+- Runner admission has no shared six-runs-per-hour repository cap. Queueing still respects a busy runner, disabled account, revoked machine, disabled execution and configured resource budgets.
 - To stop a timer, remove its `schedule` entry and commit. Use Actions to cancel an already queued or running job.
 
 ## API

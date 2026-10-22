@@ -564,9 +564,7 @@ export async function queueRunnerRun(
   };
   const insertRun = env.DB.prepare(
     `INSERT OR IGNORE INTO actions_runs (id,repository_id,commit_oid,workflow,path,source_ref,created_by,created_at,trigger_kind,executor,scheduled_at)
-    SELECT ?,?,?,?,?,?,?,?,?,'runner',? WHERE (SELECT COUNT(*) FROM actions_runs a WHERE a.repository_id=? AND a.created_at>?
-      AND NOT EXISTS (SELECT 1 FROM actions_signing_runs s WHERE s.run_id=a.id
-        AND s.stage NOT IN ('sign','windows_sign','ios_sign'))) < 6`
+    VALUES(?,?,?,?,?,?,?, ?,?,'runner',?)`
   ).bind(
     id,
     repositoryId,
@@ -577,9 +575,7 @@ export async function queueRunnerRun(
     user.id,
     now,
     event,
-    schedule?.at ?? null,
-    repositoryId,
-    now - 3_600_000
+    schedule?.at ?? null
   );
   const insertJob = env.DB.prepare(
     "INSERT INTO actions_runner_runs (run_id,workflow_source,labels_json,permission,timeout_minutes,event_json) SELECT ?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM actions_runs WHERE id=?)"

@@ -325,11 +325,7 @@ export async function enqueueNativeSigningRun(
         `INSERT INTO actions_runs
        (id,repository_id,commit_oid,workflow,path,source_ref,created_by,created_at,trigger_kind,executor)
        SELECT ?,?,?,?,?,?,?,?,?, 'runner'
-       WHERE (?=0 OR (SELECT COUNT(*) FROM actions_runs a
-         LEFT JOIN actions_signing_runs s ON s.run_id=a.id
-         WHERE a.repository_id=? AND a.created_at>?
-           AND (s.run_id IS NULL OR s.stage IN ('sign','windows_sign','ios_sign'))) < 6)
-         AND EXISTS (SELECT 1 FROM actions_signing_profiles WHERE owner_id=? AND repository_id=?
+       WHERE EXISTS (SELECT 1 FROM actions_signing_profiles WHERE owner_id=? AND repository_id=?
            AND revision=? AND approved_by=? AND revoked_at IS NULL
            AND json_extract(profile_json,'$.workflowOid')=? AND json_extract(profile_json,'$.platform')=?)`
       ).bind(
@@ -342,9 +338,6 @@ export async function enqueueNativeSigningRun(
         input.ownerId,
         now,
         "workflow_dispatch",
-        initialStage ? 1 : 0,
-        repository.id,
-        now - 3_600_000,
         input.ownerId,
         repository.id,
         input.profileRevision,
