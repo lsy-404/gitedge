@@ -382,6 +382,46 @@ describe("native signing admission", () => {
     expect(test.stub.fetch).not.toHaveBeenCalled();
   });
 
+  it("rejects unsupported legacy kinds and unapproved profiles before calling the private service", async () => {
+    const test = environment();
+    const exportCredential = vi.fn(async () => ({
+      version: 1 as const,
+      kind: "macos",
+      wrappedKey: "wrapped",
+      iv: "iv",
+      ciphertext: "ciphertext",
+    }));
+    const env = { ...test.env, LEGACY_SIGNING: { exportCredential } } as unknown as SigningEnv;
+    const ownerSession = { ...owner, recentAuthAt: Date.now() };
+    const makeRequest = (importLegacy: string) =>
+      new Request(
+        "https://actions.test/signing/profiles/desktop-release/credentials?repositoryId=runner-repo",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ importLegacy }),
+        }
+      );
+
+    const unsupported = await handleSigningRoute(
+      makeRequest("windows"),
+      env,
+      ownerSession,
+      test.hooks(true)
+    );
+    expect(unsupported.status).toBe(400);
+    expect(exportCredential).not.toHaveBeenCalled();
+
+    const unapproved = await handleSigningRoute(
+      makeRequest("macos"),
+      env,
+      ownerSession,
+      test.hooks(true)
+    );
+    expect(unapproved.status).toBe(503);
+    expect(exportCredential).not.toHaveBeenCalled();
+  });
+
   it("isolates encrypted GitHub source credentials by owner, Runner repository, and profile revision", async () => {
     const digest = async (value: unknown) =>
       `sha256:${Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(value)))), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;

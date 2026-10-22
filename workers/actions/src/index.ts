@@ -78,13 +78,14 @@ const CHECK_SCAN_LIMIT = 20;
 const CHECK_RETRY_MS = 60_000;
 const MISSING_RUN_TIMEOUT_MS = 150_000;
 
-interface ActionsEnv extends Cloudflare.Env {
+interface ActionsEnv extends Omit<Cloudflare.Env, "LEGACY_SIGNING"> {
   readonly DB: D1Database;
   readonly GIT: Fetcher;
   readonly FORGE: Fetcher;
   readonly AUTH: Fetcher;
   readonly RELEASE_ASSETS: R2Bucket;
   readonly LOG_LEVEL?: string;
+  readonly LEGACY_SIGNING: Fetcher<import("./signing/types").LegacySigningEntrypoint>;
 }
 
 function signingExecutionHooks(env: ActionsEnv) {

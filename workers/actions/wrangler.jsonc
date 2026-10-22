@@ -81,6 +81,11 @@
     {
       "binding": "FORGE",
       "service": "gitedge-forge"
+    },
+    {
+      "binding": "LEGACY_SIGNING",
+      "service": "voidcarve-signing-center",
+      "entrypoint": "CredentialMigration"
     }
   ],
   "triggers": {

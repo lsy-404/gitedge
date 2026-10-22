@@ -24,3 +24,4 @@
 | 019 | [Ops] Mac与Windows Runner替换 | Mac保持1个、Windows接入2个并发broker并替换旧注册 | 用户要求更新主机、凭据存入1Password并扩大Windows容量 | ✅ 已完成 |
 | 020 | [Feature] 东京空闲任务主动退避 | 为已选出的受限公益计算任务提供可恢复的空闲资源调度 | 空闲负载需让出资源给runner及其他主机服务，并支持断点续跑 | 🔄 进行中 |
 | 021 | [Refactor] 通用Runner签名 | 统一通用调度、任务级secret和凭据清理并更新主机 | 用户明确要求原生签名也不依赖专用runner | 🔄 进行中 |
+| 022 | [Ops] 签名凭据迁移准备 | 盘点旧签名凭据并准备IRIS Runner profile策略候选 | 统一GitEdge生产签名入口并保留凭据授权边界 | 🔄 进行中 |
