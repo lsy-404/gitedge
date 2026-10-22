@@ -994,6 +994,7 @@ async function runClaimedGitHub(profile, claim, signal) {
     if (heartbeatFailure) throw heartbeatFailure;
     conclusion = "success";
   } catch (error) {
+    error = heartbeatFailure ?? error;
     executionError = error;
     if (
       signal.aborted ||
