@@ -352,12 +352,16 @@ async function verifySource(
     })
   );
   if (response.status !== 302) {
-    await response.body?.cancel();
+    await sourceStep("signing_source_artifact_redirect_cancel_failed", async () => {
+      await response.body?.cancel();
+    });
     return null;
   }
   const location = response.headers.get("Location");
   if (!location) {
-    await response.body?.cancel();
+    await sourceStep("signing_source_artifact_redirect_cancel_failed", async () => {
+      await response.body?.cancel();
+    });
     return null;
   }
   const target = await sourceStep(
@@ -375,15 +379,21 @@ async function verifySource(
       target.hostname === "results-receiver.actions.githubusercontent.com"
     )
   ) {
-    await response.body?.cancel();
+    await sourceStep("signing_source_artifact_redirect_cancel_failed", async () => {
+      await response.body?.cancel();
+    });
     return null;
   }
-  await response.body?.cancel();
+  await sourceStep("signing_source_artifact_redirect_cancel_failed", async () => {
+    await response.body?.cancel();
+  });
   const download = await sourceStep("signing_source_artifact_download_failed", () =>
     fetch(target, { redirect: "error", signal: AbortSignal.timeout(60_000) })
   );
   if (!download.ok || !download.body) {
-    await download.body?.cancel();
+    await sourceStep("signing_source_artifact_download_cancel_failed", async () => {
+      await download.body?.cancel();
+    });
     return null;
   }
   return { body: download.body };
