@@ -11,6 +11,8 @@ from pathlib import Path
 
 RUNNER_LOCK = "/opt/gitedge/work/actions/active.lock"
 STATE_DIR = "/var/lib/gitedge-idle"
+LOCK_GRACE_SECONDS = 5
+RUNNER_PROCESS_NAMES = {"Runner.Listener", "Runner.Client", "Runner.Server", "Runner.Worker"}
 stop_requested = False
 
 
@@ -59,6 +61,27 @@ def resource_pressure(proc_root):
         return available < 131072 or available / total < 0.20
     except (OSError, ValueError, KeyError, IndexError, ZeroDivisionError):
         return False
+
+
+def runner_process_active(proc_root):
+    try:
+        processes = proc_root.iterdir()
+    except OSError:
+        return False
+    for process in processes:
+        if not process.name.isdigit():
+            continue
+        try:
+            arguments = [part for part in (process / "cmdline").read_bytes().split(b"\0") if part]
+        except OSError:
+            continue
+        names = [argument.rsplit(b"/", 1)[-1].decode("utf-8", "ignore") for argument in arguments]
+        if RUNNER_PROCESS_NAMES.intersection(names):
+            return True
+        for index, name in enumerate(names[:-1]):
+            if name == "actions-runner.mjs" and names[index + 1] == "run":
+                return True
+    return False
 
 
 def start_disk_probe(state_dir):
@@ -154,6 +177,19 @@ def main():
     disk_limit = args.max_disk_mib * 1024 * 1024
     disk_probe = None
     disk_probe_started = 0
+    lock_seen_since = None
+    gate_state = None
+
+    def report_gate(state):
+        nonlocal gate_state
+        if gate_state != state:
+            if state == "clear":
+                print("Idle task gate is clear.", flush=True)
+            elif state == "claim lock":
+                print("Idle task gate is waiting on a short claim lock.", flush=True)
+            else:
+                print(f"Idle task gate is busy: {state}.", flush=True)
+            gate_state = state
 
     try:
         while not stop_requested and (args.run_for == 0 or time.monotonic() - started_at < args.run_for):
@@ -197,13 +233,33 @@ def main():
                 status = task.wait()
                 print(f"Idle task exited with status {status}; no automatic retry is scheduled.", flush=True)
                 return status
-            if args.lock_file.exists() or resource_pressure(args.proc_root) or not disk_allowed:
+            lock_present = args.lock_file.exists()
+            if lock_present:
+                if lock_seen_since is None:
+                    lock_seen_since = now
+            else:
+                lock_seen_since = None
+            runner_active = runner_process_active(args.proc_root)
+            if runner_active:
+                busy_reason = "runner execution process"
+            elif lock_present and now - lock_seen_since >= LOCK_GRACE_SECONDS:
+                busy_reason = "claim lock held over 5 seconds"
+            elif resource_pressure(args.proc_root):
+                busy_reason = "host resource pressure"
+            elif not disk_allowed:
+                busy_reason = "disk budget unavailable"
+            else:
+                busy_reason = None
+
+            if busy_reason:
+                report_gate(busy_reason)
                 if task is not None:
-                    print("Idle task yielding to host work, resource pressure, or disk budget.", flush=True)
                     stop_task(task)
                     task = None
                 idle_since = None
-            elif task is None:
+            else:
+                report_gate("claim lock" if lock_present else "clear")
+            if not busy_reason and not lock_present and task is None:
                 now = time.monotonic()
                 if idle_since is None:
                     idle_since = now
@@ -211,6 +267,8 @@ def main():
                     task = start_task(command, args.task_user, args.state_dir)
                     idle_since = None
                     print("Idle task started.", flush=True)
+            elif not busy_reason and lock_present and idle_since is None:
+                idle_since = now
             time.sleep(1)
     finally:
         stop_task(task)

@@ -8,3 +8,6 @@
 - 测试覆盖活动锁抢占、低压力负例、CPU/内存/IO PSI、磁盘上限、恢复和清理，位于仓库根 `/test`。
 - `py_compile`、Node语法检查、Git Bash语法检查、`git diff --check`通过；Node测试在Windows跳过2项Linux进程组/`/proc`集成用例。WSL启动失败，未能本机执行Linux运行验证。
 - 已提交本地分支 `codex/idle-backoff`，没有推送、合并或远端写入。
+
+- A1首次真实启动结果为未启动FAH（manager约7MiB、未监听7396）；初判锁抖动。核对生产broker源码后确认空poll也持锁，修为短锁不暂停任务、超过5秒才busy，并检测真实bridge/Runner进程立即抢占。
+- Linux隔离集成测试复测4/4通过，覆盖2秒锁抖动保留恢复计时、短锁不中断运行task、5秒持续锁抢占、bridge进程即时抢占及既有CPU/内存/IO/磁盘/进程清理用例。
