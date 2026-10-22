@@ -13,10 +13,11 @@ export interface SigningExecutionEnv
   extends
     Pick<SigningEnv, "DB" | "FORGE">,
     Partial<
-      Pick<SigningEnv, "SIGNING_COORDINATORS" | "SIGNING_ARTIFACTS" | "SIGNING_ENCRYPTION_KEY">
-    > {
-  readonly GIT?: Pick<Fetcher, "fetch">;
-}
+      Pick<
+        SigningEnv,
+        "GIT" | "SIGNING_COORDINATORS" | "SIGNING_ARTIFACTS" | "SIGNING_ENCRYPTION_KEY"
+      >
+    > {}
 
 function hasSigningBindings(env: SigningExecutionEnv): env is SigningEnv {
   return Boolean(

@@ -467,6 +467,17 @@ describe("owner-approved signing runner execution class", () => {
               return Response.json({
                 data: {
                   profile: signingProfile,
+                  submission: {
+                    profile: "release",
+                    platform: "windows",
+                    sourceRepositoryId: "1",
+                    sourceCommitOid: "e".repeat(40),
+                    sourceRunId: "123",
+                    sourceArtifactId: "release",
+                    sourceDigest: digest,
+                    sourceSize: 1,
+                    version: "1.2.3",
+                  },
                   sourceDigest: digest,
                   sourceCommitOid: "e".repeat(40),
                   version: "1.2.3",
@@ -553,7 +564,7 @@ describe("owner-approved signing runner execution class", () => {
       }),
       machineEnv
     );
-    expect(validLease.status).toBe(200);
+    expect(validLease.status, await validLease.clone().text()).toBe(200);
     const report = {
       schema_version: 1,
       request_id: requestId,
