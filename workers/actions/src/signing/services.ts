@@ -118,6 +118,32 @@ const githubArtifactSchema = z
   })
   .passthrough();
 
+function isAllowedArtifactDownloadUrl(target: URL): boolean {
+  return (
+    target.protocol === "https:" &&
+    !target.port &&
+    !target.username &&
+    !target.password &&
+    (/^productionresultssa[0-9]+\.blob\.core\.windows\.net$/.test(target.hostname) ||
+      target.hostname === "pipelines.actions.githubusercontent.com" ||
+      target.hostname === "results-receiver.actions.githubusercontent.com")
+  );
+}
+
+export async function fetchArtifactDownload(
+  target: URL
+): Promise<ReadableStream<Uint8Array> | null> {
+  const response = await fetch(target, {
+    redirect: "manual",
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!response.ok || !response.body) {
+    await response.body?.cancel();
+    return null;
+  }
+  return response.body;
+}
+
 const githubRunIdentitySchema = z.object({
   repository_id: z.string(),
   run_id: z.string(),
@@ -368,17 +394,7 @@ async function verifySource(
     "signing_source_artifact_redirect_invalid",
     async () => new URL(location)
   );
-  if (
-    target.protocol !== "https:" ||
-    target.port ||
-    target.username ||
-    target.password ||
-    !(
-      /^productionresultssa[0-9]+\.blob\.core\.windows\.net$/.test(target.hostname) ||
-      target.hostname === "pipelines.actions.githubusercontent.com" ||
-      target.hostname === "results-receiver.actions.githubusercontent.com"
-    )
-  ) {
+  if (!isAllowedArtifactDownloadUrl(target)) {
     await sourceStep("signing_source_artifact_redirect_cancel_failed", async () => {
       await response.body?.cancel();
     });
@@ -387,16 +403,10 @@ async function verifySource(
   await sourceStep("signing_source_artifact_redirect_cancel_failed", async () => {
     await response.body?.cancel();
   });
-  const download = await sourceStep("signing_source_artifact_download_failed", () =>
-    fetch(target, { redirect: "error", signal: AbortSignal.timeout(60_000) })
+  const body = await sourceStep("signing_source_artifact_download_failed", () =>
+    fetchArtifactDownload(target)
   );
-  if (!download.ok || !download.body) {
-    await sourceStep("signing_source_artifact_download_cancel_failed", async () => {
-      await download.body?.cancel();
-    });
-    return null;
-  }
-  return { body: download.body };
+  return body ? { body } : null;
 }
 
 async function verifySourceCurrent(
