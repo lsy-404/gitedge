@@ -133,13 +133,20 @@ async function copyMcpUrl(): Promise<void> {
 async function load(): Promise<void> {
   loading.value = true;
   loadingError.value = "";
-  const [tokenRows, repositoryRows] = await Promise.allSettled([
+  const [tokenRows, repositoryRows, accountRunner] = await Promise.allSettled([
     api.accessTokens(),
     api.repositories(),
+    api.accountRunner(),
   ]);
   if (tokenRows.status === "fulfilled") tokens.value = tokenRows.value;
-  if (repositoryRows.status === "fulfilled") repositories.value = repositoryRows.value;
-  for (const result of [tokenRows, repositoryRows])
+  const listedRepositories = repositoryRows.status === "fulfilled" ? repositoryRows.value : [];
+  const runnerRepository =
+    accountRunner.status === "fulfilled" ? accountRunner.value.repository : null;
+  repositories.value =
+    runnerRepository && !listedRepositories.some(({ id }) => id === runnerRepository.id)
+      ? [...listedRepositories, runnerRepository]
+      : listedRepositories;
+  for (const result of [tokenRows, repositoryRows, accountRunner])
     if (result.status === "rejected" && !loadingError.value)
       loadingError.value = errorMessage(result.reason, t);
   loading.value = false;
