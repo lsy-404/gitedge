@@ -41,13 +41,14 @@ function request(path: string, method: string, body?: unknown): Request {
 }
 
 const profileRevision = "d".repeat(40);
+const signingWorkflowSource = `name: signing\non: workflow_dispatch\njobs:\n  sign:\n    runs-on: [self-hosted, Windows, ci, need-time-5m, need-mem-2g, need-tool-python]\n    steps:\n      - run: echo signing\n`;
 const signingProfile = {
   name: "release",
   revision: profileRevision,
   policyDigest: `sha256:${"f".repeat(64)}`,
   workflowOid: "e".repeat(40),
   workflowPath: ".github/workflows/sign.yml",
-  workflowSource: "name: signing\non: workflow_dispatch\njobs: {}\n",
+  workflowSource: signingWorkflowSource,
   platform: "windows",
   timeoutMinutes: 60,
   enabled: true,
@@ -131,8 +132,8 @@ describe("general-purpose native signing execution", () => {
       ownerId: owner.id,
       repositoryId,
       workflowOid: "e".repeat(40),
-      workflowPath: ".gitedge/signing/release.yml",
-      workflowSource: "trusted-source",
+      workflowPath: ".github/workflows/sign.yml",
+      workflowSource: signingWorkflowSource,
       stage: "sign" as const,
       inputDigest: `sha256:${"b".repeat(64)}`,
       platform: "windows" as const,
@@ -151,6 +152,21 @@ describe("general-purpose native signing execution", () => {
       .bind(input.requestId)
       .first<{ count: number }>();
     expect(count?.count).toBe(1);
+    const queuedLabels = await env.DB.prepare(
+      "SELECT labels_json FROM actions_runner_runs WHERE run_id=?"
+    )
+      .bind(first.runId)
+      .first<{ labels_json: string }>();
+    expect(JSON.parse(queuedLabels!.labels_json)).toEqual(
+      expect.arrayContaining(["windows", "ci", "need-time-5m", "need-mem-2g", "need-tool-python"])
+    );
+    await expect(
+      enqueueNativeSigningRun(actionEnv, {
+        ...input,
+        requestId: crypto.randomUUID(),
+        workflowSource: signingWorkflowSource.replace("need-tool-python", "need-tool-invalid!"),
+      })
+    ).rejects.toThrow("literal runs-on labels");
     await env.DB.prepare(
       "UPDATE actions_runner_runs SET status='completed',conclusion='success',completed_at=? WHERE run_id=?"
     )
@@ -196,7 +212,7 @@ describe("general-purpose native signing execution", () => {
       repositoryId,
       workflowOid: "e".repeat(40),
       workflowPath: ".github/workflows/release.yml",
-      workflowSource: "trusted workflow",
+      workflowSource: signingWorkflowSource,
       stage: "finalize",
       inputDigest: `sha256:${"c".repeat(64)}`,
       platform: "windows",
@@ -314,6 +330,7 @@ describe("general-purpose native signing execution", () => {
         null
       )
     ).toBe(true);
+    const signingJobToken = `ge_job_${"a".repeat(64)}`;
     const claimResponse = await runnerMachineRequest(
       new Request("https://actions.internal/runner/claim", {
         method: "POST",
@@ -341,12 +358,26 @@ describe("general-purpose native signing execution", () => {
         AUTH: {
           fetch: async (request: Request) => {
             expect(new URL(request.url).pathname).toBe("/internal/actions-job-token");
-            return Response.json({ data: { token: `ge_job_${"a".repeat(64)}` } });
+            await env.DB.prepare(
+              "INSERT INTO actions_job_tokens(run_id,token_hash,expires_at) VALUES(?,?,?)"
+            )
+              .bind(signingRunId, await sha256Hex(signingJobToken), Date.now() + 60_000)
+              .run();
+            return Response.json({ data: { token: signingJobToken } });
           },
         },
       }
     );
     expect(claimResponse.status).toBe(200);
+    const jobTokenCannotClaim = await runnerMachineRequest(
+      new Request("https://actions.internal/runner/claim", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${signingJobToken}` },
+        body: "{}",
+      }),
+      actionEnv
+    );
+    expect(jobTokenCannotClaim.status).toBe(401);
     const signingClaim = (await claimResponse.json()) as {
       data: {
         run: { kind: string; token: string; repository: string; sha: string };
@@ -356,7 +387,7 @@ describe("general-purpose native signing execution", () => {
     const signingLeaseToken = signingClaim.data.leaseToken;
     expect(signingClaim.data.run).toMatchObject({
       kind: "signing",
-      token: `ge_job_${"a".repeat(64)}`,
+      token: signingJobToken,
       repository: "signing-runner-owner/runner",
       sha: "c".repeat(40),
     });
@@ -365,6 +396,16 @@ describe("general-purpose native signing execution", () => {
     const outputKey = `signing/${owner.id}/${repositoryId}/${requestId}/output.zip`;
     const machineEnv = {
       ...actionEnv,
+      AUTH: {
+        fetch: async () =>
+          Response.json({
+            data: {
+              id: owner.id,
+              job: { runId: signingRunId, repositoryId },
+              token: { repositoryIds: [repositoryId] },
+            },
+          }),
+      },
       SIGNING_COORDINATORS: {
         getByName: () => ({
           fetch: async (rpc: Request) => {
@@ -450,7 +491,7 @@ describe("general-purpose native signing execution", () => {
       new Request(signingUrl, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${runnerToken}`,
+          Authorization: `Bearer ${signingJobToken}`,
           "X-Runner-Run-Id": signingRunId,
           "X-Runner-Lease-Token": "8".repeat(64),
           "Content-Type": "application/json",
@@ -459,12 +500,12 @@ describe("general-purpose native signing execution", () => {
       }),
       machineEnv
     );
-    expect(wrongLease.status).toBe(403);
+    expect(wrongLease.status).toBe(401);
     const validLease = await runnerMachineRequest(
       new Request(signingUrl, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${runnerToken}`,
+          Authorization: `Bearer ${signingJobToken}`,
           "X-Runner-Run-Id": signingRunId,
           "X-Runner-Lease-Token": signingLeaseToken,
           "Content-Type": "application/json",
@@ -495,7 +536,7 @@ describe("general-purpose native signing execution", () => {
       new Request(`https://actions.internal/runner/signing/requests/${requestId}/complete`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${runnerToken}`,
+          Authorization: `Bearer ${signingJobToken}`,
           "X-Runner-Run-Id": signingRunId,
           "X-Runner-Lease-Token": signingLeaseToken,
           "Content-Type": "application/json",
@@ -513,7 +554,7 @@ describe("general-purpose native signing execution", () => {
       new Request(`https://actions.internal/runner/signing/requests/${requestId}/complete`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${runnerToken}`,
+          Authorization: `Bearer ${signingJobToken}`,
           "X-Runner-Run-Id": signingRunId,
           "X-Runner-Lease-Token": signingLeaseToken,
           "Content-Type": "application/json",
@@ -596,19 +637,37 @@ describe("general-purpose native signing execution", () => {
         null
       )
     ).toBe(true);
+    const failedJobToken = `ge_job_${"b".repeat(64)}`;
+    await env.DB.prepare(
+      "INSERT INTO actions_job_tokens(run_id,token_hash,expires_at) VALUES(?,?,?)"
+    )
+      .bind(failedRunId, await sha256Hex(failedJobToken), Date.now() + 60_000)
+      .run();
     const failRequest = () =>
       runnerMachineRequest(
         new Request(`https://actions.internal/runner/signing/requests/${failedRequestId}/fail`, {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${failedRunnerToken}`,
+            Authorization: `Bearer ${failedJobToken}`,
             "X-Runner-Run-Id": failedRunId,
             "X-Runner-Lease-Token": failedLeaseToken,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({ code: "execution_failed" }),
         }),
-        machineEnv
+        {
+          ...machineEnv,
+          AUTH: {
+            fetch: async () =>
+              Response.json({
+                data: {
+                  id: owner.id,
+                  job: { runId: failedRunId, repositoryId },
+                  token: { repositoryIds: [repositoryId] },
+                },
+              }),
+          },
+        }
       );
     expect((await failRequest()).status).toBe(200);
     expect((await failRequest()).status).toBe(200);

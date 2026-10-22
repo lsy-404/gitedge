@@ -169,7 +169,7 @@ export function parseRunnerWorkflow(path: string, source: string): RunnerWorkflo
   };
 }
 
-export function validateSingleSigningJob(path: string, source: string): void {
+export function validateSingleSigningJob(path: string, source: string): RunnerWorkflow {
   if (new TextEncoder().encode(source).byteLength > 65_536) fail("Runner workflow exceeds 64 KiB.");
   const document = parseDocument(source, { schema: "core", uniqueKeys: true, strict: true });
   if (document.errors.length) fail("Workflow YAML is invalid.");
@@ -195,7 +195,7 @@ export function validateSingleSigningJob(path: string, source: string): void {
     job.data.if !== undefined
   )
     fail("Signing workflows cannot use matrix jobs or conditional jobs.");
-  parseRunnerWorkflow(path, source);
+  return parseRunnerWorkflow(path, source);
 }
 
 export function runnerDispatchInputs(

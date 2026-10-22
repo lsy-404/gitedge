@@ -102,7 +102,7 @@ function resultPayload(value) {
 
 function identityHeaders(context) {
   return {
-    authorization: `Bearer ${context.runnerToken}`,
+    authorization: `Bearer ${context.jobToken}`,
     accept: "application/json",
     "x-runner-run-id": context.runId,
     "x-runner-lease-token": context.leaseToken,

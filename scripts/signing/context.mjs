@@ -25,7 +25,7 @@ const CONTEXT_SCHEMA = z
     nonce: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
     leaseToken: z.string().regex(/^[0-9a-f]{64}$/i),
     leaseExpiresAt: z.number().int().positive(),
-    runnerToken: z.string().regex(/^ge_runner_[0-9a-f]{64}$/i),
+    jobToken: z.string().regex(/^ge_job_[0-9a-f]{64}$/),
   })
   .strict();
 

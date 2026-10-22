@@ -1145,7 +1145,7 @@ async function runClaimedSigning(profile, claim, signal) {
     nonce: run.nonce,
     leaseToken: claim.leaseToken,
     leaseExpiresAt: claim.leaseExpiresAt,
-    runnerToken: secret.trim(),
+    jobToken: run.token,
   };
   const runDirectory = await mkdtemp(path.join(profile.directory, "signing-"));
   const contextFile = path.join(runDirectory, "context.json");
@@ -1180,9 +1180,12 @@ async function runClaimedSigning(profile, claim, signal) {
         !["read", "write"].includes(run.permission)
       )
         throw new Error("Signing workflow metadata is incomplete.");
-      const jobClaim = parseJobClaim(run.labels, run.timeoutMinutes);
-      if (!jobClaim.valid) throw new Error("Signing workflow has invalid host requirements.");
-      validateLocalJobClaim(run.labels, capacity, run.timeoutMinutes);
+      const workflowDemand = validateGitEdgeWorkflow(run.workflowSource, profile);
+      const requiredLabels = [...new Set([...run.labels, ...workflowDemand.labels])];
+      const jobClaim = parseJobClaim(requiredLabels, run.timeoutMinutes);
+      if (!workflowDemand.claim.valid || !jobClaim.valid)
+        throw new Error("Signing workflow has invalid host requirements.");
+      validateLocalJobClaim(requiredLabels, capacity, run.timeoutMinutes);
       await secureSigningPath(runDirectory, true);
       await writePrivate(contextFile, JSON.stringify(context));
       await secureSigningPath(contextFile);
@@ -1202,7 +1205,7 @@ async function runClaimedSigning(profile, claim, signal) {
         workflowFile,
         actionsState: path.join(root, "work", "actions"),
         jobClaim,
-        demandLabels: run.labels,
+        demandLabels: workflowDemand.labels,
         eventPayloadFile,
       });
       const childEnvironment = { ...process.env };

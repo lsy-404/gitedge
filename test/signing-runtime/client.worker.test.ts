@@ -39,7 +39,7 @@ function context(overrides = {}) {
     nonce: "A".repeat(43),
     leaseToken: "c".repeat(64),
     leaseExpiresAt: Date.now() + 60_000,
-    runnerToken: `ge_runner_${"d".repeat(64)}`,
+    jobToken: `ge_job_${"d".repeat(64)}`,
     ...overrides,
   };
 }
@@ -207,6 +207,11 @@ describe("native signing context and Actions client", () => {
       SigningContextError
     );
     expect(() =>
+      parseSigningContext(
+        context({ jobToken: undefined, runnerToken: `ge_runner_${"d".repeat(64)}` })
+      )
+    ).toThrow(SigningContextError);
+    expect(() =>
       parseSigningContext(context({ baseUrl: "http://example.invalid/api/actions" }))
     ).toThrow(SigningContextError);
   });
@@ -357,7 +362,7 @@ describe("native signing context and Actions client", () => {
       const parsed = new URL(url);
       const action = parsed.pathname.split("/").slice(-1)[0];
       calls.push({ url: parsed, init, action });
-      expect(init.headers.authorization).toBe(`Bearer ${runContext.runnerToken}`);
+      expect(init.headers.authorization).toBe(`Bearer ${runContext.jobToken}`);
       expect(init.headers["x-runner-run-id"]).toBe(runContext.runId);
       expect(init.headers["x-runner-lease-token"]).toBe(runContext.leaseToken);
       if (action === "start") return Response.json({ data: { manifest: manifest() } });
@@ -462,7 +467,7 @@ describe("native signing context and Actions client", () => {
       const parsed = new URL(url);
       const action = parsed.pathname.split("/").slice(-1)[0];
       calls.push({ url: parsed, init, action });
-      expect(init.headers.authorization).toBe(`Bearer ${runContext.runnerToken}`);
+      expect(init.headers.authorization).toBe(`Bearer ${runContext.jobToken}`);
       expect(init.headers["x-runner-run-id"]).toBe(runContext.runId);
       expect(init.headers["x-runner-lease-token"]).toBe(runContext.leaseToken);
       if (action === "start") return Response.json({ data: { manifest: windowsManifest() } });
