@@ -7,6 +7,20 @@ import type {
   SigningSubmission,
 } from "../../../../packages/contracts/src/signing";
 import type { TrustedUser } from "../../../../packages/contracts/src/index";
+import type { WorkerEntrypoint } from "cloudflare:workers";
+
+export interface LegacySigningEntrypoint extends WorkerEntrypoint {
+  exportCredential(
+    kind: string,
+    recipientPublicKey: string
+  ): Promise<{
+    version: 1;
+    kind: string;
+    wrappedKey: string;
+    iv: string;
+    ciphertext: string;
+  }>;
+}
 
 export interface SigningEnv {
   readonly LOG_LEVEL?: string;
@@ -16,6 +30,9 @@ export interface SigningEnv {
   readonly SIGNING_COORDINATORS: DurableObjectNamespace<import("./coordinator").SigningCoordinator>;
   readonly SIGNING_ARTIFACTS: R2Bucket;
   readonly SIGNING_ENCRYPTION_KEY: string;
+  readonly LEGACY_SIGNING?: Fetcher<LegacySigningEntrypoint>;
+  readonly LEGACY_SIGNING_OWNER_ID?: string;
+  readonly LEGACY_SIGNING_REPOSITORY_ID?: string;
 }
 
 export type ApprovedSigningProfile = SigningProfile;

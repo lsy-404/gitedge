@@ -1,0 +1,496 @@
+{
+  "origin": "https://gitedge.voidcarve.com",
+  "runnerRepositoryId": "13814fa3-8580-4b5a-803e-a6b1206007ed",
+  "source": {
+    "repositoryId": "1204257969",
+    "fullName": "lsy-404/IRIS",
+    "workflowPath": ".github/workflows/shell.yml",
+    "defaultBranch": "main",
+    "events": ["push", "workflow_dispatch"],
+    "refs": ["main"],
+    "actorIds": [53390868],
+    "actorIdsRequireConfirmationAgainstArtifactRun": true,
+    "artifactsCurrentlyEmittedBySourceWorkflow": false
+  },
+  "legacyPolicyContext": {
+    "repositoryDispatchOnlyTrustedActorIds": [41898282],
+    "note": "This legacy allowlist applied only to repository_dispatch, which the current shell workflow does not declare."
+  },
+  "profiles": [
+    {
+      "name": "iris-macos-arm64",
+      "platform": "macos",
+      "stage": "sign",
+      "timeoutMinutes": 90,
+      "policy": {
+        "stage": "sign",
+        "teamId": "76DMUAK6J5",
+        "project": {
+          "id": "iris-shell-arm64",
+          "enabled": true,
+          "max_artifact_bytes": 1000000000,
+          "macos": {
+            "bundle_id": "io.github.wuyilingwei.iris",
+            "bundle_name": "IRIS.app",
+            "architecture": "arm64",
+            "profile": "electron",
+            "harden_electron_fuses": false,
+            "output_format": "dmg",
+            "max_unpacked_bytes": 3000000000
+          }
+        },
+        "sourceRepositories": [
+          {
+            "id": "1204257969",
+            "fullName": "lsy-404/IRIS",
+            "workflowPath": ".github/workflows/shell.yml",
+            "artifactName": "iris-macos-arm64-source",
+            "actorIds": [53390868],
+            "events": ["push", "workflow_dispatch"],
+            "refs": ["main"]
+          }
+        ]
+      }
+    },
+    {
+      "name": "iris-macos-x64",
+      "platform": "macos",
+      "stage": "sign",
+      "timeoutMinutes": 90,
+      "policy": {
+        "stage": "sign",
+        "teamId": "76DMUAK6J5",
+        "project": {
+          "id": "iris-shell-x64",
+          "enabled": true,
+          "max_artifact_bytes": 1000000000,
+          "macos": {
+            "bundle_id": "io.github.wuyilingwei.iris",
+            "bundle_name": "IRIS.app",
+            "architecture": "x64",
+            "profile": "electron",
+            "harden_electron_fuses": false,
+            "output_format": "dmg",
+            "max_unpacked_bytes": 3000000000
+          }
+        },
+        "sourceRepositories": [
+          {
+            "id": "1204257969",
+            "fullName": "lsy-404/IRIS",
+            "workflowPath": ".github/workflows/shell.yml",
+            "artifactName": "iris-macos-x64-source",
+            "actorIds": [53390868],
+            "events": ["push", "workflow_dispatch"],
+            "refs": ["main"]
+          }
+        ]
+      }
+    },
+    {
+      "name": "iris-windows-x64",
+      "platform": "windows",
+      "stage": "windows_sign",
+      "timeoutMinutes": 60,
+      "policy": {
+        "stage": "windows_sign",
+        "azure": {
+          "endpoint": "https://eus.codesigning.azure.net/",
+          "account": "voidcarve-signing",
+          "certificate_profile": "voidcarve-public-trust",
+          "subject": "CN=VOIDCARVE LABS, O=VOIDCARVE LABS, L=Mississauga, S=Ontario, C=CA"
+        },
+        "project": {
+          "id": "iris-shell-windows-x64",
+          "enabled": true,
+          "max_artifact_bytes": 1500000000,
+          "windows": {
+            "bundle_id": "io.github.wuyilingwei.iris",
+            "architecture": "x64",
+            "max_unpacked_bytes": 4000000000,
+            "product_name": "IRIS",
+            "electron_version": "37.10.3",
+            "executable_name": "IRIS.exe",
+            "installer": "nsis",
+            "portable": true
+          }
+        },
+        "sourceRepositories": [
+          {
+            "id": "1204257969",
+            "fullName": "lsy-404/IRIS",
+            "workflowPath": ".github/workflows/shell.yml",
+            "artifactName": "iris-windows-x64-source",
+            "actorIds": [53390868],
+            "events": ["push", "workflow_dispatch"],
+            "refs": ["main"]
+          }
+        ]
+      }
+    },
+    {
+      "name": "oblivionis-macos",
+      "platform": "macos",
+      "stage": "sign",
+      "timeoutMinutes": 90,
+      "policy": {
+        "stage": "sign",
+        "teamId": "76DMUAK6J5",
+        "project": {
+          "id": "import-oblivionis-universal",
+          "enabled": true,
+          "max_artifact_bytes": 1000000000,
+          "macos": {
+            "bundle_id": "com.selvaerronea.oblivionis",
+            "bundle_name": "此生歧林.app",
+            "architecture": "universal",
+            "profile": "electron",
+            "harden_electron_fuses": true,
+            "output_format": "dmg",
+            "max_unpacked_bytes": 3000000000
+          }
+        },
+        "sourceRepositories": [{
+          "id": "1344623160",
+          "fullName": "lsy-404/oblivionis",
+          "workflowPath": ".github/workflows/import-macos.yml",
+          "artifactName": "unsigned-macos-oblivionis-universal",
+          "actorIds": [53390868],
+          "events": ["workflow_dispatch"],
+          "refs": ["main"]
+        }]
+      }
+    },
+    {
+      "name": "release-macos",
+      "platform": "macos",
+      "stage": "sign",
+      "timeoutMinutes": 90,
+      "policy": {
+        "stage": "sign",
+        "teamId": "76DMUAK6J5",
+        "project": {
+          "id": "oblivionis-macos-universal",
+          "enabled": true,
+          "max_artifact_bytes": 1500000000,
+          "macos": {
+            "bundle_id": "com.selvaerronea.oblivionis",
+            "bundle_name": "此生歧林.app",
+            "architecture": "universal",
+            "profile": "electron",
+            "harden_electron_fuses": true,
+            "output_format": "dmg",
+            "max_unpacked_bytes": 4000000000
+          }
+        },
+        "sourceRepositories": [{
+          "id": "1344623160",
+          "fullName": "lsy-404/oblivionis",
+          "workflowPath": ".github/workflows/release-signing.yml",
+          "artifactName": "unsigned-oblivionis-macos-universal",
+          "actorIds": [53390868],
+          "events": ["workflow_dispatch"],
+          "refs": ["main"]
+        }]
+      }
+    },
+    {
+      "name": "release-windows",
+      "platform": "windows",
+      "stage": "windows_sign",
+      "timeoutMinutes": 60,
+      "policy": {
+        "stage": "windows_sign",
+        "azure": {
+          "endpoint": "https://eus.codesigning.azure.net/",
+          "account": "voidcarve-signing",
+          "certificate_profile": "voidcarve-public-trust",
+          "subject": "CN=VOIDCARVE LABS, O=VOIDCARVE LABS, L=Mississauga, S=Ontario, C=CA"
+        },
+        "project": {
+          "id": "oblivionis-windows-x64",
+          "enabled": true,
+          "max_artifact_bytes": 1500000000,
+          "windows": {
+            "bundle_id": "com.selvaerronea.oblivionis",
+            "architecture": "x64",
+            "max_unpacked_bytes": 4000000000,
+            "product_name": "此生歧林",
+            "electron_version": "44.4.5",
+            "executable_name": "此生歧林.exe",
+            "installer": "nsis",
+            "portable": false
+          }
+        },
+        "sourceRepositories": [{
+          "id": "1344623160",
+          "fullName": "lsy-404/oblivionis",
+          "workflowPath": ".github/workflows/release-signing.yml",
+          "artifactName": "unsigned-oblivionis-windows-x64",
+          "actorIds": [53390868],
+          "events": ["workflow_dispatch"],
+          "refs": ["main"]
+        }]
+      }
+    },
+    {
+      "name": "epilogue-macos-arm64",
+      "platform": "macos",
+      "stage": "sign",
+      "timeoutMinutes": 90,
+      "policy": {
+        "stage": "sign",
+        "teamId": "76DMUAK6J5",
+        "project": {
+          "id": "epilogue-macos-arm64",
+          "enabled": true,
+          "max_artifact_bytes": 1500000000,
+          "macos": {
+            "bundle_id": "com.electron.epilogue",
+            "bundle_name": "Epilogue.app",
+            "architecture": "arm64",
+            "profile": "electron",
+            "harden_electron_fuses": true,
+            "output_format": "dmg",
+            "max_unpacked_bytes": 4000000000
+          }
+        },
+        "sourceRepositories": [{
+          "id": "1264930787",
+          "fullName": "lsy-404/epilogue",
+          "workflowPath": ".github/workflows/release.yml",
+          "releaseTagPattern": "^v\\d+\\.\\d+\\.\\d+$",
+          "artifactName": "epilogue-macos-arm64-source",
+          "actorIds": [53390868],
+          "events": ["push"],
+          "refs": ["refs/tags/v*" ]
+        }]
+      }
+    },
+    {
+      "name": "epilogue-windows-x64",
+      "platform": "windows",
+      "stage": "windows_sign",
+      "timeoutMinutes": 60,
+      "policy": {
+        "stage": "windows_sign",
+        "azure": {
+          "endpoint": "https://eus.codesigning.azure.net/",
+          "account": "voidcarve-signing",
+          "certificate_profile": "voidcarve-public-trust",
+          "subject": "CN=VOIDCARVE LABS, O=VOIDCARVE LABS, L=Mississauga, S=Ontario, C=CA"
+        },
+        "project": {
+          "id": "epilogue-windows-x64",
+          "enabled": true,
+          "max_artifact_bytes": 1500000000,
+          "windows": {
+            "bundle_id": "com.electron.epilogue",
+            "architecture": "x64",
+            "max_unpacked_bytes": 4000000000,
+            "product_name": "Epilogue",
+            "electron_version": "44.0.0",
+            "executable_name": "Epilogue.exe",
+            "installer": "squirrel",
+            "portable": false
+          }
+        },
+        "sourceRepositories": [{
+          "id": "1264930787",
+          "fullName": "lsy-404/epilogue",
+          "workflowPath": ".github/workflows/release.yml",
+          "releaseTagPattern": "^v\\d+\\.\\d+\\.\\d+$",
+          "artifactName": "epilogue-windows-x64-source",
+          "actorIds": [53390868],
+          "events": ["push"],
+          "refs": ["refs/tags/v*" ]
+        }]
+      }
+    },
+    {
+      "name": "epilogue-windows-arm64",
+      "platform": "windows",
+      "stage": "windows_sign",
+      "timeoutMinutes": 60,
+      "policy": {
+        "stage": "windows_sign",
+        "azure": {
+          "endpoint": "https://eus.codesigning.azure.net/",
+          "account": "voidcarve-signing",
+          "certificate_profile": "voidcarve-public-trust",
+          "subject": "CN=VOIDCARVE LABS, O=VOIDCARVE LABS, L=Mississauga, S=Ontario, C=CA"
+        },
+        "project": {
+          "id": "epilogue-windows-arm64",
+          "enabled": true,
+          "max_artifact_bytes": 1500000000,
+          "windows": {
+            "bundle_id": "com.electron.epilogue",
+            "architecture": "arm64",
+            "max_unpacked_bytes": 4000000000,
+            "product_name": "Epilogue",
+            "electron_version": "44.0.0",
+            "executable_name": "Epilogue.exe",
+            "installer": "squirrel",
+            "portable": false
+          }
+        },
+        "sourceRepositories": [{
+          "id": "1264930787",
+          "fullName": "lsy-404/epilogue",
+          "workflowPath": ".github/workflows/release.yml",
+          "releaseTagPattern": "^v\\d+\\.\\d+\\.\\d+$",
+          "artifactName": "epilogue-windows-arm64-source",
+          "actorIds": [53390868],
+          "events": ["push"],
+          "refs": ["refs/tags/v*" ]
+        }]
+      }
+    },
+    {
+      "name": "synthv-macos-arm64",
+      "platform": "macos",
+      "stage": "sign",
+      "timeoutMinutes": 90,
+      "policy": {
+        "stage": "sign",
+        "teamId": "76DMUAK6J5",
+        "project": {
+          "id": "synthv-toolbox-arm64",
+          "enabled": true,
+          "max_artifact_bytes": 1000000000,
+          "macos": {
+            "bundle_id": "com.synthvcopilot.toolbox",
+            "bundle_name": "Synthesizer V Toolbox.app",
+            "architecture": "arm64",
+            "profile": "electron",
+            "harden_electron_fuses": true,
+            "output_format": "dmg",
+            "max_unpacked_bytes": 3000000000
+          }
+        },
+        "sourceRepositories": [{
+          "id": "1319908050",
+          "fullName": "SynthVCopilot/synthv-toolbox",
+          "workflowPath": ".github/workflows/desktop.yml",
+          "releaseTagPattern": "^v\\d+\\.\\d+\\.\\d+$",
+          "artifactName": "signing-source",
+          "actorIds": [53390868],
+          "events": ["push"],
+          "refs": ["refs/tags/v*" ]
+        }]
+      }
+    },
+    {
+      "name": "stardust-ios",
+      "platform": "ios",
+      "stage": "ios_sign",
+      "timeoutMinutes": 60,
+      "policy": {
+        "stage": "ios_sign",
+        "teamId": "76DMUAK6J5",
+        "project": {
+          "id": "stardust-ios",
+          "enabled": true,
+          "max_artifact_bytes": 1000000000,
+          "ios": {
+            "bundle_id": "top.stardustinfinity.mobile",
+            "architecture": "arm64",
+            "max_unpacked_bytes": 4000000000
+          }
+        },
+        "sourceRepositories": [{
+          "id": "1423880436",
+          "fullName": "stardust-fans/star-dust-fans_android",
+          "workflowPath": ".github/workflows/ios-sign.yml",
+          "artifactName": "unsigned-ios-archive",
+          "actorIds": [53390868],
+          "events": ["workflow_dispatch"],
+          "refs": ["main"]
+        }]
+      }
+    }
+  ],
+  "activeConsumers": [
+    {
+      "repository": "lsy-404/IRIS",
+      "repositoryId": "1204257969",
+      "workflow": ".github/workflows/shell.yml",
+      "profiles": ["iris-macos-arm64", "iris-macos-x64", "iris-windows-x64"],
+      "candidateArtifacts": ["iris-macos-arm64-source", "iris-macos-x64-source", "iris-windows-x64-source"],
+      "currentArtifactUploaded": false,
+      "currentCallerUsesLegacySigningApi": true,
+      "workflowEvents": ["push", "workflow_dispatch"],
+      "workflowRef": "refs/heads/main",
+      "actorIdsNeedRunValidation": true
+    },
+    {
+      "repository": "lsy-404/oblivionis",
+      "repositoryId": "1344623160",
+      "workflow": ".github/workflows/import-macos.yml",
+      "profile": "oblivionis-macos",
+      "currentArtifact": "unsigned-macos-oblivionis-universal",
+      "currentArtifactUploaded": true,
+      "workflowEvent": "workflow_dispatch",
+      "workflowRef": "refs/heads/main",
+      "actorIdsNeedRunValidation": true
+    },
+    {
+      "repository": "lsy-404/oblivionis",
+      "repositoryId": "1344623160",
+      "workflow": ".github/workflows/release-signing.yml",
+      "profiles": ["release-macos", "release-windows"],
+      "candidateArtifacts": ["unsigned-oblivionis-macos-universal", "unsigned-oblivionis-windows-x64"],
+      "currentCallerUploadsUnsignedArtifacts": false,
+      "workflowEvent": "workflow_dispatch",
+      "workflowRef": "refs/heads/main",
+      "actorIdsNeedRunValidation": true
+    },
+    {
+      "repository": "lsy-404/epilogue",
+      "repositoryId": "1264930787",
+      "workflow": ".github/workflows/release.yml",
+      "profiles": ["epilogue-macos-arm64", "epilogue-windows-x64", "epilogue-windows-arm64"],
+      "candidateArtifacts": ["epilogue-macos-arm64-source", "epilogue-windows-x64-source", "epilogue-windows-arm64-source"],
+      "currentBuildArtifacts": ["build-app-macos-arm64", "build-app-windows-x64", "build-app-windows-arm64"],
+      "currentSigningJobsUploadRequestContext": true,
+      "workflowEvent": "push",
+      "workflowRefPattern": "refs/tags/v<major>.<minor>.<patch>",
+      "actorIdsNeedRunValidation": true
+    },
+    {
+      "repository": "SynthVCopilot/synthv-toolbox",
+      "repositoryId": "1319908050",
+      "workflow": ".github/workflows/desktop.yml",
+      "profile": "synthv-macos-arm64",
+      "currentArtifact": "signing-source",
+      "currentArtifactUploaded": true,
+      "workflowEvent": "push",
+      "workflowRefPattern": "refs/tags/v<major>.<minor>.<patch>",
+      "actorIdsNeedRunValidation": true
+    },
+    {
+      "repository": "stardust-fans/star-dust-fans_android",
+      "repositoryId": "1423880436",
+      "workflow": ".github/workflows/ios-sign.yml",
+      "profile": "stardust-ios",
+      "currentArtifact": "unsigned-ios-archive",
+      "currentArtifactUploaded": true,
+      "workflowEvent": "workflow_dispatch",
+      "workflowRef": "refs/heads/main",
+      "actorIdsNeedRunValidation": true
+    }
+  ],
+  "runnerWorkflowBinding": {
+    "workflowPath": "Must be selected in the account Runner repository",
+    "workflowOid": "Must be read from the exact protected Runner repository commit",
+    "note": "The IRIS source workflow path above is policy provenance. It is distinct from the immutable Runner signing workflow pinned by GitEdge profile approval."
+  },
+  "credentialInputs": {
+    "github-source": "Install the currently authorized read-only GitHub token through the normal credential UI.",
+    "macos": "Restore Apple signing and notarization credentials from their authorized source, then install through the normal credential UI.",
+    "windows": "Create or restore the Azure signing client secret from an authorized Azure identity-management path; it is not present in the legacy static policy.",
+    "ios": "Restore the iOS signing credentials through the normal credential UI for the Stardust candidate profile."
+  },
+  "activationGate": "Do not approve or route a profile until its caller submits through GitEdge, emits the candidate input artifact, and its actor ID is verified against a successful source run."
+}

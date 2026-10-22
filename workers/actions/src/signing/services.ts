@@ -536,6 +536,77 @@ export async function installSigningCredentials(
     .run();
 }
 
+export async function importLegacySigningCredentials(
+  env: SigningEnv,
+  ownerId: string,
+  repositoryId: string,
+  profileName: string,
+  kind: SigningCredentialPlatform
+): Promise<void> {
+  if (!env.LEGACY_SIGNING) throw new Error("legacy_credential_import_unavailable");
+  if (
+    !env.LEGACY_SIGNING_OWNER_ID ||
+    !env.LEGACY_SIGNING_REPOSITORY_ID ||
+    ownerId !== env.LEGACY_SIGNING_OWNER_ID ||
+    repositoryId !== env.LEGACY_SIGNING_REPOSITORY_ID
+  )
+    throw new Error("legacy_credential_import_target_mismatch");
+  const status = await signingCredentialStatus(env, ownerId, repositoryId, profileName, kind);
+  if (!status || (kind !== "github-source" && status.platform !== kind))
+    throw new Error("signing_profile_not_approved");
+
+  const keyPair = await crypto.subtle.generateKey(
+    {
+      name: "RSA-OAEP",
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: "SHA-256",
+    },
+    false,
+    ["encrypt", "decrypt"]
+  );
+  const publicKey = new Uint8Array(await crypto.subtle.exportKey("spki", keyPair.publicKey));
+  const recipientPublicKey = bytesToBase64(publicKey);
+  const envelope = await env.LEGACY_SIGNING.exportCredential(kind, recipientPublicKey);
+  const maxCiphertext = kind === "ios" ? 500_000 : kind === "macos" ? 100_000 : 4096;
+  if (
+    envelope.version !== 1 ||
+    envelope.kind !== kind ||
+    envelope.wrappedKey.length > 1024 ||
+    envelope.iv.length > 64 ||
+    envelope.ciphertext.length > maxCiphertext
+  )
+    throw new Error("legacy_credential_envelope_invalid");
+
+  const rawKey = new Uint8Array(
+    await crypto.subtle.decrypt(
+      { name: "RSA-OAEP" },
+      keyPair.privateKey,
+      base64ToBytes(envelope.wrappedKey)
+    )
+  );
+  if (rawKey.length !== 32) throw new Error("legacy_credential_envelope_invalid");
+  const contentKey = await crypto.subtle.importKey("raw", rawKey, "AES-GCM", false, ["decrypt"]);
+  rawKey.fill(0);
+  const plaintext = await crypto.subtle.decrypt(
+    {
+      name: "AES-GCM",
+      iv: base64ToBytes(envelope.iv),
+      additionalData: new TextEncoder().encode(`gitedge-credential-migration:v1:${kind}`),
+    },
+    contentKey,
+    base64ToBytes(envelope.ciphertext)
+  );
+  await installSigningCredentials(
+    env,
+    ownerId,
+    repositoryId,
+    profileName,
+    kind,
+    JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(plaintext))
+  );
+}
+
 export async function removeSigningCredentials(
   env: SigningEnv,
   ownerId: string,
