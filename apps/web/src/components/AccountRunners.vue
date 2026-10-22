@@ -8,16 +8,13 @@ import type {
   RunnerOverviewRunner,
 } from "../../../../packages/contracts/src/runners";
 import { api, errorMessage } from "../lib/api";
-import type { Repository } from "../lib/api";
 import NoticeBar from "./NoticeBar.vue";
 import StatusBadge from "./StatusBadge.vue";
 import StatusState from "./StatusState.vue";
 import AccountRunnerServices from "./AccountRunnerServices.vue";
-import AccountRunnerSigningApproval from "./AccountRunnerSigningApproval.vue";
 
 const { t, d } = useI18n();
 const overview = ref<RunnerOverview | null>(null);
-const accountRunner = ref<Pick<Repository, "id" | "owner" | "slug"> | null>(null);
 const loading = ref(true);
 const loadError = ref("");
 const histories = ref(new Map<string, RunnerHistoryItem[]>());
@@ -166,7 +163,7 @@ onUnmounted(() => {
       }}</FluentButton>
     </header>
     <NoticeBar v-if="loadError" intent="error">{{ loadError }}</NoticeBar>
-    <AccountRunnerServices @loaded="accountRunner = $event" />
+    <AccountRunnerServices />
     <div v-if="loading" class="box"><StatusState :loading="true" /></div>
     <template v-else-if="overview">
       <NoticeBar v-if="overview.truncated" intent="warning">{{ t("runnerTruncated") }}</NoticeBar>
@@ -222,12 +219,6 @@ onUnmounted(() => {
           <div class="runner-labels">
             <StatusBadge v-for="label in runner.labels" :key="label">{{ label }}</StatusBadge>
           </div>
-          <AccountRunnerSigningApproval
-            v-if="accountRunner"
-            :runner="runner"
-            :account-runner="accountRunner"
-            @updated="refresh"
-          />
           <div v-if="runner.capacity" class="runner-metrics">
             <div>
               <span

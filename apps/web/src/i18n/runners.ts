@@ -82,27 +82,12 @@ export const runnerMessages = {
     accountRunnerEmpty: "尚未创建账户 Runner 仓库。创建后即可编辑工作流并手动运行服务。",
     accountRunnerServiceScope:
       "服务以工作流配置。账户 Runner 支持手动运行和最多 5 个五字段 UTC Cron 定时表达式；定时任务使用默认分支，重复排队运行会合并。",
-    runnerSigningTitle: "签名执行授权",
-    runnerSigningDescription:
-      "此授权只适用于当前账户私有 Runner 仓库中的节点。它将此注册切换为专用签名执行类别。",
-    runnerSigningClassGeneral: "通用执行",
-    runnerSigningClassDedicated: "专用签名节点",
-    runnerSigningPlatform: "签名平台",
     runnerSigningPlatform_windows: "Windows",
     runnerSigningPlatform_macos: "macOS",
     runnerSigningPlatform_ios: "iOS",
-    runnerSigningApprovedPlatform: "已批准平台：{platform}",
-    runnerSigningApprovedAt: "批准时间：{time}",
-    runnerSigningDedicatedConfirm:
-      "我已核实此主机或 OS 服务账户仅用于签名，与普通 CI 执行身份隔离。",
-    runnerSigningIsolationNote:
-      "请使用单独主机/虚拟机或 OS 服务账户。此确认是操作员声明，不是硬件证明；普通 Mac CI 配置不能直接复用为专用签名节点。",
-    runnerSigningApprove: "批准为签名节点",
-    runnerSigningUpdate: "更新签名批准",
-    runnerSigningRevoke: "撤销签名批准",
-    runnerSigningRevokeConfirm: "撤销后会取消此节点当前的签名运行。继续？",
     runnerSigningProfilesTitle: "签名配置",
-    runnerSigningProfilesDescription: "批准 Runner 仓库中的签名工作流，并管理加密保存的平台凭据。",
+    runnerSigningProfilesDescription:
+      "批准 Runner 仓库中的签名工作流，并管理加密保存的平台凭据。签名任务使用已登记的通用 runner。",
     runnerSigningProfileName: "配置名称",
     runnerSigningProfileNameExample: "release",
     runnerSigningProfileApprove: "批准配置",
@@ -114,6 +99,8 @@ export const runnerMessages = {
     runnerSigningCredentialConfigured: "已加密保存",
     runnerSigningCredentialMissing: "未安装",
     runnerSigningCredentialsInstall: "从 JSON 安装凭据",
+    runnerSigningWindowsCredentialsHelp:
+      "Windows JSON 必须只包含 tenant_id、client_id 和 client_secret 三个字符串字段。由服务端加密保存，并按任务下发。",
     runnerSigningSourceCredentialsInstall: "从 JSON 安装源码读取令牌",
     runnerSigningCredentialsRemove: "撤销凭据",
     runnerSigningCredentialsRemoveConfirm: "删除此配置的已加密凭据？",
@@ -205,29 +192,12 @@ export const runnerMessages = {
       "No account Runner repository exists yet. Create one to edit workflows and run services manually.",
     accountRunnerServiceScope:
       "Services are configured as workflows. Runner workflows support manual runs and up to five UTC cron schedules (five-field syntax); schedules use the default branch and duplicate queued runs are coalesced.",
-    runnerSigningTitle: "Signing execution approval",
-    runnerSigningDescription:
-      "This approval applies only to a runner registered under your private account Runner repository. It assigns the dedicated signing execution class.",
-    runnerSigningClassGeneral: "General execution",
-    runnerSigningClassDedicated: "Dedicated signing node",
-    runnerSigningPlatform: "Signing platform",
     runnerSigningPlatform_windows: "Windows",
     runnerSigningPlatform_macos: "macOS",
     runnerSigningPlatform_ios: "iOS",
-    runnerSigningApprovedPlatform: "Approved platform: {platform}",
-    runnerSigningApprovedAt: "Approved: {time}",
-    runnerSigningDedicatedConfirm:
-      "I verified this host or OS service account is reserved for signing and isolated from general CI execution.",
-    runnerSigningIsolationNote:
-      "Use a separate host/VM or OS service account. This is an operator declaration, not hardware proof; do not reuse an ordinary Mac CI profile as a dedicated signer.",
-    runnerSigningApprove: "Approve signing node",
-    runnerSigningUpdate: "Update signing approval",
-    runnerSigningRevoke: "Revoke signing approval",
-    runnerSigningRevokeConfirm:
-      "Revoking this approval cancels active signing runs on this runner. Continue?",
     runnerSigningProfilesTitle: "Signing profiles",
     runnerSigningProfilesDescription:
-      "Approve signing workflows from the Runner repository and manage encrypted platform credentials.",
+      "Approve signing workflows from the Runner repository and manage encrypted platform credentials. Signing jobs use registered generic runners.",
     runnerSigningProfileName: "Profile name",
     runnerSigningProfileNameExample: "release",
     runnerSigningProfileApprove: "Approve profile",
@@ -239,6 +209,8 @@ export const runnerMessages = {
     runnerSigningCredentialConfigured: "Encrypted and stored",
     runnerSigningCredentialMissing: "Not installed",
     runnerSigningCredentialsInstall: "Install credentials from JSON",
+    runnerSigningWindowsCredentialsHelp:
+      "Windows JSON must contain exactly three string fields: tenant_id, client_id, and client_secret. Encrypted on the server and delivered per task.",
     runnerSigningSourceCredentialsInstall: "Install source-read token from JSON",
     runnerSigningCredentialsRemove: "Revoke credentials",
     runnerSigningCredentialsRemoveConfirm: "Delete the encrypted credentials for this profile?",

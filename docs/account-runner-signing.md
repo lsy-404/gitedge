@@ -1,44 +1,28 @@
 # Account Runner signing
 
-Signing runs through the private account Runner repository and dedicated signing machines. The Actions Worker owns admission, profile approval, credential grants, request state and artifact storage. A signing machine executes platform tools under its registered identity and current lease.
+Signing runs use the private account Runner repository and the same generic runner registrations as other GitEdge and GitHub jobs. The Actions Worker owns profile approval, encrypted credential storage, request state and artifact storage. A runner is eligible when its reported operating system, architecture, labels and tools satisfy the signing profile and workflow requirements. No separate signing registration, dedicated-host approval or OS service identity is required. The intended deployment uses one Mac broker and two Windows brokers, all registered as generic runners.
 
-## Prepare a machine
+## Runner setup
 
-Use a dedicated host, VM or OS service account that ordinary CI cannot read or impersonate. Separate labels or broker profiles do not provide that boundary. A broker service rejects a mixture of ordinary and signing profiles. Keep signing and ordinary service state directories separate.
+Install the broker and platform toolchain on each host, then register it with the standard `register-gitedge` command for the account Runner repository. Keep the GitEdge registration token and local runner state private. The broker stores the returned GitEdge runner credential; signing credentials remain encrypted on the server and are delivered only to the authorized task under its active lease.
 
-Give the signing account access only to the signing checkout, broker state and platform tools. Keep the state directory and registration credential readable only by that OS identity. Do not run an ordinary CI broker or ordinary workflow under the signing identity. The dashboard's dedicated-host approval records the owner's review; it does not prove hardware isolation.
+macOS profiles need the required Apple signing and notarization tools. iOS profiles need the approved Xcode, SDK, certificate and provisioning profile. Windows profiles need the approved Microsoft signing tooling. The broker reports its real OS, architecture and available tools so the scheduler can match requirements; custom labels do not change the host platform.
 
-- **macOS:** create a separate macOS user for signing. Install and register the signing profile while logged in as that user, then install the LaunchAgent from the same account. It runs in that user's GUI session; do not install it under an ordinary CI account. Keep Apple signing credentials in the approved per-run keychain flow.
-- **Windows:** create a separate local or managed OS identity and run the broker from a Task Scheduler task under that identity. `runner-broker service install` does not support Windows. Restrict the checkout, broker state and task configuration to the signing identity; verify that the selected Azure managed/workload identity is the one authorized for the signing API.
-- **Linux:** use the supported systemd service with a dedicated non-root account and a private state directory owned by that account. Install with `service install --run-as-user <account>`; the installer checks the state directory ownership and mode.
+## Approve a definition and credentials
 
-Coordinate the broker upgrade with the Actions deployment: finish active jobs, pause claims, deploy Actions, then upgrade and resume every broker. The new broker requires the server's explicit execution class in each claim response. Confirm that an existing registration is ordinary, then explicitly set its local profile's `executionClass` to `ordinary` before resuming. A new ordinary registration also writes this field. Do not convert an ordinary registration or OS account into a signing identity. Signing requires a separate host or OS account and a fresh signing registration approved by the account owner; editing local profile JSON does not grant signing authority.
-
-Install Node.js 24 or newer and the repository dependencies. Install the platform runtime dependencies with:
-
-```sh
-pnpm --dir scripts/signing install --frozen-lockfile
-```
-
-macOS signing requires the Apple signing/notarization tools and a Developer ID certificate. iOS signing requires the approved Xcode toolchain, development certificate and provisioning profile. Windows signing requires the approved Azure Artifact Signing configuration and a working managed identity or workload identity; an interactive Azure CLI login does not grant signing authority.
-
-Register a repository-scoped signing broker using `register-gitedge --signing --repository runner` and a distinct state directory. Supply the registration credential through `GITEDGE_TOKEN`, then remove it from the shell. Registration alone does not authorize signing. In **Settings → Runners**, the account owner confirms the dedicated machine and approves its signing platform with recent authentication. Revoking approval stops further signing claims and credential authorization.
-
-## Approve a definition
-
-Keep signing profiles in `.gitedge/signing/<name>.yml` within Runner. The profile pins a workflow path and commit from the same private repository, a platform, timeout and product/source policy. Approval reads that exact workflow from GitEdge and stores an immutable snapshot. Editing YAML does not authorize a new revision; approve it again explicitly.
+Keep signing profiles in `.gitedge/signing/<name>.yml` within Runner. A profile pins a workflow path and commit from the same private repository, a platform, timeout and product/source policy. Approval reads that exact workflow from GitEdge and stores an immutable snapshot. Editing YAML does not authorize a new revision; approve it again explicitly.
 
 Source policy identifies permitted GitHub repository IDs, workflow path, artifact name, actor IDs, events and branch/tag names. GitHub is used to validate the source build and download its archive. Signing execution does not dispatch a GitHub workflow.
 
 Without `releaseTagPattern`, a source build must come from its repository's default branch. A release profile additionally checks its approved tag pattern, the exact `v<version>` tag and default-branch ancestry. Release submissions require GitHub Actions OIDC proof for that source run. Grant the source job `id-token: write`; the CLI obtains a fresh identity with the Gateway origin as its audience. A caller integrating the client directly supplies `sourceIdentity`, or sets `GITEDGE_SOURCE_IDENTITY` for the CLI. Identity tokens are never part of the stored request.
 
-Use the signing profile panel to approve a profile and install platform credential JSON. Install a separate GitHub source credential for the same profile with purpose `github-source` and JSON `{ "token": "..." }`. This credential must have read access to the approved source repositories; another account's source integration is never used. Credential writes and removal require recent human authentication. The panel exposes configuration metadata, never stored secret values. Certificate material is encrypted by Actions and is issued only to the approved machine with a current request/run/lease binding. Finalization does not receive the signing certificate.
+Use the signing profile panel to approve a profile and install platform credential JSON. GitHub source-read credentials use purpose `github-source` and JSON `{ "token": "..." }`. Windows platform credentials must be exactly `{ "tenant_id": "...", "client_id": "...", "client_secret": "..." }`; the broker does not use a preconfigured managed or workload identity. The service encrypts credentials at rest and grants them per authorized task. Credential writes and removal require recent human authentication. The panel exposes configuration metadata, never stored secret values.
 
 ## Submit from a workflow
 
-Use an exact-Runner-repository token with `repo:write` to submit and `repo:read` to poll/download, or a job credential bound to that Runner repository. A normal project's job credential cannot submit on behalf of the account Runner. Profile approval, credential installation and host approval require a human browser session.
+Use an exact-Runner-repository token with `repo:write` to submit and `repo:read` to poll/download, or a job credential bound to that Runner repository. A normal project's job credential cannot submit on behalf of the account Runner. Profile approval, credential installation and removal require a human browser session.
 
-The request file contains only source proof and a profile name:
+The request file contains source proof and a profile name:
 
 ```json
 {
@@ -73,7 +57,7 @@ node scripts/signing/request.mjs wait \
   --output signed-output.zip
 ```
 
-The client prints the request as JSON. Download validates the declared size and whole-archive SHA-256 before publishing the output file. The returned ZIP contains the platform output and its verification report. Platform output names include `product.zip`, `product.dmg`, `signed.ipa` and the approved Windows installer outputs. Verify each report's file digest when importing individual files into a release.
+The client prints the request as JSON. Download validates the declared size and whole-archive SHA-256 before publishing the output file. The returned ZIP contains the platform output and its verification report. Verify each report's file digest when importing individual files into a release.
 
 ## HTTP endpoints
 
@@ -90,6 +74,6 @@ All paths below are under `/api/actions` on the Gateway. Pass the private Runner
 | GET    | `/signing/requests/:id`               | Read request state                                        |
 | GET    | `/signing/requests/:id/download`      | Download verified final output                            |
 
-Machine callbacks are separate. They require the registered runner credential and matching native run lease; caller tokens and ordinary job credentials cannot authorize them. Existing account-runner capacity, cancellation, history and repository admission limits apply to signing stages.
+Runner callbacks require the registered runner credential and matching native run lease. Signing profile approval and the task/lease authorization govern signing and credential access. Account-runner capacity, cancellation, history and repository admission limits apply to signing stages.
 
 Signing requests have a six-day deadline. The dedicated signing artifact bucket retains source and output objects for seven days and aborts unfinished multipart uploads after one day. Request metadata remains in history; expired downloads return 410. Import verified outputs into release storage before their retention period ends.

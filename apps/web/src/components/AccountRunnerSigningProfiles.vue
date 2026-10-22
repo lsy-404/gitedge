@@ -29,6 +29,10 @@ const loading = ref(false);
 const busy = ref<string | null>(null);
 const error = ref("");
 
+function isCredentialObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 async function refresh(): Promise<void> {
   loading.value = true;
   error.value = "";
@@ -93,16 +97,24 @@ async function install(
   let credentials: unknown;
   try {
     credentials = JSON.parse(await file.text());
-    if (!credentials || typeof credentials !== "object" || Array.isArray(credentials))
-      throw new Error("invalid_credentials");
-    if (
-      platform === "github-source" &&
-      (!Object.hasOwn(credentials as object, "token") ||
-        typeof (credentials as Record<string, unknown>).token !== "string" ||
-        !(credentials as Record<string, string>).token.trim() ||
-        (credentials as Record<string, string>).token.length > 512)
-    )
-      throw new Error("invalid_source_token");
+    if (!isCredentialObject(credentials)) throw new Error("invalid_credentials");
+    const values = credentials;
+    if (platform === "github-source") {
+      if (
+        Object.keys(values).length !== 1 ||
+        typeof values.token !== "string" ||
+        !values.token.trim() ||
+        values.token.length > 512
+      )
+        throw new Error("invalid_source_token");
+    } else if (platform === "windows") {
+      const keys = ["tenant_id", "client_id", "client_secret"];
+      if (
+        Object.keys(values).length !== keys.length ||
+        keys.some((key) => typeof values[key] !== "string" || !values[key].trim())
+      )
+        throw new Error("invalid_windows_credentials");
+    }
   } catch {
     error.value = t("runnerSigningCredentialsFileInvalid");
     return;
@@ -211,6 +223,9 @@ onMounted(() => void refresh());
           · {{ d(new Date(statusFor(profile, profile.platform)!.updatedAt!), "long") }}</span
         >
       </div>
+      <p v-if="profile.platform === 'windows'" class="row-meta">
+        {{ t("runnerSigningWindowsCredentialsHelp") }}
+      </p>
       <div class="profile-actions">
         <label class="file-button">
           {{ t("runnerSigningCredentialsInstall") }}

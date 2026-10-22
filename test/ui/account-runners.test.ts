@@ -23,11 +23,6 @@ function overview(overrides: Partial<RunnerOverview> = {}): RunnerOverview {
         name: "amd-small",
         scope: { owner: "ada" },
         labels: ["linux", "x64"],
-        executionClass: "ordinary",
-        signingPlatform: null,
-        dedicatedHostConfirmed: false,
-        operatorApprovedAt: null,
-        operatorApprovedBy: null,
         createdAt: Date.now() - 10_000,
         lastSeenAt: Date.now(),
         revokedAt: null,
@@ -193,62 +188,6 @@ describe("AccountRunners", () => {
     ).toContain("Edit or add service workflows");
   });
 
-  it("offers signing approval only for the owner's private Runner registration", async () => {
-    const runner = {
-      ...overview().runners[0]!,
-      scope: { owner: "ada", repository: "runner" },
-    };
-    const repository = {
-      ...baseRepository,
-      id: "account-runner",
-      owner: "ada",
-      name: "Runner",
-      slug: "runner",
-      visibility: "private" as const,
-      systemKind: "account_runner" as const,
-    };
-    vi.spyOn(api, "runnerOverview").mockResolvedValue(
-      overview({ runners: [runner], github: [], queue: [] })
-    );
-    vi.spyOn(api, "accountRunner").mockResolvedValue({ repository });
-    const approve = vi.spyOn(api, "approveRunnerSigning").mockResolvedValue({
-      runner: {
-        id: runner.id,
-        name: runner.name,
-        scope: runner.scope,
-        labels: runner.labels,
-        executionClass: "signing",
-        signingPlatform: "windows",
-        dedicatedHostConfirmed: true,
-        operatorApprovedAt: Date.now(),
-        operatorApprovedBy: "user-1",
-        createdAt: runner.createdAt,
-        lastSeenAt: runner.lastSeenAt,
-        revokedAt: runner.revokedAt,
-      },
-    });
-    const mounted = await mountAt("/_verify/signing-approval", "/_verify/signing-approval", () =>
-      h(AccountRunners)
-    );
-    await settle();
-    expect(mounted.root.textContent).toContain("Signing execution approval");
-    expect(mounted.root.textContent).toContain("operator declaration, not hardware proof");
-    const confirm = mounted.root.querySelector<HTMLInputElement>(
-      ".runner-signing-confirm input[type=checkbox]"
-    );
-    expect(confirm).not.toBeNull();
-    confirm!.checked = true;
-    confirm!.dispatchEvent(new Event("input", { bubbles: true }));
-    confirm!.dispatchEvent(new Event("change", { bubbles: true }));
-    await settle();
-    findButton(mounted.root, "Approve signing node").click();
-    await settle();
-    expect(approve).toHaveBeenCalledWith(runner.id, {
-      platform: "windows",
-      dedicatedHostConfirmed: true,
-    });
-  });
-
   it("approves a named Runner profile and installs source credentials without rendering the token", async () => {
     const profile = {
       name: "release",
@@ -268,18 +207,37 @@ describe("AccountRunners", () => {
       updatedAt: null,
     }));
     const approveProfile = vi.spyOn(api, "approveSigningProfile").mockResolvedValue(profile);
-    const install = vi.spyOn(api, "installSigningCredentials").mockResolvedValue({
-      name: profile.name,
-      revision: profile.revision,
-      platform: "github-source",
-      configured: true,
-      updatedAt: Date.now(),
-    });
+    const install = vi
+      .spyOn(api, "installSigningCredentials")
+      .mockImplementation(async (_id, name, platform) => ({
+        name,
+        revision: profile.revision,
+        platform,
+        configured: true,
+        updatedAt: Date.now(),
+      }));
     const mounted = await mountAt("/_verify/signing-profiles", "/_verify/signing-profiles", () =>
       h(AccountRunnerSigningProfiles, { repositoryId: "runner-repository" })
     );
     await settle();
     expect(mounted.root.textContent).toContain(".github/workflows/sign.yml");
+    expect(mounted.root.textContent).toContain("tenant_id");
+    const credentialInput = mounted.root.querySelector<HTMLInputElement>(
+      '.signing-profile input[type="file"]'
+    )!;
+    const windowsFile = new File(
+      [JSON.stringify({ tenant_id: "tenant", client_id: "client", client_secret: "secret" })],
+      "windows.json",
+      { type: "application/json" }
+    );
+    Object.defineProperty(credentialInput, "files", { value: [windowsFile], configurable: true });
+    credentialInput.dispatchEvent(new Event("change", { bubbles: true }));
+    await settle();
+    expect(install).toHaveBeenCalledWith("runner-repository", "release", "windows", {
+      tenant_id: "tenant",
+      client_id: "client",
+      client_secret: "secret",
+    });
 
     const name = mounted.root.querySelector<HTMLInputElement>("#runner-signing-profile-name")!;
     name.value = "release";

@@ -1,26 +1,9 @@
 import type {
-  RegisteredRunner,
-  SigningRunnerApproval,
-} from "../../../../packages/contracts/src/runners";
-import type {
   SigningCredentialStatus,
   SigningCredentialPlatform,
   SigningProfileMetadata,
 } from "../../../../packages/contracts/src/signing";
 import { api } from "./api";
-
-export async function approveRunnerSigning(
-  runnerId: string,
-  approval: SigningRunnerApproval
-): Promise<RegisteredRunner> {
-  const result = await api.approveRunnerSigning(runnerId, approval);
-  if (!result.runner) throw new Error("Runner approval response was incomplete.");
-  return result.runner;
-}
-
-export async function revokeRunnerSigning(runnerId: string): Promise<void> {
-  await api.revokeRunnerSigning(runnerId);
-}
 
 export async function listSigningProfiles(repositoryId: string): Promise<SigningProfileMetadata[]> {
   return (await api.signingProfiles(repositoryId)).profiles;
