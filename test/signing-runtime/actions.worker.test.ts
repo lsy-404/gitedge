@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { TrustedUser } from "../../packages/contracts/src/index";
 import type {
   SigningMachineContext,
@@ -17,6 +17,7 @@ import {
 } from "../../workers/actions/src/signing";
 import type { SigningEnv, SigningExecutionHooks } from "../../workers/actions/src/signing/types";
 import { enqueueNativeSigningRun } from "../../workers/actions/src/signing-execution";
+import { fetchArtifactDownload } from "../../workers/actions/src/signing/services";
 import { createPerson, migrate, type Person } from "../support/stack";
 import { runSigning } from "../../scripts/signing/client.mjs";
 
@@ -359,6 +360,53 @@ describe("Actions signing Worker integration", () => {
     )
       .bind(repositoryId, namespace!.id, owner.id, `repo:${repositoryId}`, now, now)
       .run();
+  });
+
+  it("uses Worker-supported manual artifact downloads and rejects further redirects", async () => {
+    expect(
+      () =>
+        new Request("https://productionresultssa1.blob.core.windows.net/archive", {
+          redirect: "error",
+        })
+    ).toThrow(TypeError);
+
+    const archiveFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init);
+      expect(request.redirect).toBe("manual");
+      return new Response("archive bytes");
+    });
+    vi.stubGlobal("fetch", archiveFetch);
+    try {
+      const archive = await fetchArtifactDownload(
+        new URL("https://productionresultssa1.blob.core.windows.net/archive")
+      );
+      await expect(new Response(archive).text()).resolves.toBe("archive bytes");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    let redirectBodyCancelled = false;
+    const redirectFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      new Request(input, init);
+      return new Response(
+        new ReadableStream({
+          cancel() {
+            redirectBodyCancelled = true;
+          },
+        }),
+        { status: 302, headers: { Location: "https://example.invalid/redirect" } }
+      );
+    });
+    vi.stubGlobal("fetch", redirectFetch);
+    try {
+      await expect(
+        fetchArtifactDownload(new URL("https://productionresultssa1.blob.core.windows.net/archive"))
+      ).resolves.toBeNull();
+      expect(redirectFetch).toHaveBeenCalledTimes(1);
+      expect(redirectBodyCancelled).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it.each([

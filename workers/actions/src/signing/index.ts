@@ -809,10 +809,8 @@ export async function handleSigningRoute(
       "signing_source_repository_metadata_failed",
       "signing_source_artifact_metadata_failed",
       "signing_source_artifact_redirect_failed",
-      "signing_source_artifact_redirect_cancel_failed",
       "signing_source_artifact_redirect_invalid",
       "signing_source_artifact_download_failed",
-      "signing_source_artifact_download_cancel_failed",
     ]).has(message)
       ? message
       : "unclassified";
