@@ -1,12 +1,14 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import os from "node:os";
 import { readFile, statfs } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { matchesCapacity, parseJobClaim } from "../packages/contracts/runner-scheduling.mjs";
 
 const megabyte = 1024 * 1024;
 const toolCacheMs = 10 * 60_000;
 const toolTimeoutMs = 3_000;
+const execFileAsync = promisify(execFile);
 
 export function parseRunnerBudget(values) {
   const budget = {};
@@ -126,6 +128,26 @@ async function linuxAvailableMemoryMb(read = readFile) {
   }
 }
 
+async function macosAvailableMemoryMb() {
+  const { stdout } = await execFileAsync("/usr/bin/vm_stat", [], {
+    encoding: "utf8",
+    timeout: toolTimeoutMs,
+    maxBuffer: 16 * 1024,
+    env: { ...process.env, LC_ALL: "C" },
+  });
+  const pageSize = Number(/page size of (\d+) bytes/.exec(stdout)?.[1]);
+  const pages = ["free", "inactive", "speculative"].map((name) =>
+    Number(new RegExp(`^Pages ${name}:\\s+(\\d+)\\.\\s*$`, "m").exec(stdout)?.[1])
+  );
+  if (
+    !Number.isSafeInteger(pageSize) ||
+    pageSize <= 0 ||
+    pages.some((value) => !Number.isSafeInteger(value) || value < 0)
+  )
+    throw new Error("Could not read available memory from vm_stat.");
+  return Math.floor((pages.reduce((total, value) => total + value, 0) * pageSize) / megabyte);
+}
+
 async function freeDiskMb(directory, getStatfs = statfs) {
   const info = await getStatfs(directory, { bigint: true });
   const availableBlocks = info.bavail ?? info.bfree;
@@ -147,7 +169,11 @@ export async function getRunnerCapacity({ workDirectories, busy = 0 } = {}) {
     getTools(),
   ]);
   const memFreeMb =
-    platform === "linux" ? await linuxAvailableMemoryMb() : Math.floor(os.freemem() / megabyte);
+    platform === "linux"
+      ? await linuxAvailableMemoryMb()
+      : platform === "darwin"
+        ? await macosAvailableMemoryMb()
+        : Math.floor(os.freemem() / megabyte);
   return {
     os: platform === "darwin" ? "macos" : platform === "win32" ? "windows" : platform,
     arch: os.arch(),
