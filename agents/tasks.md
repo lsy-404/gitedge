@@ -31,3 +31,4 @@
 | 028 | [Feature] Native signing workflow jobs | Run approved native signing through the standard one-job Runner.Server workflow and append the trusted SDK step | Preserve setup-action environment while keeping signing credentials protected | ✅ 已完成 |
 | 029 | [Fix] executor-specific run limits | Container actions retain their hourly cap while self-hosted and native signing admission do not share it | The current shared cap blocks legitimate self-hosted signing and runner workloads | ✅ 已完成 |
 | 030 | [Feature] Windows signing credential form | Add transient native inputs for Windows signing credentials with reauthentication retry | Allow owner-authorized credential installation without writing secrets to a local file | ✅ 已完成 |
+| 031 | [BugFix] iOS signing submit 503 | Locate and fix the source submission failure without bypassing GitHub source attestation | The first production iOS native-signing canary failed before source acceptance | 🔄 进行中 |

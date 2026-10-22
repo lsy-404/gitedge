@@ -433,6 +433,17 @@ export async function handleSigningRoute(
   user: TrustedUser | null,
   executionHooks: SigningExecutionHooks
 ): Promise<Response> {
+  const logger = createLogger(env.LOG_LEVEL, { service: "actions-signing-admission" });
+  let phase:
+    | "route"
+    | "runner"
+    | "submission"
+    | "profile"
+    | "source"
+    | "coordinator"
+    | "source_storage"
+    | "enqueue"
+    | "bind" = "route";
   const url = new URL(request.url);
   const path = url.pathname.split("/").filter(Boolean);
   if (path[0] !== "signing")
@@ -539,37 +550,51 @@ export async function handleSigningRoute(
     if (path[1] !== "requests")
       return errorResponse(404, "not_found", "Signing endpoint was not found.");
     if (request.method === "POST" && path.length === 2) {
+      phase = "runner";
       const repositoryId = url.searchParams.get("repositoryId") ?? user.job?.repositoryId;
       if ((user.job || user.token) && !repositoryId)
         return errorResponse(400, "bad_request", "repositoryId is required.");
       const repository = await ownedRunnerRepository(env, user.id, repositoryId);
-      if (!repository || !runnerAccess(user, repository.id, true))
+      if (!repository || !runnerAccess(user, repository.id, true)) {
+        logger.warn("signing:admission-rejected", {
+          phase,
+          code: "signing_runner_unavailable",
+        });
         return errorResponse(
           503,
           "signing_runner_unavailable",
           "The private account Runner is unavailable."
         );
+      }
+      phase = "submission";
       const idempotencyKey = request.headers.get("Idempotency-Key") ?? "";
       if (!/^[A-Za-z0-9_.-]{16,128}$/.test(idempotencyKey))
         return errorResponse(400, "bad_request", "A valid idempotency key is required.");
       const submission = SigningSubmissionSchema.parse(await readJsonLimited(request, 16_384));
+      phase = "profile";
       const profile = await executionHooks.loadApprovedProfile(
         user,
         repository.id,
         submission.profile
       );
-      if (!profile || !profile.enabled || profile.platform !== submission.platform)
+      if (!profile || !profile.enabled || profile.platform !== submission.platform) {
+        logger.warn("signing:admission-rejected", {
+          phase,
+          code: "signing_profile_unavailable",
+        });
         return errorResponse(
           503,
           "signing_profile_unavailable",
           "No approved signing profile is available."
         );
+      }
       if (submission.sourceSize > profile.policy.project.max_artifact_bytes)
         return errorResponse(
           413,
           "signing_source_too_large",
           "The source artifact exceeds the approved profile limit."
         );
+      phase = "source";
       const source = await executionHooks.verifySource(
         user,
         repository.id,
@@ -589,6 +614,7 @@ export async function handleSigningRoute(
         .replaceAll("+", "-")
         .replaceAll("/", "_")
         .replaceAll("=", "");
+      phase = "coordinator";
       const stub = coordinator(env, user.id);
       const created = await bodyResponse(
         await stub.fetch(
@@ -624,6 +650,7 @@ export async function handleSigningRoute(
           "The approved profile changed after this request was accepted."
         );
       const sourceKey = signingObjectKey(user.id, repository.id, created.request.id, "source");
+      phase = "source_storage";
       try {
         const existing = await env.SIGNING_ARTIFACTS.head(sourceKey);
         if (!existing) {
@@ -650,12 +677,18 @@ export async function handleSigningRoute(
           );
         }
       } catch {
+        logger.error("signing:admission-failed", {
+          phase,
+          code: "signing_source_storage_unavailable",
+          errorType: "Error",
+        });
         return errorResponse(
           503,
           "signing_source_storage_unavailable",
           "The source artifact could not be stored and verified."
         );
       }
+      phase = "enqueue";
       const queued = await executionHooks.enqueue({
         requestId: created.request.id,
         ownerId: user.id,
@@ -672,6 +705,7 @@ export async function handleSigningRoute(
         sourceDigest: accepted.submission.sourceDigest,
         profileRevision: accepted.profile.revision,
       });
+      phase = "bind";
       const bound = await bodyResponse(
         await stub.fetch(
           new Request(`https://signing.internal/bind-run/${created.request.id}`, {
@@ -748,14 +782,41 @@ export async function handleSigningRoute(
         "conflict",
         "The idempotency key is already bound to another request."
       );
-    if (message === "signing_profile_not_approved")
+    if (message === "signing_profile_not_approved") {
+      logger.warn("signing:admission-rejected", {
+        phase,
+        code: "signing_profile_not_approved",
+      });
       return errorResponse(
         503,
         "signing_profile_unavailable",
         "No approved signing profile is available."
       );
+    }
     if (error instanceof SyntaxError || error instanceof z.ZodError)
       return errorResponse(400, "bad_request", "Invalid signing request.");
+    const errorCode = new Set([
+      "signing_runner_unavailable",
+      "signing_profile_unavailable",
+      "signing_profile_file_unavailable",
+      "signing_profile_file_invalid",
+      "signing_workflow_not_found",
+      "signing_workflow_invalid",
+      "invalid_signing_queue_input",
+      "invalid_signing_workflow_requirements",
+      "signing_initial_stage_not_admitted",
+    ]).has(message)
+      ? message
+      : "unclassified";
+    const errorType =
+      error instanceof TypeError
+        ? "TypeError"
+        : error instanceof RangeError
+          ? "RangeError"
+          : error instanceof Error
+            ? "Error"
+            : "unknown";
+    logger.error("signing:admission-failed", { phase, code: errorCode, errorType });
     return errorResponse(503, "signing_unavailable", "Signing service is unavailable.");
   }
 }

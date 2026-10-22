@@ -242,12 +242,40 @@ function request() {
 describe("native signing admission", () => {
   it("fails closed before persistence or queueing when no approved profile is available", async () => {
     const test = environment();
+    const log = vi.spyOn(console, "info").mockImplementation(() => {});
     const response = await handleSigningRoute(request(), test.env, owner, test.hooks(false));
 
     expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({ error: { code: "signing_profile_unavailable" } });
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining('"code":"signing_profile_unavailable"')
+    );
+    expect(log.mock.calls.flat().join(" ")).not.toMatch(
+      /credential|token|owner-1|desktop-release/i
+    );
     expect(test.state()).toMatchObject({ created: false, enqueued: undefined, bound: undefined });
     expect(test.stub.fetch).not.toHaveBeenCalled();
+    log.mockRestore();
+  });
+
+  it("logs only a fixed stage and classified error for an internal admission failure", async () => {
+    const test = environment();
+    const hooks = test.hooks(true);
+    vi.mocked(hooks.loadApprovedProfile).mockRejectedValue(
+      new Error("sensitive detail must not reach logs")
+    );
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const response = await handleSigningRoute(request(), test.env, owner, hooks);
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ error: { code: "signing_unavailable" } });
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining('"phase":"profile","code":"unclassified","errorType":"Error"')
+    );
+    expect(log.mock.calls.flat().join(" ")).not.toContain("sensitive detail");
+    expect(test.state()).toMatchObject({ created: false, enqueued: undefined, bound: undefined });
+    log.mockRestore();
   });
 
   it("creates and binds an immutable approved profile to the native run when admission succeeds", async () => {
