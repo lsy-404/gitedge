@@ -67,14 +67,19 @@ export async function reconcileSigningRequests(
 ): Promise<{ queued: number; skipped: number; failed: number }> {
   const candidates = await env.DB.prepare(
     `SELECT s.request_id AS requestId,s.owner_id AS ownerId,s.repository_id AS repositoryId,s.run_id AS runId,
-    s.profile_revision AS profileRevision,s.platform,s.last_reconciled_at AS lastReconciledAt
+    s.profile_revision AS profileRevision,s.platform,s.last_reconciled_at AS lastReconciledAt,
+    r.status,r.conclusion,r.lease_expires_at AS leaseExpiresAt
     FROM actions_signing_runs s JOIN actions_runner_runs r ON r.run_id=s.run_id
     JOIN actions_signing_profiles p ON p.owner_id=s.owner_id AND p.repository_id=s.repository_id AND p.revision=s.profile_revision
-    WHERE s.platform='macos' AND s.reconcile_state='pending' AND p.revoked_at IS NULL AND (
-        (s.stage='sign' AND r.status='completed' AND r.conclusion='success')
-        OR (s.stage='finalize' AND (r.status IN ('queued','running') OR (r.status='completed' AND r.conclusion='success' AND json_extract(p.profile_json,'$.policy.project.macos.output_format')='dmg')))
-        OR (s.stage='dmg_sign' AND (r.status IN ('queued','running') OR (r.status='completed' AND r.conclusion='success')))
-        OR (s.stage='dmg_finalize' AND r.status IN ('queued','running'))
+    WHERE s.reconcile_state='pending' AND p.revoked_at IS NULL AND (
+        (r.status='completed' AND COALESCE(r.conclusion,'')!='success')
+        OR (r.status IN ('queued','running') AND r.lease_expires_at IS NOT NULL AND r.lease_expires_at<=${Date.now()})
+        OR (s.platform='macos' AND (
+          (s.stage='sign' AND r.status='completed' AND r.conclusion='success')
+          OR (s.stage='finalize' AND (r.status IN ('queued','running') OR (r.status='completed' AND r.conclusion='success' AND json_extract(p.profile_json,'$.policy.project.macos.output_format')='dmg')))
+          OR (s.stage='dmg_sign' AND (r.status IN ('queued','running') OR (r.status='completed' AND r.conclusion='success')))
+          OR (s.stage='dmg_finalize' AND r.status IN ('queued','running'))
+        ))
       )
       AND NOT EXISTS (SELECT 1 FROM actions_signing_runs newer WHERE newer.request_id=s.request_id AND newer.owner_id=s.owner_id
         AND (newer.generation>s.generation OR (newer.generation=s.generation AND newer.created_at>s.created_at)))
@@ -87,6 +92,9 @@ export async function reconcileSigningRequests(
     profileRevision: string;
     platform: string;
     lastReconciledAt: number | null;
+    status: string;
+    conclusion: string | null;
+    leaseExpiresAt: number | null;
   }>();
   const seen = new Set<string>();
   let queued = 0,
@@ -112,6 +120,44 @@ export async function reconcileSigningRequests(
         skipped++;
         continue;
       }
+      const stub = coordinator(env, candidate.ownerId);
+      const leaseExpired =
+        candidate.status !== "completed" &&
+        candidate.leaseExpiresAt !== null &&
+        candidate.leaseExpiresAt <= Date.now();
+      if (
+        (candidate.status === "completed" && candidate.conclusion !== "success") ||
+        leaseExpired
+      ) {
+        const failureResponse = await stub.fetch(
+          new Request(
+            `https://signing.internal/fail-run/${encodeURIComponent(candidate.requestId)}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                ownerId: candidate.ownerId,
+                repositoryId: candidate.repositoryId,
+                runId: candidate.runId,
+                conclusion: leaseExpired ? "lease_expired" : (candidate.conclusion ?? "failed"),
+              }),
+            }
+          )
+        );
+        const failure = z.object({ failed: z.boolean() }).parse(await failureResponse.json());
+        if (!failureResponse.ok || !failure.failed)
+          throw new Error("signing_run_failure_state_failed");
+        await env.DB.batch([
+          env.DB.prepare(
+            "UPDATE actions_runner_runs SET status='completed',conclusion='failure',completed_at=?,log='Signing runner lease expired' WHERE run_id=? AND status IN ('queued','running')"
+          ).bind(Date.now(), candidate.runId),
+          env.DB.prepare(
+            "UPDATE actions_signing_runs SET reconcile_state='failed' WHERE request_id=? AND owner_id=? AND run_id=?"
+          ).bind(candidate.requestId, candidate.ownerId, candidate.runId),
+        ]);
+        failed++;
+        continue;
+      }
       const profileRow = await env.DB.prepare(
         `SELECT 1 AS active FROM actions_signing_profiles
         WHERE owner_id=? AND repository_id=? AND revision=? AND revoked_at IS NULL`
@@ -132,7 +178,6 @@ export async function reconcileSigningRequests(
         .replaceAll("+", "-")
         .replaceAll("/", "_")
         .replaceAll("=", "");
-      const stub = coordinator(env, candidate.ownerId);
       const preparedResponse = await stub.fetch(
         new Request(
           `https://signing.internal/prepare-next-stage/${encodeURIComponent(candidate.requestId)}`,
@@ -202,6 +247,41 @@ export async function reconcileSigningRequests(
       const dispatch = preparedBody.data?.dispatch;
       if (!dispatch) {
         skipped++;
+        continue;
+      }
+      if (
+        !(await hooks.verifySourceCurrent(
+          candidate.ownerId,
+          candidate.repositoryId,
+          dispatch.profile,
+          dispatch.submission
+        ))
+      ) {
+        const failedResponse = await stub.fetch(
+          new Request(
+            `https://signing.internal/fail-source/${encodeURIComponent(candidate.requestId)}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                ownerId: candidate.ownerId,
+                repositoryId: candidate.repositoryId,
+              }),
+            }
+          )
+        );
+        const failureResult = z.object({ failed: z.boolean() }).parse(await failedResponse.json());
+        if (!failedResponse.ok || !failureResult.failed)
+          throw new Error("signing_source_failure_state_failed");
+        await env.DB.batch([
+          env.DB.prepare(
+            "UPDATE actions_runner_runs SET status='completed',conclusion='failure',completed_at=?,log='Signing source changed' WHERE run_id=? AND status IN ('queued','running')"
+          ).bind(Date.now(), candidate.runId),
+          env.DB.prepare(
+            "UPDATE actions_signing_runs SET reconcile_state='failed' WHERE request_id=? AND owner_id=? AND run_id=?"
+          ).bind(candidate.requestId, candidate.ownerId, candidate.runId),
+        ]);
+        failed++;
         continue;
       }
       if (dispatch.operatorApproval.approvedAt !== approval.approvedAt) {
@@ -346,7 +426,7 @@ async function verifiedObject(
     await object?.body.cancel();
     return false;
   }
-  const sink = new DigestStream("SHA-256");
+  const sink = new crypto.DigestStream("SHA-256");
   await object.body.pipeTo(sink);
   const actual = Array.from(new Uint8Array(await sink.digest), (value) =>
     value.toString(16).padStart(2, "0")
@@ -489,6 +569,12 @@ export async function handleSigningRoute(
           "signing_profile_unavailable",
           "No approved signing profile is available."
         );
+      if (submission.sourceSize > profile.policy.project.max_artifact_bytes)
+        return errorResponse(
+          413,
+          "signing_source_too_large",
+          "The source artifact exceeds the approved profile limit."
+        );
       const operatorApproval = await executionHooks.verifySigningHost(
         user.id,
         repository.id,
@@ -562,7 +648,8 @@ export async function handleSigningRoute(
       try {
         const existing = await env.SIGNING_ARTIFACTS.head(sourceKey);
         if (!existing) {
-          await env.SIGNING_ARTIFACTS.put(sourceKey, source.body, {
+          const { readable, writable } = new FixedLengthStream(submission.sourceSize);
+          const storage = env.SIGNING_ARTIFACTS.put(sourceKey, readable, {
             customMetadata: {
               ownerId: user.id,
               repositoryId: repository.id,
@@ -571,6 +658,7 @@ export async function handleSigningRoute(
               size: String(submission.sourceSize),
             },
           });
+          await Promise.all([storage, source.body.pipeTo(writable)]);
         } else await source.body.cancel();
         if (
           !(await verifiedObject(env, sourceKey, submission.sourceDigest, submission.sourceSize))
@@ -718,7 +806,10 @@ async function machineRpc<T>(
   return schema.parse(envelope.data);
 }
 
-const profileRpcSchema = z.object({ profile: SigningProfileSchema });
+const profileRpcSchema = z.object({
+  profile: SigningProfileSchema,
+  submission: SigningSubmissionSchema,
+});
 const profileContextRpcSchema = profileRpcSchema.extend({
   sourceDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   sourceCommitOid: z.string().regex(/^[a-f0-9]{40}$/),
@@ -729,6 +820,8 @@ const objectTargetSchema = z.object({
   digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   size: z.number().int().positive(),
 });
+const outputUploadBindingSchema = z.object({ key: z.string(), uploadId: z.string() });
+
 const outputPartTargetSchema = z.object({
   key: z.string().min(1),
   uploadId: z.string().min(1),
@@ -859,7 +952,7 @@ export async function handleSigningMachineRoute(
       });
     }
     if (operation === "authorize-sign" && request.method === "POST") {
-      const { profile } = await machineRpc(
+      const { profile, submission } = await machineRpc(
         env,
         context.ownerId,
         id,
@@ -867,6 +960,19 @@ export async function handleSigningMachineRoute(
         context,
         profileRpcSchema
       );
+      if (
+        !(await hooks.verifySourceCurrent(
+          context.ownerId,
+          context.repositoryId,
+          profile,
+          submission
+        ))
+      )
+        return errorResponse(
+          409,
+          "signing_source_changed",
+          "The approved source run or release tag is no longer valid."
+        );
       await machineRpc(
         env,
         context.ownerId,
@@ -896,18 +1002,10 @@ export async function handleSigningMachineRoute(
         .object({
           digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
           size: z.number().int().positive().max(2_000_000_000),
-          runId: z.string().uuid(),
-          leaseToken: z.string().min(1).max(4096),
         })
         .strict()
         .parse(await readJsonLimited(request, 4096));
       const { digest, size } = body;
-      if (body.runId !== context.runId)
-        return errorResponse(
-          403,
-          "forbidden",
-          "The output lease does not match the active signing run."
-        );
       const transfer = await machineRpc(
         env,
         context.ownerId,
@@ -915,6 +1013,8 @@ export async function handleSigningMachineRoute(
         "output-begin",
         context,
         z.object({
+          key: z.string(),
+          uploadId: z.string(),
           partSize: z.number().int().positive(),
           partCount: z.number().int().positive(),
           receivedParts: z.array(z.number().int().positive()),
@@ -922,6 +1022,34 @@ export async function handleSigningMachineRoute(
         }),
         { digest, size }
       );
+      if (transfer.uploadId === "pending" && !transfer.verified) {
+        const upload = await env.SIGNING_ARTIFACTS.createMultipartUpload(transfer.key, {
+          customMetadata: {
+            ownerId: context.ownerId,
+            repositoryId: context.repositoryId,
+            requestId: id,
+            sha256: digest,
+            size: String(size),
+          },
+        });
+        let bound: z.infer<typeof outputUploadBindingSchema>;
+        try {
+          bound = await machineRpc(
+            env,
+            context.ownerId,
+            id,
+            "output-bind",
+            context,
+            outputUploadBindingSchema,
+            { uploadId: upload.uploadId }
+          );
+        } catch (error) {
+          await upload.abort();
+          throw error;
+        }
+        if (bound.uploadId !== upload.uploadId) await upload.abort();
+        return dataResponse({ ...transfer, key: bound.key, uploadId: bound.uploadId });
+      }
       return dataResponse(transfer);
     }
     if (operation === "output" && parts[5] === "parts" && parts[6] && request.method === "PUT") {
@@ -950,7 +1078,7 @@ export async function handleSigningMachineRoute(
         return errorResponse(400, "bad_request", "Output part range and digest are required.");
       const { readable, writable } = new FixedLengthStream(target.expected);
       let received = 0;
-      const hasher = new DigestStream("SHA-256");
+      const hasher = new crypto.DigestStream("SHA-256");
       const [toUpload, toHash] = request.body.tee();
       const hashDone = toHash.pipeTo(hasher);
       const counted = toUpload.pipeThrough(
@@ -1008,19 +1136,70 @@ export async function handleSigningMachineRoute(
       );
     }
     if (operation === "output" && parts[5] === "complete" && request.method === "POST") {
-      const result = await machineRpc(
+      const plan = await machineRpc(
         env,
         context.ownerId,
         id,
         "output-complete",
         context,
         z.object({
+          key: z.string(),
+          uploadId: z.string(),
           digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
           size: z.number().int().positive(),
-          verified: z.literal(true),
+          verified: z.boolean(),
+          parts: z.array(z.object({ partNumber: z.number().int().positive(), etag: z.string() })),
         })
       );
-      return dataResponse(result);
+      if (plan.verified)
+        return dataResponse({ digest: plan.digest, size: plan.size, verified: true });
+      let object = await env.SIGNING_ARTIFACTS.get(plan.key);
+      if (!object) {
+        try {
+          await env.SIGNING_ARTIFACTS.resumeMultipartUpload(plan.key, plan.uploadId).complete(
+            plan.parts
+          );
+        } catch {
+          object = await env.SIGNING_ARTIFACTS.get(plan.key);
+          if (!object) throw new Error("signing_output_completion_unavailable");
+        }
+        object ??= await env.SIGNING_ARTIFACTS.get(plan.key);
+      }
+      if (!object || object.size !== plan.size) {
+        await object?.body.cancel();
+        if (object) await env.SIGNING_ARTIFACTS.delete(plan.key);
+        return errorResponse(
+          422,
+          "signing_output_invalid",
+          "The output archive is missing or has an invalid size."
+        );
+      }
+      const digestStream = new crypto.DigestStream("SHA-256");
+      await object.body.pipeTo(digestStream);
+      const actual = `sha256:${Array.from(new Uint8Array(await digestStream.digest), (value) => value.toString(16).padStart(2, "0")).join("")}`;
+      if (actual !== plan.digest) {
+        await env.SIGNING_ARTIFACTS.delete(plan.key);
+        return errorResponse(
+          422,
+          "signing_output_invalid",
+          "The output archive digest did not match."
+        );
+      }
+      return dataResponse(
+        await machineRpc(
+          env,
+          context.ownerId,
+          id,
+          "output-verified",
+          context,
+          z.object({
+            digest: z.string(),
+            size: z.number().int().positive(),
+            verified: z.literal(true),
+          }),
+          { digest: actual, size: plan.size }
+        )
+      );
     }
     if (operation === "complete" && request.method === "POST") {
       const body = z
@@ -1039,11 +1218,7 @@ export async function handleSigningMachineRoute(
         context,
         objectTargetSchema
       );
-      if (
-        body.digest !== output.digest ||
-        body.size !== output.size ||
-        !(await verifiedObject(env, output.key, output.digest, output.size))
-      )
+      if (body.digest !== output.digest || body.size !== output.size)
         return errorResponse(
           422,
           "signing_output_invalid",
