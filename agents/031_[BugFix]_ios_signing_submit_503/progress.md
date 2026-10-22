@@ -8,4 +8,7 @@
 - `pnpm exec vitest run --config vitest.unit.config.ts test/actions/signing.test.ts` passed: 20 tests.
 - `pnpm run typecheck:actions`, Prettier, and `git diff --check` passed.
 - Diagnostics were committed as `7af4f7a37c3caeb35f16e031069f89a22620d0c8`; root reviewed and merged the change and is publishing/deploying it.
-- Remaining: reconnect production tails, then capture a new first-attempt canary after root confirms deployment and repair its confirmed cause.
+- Source diagnostics on new first-attempt run `39868445683` identified the failure at the validated artifact-target download fetch. Cloudflare Workers reject `redirect: "error"` before issuing that fetch.
+- Replaced the unsupported mode with manual handling and fail-closed rejection of redirects/non-2xx, preserving the current destination allowlist. Committed as `47278fd4b3ce4f15596af54d4c2e1afc3a9ff093`.
+- Added Worker-runtime regression coverage for the unsupported mode, successful manual download, and rejected/unfollowed 302. `test:signing` passed 5/5; focused unit tests passed 20/20; Actions typecheck, Prettier, and diff checks passed.
+- Remaining: root review/deploy, then verify a new first-attempt iOS signing canary end to end.
