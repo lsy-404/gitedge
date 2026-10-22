@@ -22,3 +22,4 @@
 | 017 | [Feature] 专用签名执行 | 节点审批、租约与工作流隔离 | 保护签名身份和凭据 | ✅ 已完成 |
 | 018 | [Feature] 签名SDK | 平台工具与真实服务集成测试 | 使用account runner执行签名 | ✅ 已完成 |
 | 019 | [Ops] Mac与Windows Runner替换 | Mac保持1个、Windows接入2个并发broker并替换旧注册 | 用户要求更新主机、凭据存入1Password并扩大Windows容量 | ✅ 已完成 |
+| 020 | [Refactor] 通用Runner签名 | 统一通用调度、任务级secret和凭据清理并更新主机 | 用户明确要求原生签名也不依赖专用runner | 🔄 进行中 |
