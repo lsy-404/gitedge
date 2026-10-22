@@ -32,7 +32,6 @@ import { publishCheck } from "./check-delivery";
 import type { RunnerWorkflow } from "./runner-workflow";
 import { claimGithubRunner, githubRunnerLease } from "./github-runners";
 import { handleSigningMachineCallback } from "./signing-execution";
-import type { SigningEnv } from "./signing/types";
 import {
   betterPeerExists,
   claimRunnerCandidate,
@@ -892,7 +891,7 @@ export async function runnerMachineRequest(request: Request, env: RunnerEnv): Pr
   if (signingMachineRoute) {
     const response = await handleSigningMachineCallback(
       request,
-      env as RunnerEnv & SigningEnv,
+      env,
       runner.id
     );
     const signingOperation =

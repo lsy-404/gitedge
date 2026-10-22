@@ -9,13 +9,20 @@ import {
 import type { SigningHostApproval } from "./signing/types";
 import { sha256Hex } from "../../../packages/contracts/src/index";
 
-export interface SigningExecutionEnv {
-  DB: D1Database;
+export interface SigningExecutionEnv
+  extends
+    Pick<SigningEnv, "DB" | "FORGE">,
+    Partial<
+      Pick<SigningEnv, "SIGNING_COORDINATORS" | "SIGNING_ARTIFACTS" | "SIGNING_ENCRYPTION_KEY">
+    > {}
+
+function hasSigningBindings(env: SigningExecutionEnv): env is SigningEnv {
+  return Boolean(env.SIGNING_COORDINATORS && env.SIGNING_ARTIFACTS && env.SIGNING_ENCRYPTION_KEY);
 }
 
 export async function handleSigningMachineCallback(
   request: Request,
-  env: Partial<SigningEnv> & { DB: D1Database },
+  env: SigningExecutionEnv,
   runnerId: string
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -31,7 +38,7 @@ export async function handleSigningMachineCallback(
       { status: 404, headers: { "Content-Type": "application/json" } }
     );
   const requestId = match[1]!;
-  if (!env.SIGNING_COORDINATORS || !env.SIGNING_ARTIFACTS || !env.SIGNING_ENCRYPTION_KEY)
+  if (!hasSigningBindings(env))
     return new Response(
       JSON.stringify({
         error: { code: "internal_error", message: "Signing execution is unavailable." },
@@ -186,13 +193,12 @@ export async function handleSigningMachineCallback(
       approvedAt: row.operator_approved_at,
     },
   };
-  const signingEnv = env as SigningEnv;
-  const hooks = createSigningExecutionHooks(signingEnv, {
+  const hooks = createSigningExecutionHooks(env, {
     enqueue: (input) => enqueueNativeSigningRun(env, input),
     verifySigningHost: (ownerId, repositoryId, platform) =>
-      verifySigningHost(signingEnv, ownerId, repositoryId, platform),
+      verifySigningHost(env, ownerId, repositoryId, platform),
   });
-  return handleSigningMachineRoute(request, signingEnv, context, hooks);
+  return handleSigningMachineRoute(request, env, context, hooks);
 }
 
 export async function verifySigningHost(
@@ -341,8 +347,8 @@ export async function enqueueNativeSigningRun(
   let results: D1Result[];
   try {
     results = await env.DB.batch([
-    env.DB.prepare(
-      `INSERT INTO actions_runs
+      env.DB.prepare(
+        `INSERT INTO actions_runs
        (id,repository_id,commit_oid,workflow,path,source_ref,created_by,created_at,trigger_kind,executor)
        SELECT ?,?,?,?,?,?,?,?,?, 'runner'
        WHERE (?=0 OR (SELECT COUNT(*) FROM actions_runs a
@@ -352,51 +358,51 @@ export async function enqueueNativeSigningRun(
          AND EXISTS (SELECT 1 FROM actions_runners WHERE created_by=? AND repository_id=?
            AND execution_class='signing' AND signing_platform=? AND operator_approved_by=? AND operator_approved_at=?
            AND revoked_at IS NULL)`
-    ).bind(
-      runId,
-      repository.id,
-      input.workflowOid,
-      "native-signing",
-      input.workflowPath,
-      "refs/heads/main",
-      input.ownerId,
-      now,
-      "workflow_dispatch",
-      initialStage ? 1 : 0,
-      repository.id,
-      now - 3_600_000,
-      input.ownerId,
-      repository.id,
-      input.platform,
-      approval.approvedBy,
-      approval.approvedAt
-    ),
-    env.DB.prepare(
-      `INSERT INTO actions_runner_runs(run_id,workflow_source,labels_json,permission,timeout_minutes,event_json)
+      ).bind(
+        runId,
+        repository.id,
+        input.workflowOid,
+        "native-signing",
+        input.workflowPath,
+        "refs/heads/main",
+        input.ownerId,
+        now,
+        "workflow_dispatch",
+        initialStage ? 1 : 0,
+        repository.id,
+        now - 3_600_000,
+        input.ownerId,
+        repository.id,
+        input.platform,
+        approval.approvedBy,
+        approval.approvedAt
+      ),
+      env.DB.prepare(
+        `INSERT INTO actions_runner_runs(run_id,workflow_source,labels_json,permission,timeout_minutes,event_json)
        SELECT ?,?,'[]','read',?,? WHERE EXISTS (SELECT 1 FROM actions_runs WHERE id=?)`
-    ).bind(runId, input.workflowSource, input.timeoutMinutes, event, runId),
-    env.DB.prepare(
-      `INSERT INTO actions_signing_runs
+      ).bind(runId, input.workflowSource, input.timeoutMinutes, event, runId),
+      env.DB.prepare(
+        `INSERT INTO actions_signing_runs
        (run_id,request_id,owner_id,repository_id,profile_revision,workflow_oid,platform,stage,input_digest,
         operator_approved_by,operator_approved_at,generation,nonce,created_at)
        SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM actions_runner_runs WHERE run_id=?)`
-    ).bind(
-      runId,
-      input.requestId,
-      input.ownerId,
-      repository.id,
-      input.profileRevision,
-      input.workflowOid,
-      input.platform,
-      input.stage,
-      input.inputDigest,
-      approval.approvedBy,
-      approval.approvedAt,
-      input.generation,
-      input.nonce,
-      now,
-      runId
-    ),
+      ).bind(
+        runId,
+        input.requestId,
+        input.ownerId,
+        repository.id,
+        input.profileRevision,
+        input.workflowOid,
+        input.platform,
+        input.stage,
+        input.inputDigest,
+        approval.approvedBy,
+        approval.approvedAt,
+        input.generation,
+        input.nonce,
+        now,
+        runId
+      ),
     ]);
   } catch (error) {
     const raced = await findExistingRun();
