@@ -157,6 +157,7 @@ describe("AccountRunners", () => {
   });
 
   it("shows private repository links and workflow guidance for an existing owner", async () => {
+    const signingProfiles = vi.spyOn(api, "signingProfiles").mockResolvedValue({ profiles: [] });
     vi.spyOn(api, "runnerOverview").mockResolvedValue(
       overview({ runners: [], github: [], queue: [] })
     );
@@ -186,6 +187,8 @@ describe("AccountRunners", () => {
     expect(
       mounted.root.querySelector('a[href="/ada/runner/tree/.github/workflows"]')?.textContent
     ).toContain("Edit or add service workflows");
+    expect(mounted.root.querySelector("#runner-signing-profile-name")).not.toBeNull();
+    expect(signingProfiles).toHaveBeenCalledWith("account-runner");
   });
 
   it("approves a named Runner profile and installs source credentials without rendering the token", async () => {

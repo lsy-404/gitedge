@@ -7,6 +7,7 @@ import type { Repository } from "../lib/api";
 import { api, errorMessage } from "../lib/api";
 import NoticeBar from "./NoticeBar.vue";
 import StatusState from "./StatusState.vue";
+import AccountRunnerSigningProfiles from "./AccountRunnerSigningProfiles.vue";
 
 const { t } = useI18n();
 const router = useRouter();
@@ -120,6 +121,7 @@ onUnmounted(() => {
         }}</RouterLink>
       </nav>
       <p class="muted">{{ t("accountRunnerServiceScope") }}</p>
+      <AccountRunnerSigningProfiles :repository-id="repository.id" />
     </div>
     <p v-else class="empty-state">{{ t("accountRunnerEmpty") }}</p>
   </section>
