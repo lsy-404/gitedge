@@ -100,7 +100,11 @@ export const runnerMessages = {
     runnerSigningCredentialMissing: "未安装",
     runnerSigningCredentialsInstall: "从 JSON 安装凭据",
     runnerSigningWindowsCredentialsHelp:
-      "Windows JSON 必须只包含 tenant_id、client_id 和 client_secret 三个字符串字段。由服务端加密保存，并按任务下发。",
+      "输入 Azure 应用的 tenant_id、client_id 和 client_secret。凭据由服务端加密保存，并按任务下发。",
+    runnerSigningWindowsCredentialsInstall: "输入 Windows 凭据",
+    runnerSigningWindowsCredentialsSave: "加密保存凭据",
+    runnerSigningWindowsCredentialsCancel: "取消",
+    runnerSigningWindowsCredentialsInvalid: "请输入有效的 tenant_id、client_id 和 client_secret。",
     runnerSigningSourceCredentialsInstall: "从 JSON 安装源码读取令牌",
     runnerSigningCredentialsRemove: "撤销凭据",
     runnerSigningCredentialsRemoveConfirm: "删除此配置的已加密凭据？",
@@ -210,7 +214,12 @@ export const runnerMessages = {
     runnerSigningCredentialMissing: "Not installed",
     runnerSigningCredentialsInstall: "Install credentials from JSON",
     runnerSigningWindowsCredentialsHelp:
-      "Windows JSON must contain exactly three string fields: tenant_id, client_id, and client_secret. Encrypted on the server and delivered per task.",
+      "Enter the Azure application's tenant_id, client_id, and client_secret. Credentials are encrypted on the server and delivered per task.",
+    runnerSigningWindowsCredentialsInstall: "Enter Windows credentials",
+    runnerSigningWindowsCredentialsSave: "Encrypt and save credentials",
+    runnerSigningWindowsCredentialsCancel: "Cancel",
+    runnerSigningWindowsCredentialsInvalid:
+      "Enter a valid tenant_id, client_id, and client_secret.",
     runnerSigningSourceCredentialsInstall: "Install source-read token from JSON",
     runnerSigningCredentialsRemove: "Revoke credentials",
     runnerSigningCredentialsRemoveConfirm: "Delete the encrypted credentials for this profile?",

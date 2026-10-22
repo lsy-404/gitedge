@@ -2,15 +2,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { h } from "vue";
 import AccountRunners from "../../apps/web/src/components/AccountRunners.vue";
 import AccountRunnerSigningProfiles from "../../apps/web/src/components/AccountRunnerSigningProfiles.vue";
-import { api } from "../../apps/web/src/lib/api";
+import { api, ApiError } from "../../apps/web/src/lib/api";
 import { i18n } from "../../apps/web/src/i18n";
 import { router } from "../../apps/web/src/router";
 import type { RunnerOverview } from "../../packages/contracts/src/runners";
 import {
   findButton,
+  fill,
   mountAt,
   repository as baseRepository,
   settle,
+  submit,
   unmountAll,
 } from "./task-support";
 
@@ -224,29 +226,31 @@ describe("AccountRunners", () => {
     );
     await settle();
     expect(mounted.root.textContent).toContain(".github/workflows/sign.yml");
-    expect(mounted.root.textContent).toContain("tenant_id");
-    const credentialInput = mounted.root.querySelector<HTMLInputElement>(
-      '.signing-profile input[type="file"]'
-    )!;
-    const windowsFile = new File(
-      [
-        JSON.stringify({
-          tenant_id: "11111111-1111-4111-8111-111111111111",
-          client_id: "22222222-2222-4222-8222-222222222222",
-          client_secret: "secret",
-        }),
-      ],
-      "windows.json",
-      { type: "application/json" }
-    );
-    Object.defineProperty(credentialInput, "files", { value: [windowsFile], configurable: true });
-    credentialInput.dispatchEvent(new Event("change", { bubbles: true }));
+    findButton(mounted.root, "Enter Windows credentials").click();
+    await settle();
+    const windowsFields = {
+      tenant: mounted.root.querySelector<HTMLInputElement>(
+        "#runner-signing-windows-tenant-release"
+      )!,
+      client: mounted.root.querySelector<HTMLInputElement>(
+        "#runner-signing-windows-client-release"
+      )!,
+      secret: mounted.root.querySelector<HTMLInputElement>(
+        "#runner-signing-windows-secret-release"
+      )!,
+    };
+    fill(windowsFields.tenant, "11111111-1111-4111-8111-111111111111");
+    fill(windowsFields.client, "22222222-2222-4222-8222-222222222222");
+    fill(windowsFields.secret, "test-client-secret");
+    submit(mounted.root.querySelector<HTMLFormElement>(".windows-credentials-form")!);
     await settle();
     expect(install).toHaveBeenCalledWith("runner-repository", "release", "windows", {
       tenant_id: "11111111-1111-4111-8111-111111111111",
       client_id: "22222222-2222-4222-8222-222222222222",
-      client_secret: "secret",
+      client_secret: "test-client-secret",
     });
+    expect(mounted.root.querySelector(".windows-credentials-form")).toBeNull();
+    expect(mounted.root.textContent).not.toContain("test-client-secret");
 
     const name = mounted.root.querySelector<HTMLInputElement>("#runner-signing-profile-name")!;
     name.value = "release";
@@ -257,9 +261,7 @@ describe("AccountRunners", () => {
     await settle();
     expect(approveProfile).toHaveBeenCalledWith("runner-repository", "release");
 
-    const fileInput = Array.from(
-      mounted.root.querySelectorAll<HTMLInputElement>('input[type="file"]')
-    )[1]!;
+    const fileInput = mounted.root.querySelector<HTMLInputElement>('input[type="file"]')!;
     const secretFile = new File(
       [JSON.stringify({ token: "source-token-not-rendered" })],
       "source.json",
@@ -274,6 +276,91 @@ describe("AccountRunners", () => {
       token: "source-token-not-rendered",
     });
     expect(mounted.root.textContent).not.toContain("source-token-not-rendered");
+  });
+
+  it("retries Windows credential installation after recent-auth confirmation", async () => {
+    const profile = {
+      name: "release",
+      revision: "a".repeat(40),
+      platform: "windows" as const,
+      workflowOid: "b".repeat(40),
+      workflowPath: ".github/workflows/sign.yml",
+      enabled: true,
+      approvedAt: Date.now(),
+    };
+    vi.spyOn(api, "signingProfiles").mockResolvedValue({ profiles: [profile] });
+    vi.spyOn(api, "signingCredentialStatus").mockImplementation(async (_id, name, platform) => ({
+      name,
+      revision: profile.revision,
+      platform,
+      configured: false,
+      updatedAt: null,
+    }));
+    const install = vi
+      .spyOn(api, "installSigningCredentials")
+      .mockRejectedValueOnce(new ApiError(403, "reauth", "reauth_required"))
+      .mockResolvedValue({
+        name: profile.name,
+        revision: profile.revision,
+        platform: "windows",
+        configured: true,
+        updatedAt: Date.now(),
+      });
+    vi.spyOn(api, "security").mockResolvedValue({
+      passwordEnabled: true,
+      email: null,
+      emailAvailable: true,
+      totp: { enabled: false, available: true },
+      passkeys: [],
+      recoveryCodesRemaining: 0,
+      secondFactorEnabled: false,
+      recentAuth: { valid: false, expiresAt: null, methods: ["password"] },
+    });
+    const reauthenticate = vi.spyOn(api, "reauthenticate").mockResolvedValue({
+      recentAuthAt: Date.now(),
+      expiresAt: Date.now() + 600_000,
+    });
+    const mounted = await mountAt("/_verify/signing-reauth", "/_verify/signing-reauth", () =>
+      h(AccountRunnerSigningProfiles, { repositoryId: "runner-repository" })
+    );
+    await settle();
+    findButton(mounted.root, "Enter Windows credentials").click();
+    await settle();
+    fill(
+      mounted.root.querySelector<HTMLInputElement>("#runner-signing-windows-tenant-release")!,
+      "11111111-1111-4111-8111-111111111111"
+    );
+    fill(
+      mounted.root.querySelector<HTMLInputElement>("#runner-signing-windows-client-release")!,
+      "22222222-2222-4222-8222-222222222222"
+    );
+    fill(
+      mounted.root.querySelector<HTMLInputElement>("#runner-signing-windows-secret-release")!,
+      "test-client-secret"
+    );
+    submit(mounted.root.querySelector<HTMLFormElement>(".windows-credentials-form")!);
+    await settle();
+    expect(install).toHaveBeenCalledTimes(1);
+    expect(mounted.root.textContent).toContain("Confirm it is you");
+
+    fill(
+      mounted.root.querySelector<HTMLInputElement>('input[autocomplete="current-password"]')!,
+      "recent-auth-test"
+    );
+    submit(mounted.root.querySelector<HTMLFormElement>(".box-form")!);
+    await settle();
+    expect(reauthenticate).toHaveBeenCalledWith({
+      method: "password",
+      password: "recent-auth-test",
+    });
+    expect(install).toHaveBeenCalledTimes(2);
+    expect(install).toHaveBeenLastCalledWith("runner-repository", "release", "windows", {
+      tenant_id: "11111111-1111-4111-8111-111111111111",
+      client_id: "22222222-2222-4222-8222-222222222222",
+      client_secret: "test-client-secret",
+    });
+    expect(mounted.root.querySelector(".windows-credentials-form")).toBeNull();
+    expect(mounted.root.textContent).not.toContain("test-client-secret");
   });
 
   it("keeps a profile approval failure visible without treating the profile as approved", async () => {
