@@ -219,6 +219,13 @@ async function verifySource(
   runIdentity: string | null = null,
   audience = ""
 ): Promise<{ body: ReadableStream<Uint8Array> } | null> {
+  const sourceStep = async <T>(code: string, operation: () => Promise<T>): Promise<T> => {
+    try {
+      return await operation();
+    } catch {
+      throw new Error(code);
+    }
+  };
   const token = await storedSourceCredential(env, ownerId, repositoryId, profile.revision);
   if (!token) return null;
   const repo = profile.policy.sourceRepositories.find(
@@ -236,9 +243,11 @@ async function verifySource(
   if (!/^[1-9]\d*$/.test(input.sourceRunId) || !/^[1-9]\d*$/.test(input.sourceArtifactId))
     return null;
   const run = githubRunSchema.safeParse(
-    await githubJson(
-      token,
-      `/repos/${repo.fullName}/actions/runs/${encodeURIComponent(input.sourceRunId)}`
+    await sourceStep("signing_source_run_metadata_failed", () =>
+      githubJson(
+        token,
+        `/repos/${repo.fullName}/actions/runs/${encodeURIComponent(input.sourceRunId)}`
+      )
     )
   );
   if (
@@ -256,7 +265,11 @@ async function verifySource(
   const repositoryInfo = z
     .object({ default_branch: z.string().min(1).max(256) })
     .passthrough()
-    .safeParse(await githubJson(token, `/repos/${repo.fullName}`));
+    .safeParse(
+      await sourceStep("signing_source_repository_metadata_failed", () =>
+        githubJson(token, `/repos/${repo.fullName}`)
+      )
+    );
   if (!repositoryInfo.success) return null;
   const defaultBranch = repositoryInfo.data.default_branch;
   if (repo.releaseTagPattern) {
@@ -310,9 +323,11 @@ async function verifySource(
       return null;
   }
   const artifact = githubArtifactSchema.safeParse(
-    await githubJson(
-      token,
-      `/repos/${repo.fullName}/actions/artifacts/${encodeURIComponent(input.sourceArtifactId)}`
+    await sourceStep("signing_source_artifact_metadata_failed", () =>
+      githubJson(
+        token,
+        `/repos/${repo.fullName}/actions/artifacts/${encodeURIComponent(input.sourceArtifactId)}`
+      )
     )
   );
   if (
@@ -325,15 +340,17 @@ async function verifySource(
   )
     return null;
   const url = `https://api.github.com/repos/${repo.fullName}/actions/artifacts/${encodeURIComponent(input.sourceArtifactId)}/zip`;
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "User-Agent": "gitedge-actions-signing",
-    },
-    redirect: "manual",
-    signal: AbortSignal.timeout(30_000),
-  });
+  const response = await sourceStep("signing_source_artifact_redirect_failed", () =>
+    fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "User-Agent": "gitedge-actions-signing",
+      },
+      redirect: "manual",
+      signal: AbortSignal.timeout(30_000),
+    })
+  );
   if (response.status !== 302) {
     await response.body?.cancel();
     return null;
@@ -343,7 +360,10 @@ async function verifySource(
     await response.body?.cancel();
     return null;
   }
-  const target = new URL(location);
+  const target = await sourceStep(
+    "signing_source_artifact_redirect_invalid",
+    async () => new URL(location)
+  );
   if (
     target.protocol !== "https:" ||
     target.port ||
@@ -359,7 +379,9 @@ async function verifySource(
     return null;
   }
   await response.body?.cancel();
-  const download = await fetch(target, { redirect: "error", signal: AbortSignal.timeout(60_000) });
+  const download = await sourceStep("signing_source_artifact_download_failed", () =>
+    fetch(target, { redirect: "error", signal: AbortSignal.timeout(60_000) })
+  );
   if (!download.ok || !download.body) {
     await download.body?.cancel();
     return null;
