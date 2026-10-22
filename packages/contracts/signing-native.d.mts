@@ -43,6 +43,11 @@ export type MacosVerification = {
 };
 export declare const macosVerificationSchema: z.ZodType<MacosVerification>;
 export declare const azureProfileSchema: z.ZodType<unknown>;
+export declare const windowsCredentialsSchema: z.ZodType<{
+  tenant_id: string;
+  client_id: string;
+  client_secret: string;
+}>;
 export declare const windowsRecipeSchema: z.ZodType<unknown>;
 export declare const windowsManifestSchema: z.ZodType<unknown>;
 export type WindowsVerification = {

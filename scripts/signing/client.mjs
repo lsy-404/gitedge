@@ -21,6 +21,7 @@ import {
   iosCredentialsSchema,
   manifestSchema,
   verificationSchema,
+  windowsCredentialsSchema,
 } from "./contract.mjs";
 import { parseSigningContext, readSigningContext, removeSigningContext } from "./context.mjs";
 
@@ -620,11 +621,6 @@ export async function runSigning({
       void pulse();
     }, heartbeatIntervalMs);
     timer.unref?.();
-    if (manifest.stage === "windows_sign") {
-      const identityMode = manifest.identity_mode;
-      if (!new Set(["azure-managed-identity", "azure-workload-identity"]).has(identityMode))
-        throw new ClientError("WINDOWS_IDENTITY_UNAPPROVED");
-    }
     const inputFile = path.join(work, "input.zip");
     await client.download("input", inputFile, {
       digest: manifest.input_digest,
@@ -652,12 +648,7 @@ export async function runSigning({
       )
         throw new ClientError("INVALID_RESPONSE");
       if (family.windows) {
-        if (
-          authorization.credentials?.identityMode !== manifest.identity_mode ||
-          Object.keys(authorization.credentials).length !== 1
-        )
-          throw new ClientError("INVALID_RESPONSE");
-        return authorization.credentials;
+        return windowsCredentialsSchema.parse(authorization.credentials);
       }
       if (manifest.stage.endsWith("finalize")) {
         return;

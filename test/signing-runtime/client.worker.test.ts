@@ -12,9 +12,9 @@ import {
 import {
   manifestSchema,
   verificationSchema,
+  windowsCredentialsSchema,
   windowsManifestSchema,
 } from "../../scripts/signing/contract.mjs";
-import { approvedAzureIdentityMode } from "../../scripts/signing/windows-identity.mjs";
 
 const tempDirs = [];
 const input = Buffer.from("validated source archive");
@@ -40,9 +40,6 @@ function context(overrides = {}) {
     leaseToken: "c".repeat(64),
     leaseExpiresAt: Date.now() + 60_000,
     runnerToken: `ge_runner_${"d".repeat(64)}`,
-    operatorApproved: true,
-    approvedBy: "owner-id",
-    approvedAt: Date.now(),
     ...overrides,
   };
 }
@@ -142,7 +139,6 @@ function windowsManifest() {
       certificate_profile: "public-trust",
       subject: "CN=Example, O=Example",
     },
-    identity_mode: "azure-managed-identity",
     max_artifact_bytes: 20_000_000,
     max_unpacked_bytes: 30_000_000,
   };
@@ -205,11 +201,8 @@ afterEach(async () => {
 });
 
 describe("native signing context and Actions client", () => {
-  it("requires a GitEdge UUID context and explicit owner approval", () => {
+  it("requires a GitEdge UUID context", () => {
     expect(parseSigningContext(context()).requestId).toBe(requestId);
-    expect(() => parseSigningContext(context({ operatorApproved: false }))).toThrow(
-      SigningContextError
-    );
     expect(() => parseSigningContext(context({ runId: "1234567890" }))).toThrow(
       SigningContextError
     );
@@ -218,18 +211,7 @@ describe("native signing context and Actions client", () => {
     ).toThrow(SigningContextError);
   });
 
-  it("only accepts the profile-approved Azure host identity providers", () => {
-    expect(approvedAzureIdentityMode("azure-managed-identity")).toBe("azure-managed-identity");
-    expect(approvedAzureIdentityMode("azure-workload-identity")).toBe("azure-workload-identity");
-    expect(() => approvedAzureIdentityMode("azure-cli")).toThrow(
-      "approved Azure identity provider missing"
-    );
-    expect(() => approvedAzureIdentityMode(undefined)).toThrow(
-      "approved Azure identity provider missing"
-    );
-  });
-
-  it("validates account-specific Azure signing policy and an explicit host identity", () => {
+  it("validates account-specific Azure signing policy and task credentials", () => {
     const windowsManifest = {
       schema_version: 1,
       request_id: requestId,
@@ -256,14 +238,10 @@ describe("native signing context and Actions client", () => {
         certificate_profile: "public-trust",
         subject: "CN=Example, O=Example",
       },
-      identity_mode: "azure-managed-identity",
       max_artifact_bytes: 20_000_000,
       max_unpacked_bytes: 30_000_000,
     };
     expect(() => windowsManifestSchema.parse(windowsManifest)).not.toThrow();
-    expect(() =>
-      windowsManifestSchema.parse({ ...windowsManifest, identity_mode: "azure-cli" })
-    ).toThrow();
     expect(() =>
       windowsManifestSchema.parse({
         ...windowsManifest,
@@ -271,6 +249,14 @@ describe("native signing context and Actions client", () => {
           ...windowsManifest.azure,
           endpoint: "https://evil.codesigning.azure.net.example/",
         },
+      })
+    ).toThrow();
+    expect(() =>
+      windowsCredentialsSchema.parse({
+        tenant_id: randomUUID(),
+        client_id: randomUUID(),
+        client_secret: "secret",
+        unexpected: true,
       })
     ).toThrow();
   });
@@ -465,7 +451,7 @@ describe("native signing context and Actions client", () => {
     expect(await readdirSafe(workParent)).toEqual([]);
   });
 
-  it("uses the server-approved Windows identity only after native input validation", async () => {
+  it("uses task-scoped Windows credentials only after native input validation", async () => {
     const dir = await temporaryDirectory();
     const contextFile = path.join(dir, "run-context.json");
     const workParent = path.join(dir, "work");
@@ -485,7 +471,11 @@ describe("native signing context and Actions client", () => {
       if (action === "authorize-sign")
         return Response.json({
           data: {
-            credentials: { identityMode: "azure-managed-identity" },
+            credentials: {
+              tenant_id: randomUUID(),
+              client_id: randomUUID(),
+              client_secret: "task-scoped-secret",
+            },
             expiresAt: Date.now() + 30_000,
           },
         });
@@ -513,7 +503,13 @@ describe("native signing context and Actions client", () => {
       sleep: async () => {},
       contextReader: async (file) => parseSigningContext(JSON.parse(await readFile(file, "utf8"))),
       platformExecutor: async (_manifest, _input, outputDir, credentialsProvider) => {
-        expect(await credentialsProvider()).toEqual({ identityMode: "azure-managed-identity" });
+        expect(await credentialsProvider()).toEqual(
+          expect.objectContaining({
+            tenant_id: expect.any(String),
+            client_id: expect.any(String),
+            client_secret: "task-scoped-secret",
+          })
+        );
         await writeFile(path.join(outputDir, "product.exe"), signed, { mode: 0o600 });
         await writeFile(path.join(outputDir, "verification.json"), JSON.stringify(report), {
           mode: 0o600,

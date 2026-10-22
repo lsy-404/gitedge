@@ -26,10 +26,10 @@ import yauzl from "yauzl";
 import { createRequire } from "node:module";
 import {
   sourceMetadataSchema,
+  windowsCredentialsSchema,
   windowsManifestSchema,
   windowsVerificationSchema,
 } from "./contract.mjs";
-import { approvedAzureIdentityMode } from "./windows-identity.mjs";
 
 let signingAbortSignal;
 
@@ -95,6 +95,16 @@ async function fileSha256(file) {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(file)) hash.update(chunk);
   return hash.digest("hex");
+}
+
+function credentialEnvironment(credentials) {
+  const parsed = windowsCredentialsSchema.parse(credentials);
+  return {
+    ...process.env,
+    AZURE_TENANT_ID: parsed.tenant_id,
+    AZURE_CLIENT_ID: parsed.client_id,
+    AZURE_CLIENT_SECRET: parsed.client_secret,
+  };
 }
 
 async function run(file, args, { timeout = 300_000, maxOutput = 8 * 1024 * 1024, cwd, env } = {}) {
@@ -587,23 +597,27 @@ async function readJsonOutput(result) {
   return JSON.parse(candidates.at(-1));
 }
 
-async function invokePowerShell(script, mode, configPath, filePath, scope) {
+async function invokePowerShell(script, mode, configPath, filePath, scope, credentials) {
   if (!["app", "nsis", "squirrel"].includes(scope))
     throw new Error("invalid trusted signing scope");
   try {
-    const result = await run(POWERSHELL, [
-      "-NoLogo",
-      "-NoProfile",
-      "-NonInteractive",
-      "-File",
-      script,
-      "-Mode",
-      mode,
-      "-ConfigPath",
-      configPath,
-      "-FilePath",
-      filePath,
-    ]);
+    const result = await run(
+      POWERSHELL,
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-File",
+        script,
+        "-Mode",
+        mode,
+        "-ConfigPath",
+        configPath,
+        "-FilePath",
+        filePath,
+      ],
+      mode === "Sign" || mode === "SignFolder" ? { env: credentialEnvironment(credentials) } : {}
+    );
     if (mode === "SignFolder") return {};
     return await readJsonOutput(result);
   } catch (error) {
@@ -628,12 +642,17 @@ async function copyOutput(source, output, name, maxBytes) {
   return { path: name, size: metadata.size, sha256: await fileSha256(target) };
 }
 
-function trustedHookSource(script, config, failureMarker) {
+function trustedHookSource(script, config, failureMarker, credentials) {
   const scriptArg = JSON.stringify(script);
   const configArg = JSON.stringify(config);
   const markerArg = JSON.stringify(failureMarker);
+  const environmentArg = JSON.stringify({
+    AZURE_TENANT_ID: credentials.tenant_id,
+    AZURE_CLIENT_ID: credentials.client_id,
+    AZURE_CLIENT_SECRET: credentials.client_secret,
+  });
   const diagnosticSource = `const powerShellDiagnostic=${powerShellDiagnostic.toString()};\n`;
-  return `const { spawnSync } = require('node:child_process');\nconst { writeFileSync } = require('node:fs');\n${diagnosticSource}module.exports = function(file) {\n  const base = ['-NoLogo','-NoProfile','-NonInteractive','-File',${scriptArg},'-ConfigPath',${configArg},'-FilePath',file];\n  const options = { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, stdio: ['ignore','pipe','pipe'], windowsHide: true, timeout: 300000 };\n  const fail = diagnostic => { try { writeFileSync(${markerArg}, 'Sign:' + diagnostic, { flag: 'wx' }); } catch { throw 'Windows signature operation failed'; } };\n  try {\n    const verify = spawnSync('pwsh.exe', [...base.slice(0, 5), '-Mode', 'Verify', ...base.slice(5)], options);\n    if (!verify.error && verify.status === 0) return;\n    const sign = spawnSync('pwsh.exe', [...base.slice(0, 5), '-Mode', 'Sign', ...base.slice(5)], options);\n    if (sign.error || sign.status !== 0) {\n      fail(sign.error ? 'process_unavailable' : powerShellDiagnostic(sign, sign.status));\n    }\n  } catch {\n    fail('powershell_failed');\n  }\n};\n`;
+  return `const { spawnSync } = require('node:child_process');\nconst { writeFileSync } = require('node:fs');\n${diagnosticSource}module.exports = function(file) {\n  const base = ['-NoLogo','-NoProfile','-NonInteractive','-File',${scriptArg},'-ConfigPath',${configArg},'-FilePath',file];\n  const options = { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, stdio: ['ignore','pipe','pipe'], windowsHide: true, timeout: 300000 };\n  const fail = diagnostic => { try { writeFileSync(${markerArg}, 'Sign:' + diagnostic, { flag: 'wx' }); } catch { throw 'Windows signature operation failed'; } };\n  try {\n    const verify = spawnSync('pwsh.exe', [...base.slice(0, 5), '-Mode', 'Verify', ...base.slice(5)], options);\n    if (!verify.error && verify.status === 0) return;\n    const sign = spawnSync('pwsh.exe', [...base.slice(0, 5), '-Mode', 'Sign', ...base.slice(5)], { ...options, env: { ...process.env, ...${environmentArg} } });\n    if (sign.error || sign.status !== 0) {\n      fail(sign.error ? 'process_unavailable' : powerShellDiagnostic(sign, sign.status));\n    }\n  } catch {\n    fail('powershell_failed');\n  }\n};\n`;
 }
 
 async function prepareSquirrelVendor(work, installerModule) {
@@ -822,7 +841,7 @@ async function signNsis(manifest, appDir, work, output, signOne, signScript, con
   }
 }
 
-async function signSquirrel(manifest, appDir, work, output, signScript, configPath) {
+async function signSquirrel(manifest, appDir, work, output, signScript, configPath, credentials) {
   if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/.test(manifest.windows.product_name))
     throw new Error("Squirrel product name is not package-safe");
   let phase = "squirrel_vendor_prepare";
@@ -832,17 +851,25 @@ async function signSquirrel(manifest, appDir, work, output, signScript, configPa
     await mkdir(buildDir, { recursive: false, mode: 0o700 });
     const hookModule = path.join(work, "squirrel-sign-hook.cjs");
     const hookFailureMarker = path.join(work, "squirrel-signing-failed");
-    await writeFile(hookModule, trustedHookSource(signScript, configPath, hookFailureMarker), {
-      flag: "wx",
-      mode: 0o600,
-    });
+    await writeFile(
+      hookModule,
+      trustedHookSource(signScript, configPath, hookFailureMarker, credentials),
+      { flag: "wx", mode: 0o600 }
+    );
     const tempDirectory = path.join(work, "squirrel-temp");
     await mkdir(tempDirectory, { recursive: false, mode: 0o700 });
     const installerModule = createRequire(import.meta.url).resolve("electron-winstaller");
     const vendorDirectory = await prepareSquirrelVendor(work, installerModule);
     phase = "squirrel_vendor_sign";
     const squirrelExecutable = path.join(vendorDirectory, "Squirrel.exe");
-    await invokePowerShell(signScript, "Sign", configPath, squirrelExecutable, "squirrel");
+    await invokePowerShell(
+      signScript,
+      "Sign",
+      configPath,
+      squirrelExecutable,
+      "squirrel",
+      credentials
+    );
     await invokePowerShell(signScript, "Verify", configPath, squirrelExecutable, "squirrel");
     const previousTemp = process.env.TEMP;
     const previousTmp = process.env.TMP;
@@ -999,11 +1026,10 @@ async function execute(manifestInput, inputZip, outputDir, authorize) {
     if ((await inspectPeArchitecture(executable)) !== manifest.architecture)
       throw new Error("application architecture mismatch");
     const signable = await walkSignableFiles(appDir);
-    const identityMode = approvedAzureIdentityMode(manifest.identity_mode);
     await writeFile(
       configPath,
       JSON.stringify({
-        azure: { ...manifest.azure, identity_mode: identityMode },
+        azure: manifest.azure,
         app_root: appDir,
         signable_files: signable,
         allowed_roots: [
@@ -1045,11 +1071,9 @@ async function execute(manifestInput, inputZip, outputDir, authorize) {
       throw new Error("Squirrel product name is not package-safe");
     }
     failureCode = "authorization";
-    const authorization = await authorize();
-    if (authorization?.identityMode !== identityMode)
-      throw new RunnerFailure("authorization", "client:INVALID_RESPONSE");
+    const credentials = windowsCredentialsSchema.parse(await authorize());
     failureCode = "codesign";
-    await invokePowerShell(script, "SignFolder", configPath, appDir, "app");
+    await invokePowerShell(script, "SignFolder", configPath, appDir, "app", credentials);
     for (const file of signable) await invokePowerShell(script, "Verify", configPath, file, "app");
     const signOne = async (file) => {
       const absolute = path.resolve(file);
@@ -1068,14 +1092,14 @@ async function execute(manifestInput, inputZip, outputDir, authorize) {
       try {
         await invokePowerShell(script, "Verify", configPath, absolute, "nsis");
       } catch {
-        await invokePowerShell(script, "Sign", configPath, absolute, "nsis");
+        await invokePowerShell(script, "Sign", configPath, absolute, "nsis", credentials);
       }
     };
     failureCode = "packaging";
     if (manifest.windows.installer === "nsis") {
       await signNsis(manifest, appDir, work, output, signOne, script, configPath);
     } else {
-      await signSquirrel(manifest, appDir, work, output, script, configPath);
+      await signSquirrel(manifest, appDir, work, output, script, configPath, credentials);
     }
     failureCode = "signature_verification";
     const productName = `${manifest.windows.product_name}-${manifest.architecture}`;

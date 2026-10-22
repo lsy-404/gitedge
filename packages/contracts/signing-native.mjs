@@ -148,6 +148,13 @@ export const azureProfileSchema = z
     subject: z.string().min(1).max(512),
   })
   .strict();
+export const windowsCredentialsSchema = z
+  .object({
+    tenant_id: z.uuid(),
+    client_id: z.uuid(),
+    client_secret: z.string().min(1).max(10_000),
+  })
+  .strict();
 export const windowsRecipeSchema = z
   .object({
     product_name: executableName,
@@ -173,7 +180,6 @@ export const windowsManifestSchema = z
     architecture: z.enum(["x64", "arm64"]),
     windows: windowsRecipeSchema,
     azure: azureProfileSchema,
-    identity_mode: z.enum(["azure-managed-identity", "azure-workload-identity"]),
     max_artifact_bytes: z.number().int().positive().max(2_000_000_000),
     max_unpacked_bytes: z.number().int().positive().max(8_000_000_000),
   })

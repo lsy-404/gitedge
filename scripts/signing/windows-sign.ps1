@@ -44,10 +44,6 @@ function Verify-Authenticode([string]$Path, [string]$Subject) {
 }
 
 $config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
-$identityMode = $config.azure.identity_mode
-if ($identityMode -notin @('azure-managed-identity', 'azure-workload-identity')) {
-  throw 'approved Azure identity provider missing'
-}
 $file = [System.IO.Path]::GetFullPath($FilePath)
 $inAllowedRoot = $false
 foreach ($root in $config.allowed_roots) {
@@ -85,9 +81,9 @@ switch ($Mode) {
       FileDigest = 'SHA256'
       TimestampRfc3161 = 'http://timestamp.acs.microsoft.com'
       TimestampDigest = 'SHA256'
-      ExcludeEnvironmentCredential = $true
-      ExcludeWorkloadIdentityCredential = $identityMode -ne 'azure-workload-identity'
-      ExcludeManagedIdentityCredential = $identityMode -ne 'azure-managed-identity'
+      ExcludeEnvironmentCredential = $false
+      ExcludeWorkloadIdentityCredential = $true
+      ExcludeManagedIdentityCredential = $true
       ExcludeSharedTokenCacheCredential = $true
       ExcludeVisualStudioCredential = $true
       ExcludeVisualStudioCodeCredential = $true
