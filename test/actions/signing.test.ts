@@ -562,6 +562,10 @@ describe("native signing admission", () => {
         sourceSubmission
       );
       expect(crossAccount).toBeNull();
+      githubFetch.mockRejectedValueOnce(new TypeError("private network detail"));
+      await expect(
+        hooks.verifySource(tokenUser, "runner-one", approvedProfile, sourceSubmission)
+      ).rejects.toThrow("signing_source_run_metadata_failed");
       expect(authorizations).toEqual([
         "Bearer source-token-one",
         "Bearer source-token-one",

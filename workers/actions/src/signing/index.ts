@@ -805,6 +805,12 @@ export async function handleSigningRoute(
       "invalid_signing_queue_input",
       "invalid_signing_workflow_requirements",
       "signing_initial_stage_not_admitted",
+      "signing_source_run_metadata_failed",
+      "signing_source_repository_metadata_failed",
+      "signing_source_artifact_metadata_failed",
+      "signing_source_artifact_redirect_failed",
+      "signing_source_artifact_redirect_invalid",
+      "signing_source_artifact_download_failed",
     ]).has(message)
       ? message
       : "unclassified";
