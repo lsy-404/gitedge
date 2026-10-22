@@ -214,16 +214,17 @@ export async function githubRunnerLease(
     await finish(env, job.id, "cancelled");
     return dataResponse({ cancelled: true, assigned: status.assigned, leaseExpiresAt: now });
   }
+  const renewedAt = Date.now();
   const renewed = await env.DB.prepare(
     `UPDATE actions_github_runner_jobs SET lease_expires_at=MIN(started_at+21600000,MAX(lease_expires_at,?)),assigned=MAX(assigned,?)
      WHERE id=? AND status='running' AND lease_hash=? AND lease_expires_at>? RETURNING lease_expires_at`
   )
-    .bind(now + RUNNER_LEASE_MS, Number(status.assigned), job.id, hash, now)
+    .bind(renewedAt + RUNNER_LEASE_MS, Number(status.assigned), job.id, hash, renewedAt)
     .first<{ lease_expires_at: number }>();
   return dataResponse({
     cancelled: renewed === null,
     assigned: status.assigned,
-    leaseExpiresAt: renewed?.lease_expires_at ?? now,
+    leaseExpiresAt: renewed?.lease_expires_at ?? renewedAt,
   });
 }
 
