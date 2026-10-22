@@ -9,6 +9,7 @@ import type {
 import type { TrustedUser } from "../../../../packages/contracts/src/index";
 
 export interface SigningEnv {
+  readonly LOG_LEVEL?: string;
   readonly DB: D1Database;
   readonly FORGE: Pick<Fetcher, "fetch">;
   readonly GIT: Pick<Fetcher, "fetch">;

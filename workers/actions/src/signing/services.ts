@@ -27,6 +27,12 @@ import { z } from "zod";
 import type { SigningEnv, SigningExecutionHooks } from "./types";
 import { parseRunnerWorkflow } from "../runner-workflow";
 import { readJsonLimited } from "../../../../src/worker/common/readText";
+import {
+  base64ToBytes,
+  base64UrlToBytes,
+  bytesToBase64,
+  bytesToBase64Url,
+} from "../../../../src/worker/common/encoding";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 
 const sha = /^[a-f0-9]{40}$/;
@@ -436,8 +442,8 @@ async function storedSourceCredential(
   try {
     const [ivText, cipherText, extra] = row.ciphertext.split(".");
     if (!ivText || !cipherText || extra) return null;
-    const iv = Uint8Array.from(atob(ivText), (character) => character.charCodeAt(0));
-    const cipher = Uint8Array.from(atob(cipherText), (character) => character.charCodeAt(0));
+    const iv = base64ToBytes(ivText);
+    const cipher = base64ToBytes(cipherText);
     const aad = new TextEncoder().encode(`${ownerId}:${repositoryId}:${revision}:github-source`);
     const plaintext = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv, additionalData: aad },
@@ -452,9 +458,7 @@ async function storedSourceCredential(
 }
 
 function keyBytes(secret: string): Uint8Array<ArrayBuffer> {
-  const value = Uint8Array.from(atob(secret.replaceAll("-", "+").replaceAll("_", "/")), (c) =>
-    c.charCodeAt(0)
-  );
+  const value = base64UrlToBytes(secret);
   if (value.length !== 32) throw new Error("signing_encryption_key_invalid");
   return value;
 }
@@ -506,7 +510,7 @@ export async function installSigningCredentials(
       await credentialKey(env.SIGNING_ENCRYPTION_KEY),
       new TextEncoder().encode(JSON.stringify({ token: sourceToken }))
     );
-    const envelope = `${btoa(String.fromCharCode(...iv))}.${btoa(String.fromCharCode(...new Uint8Array(encrypted)))}`;
+    const envelope = `${bytesToBase64(iv)}.${bytesToBase64(new Uint8Array(encrypted))}`;
     await env.DB.prepare(
       `INSERT INTO actions_signing_source_credentials(owner_id,repository_id,profile_revision,ciphertext,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(owner_id,repository_id,profile_revision) DO UPDATE SET ciphertext=excluded.ciphertext,updated_at=excluded.updated_at`
     )
@@ -525,7 +529,7 @@ export async function installSigningCredentials(
     await credentialKey(env.SIGNING_ENCRYPTION_KEY),
     new TextEncoder().encode(JSON.stringify(safeValue))
   );
-  const envelope = `${btoa(String.fromCharCode(...iv))}.${btoa(String.fromCharCode(...new Uint8Array(ciphertext)))}`;
+  const envelope = `${bytesToBase64(iv)}.${bytesToBase64(new Uint8Array(ciphertext))}`;
   await env.DB.prepare(
     `INSERT INTO actions_signing_credentials(owner_id,repository_id,profile_revision,platform,ciphertext,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(owner_id,repository_id,profile_revision,platform) DO UPDATE SET ciphertext=excluded.ciphertext,updated_at=excluded.updated_at`
   )
@@ -815,8 +819,8 @@ async function storedPlatformCredentials(
   try {
     const [ivText, cipherText, extra] = row.ciphertext.split(".");
     if (!ivText || !cipherText || extra) return null;
-    const iv = Uint8Array.from(atob(ivText), (c) => c.charCodeAt(0));
-    const cipher = Uint8Array.from(atob(cipherText), (c) => c.charCodeAt(0));
+    const iv = base64ToBytes(ivText);
+    const cipher = base64ToBytes(cipherText);
     const aad = new TextEncoder().encode(`${ownerId}:${repositoryId}:${revision}:${platform}`);
     const plaintext = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv, additionalData: aad },
@@ -850,38 +854,14 @@ async function verifyNotarization(
   return appleNotarizationStatus(credentials, report.notarization_id, report.notary_archive_sha256);
 }
 
-function b64url(value: Uint8Array): string {
-  let binary = "";
-  for (let i = 0; i < value.length; i += 0x8000)
-    binary += String.fromCharCode(...value.subarray(i, i + 0x8000));
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
-}
 async function boundedJson(response: Response, limit: number): Promise<unknown> {
   if (!response.ok || !response.body) {
     await response.body?.cancel();
     throw new Error("notary_service_unavailable");
   }
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let length = 0;
-  try {
-    for (;;) {
-      const next = await reader.read();
-      if (next.done) break;
-      length += next.value.byteLength;
-      if (length > limit) throw new Error("notary_response_too_large");
-      chunks.push(next.value);
-    }
-  } finally {
-    await reader.cancel();
-  }
-  const bytes = new Uint8Array(length);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  const value = await readJsonLimited(response, limit);
+  if (value === null) throw new Error("notary_response_invalid");
+  return value;
 }
 async function appleNotarizationStatus(
   credentials: Record<string, unknown>,
@@ -893,7 +873,7 @@ async function appleNotarizationStatus(
     /-----BEGIN PRIVATE KEY-----|-----END PRIVATE KEY-----|\s/g,
     ""
   );
-  const pkcs8 = Uint8Array.from(atob(pem), (c) => c.charCodeAt(0));
+  const pkcs8 = base64ToBytes(pem);
   const key = await crypto.subtle.importKey(
     "pkcs8",
     pkcs8,
@@ -901,11 +881,11 @@ async function appleNotarizationStatus(
     false,
     ["sign"]
   );
-  const header = b64url(
+  const header = bytesToBase64Url(
     new TextEncoder().encode(JSON.stringify({ alg: "ES256", kid: value.key_id, typ: "JWT" }))
   );
   const now = Math.floor(Date.now() / 1000);
-  const payload = b64url(
+  const payload = bytesToBase64Url(
     new TextEncoder().encode(
       JSON.stringify({ iss: value.issuer_id, aud: "appstoreconnect-v1", iat: now, exp: now + 300 })
     )
@@ -918,7 +898,7 @@ async function appleNotarizationStatus(
       new TextEncoder().encode(signingInput)
     )
   );
-  const token = `${signingInput}.${b64url(signature)}`;
+  const token = `${signingInput}.${bytesToBase64Url(signature)}`;
   const getJson = async (suffix = "") => {
     const response = await fetch(
       `https://appstoreconnect.apple.com/notary/v2/submissions/${encodeURIComponent(id)}${suffix}`,
