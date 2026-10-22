@@ -2,7 +2,7 @@
 
 ## Current callers and run state
 
-- Current `lsy-404/IRIS` main search found no `sign.voidcarve.com`, `SIGNING_API_KEY`, or `repository_dispatch` references. It still depends on public repository `lsy-404/IRIS-Build` for build production: `IRIS/licensing/README.md` says the authorized local Git hook and a six-hour scan trigger that build path. This is a build dependency, not a legacy signing caller; the main task should confirm whether that path is intentionally retired or migrated before archiving IRIS-Build.
+- Current `lsy-404/IRIS` main has no live IRIS-Build dispatch path in `.githooks/pre-push`, `scripts/`, `.github/`, or `package.json`; `.github/workflows/core.yml`, `shell.yml`, and `publish-shell.yml` use IRIS's own current release/upload secrets and workflows. There is no `sign.voidcarve.com`, `SIGNING_API_KEY`, or `repository_dispatch` reference in the current code search. The licensing README's statement that a local hook and six-hour scan trigger IRIS-Build is stale and inconsistent with the current implementation; documentation correction is in progress. It is not evidence of an active build dependency or a separate archive gate.
 - Current `lsy-404/IRIS-Build` main retains old-service client code (`scripts/import-macos.mjs`, `scripts/submit-macos.mjs`, `scripts/submit-windows.mjs`, `scripts/publish-shell.mjs`), used by `import-macos.yml`, `build.yml`, and `publish-shell.yml`. This is legacy implementation inside the repository proposed for archive, not an independent upstream caller; no current IRIS-main path to those legacy signing endpoints was found.
 - In-scope consumer review: current main in Oblivionis, Epilogue, SynthV (`SynthVCopilot/synthv-toolbox`), and Stardust uses GitEdge signing. Old-domain strings appear only in historical audit notes or tests asserting absence of the old string.
 - GitHub Actions read-only queries on 2026-10-22 returned zero `in_progress` runs for `IRIS`, `IRIS-Build`, `signing-exec-private`, and `signing-exec-public`. The three target repositories (`IRIS-Build`, `signing-exec-private`, `signing-exec-public`) currently report `archived:false`. No archive, delete, cancel, or secret operation was performed.
@@ -22,7 +22,7 @@
 1. Immediately before retirement, recheck old-repository workflow runs and old-service/GitEdge request status; wait for workspace cleanup of IRIS run `39861295192` to finish.
 2. Stop the old Worker ingress and cron first to prevent new requests. Do not delete the Worker or its DO class/namespace.
 3. Preserve the `SigningCoordinator` namespace and records, both encrypted Apple R2 objects, and object policy. Keep the shared GitHub source token and old Azure UAMI unchanged.
-4. Separately confirm whether IRIS-Build's build path is to stop with repository archival; it remains a visible IRIS build dependency, not a migrated old-signing caller.
+4. Correct the stale IRIS licensing README description of the former IRIS-Build trigger; this documentation correction is in progress and does not require a separate production authorization.
 5. Archive the three target repositories only after all remaining tasks are terminal and the new signing chain is accepted. Handle the signing-center repository separately.
 
 ## Evidence boundary
