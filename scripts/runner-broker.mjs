@@ -215,7 +215,7 @@ async function loadProfile(state, id) {
   return { ...profile, directory, credential };
 }
 
-async function apiRequest(origin, token, route, options = {}) {
+async function apiRequest(origin, token, route, options = {}, timeoutMs = 20_000) {
   const target = new URL(route, origin);
   if (target.origin !== origin || !route.startsWith("/"))
     throw new Error("GitEdge API requests must stay on the configured origin.");
@@ -227,7 +227,7 @@ async function apiRequest(origin, token, route, options = {}) {
       Accept: "application/json",
       ...(options.headers ?? {}),
     },
-    signal: AbortSignal.any([options.signal, AbortSignal.timeout(20_000)].filter(Boolean)),
+    signal: AbortSignal.any([options.signal, AbortSignal.timeout(timeoutMs)].filter(Boolean)),
   }).catch((error) => {
     const code = error.cause?.code;
     if (typeof code === "string" && /^[A-Z][A-Z0-9_]{1,64}$/.test(code))
@@ -932,12 +932,12 @@ async function runClaimedGitHub(profile, claim, signal) {
   const heartbeat = (async () => {
     while (!heartbeatSignal.aborted) {
       await sleep(
-        Math.min(30_000, Math.max(0, leaseExpiresAt - Date.now() - 25_000)),
+        Math.min(30_000, Math.max(0, leaseExpiresAt - Date.now() - 50_000)),
         heartbeatSignal
       );
       if (child && child.exitCode !== null) return;
       let response;
-      for (let attempt = 0; attempt < 2; attempt++) {
+      for (let attempt = 0; attempt < 4; attempt++) {
         const remaining = leaseExpiresAt - Date.now() - 1_000;
         if (remaining <= 0) throw new Error("GitHub runner lease expired before renewal.");
         try {
@@ -950,7 +950,8 @@ async function runClaimedGitHub(profile, claim, signal) {
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ runId, leaseToken }),
               signal: AbortSignal.any([heartbeatSignal, AbortSignal.timeout(remaining)]),
-            }
+            },
+            Math.min(45_000, remaining)
           );
           break;
         } catch (error) {
@@ -961,15 +962,16 @@ async function runClaimedGitHub(profile, claim, signal) {
             error.cause?.name === "TypeError" ||
             status === 429 ||
             (status >= 500 && status <= 599);
+          const delay = Math.min(10_000, 2_000 * 2 ** attempt);
           if (
             !transient ||
-            attempt === 1 ||
+            attempt === 3 ||
             heartbeatSignal.aborted ||
-            leaseExpiresAt - Date.now() <= 23_000
+            leaseExpiresAt - Date.now() <= delay + 1_000
           )
             throw error;
           console.error("GitHub heartbeat transport failed; retrying within the current lease.");
-          await sleep(2_000, heartbeatSignal);
+          await sleep(delay, heartbeatSignal);
         }
       }
       if (
