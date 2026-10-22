@@ -12,6 +12,7 @@ import { control, findButton, mountAt, settle, submit, unmountAll } from "./task
 
 beforeEach(() => {
   i18n.global.locale.value = "en";
+  vi.spyOn(api, "accountRunner").mockResolvedValue({ repository: null });
 });
 afterEach(async () => {
   await unmountAll();
