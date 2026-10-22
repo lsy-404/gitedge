@@ -58,7 +58,7 @@ def resource_pressure(proc_root):
             values[key] = int(value.strip().split()[0])
         total = values["MemTotal"]
         available = values["MemAvailable"]
-        return available < 131072 or available / total < 0.20
+        return available < 524288 or available / total < 0.20
     except (OSError, ValueError, KeyError, IndexError, ZeroDivisionError):
         return False
 

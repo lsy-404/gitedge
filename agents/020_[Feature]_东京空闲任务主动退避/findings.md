@@ -10,3 +10,5 @@
 - A1实际启动验证发现空闲客户端未出现且7396监听端口不存在：旧controller每次遇到短claim锁都会清空45秒恢复计时。运维只读样本显示约17秒一次的poll锁，常持续2–3个1秒采样；负载0.06–0.21。
 - 真实job信号：broker claim工作期间持续持有活动锁；执行通过 `scripts/actions-runner.mjs run` 桥接，并产生 `Runner.Server`、`Runner.Listener run`、`Runner.Client`，workflow worker进程可标为 `Runner.Worker`。通过root读取 `/proc/<pid>/cmdline` 在内存中匹配这些执行进程名，不读取或输出cmdline，也不访问environ/credential。
 - 控制器保留短锁期间的45秒计时；锁连续存在超过5秒才作为busy，真实runner/bridge执行进程立即busy。
+
+- AMD02正式job默认要求512MiB可用内存，broker以MemAvailable做claim容量判断；空闲任务的硬下限必须至少保留该值，并继续采用20%总内存门槛中较高者。

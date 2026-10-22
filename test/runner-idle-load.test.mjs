@@ -174,6 +174,49 @@ test("short claim-lock flaps preserve the idle recovery grace", async (t) => {
   assert.match(await readFile(log, "utf8"), /term\n/);
 });
 
+test("task yields below 512 MiB while allowing 513 MiB and then resumes", async (t) => {
+  if (process.platform !== "linux") return t.skip("Requires Linux process groups and /proc.");
+
+  const directory = await mkdtemp(path.join(os.tmpdir(), "gitedge-idle-memory-boundary-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const procRoot = path.join(directory, "proc");
+  const pressure = path.join(procRoot, "pressure");
+  await mkdir(pressure, { recursive: true });
+  await writeFile(path.join(procRoot, "loadavg"), "0 0 0 1/1 1\n");
+  await writeFile(path.join(procRoot, "meminfo"), "MemTotal: 2097152 kB\nMemAvailable: 525312 kB\n");
+  await writeFile(path.join(pressure, "cpu"), "some avg10=0 avg60=0 avg300=0 total=0\n");
+  await writeFile(path.join(pressure, "memory"), "some avg10=0 avg60=0 avg300=0 total=0\nfull avg10=0 avg60=0 avg300=0 total=0\n");
+  await writeFile(path.join(pressure, "io"), "some avg10=0 avg60=0 avg300=0 total=0\n");
+  const lock = path.join(directory, "active.lock");
+  const log = path.join(directory, "task.log");
+  const task = path.join(directory, "task.py");
+  await writeFile(
+    task,
+    "import signal, sys, time\nwith open(sys.argv[1], 'a') as log: log.write('start\\n')\ndef stop(_signum, _frame):\n    with open(sys.argv[1], 'a') as log: log.write('term\\n')\n    raise SystemExit(0)\nsignal.signal(signal.SIGTERM, stop)\nwhile True: time.sleep(0.1)\n"
+  );
+  const child = spawn(
+    "python3",
+    [controller, "--lock-file", lock, "--proc-root", procRoot, "--state-dir", directory, "--resume-after", "2", "--run-for", "30", "--max-disk-mib", "1", "--", "python3", task, log],
+    { stdio: "ignore" }
+  );
+  t.after(() => child.kill("SIGTERM"));
+  const lines = async () => (await readFile(log, "utf8").catch(() => "")).trim().split("\n").filter(Boolean);
+  await waitFor(async () => (await lines()).filter((line) => line === "start").length === 1, "task start at 513 MiB");
+  await writeFile(path.join(procRoot, "meminfo"), "MemTotal: 2097152 kB\nMemAvailable: 523264 kB\n");
+  await waitFor(async () => (await lines()).filter((line) => line === "term").length === 1, "preemption at 511 MiB");
+  await writeFile(path.join(procRoot, "meminfo"), "MemTotal: 2097152 kB\nMemAvailable: 525312 kB\n");
+  await waitFor(async () => (await lines()).filter((line) => line === "start").length === 2, "resume at 513 MiB");
+  child.kill("SIGTERM");
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("Controller did not stop.")), 5_000);
+    child.once("exit", () => {
+      clearTimeout(timeout);
+      resolve();
+    });
+  });
+  await waitFor(async () => (await lines()).filter((line) => line === "term").length === 2, "task cleanup");
+});
+
 test("controller kills a TERM-ignoring descendant after its leader exits", async (t) => {
   if (process.platform !== "linux") return t.skip("Requires Linux process groups and /proc.");
 
