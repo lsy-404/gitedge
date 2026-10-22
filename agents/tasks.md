@@ -30,3 +30,4 @@
 | 027 | [BugFix] PAT仓库选择包含账户Runner | 在owner token仓库范围选项中列出已存在的账户Runner仓库并去重 | CI凭据必须精确授权给账户Runner仓库 | ✅ 已完成 |
 | 028 | [Feature] Native signing workflow jobs | Run approved native signing through the standard one-job Runner.Server workflow and append the trusted SDK step | Preserve setup-action environment while keeping signing credentials protected | ✅ 已完成 |
 | 029 | [Fix] executor-specific run limits | Container actions retain their hourly cap while self-hosted and native signing admission do not share it | The current shared cap blocks legitimate self-hosted signing and runner workloads | ✅ 已完成 |
+| 030 | [Feature] Windows signing credential form | Add transient native inputs for Windows signing credentials with reauthentication retry | Allow owner-authorized credential installation without writing secrets to a local file | ✅ 已完成 |

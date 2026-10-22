@@ -30,6 +30,75 @@ const statuses = ref(new Map<string, SigningCredentialStatus>());
 const loading = ref(false);
 const busy = ref<string | null>(null);
 const error = ref("");
+const windowsFormProfile = ref<string | null>(null);
+const windowsTenantId = ref("");
+const windowsClientId = ref("");
+const windowsClientSecret = ref("");
+let windowsFormGeneration = 0;
+
+function clearWindowsForm(): void {
+  windowsFormGeneration += 1;
+  windowsTenantId.value = "";
+  windowsClientId.value = "";
+  windowsClientSecret.value = "";
+  windowsFormProfile.value = null;
+}
+
+function toggleWindowsForm(profile: SigningProfileMetadata): void {
+  if (windowsFormProfile.value === profile.name) {
+    clearWindowsForm();
+    return;
+  }
+  clearWindowsForm();
+  windowsFormProfile.value = profile.name;
+}
+
+async function installWindows(profile: SigningProfileMetadata): Promise<void> {
+  if (busy.value || windowsFormProfile.value !== profile.name) return;
+  try {
+    windowsCredentialsSchema.parse({
+      tenant_id: windowsTenantId.value,
+      client_id: windowsClientId.value,
+      client_secret: windowsClientSecret.value,
+    });
+  } catch {
+    error.value = t("runnerSigningWindowsCredentialsInvalid");
+    return;
+  }
+  const generation = windowsFormGeneration;
+  const operation = async () => {
+    if (generation !== windowsFormGeneration || windowsFormProfile.value !== profile.name) return;
+    let currentCredentials: unknown;
+    try {
+      currentCredentials = windowsCredentialsSchema.parse({
+        tenant_id: windowsTenantId.value,
+        client_id: windowsClientId.value,
+        client_secret: windowsClientSecret.value,
+      });
+    } catch {
+      error.value = t("runnerSigningWindowsCredentialsInvalid");
+      return;
+    }
+    busy.value = profile.name;
+    error.value = "";
+    try {
+      const status = await installSigningCredentials(
+        props.repositoryId,
+        profile.name,
+        "windows",
+        currentCredentials
+      );
+      statuses.value = new Map(statuses.value).set(statusKey(profile.name, "windows"), status);
+      clearWindowsForm();
+    } catch (cause) {
+      if (reauth.intercept(cause, operation)) return;
+      error.value = errorMessage(cause, t);
+    } finally {
+      busy.value = null;
+    }
+  };
+  await operation();
+}
 
 function isCredentialObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -214,7 +283,69 @@ onMounted(() => void refresh());
       <p v-if="profile.platform === 'windows'" class="row-meta">
         {{ t("runnerSigningWindowsCredentialsHelp") }}
       </p>
-      <div class="profile-actions">
+      <div v-if="profile.platform === 'windows'" class="profile-actions">
+        <FluentButton type="button" :disabled="busy !== null" @click="toggleWindowsForm(profile)">{{
+          windowsFormProfile === profile.name
+            ? t("runnerSigningWindowsCredentialsCancel")
+            : t("runnerSigningWindowsCredentialsInstall")
+        }}</FluentButton>
+        <FluentButton
+          v-if="statusFor(profile, profile.platform)?.configured"
+          type="button"
+          tone="danger"
+          :busy="busy === profile.name"
+          :disabled="busy !== null"
+          @click="remove(profile, profile.platform)"
+          >{{ t("runnerSigningCredentialsRemove") }}</FluentButton
+        >
+      </div>
+      <form
+        v-if="profile.platform === 'windows' && windowsFormProfile === profile.name"
+        class="windows-credentials-form"
+        @submit.prevent="installWindows(profile)"
+      >
+        <label :for="`runner-signing-windows-tenant-${profile.name}`">tenant_id</label>
+        <input
+          :id="`runner-signing-windows-tenant-${profile.name}`"
+          v-model.trim="windowsTenantId"
+          autocomplete="off"
+          spellcheck="false"
+          required
+          :disabled="busy !== null"
+        />
+        <label :for="`runner-signing-windows-client-${profile.name}`">client_id</label>
+        <input
+          :id="`runner-signing-windows-client-${profile.name}`"
+          v-model.trim="windowsClientId"
+          autocomplete="off"
+          spellcheck="false"
+          required
+          :disabled="busy !== null"
+        />
+        <label :for="`runner-signing-windows-secret-${profile.name}`">client_secret</label>
+        <input
+          :id="`runner-signing-windows-secret-${profile.name}`"
+          v-model="windowsClientSecret"
+          type="password"
+          autocomplete="new-password"
+          spellcheck="false"
+          required
+          :disabled="busy !== null"
+        />
+        <div class="profile-actions">
+          <FluentButton
+            type="submit"
+            tone="primary"
+            :busy="busy === profile.name"
+            :disabled="busy !== null"
+            >{{ t("runnerSigningWindowsCredentialsSave") }}</FluentButton
+          >
+          <FluentButton type="button" :disabled="busy !== null" @click="clearWindowsForm">
+            {{ t("runnerSigningWindowsCredentialsCancel") }}
+          </FluentButton>
+        </div>
+      </form>
+      <div v-else-if="profile.platform !== 'windows'" class="profile-actions">
         <label class="file-button">
           {{ t("runnerSigningCredentialsInstall") }}
           <input
@@ -285,7 +416,8 @@ onMounted(() => void refresh());
   margin: 0;
 }
 .profile-approval,
-.signing-profile {
+.signing-profile,
+.windows-credentials-form {
   display: grid;
   gap: 0.5rem;
 }
@@ -310,6 +442,18 @@ onMounted(() => void refresh());
   align-items: center;
   gap: 0.65rem;
   flex-wrap: wrap;
+}
+.windows-credentials-form {
+  grid-template-columns: minmax(8rem, auto) minmax(12rem, 1fr);
+  align-items: center;
+  max-width: 38rem;
+}
+.windows-credentials-form input {
+  min-height: 2.5rem;
+  padding: 0.4rem 0.6rem;
+}
+.windows-credentials-form .profile-actions {
+  grid-column: 1 / -1;
 }
 .file-button {
   display: inline-flex;
