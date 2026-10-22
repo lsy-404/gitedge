@@ -290,10 +290,16 @@ describe("AccountRunners", () => {
     await settle();
     expect(approveProfile).toHaveBeenCalledWith("runner-repository", "release");
 
-    const fileInput = Array.from(mounted.root.querySelectorAll<HTMLInputElement>('input[type="file"]'))[1]!;
-    const secretFile = new File([JSON.stringify({ token: "source-token-not-rendered" })], "source.json", {
-      type: "application/json",
-    });
+    const fileInput = Array.from(
+      mounted.root.querySelectorAll<HTMLInputElement>('input[type="file"]')
+    )[1]!;
+    const secretFile = new File(
+      [JSON.stringify({ token: "source-token-not-rendered" })],
+      "source.json",
+      {
+        type: "application/json",
+      }
+    );
     Object.defineProperty(fileInput, "files", { value: [secretFile], configurable: true });
     fileInput.dispatchEvent(new Event("change", { bubbles: true }));
     await settle();
@@ -301,6 +307,41 @@ describe("AccountRunners", () => {
       token: "source-token-not-rendered",
     });
     expect(mounted.root.textContent).not.toContain("source-token-not-rendered");
+  });
+
+  it("keeps a profile approval failure visible without treating the profile as approved", async () => {
+    vi.spyOn(api, "signingProfiles").mockResolvedValue({ profiles: [] });
+    vi.spyOn(api, "signingCredentialStatus").mockResolvedValue({
+      name: "release",
+      revision: "a".repeat(40),
+      platform: "windows",
+      configured: false,
+      updatedAt: null,
+    });
+    const approveProfile = vi
+      .spyOn(api, "approveSigningProfile")
+      .mockRejectedValue(new Error("Runner workflow YAML is unavailable."));
+    const mounted = await mountAt(
+      "/_verify/signing-profile-error",
+      "/_verify/signing-profile-error",
+      () => h(AccountRunnerSigningProfiles, { repositoryId: "runner-repository" })
+    );
+    await settle();
+
+    const name = mounted.root.querySelector<HTMLInputElement>("#runner-signing-profile-name")!;
+    name.value = "release";
+    name.dispatchEvent(new Event("input", { bubbles: true }));
+    name.dispatchEvent(new Event("change", { bubbles: true }));
+    await settle();
+    findButton(mounted.root, "Approve profile").click();
+    await settle();
+
+    expect(approveProfile).toHaveBeenCalledWith("runner-repository", "release");
+    expect(mounted.root.querySelector('[role="alert"]')?.textContent).toContain(
+      "Request failed. Try again later."
+    );
+    expect(name.value).toBe("release");
+    expect(mounted.root.querySelectorAll(".signing-profile")).toHaveLength(0);
   });
 
   it("shows an account Runner load error and retries the owner lookup", async () => {

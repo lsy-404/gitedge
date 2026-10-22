@@ -22,6 +22,7 @@ const runnerToken = `ge_runner_${"a".repeat(64)}`;
 const actionEnv: RunnerEnv = {
   DB: env.DB,
   FORGE: { fetch: async () => Response.json({ data: {} }) },
+  GIT: { fetch: async () => Response.json({ data: {} }) },
 };
 
 function trusted(person: Person, extra: Partial<TrustedUser> = {}): TrustedUser {
@@ -129,9 +130,7 @@ describe("owner-approved signing runner execution class", () => {
 
   it("reuses the same queued run after an enqueue response is retried", async () => {
     expect((await approve(trusted(owner))).status).toBe(200);
-    const row = await env.DB.prepare(
-      "SELECT operator_approved_at FROM actions_runners WHERE id=?"
-    )
+    const row = await env.DB.prepare("SELECT operator_approved_at FROM actions_runners WHERE id=?")
       .bind(runnerId)
       .first<{ operator_approved_at: number }>();
     const input = {
@@ -460,7 +459,10 @@ describe("owner-approved signing runner execution class", () => {
         getByName: () => ({
           fetch: async (rpc: Request) => {
             const operation = new URL(rpc.url).pathname.split("/").at(-1);
-            const body = (await rpc.json()) as { context?: { requestId: string }; payload?: unknown };
+            const body = (await rpc.json()) as {
+              context?: { requestId: string };
+              payload?: unknown;
+            };
             if (operation === "profile")
               return Response.json({
                 data: {
@@ -471,8 +473,11 @@ describe("owner-approved signing runner execution class", () => {
                 },
               });
             if (operation === "output-target")
-              return Response.json({ data: { key: outputKey, digest: outputDigest, size: outputBytes.length } });
-            if (operation === "complete") return Response.json({ data: { state: "awaiting_source" } });
+              return Response.json({
+                data: { key: outputKey, digest: outputDigest, size: outputBytes.length },
+              });
+            if (operation === "complete")
+              return Response.json({ data: { state: "awaiting_source" } });
             if (operation === "fail") return Response.json({ data: { state: "failed" } });
             return Response.json({
               data: {
@@ -564,9 +569,7 @@ describe("owner-approved signing runner execution class", () => {
       authenticode_verified: true,
       timestamp_verified: true,
       nested_signatures_verified: true,
-      files: [
-        { path: "product.exe", size: 1, sha256: "1".repeat(64) },
-      ],
+      files: [{ path: "product.exe", size: 1, sha256: "1".repeat(64) }],
     };
     const completed = await runnerMachineRequest(
       new Request(`https://actions.internal/runner/signing/requests/${requestId}/complete`, {
@@ -577,7 +580,11 @@ describe("owner-approved signing runner execution class", () => {
           "X-Runner-Lease-Token": signingLeaseToken,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ digest: outputDigest, size: outputBytes.length, verificationReport: report }),
+        body: JSON.stringify({
+          digest: outputDigest,
+          size: outputBytes.length,
+          verificationReport: report,
+        }),
       }),
       machineEnv
     );
@@ -591,7 +598,11 @@ describe("owner-approved signing runner execution class", () => {
           "X-Runner-Lease-Token": signingLeaseToken,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ digest: outputDigest, size: outputBytes.length, verificationReport: report }),
+        body: JSON.stringify({
+          digest: outputDigest,
+          size: outputBytes.length,
+          verificationReport: report,
+        }),
       }),
       machineEnv
     );
