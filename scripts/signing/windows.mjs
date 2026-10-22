@@ -883,7 +883,6 @@ async function signSquirrel(manifest, appDir, work, output, signScript, configPa
           noDelta: true,
           usePackageJson: false,
           fixUpPaths: false,
-          skipUpdateIcon: true,
         });
       } catch (error) {
         installerError = error;
