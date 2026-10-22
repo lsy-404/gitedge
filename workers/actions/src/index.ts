@@ -86,6 +86,8 @@ interface ActionsEnv extends Omit<Cloudflare.Env, "LEGACY_SIGNING"> {
   readonly RELEASE_ASSETS: R2Bucket;
   readonly LOG_LEVEL?: string;
   readonly LEGACY_SIGNING: Fetcher<import("./signing/types").LegacySigningEntrypoint>;
+  readonly LEGACY_SIGNING_OWNER_ID?: string;
+  readonly LEGACY_SIGNING_REPOSITORY_ID?: string;
 }
 
 function signingExecutionHooks(env: ActionsEnv) {

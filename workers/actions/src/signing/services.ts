@@ -544,6 +544,13 @@ export async function importLegacySigningCredentials(
   kind: SigningCredentialPlatform
 ): Promise<void> {
   if (!env.LEGACY_SIGNING) throw new Error("legacy_credential_import_unavailable");
+  if (
+    !env.LEGACY_SIGNING_OWNER_ID ||
+    !env.LEGACY_SIGNING_REPOSITORY_ID ||
+    ownerId !== env.LEGACY_SIGNING_OWNER_ID ||
+    repositoryId !== env.LEGACY_SIGNING_REPOSITORY_ID
+  )
+    throw new Error("legacy_credential_import_target_mismatch");
   const status = await signingCredentialStatus(env, ownerId, repositoryId, profileName, kind);
   if (!status || (kind !== "github-source" && status.platform !== kind))
     throw new Error("signing_profile_not_approved");
@@ -561,7 +568,7 @@ export async function importLegacySigningCredentials(
   const publicKey = new Uint8Array(await crypto.subtle.exportKey("spki", keyPair.publicKey));
   const recipientPublicKey = bytesToBase64(publicKey);
   const envelope = await env.LEGACY_SIGNING.exportCredential(kind, recipientPublicKey);
-  const maxCiphertext = kind === "ios" ? 500_000 : kind === "macos" ? 32_768 : 4096;
+  const maxCiphertext = kind === "ios" ? 500_000 : kind === "macos" ? 100_000 : 4096;
   if (
     envelope.version !== 1 ||
     envelope.kind !== kind ||

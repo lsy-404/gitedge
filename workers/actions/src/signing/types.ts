@@ -31,6 +31,8 @@ export interface SigningEnv {
   readonly SIGNING_ARTIFACTS: R2Bucket;
   readonly SIGNING_ENCRYPTION_KEY: string;
   readonly LEGACY_SIGNING?: Fetcher<LegacySigningEntrypoint>;
+  readonly LEGACY_SIGNING_OWNER_ID?: string;
+  readonly LEGACY_SIGNING_REPOSITORY_ID?: string;
 }
 
 export type ApprovedSigningProfile = SigningProfile;
