@@ -1348,6 +1348,7 @@ describe("native signing stage reconciliation", () => {
     let preparePayload: unknown;
     let failBindOnce = true;
     let boundRunId: string | null = null;
+    let bindPayload: unknown;
     const nextDispatch = {
       profile: {
         ...profile,
@@ -1434,13 +1435,21 @@ describe("native signing stage reconciliation", () => {
           });
         }
         if (path.startsWith("/bind-run/")) {
-          const body = (await request.json()) as { runId: string };
+          const body = await request.json();
+          bindPayload = body;
+          const runId =
+            typeof body === "object" &&
+            body !== null &&
+            "runId" in body &&
+            typeof body.runId === "string"
+              ? body.runId
+              : "";
           if (failBindOnce) {
             failBindOnce = false;
-            boundRunId = body.runId;
+            boundRunId = runId;
             throw new Error("bind response lost after commit");
           }
-          if (boundRunId !== body.runId) return Response.json({ bound: false });
+          if (boundRunId !== runId) return Response.json({ bound: false });
           return Response.json({ bound: true });
         }
         return Response.json({ error: "unexpected" }, { status: 500 });
@@ -1512,6 +1521,11 @@ describe("native signing stage reconciliation", () => {
       nonce: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
       ownerId: owner.id,
       repositoryId: "runner-repo",
+    });
+    expect(bindPayload).toEqual({
+      ownerId: owner.id,
+      repositoryId: "runner-repo",
+      runId: "22222222-2222-4222-8222-222222222222",
     });
     expect(calls.some((path) => path.startsWith("/bind-run/"))).toBe(true);
   });
