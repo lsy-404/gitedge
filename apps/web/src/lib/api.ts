@@ -699,10 +699,13 @@ export const api = {
   runnerOverview: (signal?: AbortSignal) =>
     request<RunnerOverview>("/api/actions/runners/overview", { signal }),
   approveRunnerSigning: (runnerId: string, approval: SigningRunnerApproval) =>
-    request<{ runner: RegisteredRunner }>(`/api/actions/runners/${encodeURIComponent(runnerId)}/signing`, {
-      method: "POST",
-      body: JSON.stringify(approval),
-    }),
+    request<{ runner: RegisteredRunner }>(
+      `/api/actions/runners/${encodeURIComponent(runnerId)}/signing`,
+      {
+        method: "POST",
+        body: JSON.stringify(approval),
+      }
+    ),
   revokeRunnerSigning: (runnerId: string) =>
     request<{ revoked: boolean }>(`/api/actions/runners/${encodeURIComponent(runnerId)}/signing`, {
       method: "DELETE",

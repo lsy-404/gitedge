@@ -14,10 +14,14 @@ export interface SigningExecutionEnv
     Pick<SigningEnv, "DB" | "FORGE">,
     Partial<
       Pick<SigningEnv, "SIGNING_COORDINATORS" | "SIGNING_ARTIFACTS" | "SIGNING_ENCRYPTION_KEY">
-    > {}
+    > {
+  readonly GIT?: Pick<Fetcher, "fetch">;
+}
 
 function hasSigningBindings(env: SigningExecutionEnv): env is SigningEnv {
-  return Boolean(env.SIGNING_COORDINATORS && env.SIGNING_ARTIFACTS && env.SIGNING_ENCRYPTION_KEY);
+  return Boolean(
+    env.GIT && env.SIGNING_COORDINATORS && env.SIGNING_ARTIFACTS && env.SIGNING_ENCRYPTION_KEY
+  );
 }
 
 export async function handleSigningMachineCallback(

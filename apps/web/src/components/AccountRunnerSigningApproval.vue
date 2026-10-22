@@ -94,7 +94,11 @@ function approvedDate(value: number | null): string {
       <label class="field-label" :for="`runner-signing-platform-${runner.id}`">
         {{ t("runnerSigningPlatform") }}
       </label>
-      <select :id="`runner-signing-platform-${runner.id}`" v-model="platform" :disabled="busy !== null">
+      <select
+        :id="`runner-signing-platform-${runner.id}`"
+        v-model="platform"
+        :disabled="busy !== null"
+      >
         <option value="windows">{{ t("runnerSigningPlatform_windows") }}</option>
         <option value="macos">{{ t("runnerSigningPlatform_macos") }}</option>
         <option value="ios">{{ t("runnerSigningPlatform_ios") }}</option>
@@ -125,7 +129,10 @@ function approvedDate(value: number | null): string {
         </FluentButton>
       </div>
     </div>
-    <AccountRunnerSigningProfiles v-if="approved && accountRunner" :repository-id="accountRunner.id" />
+    <AccountRunnerSigningProfiles
+      v-if="approved && accountRunner"
+      :repository-id="accountRunner.id"
+    />
   </section>
 </template>
 

@@ -16,3 +16,4 @@
 - 2026-10-21：修复签名 heartbeat watchdog 缺失的 per-run abort state；heartbeat 失败时等待 native process tree 停止后才提交可信 `/fail` 回调。Core 正在收敛 SDK output-init identity body 字段的 parser 契约，合并后补最终回归。
 - 2026-10-21：合并 core 2878909 的 output-init lease identity 契约与 SDK `45b98b3` cancellation checkpoint；更新 Windows/macOS/Linux 专用签名用户部署说明。SigningEnv cast 已由结构化 environment type guard 替代，Actions 类型检查通过。
 - 2026-10-21：真实 Worker callback start 在 core strict manifest contract 下通过；`complete` fixture 当前受 core R2 multipart route 重构影响返回 503，待其 checkpoint 合并后复跑并记录结果。
+- 2026-10-21：补充 signing callback 的 GIT binding fail-closed 守卫和真实 Worker fixture；profile approval UI 覆盖 API 拒绝时保留错误且不显示已批准状态。UI tests 8/8、Actions typecheck、Vue typecheck 通过；core 的 GitFileSchema profile route/checkpoint 尚待合并，complete Worker case 仍返回 `signing_unavailable`，暂不作为通过结果。

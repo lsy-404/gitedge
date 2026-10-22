@@ -83,7 +83,8 @@ export const runnerMessages = {
     accountRunnerServiceScope:
       "服务以工作流配置。账户 Runner 支持手动运行和最多 5 个五字段 UTC Cron 定时表达式；定时任务使用默认分支，重复排队运行会合并。",
     runnerSigningTitle: "签名执行授权",
-    runnerSigningDescription: "此授权只适用于当前账户私有 Runner 仓库中的节点。它将此注册切换为专用签名执行类别。",
+    runnerSigningDescription:
+      "此授权只适用于当前账户私有 Runner 仓库中的节点。它将此注册切换为专用签名执行类别。",
     runnerSigningClassGeneral: "通用执行",
     runnerSigningClassDedicated: "专用签名节点",
     runnerSigningPlatform: "签名平台",
@@ -92,8 +93,10 @@ export const runnerMessages = {
     runnerSigningPlatform_ios: "iOS",
     runnerSigningApprovedPlatform: "已批准平台：{platform}",
     runnerSigningApprovedAt: "批准时间：{time}",
-    runnerSigningDedicatedConfirm: "我已核实此主机或 OS 服务账户仅用于签名，与普通 CI 执行身份隔离。",
-    runnerSigningIsolationNote: "请使用单独主机/虚拟机或 OS 服务账户。此确认是操作员声明，不是硬件证明；普通 Mac CI 配置不能直接复用为专用签名节点。",
+    runnerSigningDedicatedConfirm:
+      "我已核实此主机或 OS 服务账户仅用于签名，与普通 CI 执行身份隔离。",
+    runnerSigningIsolationNote:
+      "请使用单独主机/虚拟机或 OS 服务账户。此确认是操作员声明，不是硬件证明；普通 Mac CI 配置不能直接复用为专用签名节点。",
     runnerSigningApprove: "批准为签名节点",
     runnerSigningUpdate: "更新签名批准",
     runnerSigningRevoke: "撤销签名批准",
@@ -103,7 +106,8 @@ export const runnerMessages = {
     runnerSigningProfileName: "配置名称",
     runnerSigningProfileNameExample: "release",
     runnerSigningProfileApprove: "批准配置",
-    runnerSigningProfilePathHint: "配置文件路径：.gitedge/signing/[名称].yml。更改工作流后需要重新批准。",
+    runnerSigningProfilePathHint:
+      "配置文件路径：.gitedge/signing/[名称].yml。更改工作流后需要重新批准。",
     runnerSigningProfilesEmpty: "尚未批准签名配置。",
     runnerSigningCredentialStatus: "凭据：{status}",
     runnerSigningPlatformCredential: "平台凭据：{status}",
@@ -239,9 +243,7 @@ export const runnerMessages = {
     runnerSigningCredentialsInstall: "Install credentials from JSON",
     runnerSigningSourceCredentialsInstall: "Install source-read token from JSON",
     runnerSigningCredentialsRemove: "Revoke credentials",
-    runnerSigningCredentialsRemoveConfirm:
-      "Delete the encrypted credentials for this profile?",
-    runnerSigningCredentialsFileInvalid:
-      "Choose a valid JSON object file no larger than 64 KiB.",
+    runnerSigningCredentialsRemoveConfirm: "Delete the encrypted credentials for this profile?",
+    runnerSigningCredentialsFileInvalid: "Choose a valid JSON object file no larger than 64 KiB.",
   },
 } as const;

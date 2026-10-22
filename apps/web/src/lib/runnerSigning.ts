@@ -26,10 +26,7 @@ export async function listSigningProfiles(repositoryId: string): Promise<Signing
   return (await api.signingProfiles(repositoryId)).profiles;
 }
 
-export async function approveSigningProfile(
-  repositoryId: string,
-  name: string
-): Promise<void> {
+export async function approveSigningProfile(repositoryId: string, name: string): Promise<void> {
   await api.approveSigningProfile(repositoryId, name);
 }
 

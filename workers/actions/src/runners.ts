@@ -51,6 +51,7 @@ export interface RunnerEnv {
   DB: D1Database;
   AUTH?: Pick<Fetcher, "fetch">;
   FORGE: Pick<Fetcher, "fetch">;
+  GIT?: Pick<Fetcher, "fetch">;
   LOG_LEVEL?: string;
 }
 export interface RunnerRow {
@@ -889,20 +890,19 @@ export async function runnerMachineRequest(request: Request, env: RunnerEnv): Pr
     .bind(now, runner.id, now - 30_000)
     .run();
   if (signingMachineRoute) {
-    const response = await handleSigningMachineCallback(
-      request,
-      env,
-      runner.id
-    );
+    const response = await handleSigningMachineCallback(request, env, runner.id);
     const signingOperation =
-      request.method === "POST" && /\/runner\/signing\/requests\/[0-9a-f-]{36}\/complete$/i.test(pathname);
+      request.method === "POST" &&
+      /\/runner\/signing\/requests\/[0-9a-f-]{36}\/complete$/i.test(pathname);
     const signingFailure =
-      request.method === "POST" && /\/runner\/signing\/requests\/[0-9a-f-]{36}\/fail$/i.test(pathname);
-    const conclusion = signingOperation && response.status === 202
-      ? "success"
-      : signingFailure && response.status === 200
-        ? "failure"
-        : null;
+      request.method === "POST" &&
+      /\/runner\/signing\/requests\/[0-9a-f-]{36}\/fail$/i.test(pathname);
+    const conclusion =
+      signingOperation && response.status === 202
+        ? "success"
+        : signingFailure && response.status === 200
+          ? "failure"
+          : null;
     if (conclusion) {
       const runId = request.headers.get("X-Runner-Run-Id") ?? "";
       const leaseToken = request.headers.get("X-Runner-Lease-Token") ?? "";
@@ -949,7 +949,11 @@ export async function runnerMachineRequest(request: Request, env: RunnerEnv): Pr
   if (operation === "claim") {
     const declaredClass = request.headers.get("X-Runner-Execution-Class");
     if (declaredClass !== runner.execution_class)
-      return errorResponse(409, "conflict", "The broker execution class does not match this registration.");
+      return errorResponse(
+        409,
+        "conflict",
+        "The broker execution class does not match this registration."
+      );
     return claim(request, env, runner);
   }
   const body = await readJsonLimited(

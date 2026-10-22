@@ -286,7 +286,9 @@ async function addGitEdge(state, values) {
   if (repository) repositorySegment(repository, "--repository");
   const executionClass = values.signing ? "signing" : "ordinary";
   if (executionClass === "signing" && repository !== "runner")
-    throw new Error("Signing profiles must register against the private account Runner repository.");
+    throw new Error(
+      "Signing profiles must register against the private account Runner repository."
+    );
   validateLabels(labels);
   validateProfileHostLabels(labels);
   const budget = parseRunnerBudget(values);
@@ -308,7 +310,9 @@ async function addGitEdge(state, values) {
     );
   } else {
     if (runnerPath)
-      throw new Error("Signing profiles use the native signing SDK and must not set --runner-path.");
+      throw new Error(
+        "Signing profiles use the native signing SDK and must not set --runner-path."
+      );
     await access(path.join(root, "scripts", "signing", "client.mjs"), constants.R_OK);
   }
   const directory = path.join(state, "profiles", id);
@@ -1049,23 +1053,48 @@ async function secureSigningPath(target, directory = false) {
     return;
   }
   const helper = path.join(root, "scripts", "secure-runner-context.ps1");
-  const child = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", helper, "-Path", target, ...(directory ? ["-Directory"] : [])], { stdio: "inherit" });
+  const child = spawn(
+    "powershell.exe",
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      helper,
+      "-Path",
+      target,
+      ...(directory ? ["-Directory"] : []),
+    ],
+    { stdio: "inherit" }
+  );
   await waitChild(child, new AbortController().signal);
 }
 
 async function runClaimedSigning(profile, claim, signal) {
   const { run } = claim;
-  if (profile.executionClass !== "signing" ||
-      typeof run.id !== "string" || !/^[0-9a-f-]{36}$/i.test(run.id) ||
-      typeof run.requestId !== "string" || !/^[0-9a-f-]{36}$/i.test(run.requestId) ||
-      typeof run.ownerId !== "string" || typeof run.repositoryId !== "string" ||
-      typeof run.workflowOid !== "string" || !/^[0-9a-f]{40}$/.test(run.workflowOid) ||
-      typeof run.profileRevision !== "string" || !/^[0-9a-f]{40}$/.test(run.profileRevision) ||
-      typeof run.generation !== "number" || typeof run.nonce !== "string" ||
-      !["windows", "macos", "ios"].includes(run.platform) || run.operatorApproved !== true ||
-      typeof run.approvedBy !== "string" || typeof run.approvedAt !== "number" ||
-      typeof claim.runnerId !== "string" || String(claim.runnerId) !== String(profile.runnerId) ||
-      typeof claim.leaseToken !== "string" || typeof claim.leaseExpiresAt !== "number")
+  if (
+    profile.executionClass !== "signing" ||
+    typeof run.id !== "string" ||
+    !/^[0-9a-f-]{36}$/i.test(run.id) ||
+    typeof run.requestId !== "string" ||
+    !/^[0-9a-f-]{36}$/i.test(run.requestId) ||
+    typeof run.ownerId !== "string" ||
+    typeof run.repositoryId !== "string" ||
+    typeof run.workflowOid !== "string" ||
+    !/^[0-9a-f]{40}$/.test(run.workflowOid) ||
+    typeof run.profileRevision !== "string" ||
+    !/^[0-9a-f]{40}$/.test(run.profileRevision) ||
+    typeof run.generation !== "number" ||
+    typeof run.nonce !== "string" ||
+    !["windows", "macos", "ios"].includes(run.platform) ||
+    run.operatorApproved !== true ||
+    typeof run.approvedBy !== "string" ||
+    typeof run.approvedAt !== "number" ||
+    typeof claim.runnerId !== "string" ||
+    String(claim.runnerId) !== String(profile.runnerId) ||
+    typeof claim.leaseToken !== "string" ||
+    typeof claim.leaseExpiresAt !== "number"
+  )
     throw new Error("Signing lease identity is incomplete or does not match the approved runner.");
   const secret = await readFile(path.join(profile.directory, "credential"), "utf8");
   const runDirectory = await mkdtemp(path.join(profile.directory, "signing-"));
@@ -1099,12 +1128,23 @@ async function runClaimedSigning(profile, claim, signal) {
   try {
     await writePrivate(contextFile, JSON.stringify(context));
     await secureSigningPath(contextFile);
-    child = spawn(process.execPath, [path.join(root, "scripts", "signing", "client.mjs"), "execute", "--context-file", contextFile, "--output-parent", runDirectory], {
-      cwd: root,
-      detached: process.platform !== "win32",
-      stdio: "inherit",
-      windowsHide: true,
-    });
+    child = spawn(
+      process.execPath,
+      [
+        path.join(root, "scripts", "signing", "client.mjs"),
+        "execute",
+        "--context-file",
+        contextFile,
+        "--output-parent",
+        runDirectory,
+      ],
+      {
+        cwd: root,
+        detached: process.platform !== "win32",
+        stdio: "inherit",
+        windowsHide: true,
+      }
+    );
     const heartbeat = async () => {
       while (!runSignal.aborted && childRunning(child)) {
         await sleep(30_000, runSignal);
@@ -1123,7 +1163,10 @@ async function runClaimedSigning(profile, claim, signal) {
             signal: runSignal,
           }
         );
-        if (!Number.isFinite(result?.data?.leaseExpiresAt) || result.data.leaseExpiresAt <= Date.now())
+        if (
+          !Number.isFinite(result?.data?.leaseExpiresAt) ||
+          result.data.leaseExpiresAt <= Date.now()
+        )
           throw new Error("GitEdge returned an invalid signing lease heartbeat response.");
       }
     };
@@ -1574,11 +1617,15 @@ async function serve(state, { once, pollSeconds }) {
   );
   if (!profiles.length) throw new Error("Register at least one profile before serving.");
   const executionClasses = new Set(
-    profiles.filter((profile) => profile.kind === "gitedge").map((profile) => profile.executionClass)
+    profiles
+      .filter((profile) => profile.kind === "gitedge")
+      .map((profile) => profile.executionClass)
   );
   if (profiles.some((profile) => profile.kind === "github")) executionClasses.add("ordinary");
   if (executionClasses.size > 1)
-    throw new Error("Ordinary and signing profiles require separate broker services and OS identities.");
+    throw new Error(
+      "Ordinary and signing profiles require separate broker services and OS identities."
+    );
   for (const profile of profiles) {
     if (profile.kind === "github" || profile.kind === "gitedge")
       validateProfileHostLabels(profile.labels);
