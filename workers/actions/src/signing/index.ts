@@ -387,15 +387,16 @@ function signingObjectKey(
   return `signing/${ownerId}/${repositoryId}/${requestId}/${object}.zip`;
 }
 
-function recentHuman(user: TrustedUser): boolean {
-  return (
-    !user.job &&
-    !user.agentSession &&
-    !user.token &&
-    Number.isSafeInteger(user.recentAuthAt) &&
-    user.recentAuthAt! <= Date.now() &&
-    Date.now() - user.recentAuthAt! <= 10 * 60_000
-  );
+function recentHumanError(user: TrustedUser): Response | null {
+  if (user.job || user.agentSession || user.token)
+    return errorResponse(403, "forbidden", "An account owner session is required.");
+  if (
+    !Number.isSafeInteger(user.recentAuthAt) ||
+    user.recentAuthAt! > Date.now() ||
+    Date.now() - user.recentAuthAt! > 10 * 60_000
+  )
+    return errorResponse(403, "reauth_required", "Confirm your identity to continue.");
+  return null;
 }
 
 function runnerAccess(user: TrustedUser, repositoryId: string, write: boolean): boolean {
@@ -442,8 +443,10 @@ export async function handleSigningRoute(
   try {
     if (path[1] === "profiles") {
       const repositoryId = url.searchParams.get("repositoryId") ?? "";
-      if (request.method === "POST" && path.length === 2 && !recentHuman(user))
-        return errorResponse(403, "forbidden", "Recent owner authentication is required.");
+      if (request.method === "POST" && path.length === 2) {
+        const authenticationError = recentHumanError(user);
+        if (authenticationError) return authenticationError;
+      }
       const repository = repositoryId
         ? await ownedRunnerRepository(env, user.id, repositoryId)
         : null;
@@ -492,8 +495,8 @@ export async function handleSigningRoute(
             ? dataResponse(status)
             : errorResponse(404, "not_found", "Signing profile was not found.");
         }
-        if (!recentHuman(user))
-          return errorResponse(403, "forbidden", "Recent owner authentication is required.");
+        const authenticationError = recentHumanError(user);
+        if (authenticationError) return authenticationError;
         let platform;
         if (request.method === "POST") {
           const body = z

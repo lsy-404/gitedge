@@ -8,7 +8,7 @@ import type {
   SigningCredentialPlatform,
   SigningProfileMetadata,
 } from "../../../../packages/contracts/src/signing";
-import { errorMessage } from "../lib/api";
+import { api, errorMessage } from "../lib/api";
 import {
   approveSigningProfile,
   getSigningCredentialStatus,
@@ -149,6 +149,33 @@ async function remove(
   await operation();
 }
 
+async function importCredentials(profile: SigningProfileMetadata): Promise<void> {
+  if (busy.value) return;
+  const operation = async () => {
+    busy.value = profile.name;
+    error.value = "";
+    try {
+      const platforms: ("macos" | "ios" | "github-source")[] = ["github-source"];
+      if (profile.platform === "macos" || profile.platform === "ios")
+        platforms.push(profile.platform);
+      for (const platform of platforms) {
+        const status = await api.importSigningCredentials(
+          props.repositoryId,
+          profile.name,
+          platform
+        );
+        statuses.value = new Map(statuses.value).set(statusKey(profile.name, platform), status);
+      }
+    } catch (cause) {
+      if (reauth.intercept(cause, operation)) return;
+      error.value = errorMessage(cause, t);
+    } finally {
+      busy.value = null;
+    }
+  };
+  await operation();
+}
+
 function statusKey(name: string, platform: SigningCredentialPlatform): string {
   return `${name}:${platform}`;
 }
@@ -215,6 +242,9 @@ onMounted(() => void refresh());
         {{ t("runnerSigningWindowsCredentialsHelp") }}
       </p>
       <div class="profile-actions">
+        <FluentButton type="button" :disabled="busy !== null" @click="importCredentials(profile)">
+          从旧签名服务加密迁入
+        </FluentButton>
         <label class="file-button">
           {{ t("runnerSigningCredentialsInstall") }}
           <input

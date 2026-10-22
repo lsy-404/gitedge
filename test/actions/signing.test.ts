@@ -383,6 +383,37 @@ describe("native signing admission", () => {
     expect(test.stub.fetch).not.toHaveBeenCalled();
   });
 
+  it("offers browser reauthentication without permitting token approvals", async () => {
+    const test = environment();
+    const request = () =>
+      new Request("https://actions.test/signing/profiles?repositoryId=runner-repo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "desktop-release" }),
+      });
+    const stale = await handleSigningRoute(
+      request(),
+      test.env,
+      { ...owner, recentAuthAt: Date.now() - 660_000 },
+      test.hooks(true)
+    );
+    expect(stale.status).toBe(403);
+    expect(await stale.json()).toMatchObject({ error: { code: "reauth_required" } });
+    const token = await handleSigningRoute(
+      request(),
+      test.env,
+      {
+        ...owner,
+        recentAuthAt: Date.now(),
+        token: { scopes: ["repo:write"], repositoryIds: ["runner-repo"] },
+      } as TrustedUser,
+      test.hooks(true)
+    );
+    expect(token.status).toBe(403);
+    expect(await token.json()).toMatchObject({ error: { code: "forbidden" } });
+    expect(test.stub.fetch).not.toHaveBeenCalled();
+  });
+
   it("rejects unsupported legacy kinds and unapproved profiles before calling the private service", async () => {
     const test = environment();
     const exportCredential = vi.fn(async () => ({
