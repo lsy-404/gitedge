@@ -2,7 +2,7 @@
 > 最后更新：2026-10-22
 
 ## 项目目标
-已接入东京 Linux x64 runner、主机维护和设备接入指令。每账户私有 Runner 仓库、owner-only及不可变身份、任务服务页面和UTC cron已部署，真实手动/定时任务均通过东京节点执行。原生签名的审批profile、来源授权、通用runner任务级secret和平台租约流程已部署；生产profile仍为空，尚无真实证书签名回执。GitHub签名工作流继续通过通用runner及其环境secret运行。技术栈及边界遵循 AGENTS.md / PRODUCT.md。
+已接入东京 Linux runner、Mac 和 Windows 普通构建 runner。每账户私有 Runner 仓库、owner-only及不可变身份、任务服务页面和UTC cron已部署。原生签名的审批profile、来源授权、任务级secret和平台租约流程已部署；十一份生产profile已批准，来源凭据十一份、Apple平台凭据七份已加密安装，Windows四份等待Azure凭据安装。真实签名验证仍在进行，旧服务仅在新链路通过且旧任务排空后退役。技术栈及边界遵循 AGENTS.md / PRODUCT.md。
 
 ## 执行依据
 设计提交 5697d93。用户明确要求按此执行，稿内 D1 正向变更与旧 broker 规则均为本次已授权要求。
