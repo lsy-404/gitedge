@@ -46,7 +46,11 @@ export function localExecutionMinutes(claim, workflowMaximum) {
 
 const toolCommands = () => [
   ["node", process.execPath, ["--version"]],
-  ["pnpm", "pnpm", ["--version"]],
+  [
+    "pnpm",
+    process.platform === "win32" ? "cmd.exe" : "pnpm",
+    process.platform === "win32" ? ["/d", "/c", "pnpm.cmd", "--version"] : ["--version"],
+  ],
   ["git", "git", ["--version"]],
   ["docker", "docker", ["info", "--format", "{{.ServerVersion}}"]],
   ["python", process.platform === "win32" ? "python" : "python3", ["--version"]],
