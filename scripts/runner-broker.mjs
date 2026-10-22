@@ -236,7 +236,9 @@ async function apiRequest(origin, token, route, options = {}) {
   });
   if (!response.ok) {
     await response.body?.cancel();
-    throw new Error(`GitEdge API returned HTTP ${response.status}.`);
+    throw new Error(`GitEdge API returned HTTP ${response.status}.`, {
+      cause: { status: response.status },
+    });
   }
   if (response.status === 204) return undefined;
   if (new URL(response.url).origin !== origin) {
@@ -869,7 +871,9 @@ async function runClaimedGitHub(profile, claim, signal) {
     run.timeoutMinutes < 1 ||
     run.timeoutMinutes > 360 ||
     typeof leaseToken !== "string" ||
-    !leaseToken
+    !leaseToken ||
+    !Number.isFinite(claim.leaseExpiresAt) ||
+    claim.leaseExpiresAt <= Date.now()
   )
     throw new Error("GitEdge returned invalid GitHub runner execution metadata.");
   if (
@@ -923,29 +927,60 @@ async function runClaimedGitHub(profile, claim, signal) {
   const heartbeatController = new AbortController();
   const heartbeatSignal = AbortSignal.any([execution, heartbeatController.signal]);
   const startedAt = Date.now();
+  let leaseExpiresAt = claim.leaseExpiresAt;
   let heartbeatFailure;
   const heartbeat = (async () => {
     while (!heartbeatSignal.aborted) {
-      await sleep(30_000, heartbeatSignal);
-      if (child && child.exitCode !== null) return;
-      const response = await apiRequest(
-        profile.origin,
-        profile.credential,
-        "/api/actions/runner/github/heartbeat",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ runId, leaseToken }),
-          signal: heartbeatSignal,
-        }
+      await sleep(
+        Math.min(30_000, Math.max(0, leaseExpiresAt - Date.now() - 25_000)),
+        heartbeatSignal
       );
+      if (child && child.exitCode !== null) return;
+      let response;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const remaining = leaseExpiresAt - Date.now() - 1_000;
+        if (remaining <= 0) throw new Error("GitHub runner lease expired before renewal.");
+        try {
+          response = await apiRequest(
+            profile.origin,
+            profile.credential,
+            "/api/actions/runner/github/heartbeat",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ runId, leaseToken }),
+              signal: AbortSignal.any([heartbeatSignal, AbortSignal.timeout(remaining)]),
+            }
+          );
+          break;
+        } catch (error) {
+          const status = error.cause?.status;
+          const transient =
+            error.name === "TimeoutError" ||
+            error.name === "TypeError" ||
+            error.cause?.name === "TypeError" ||
+            status === 429 ||
+            (status >= 500 && status <= 599);
+          if (
+            !transient ||
+            attempt === 1 ||
+            heartbeatSignal.aborted ||
+            leaseExpiresAt - Date.now() <= 23_000
+          )
+            throw error;
+          console.error("GitHub heartbeat transport failed; retrying within the current lease.");
+          await sleep(2_000, heartbeatSignal);
+        }
+      }
       if (
         typeof response?.data?.cancelled !== "boolean" ||
         typeof response.data.assigned !== "boolean" ||
-        !Number.isFinite(response.data.leaseExpiresAt)
+        !Number.isFinite(response.data.leaseExpiresAt) ||
+        (!response.data.cancelled && response.data.leaseExpiresAt <= Date.now())
       )
         throw new Error("GitEdge returned an invalid GitHub runner heartbeat.");
       if (response.data.cancelled) throw new Error("GitEdge requested cancellation.");
+      leaseExpiresAt = response.data.leaseExpiresAt;
       if (!response.data.assigned && Date.now() - startedAt >= 120_000)
         throw new Error("GitHub job was not assigned within 120 seconds.");
     }
