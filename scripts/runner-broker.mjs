@@ -1065,7 +1065,9 @@ async function runClaimedSigning(profile, claim, signal) {
     typeof run.profileRevision !== "string" ||
     !/^[0-9a-f]{40}$/.test(run.profileRevision) ||
     typeof run.stage !== "string" ||
-    !["sign", "windows_sign", "ios_sign"].includes(run.stage) ||
+    !["sign", "finalize", "dmg_sign", "dmg_finalize", "windows_sign", "ios_sign"].includes(
+      run.stage
+    ) ||
     typeof run.inputDigest !== "string" ||
     !/^sha256:[a-f0-9]{64}$/.test(run.inputDigest) ||
     typeof run.generation !== "number" ||
@@ -1074,7 +1076,8 @@ async function runClaimedSigning(profile, claim, signal) {
     typeof run.nonce !== "string" ||
     !/^[A-Za-z0-9_-]{43}$/.test(run.nonce) ||
     !["windows", "macos", "ios"].includes(run.platform) ||
-    (run.platform === "macos" && run.stage !== "sign") ||
+    (run.platform === "macos" &&
+      !["sign", "finalize", "dmg_sign", "dmg_finalize"].includes(run.stage)) ||
     (run.platform === "windows" && run.stage !== "windows_sign") ||
     (run.platform === "ios" && run.stage !== "ios_sign") ||
     !Number.isSafeInteger(run.timeoutMinutes) ||
@@ -1575,34 +1578,7 @@ async function claimGitEdge(profile, signal) {
   )
     throw new Error("GitEdge returned an incomplete runner lease.");
   if (claim.run.kind === "workflow") return claim;
-  if (claim.run.kind === "signing") {
-    if (
-      typeof claim.run.id !== "string" ||
-      !/^[0-9a-f-]{36}$/i.test(claim.run.id) ||
-      typeof claim.run.requestId !== "string" ||
-      !/^[0-9a-f-]{36}$/i.test(claim.run.requestId) ||
-      typeof claim.run.ownerId !== "string" ||
-      !/^[0-9a-f-]{36}$/i.test(claim.run.ownerId) ||
-      typeof claim.run.repositoryId !== "string" ||
-      !/^[0-9a-f-]{36}$/i.test(claim.run.repositoryId) ||
-      typeof claim.run.workflowOid !== "string" ||
-      !/^[0-9a-f]{40}$/.test(claim.run.workflowOid) ||
-      typeof claim.run.profileRevision !== "string" ||
-      !/^[0-9a-f]{40}$/.test(claim.run.profileRevision) ||
-      typeof claim.run.generation !== "number" ||
-      !Number.isSafeInteger(claim.run.generation) ||
-      claim.run.generation < 1 ||
-      typeof claim.run.nonce !== "string" ||
-      !/^[A-Za-z0-9_-]{43}$/.test(claim.run.nonce) ||
-      typeof claim.run.platform !== "string" ||
-      typeof claim.run.stage !== "string" ||
-      typeof claim.run.inputDigest !== "string" ||
-      typeof claim.run.timeoutMinutes !== "number" ||
-      String(claim.runnerId) !== String(profile.runnerId)
-    )
-      throw new Error("GitEdge returned an incomplete signing runner lease.");
-    return claim;
-  }
+  if (claim.run.kind === "signing") return claim;
   throw new Error("GitEdge returned an unsupported runner job kind.");
 }
 
