@@ -28,3 +28,4 @@
 | 023 | [Ops] 签名工具链核验 | 核验 Windows/macOS 通信、签名工具、runner 活跃状态和任务级凭据清理 | 为生产签名真实验证确认通用主机能力与清理边界 | 🔄 进行中 |
 | 024 | [Ops] 签名凭据迁移准备 | 盘点旧签名凭据并准备IRIS Runner profile策略候选 | 统一GitEdge生产签名入口并保留凭据授权边界 | 🔄 进行中 |
 | 026 | [Fix] iOS Python runtime selection | Use the standard Python executable when `PYTHON` is unset | Align iOS SDK behavior with macOS native signer and allow host PATH provisioning | ✅ 已完成 |
+| 027 | [Feature] Native signing workflow jobs | Run approved native signing through the standard one-job Runner.Server workflow and append the trusted SDK step | Preserve setup-action environment while keeping signing credentials protected | 🔄 进行中 |

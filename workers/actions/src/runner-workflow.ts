@@ -169,6 +169,35 @@ export function parseRunnerWorkflow(path: string, source: string): RunnerWorkflo
   };
 }
 
+export function validateSingleSigningJob(path: string, source: string): void {
+  if (new TextEncoder().encode(source).byteLength > 65_536) fail("Runner workflow exceeds 64 KiB.");
+  const document = parseDocument(source, { schema: "core", uniqueKeys: true, strict: true });
+  if (document.errors.length) fail("Workflow YAML is invalid.");
+  let value: unknown;
+  try {
+    value = document.toJS({ maxAliasCount: 0 });
+  } catch {
+    fail("Workflow aliases are unsupported.");
+  }
+  const parsed = RecordSchema.safeParse(value);
+  const jobs = parsed.success ? RecordSchema.safeParse(parsed.data.jobs) : undefined;
+  if (!jobs?.success || Object.keys(jobs.data).length !== 1)
+    fail("Signing workflows must contain exactly one job.");
+  const job = RecordSchema.safeParse(Object.values(jobs.data)[0]);
+  const strategy =
+    job?.success && job.data.strategy !== undefined
+      ? RecordSchema.safeParse(job.data.strategy)
+      : undefined;
+  if (
+    !job?.success ||
+    (job.data.strategy !== undefined &&
+      (!strategy?.success || strategy.data.matrix !== undefined)) ||
+    job.data.if !== undefined
+  )
+    fail("Signing workflows cannot use matrix jobs or conditional jobs.");
+  parseRunnerWorkflow(path, source);
+}
+
 export function runnerDispatchInputs(
   definition: RunnerWorkflow,
   supplied: unknown

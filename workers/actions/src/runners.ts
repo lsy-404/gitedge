@@ -649,11 +649,43 @@ async function claim(request: Request, env: RunnerEnv, runner: RunnerRow): Promi
       .first<RunRow>();
     if (!row) return errorResponse(409, "conflict", "Claimed run is unavailable.");
     if (candidate.execution_kind === "signing") {
+      let jobToken: string;
+      try {
+        if (!env.AUTH) throw new Error("auth_unavailable");
+        const response = await env.AUTH.fetch(
+          new Request("https://auth.internal/internal/actions-job-token", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ runId: row.id, runnerId: fresh.id, leaseToken }),
+          })
+        );
+        const body: unknown = JSON.parse((await readTextLimited(response.body, 8192)) ?? "null");
+        const credential = z
+          .object({ data: z.object({ token: z.string().regex(/^ge_job_[0-9a-f]{64}$/) }) })
+          .safeParse(body);
+        if (!response.ok || !credential.success) throw new Error("invalid_job_token");
+        jobToken = credential.data.data.token;
+      } catch {
+        const failedAt = Date.now();
+        const failed = await env.DB.prepare(
+          "UPDATE actions_runner_runs SET status='completed',conclusion='failure',completed_at=?,log='The job credential could not be issued.' WHERE run_id=? AND lease_hash=? AND status='running' RETURNING run_id"
+        )
+          .bind(failedAt, row.id, leaseHash)
+          .first();
+        if (failed) await recordRunnerFailure(env, fresh.id, failedAt);
+        await env.DB.prepare("UPDATE actions_job_tokens SET revoked_at=? WHERE run_id=?")
+          .bind(failedAt, row.id)
+          .run();
+        const completed = await getRunnerRun(env, row.id);
+        if (completed) await publishCheck(env, completed);
+        return errorResponse(503, "internal_error", "The job credential could not be issued.");
+      }
       await publishCheck(env, runDetails(row));
       return dataResponse({
         run: {
           id: row.id,
           kind: "signing",
+          token: jobToken,
           labels: evaluated.labels,
           requestId: candidate.request_id,
           stage: candidate.stage,

@@ -20,6 +20,7 @@ import { parseArgs } from "node:util";
 import { parseDocument } from "yaml";
 import { parseJobClaim, matchesLabels } from "../packages/contracts/runner-scheduling.mjs";
 import { createGitEdgeExecutionArgs } from "./runner-broker-execution.mjs";
+import { createSigningWorkflow, readSigningReceipt } from "./runner-broker-signing-workflow.mjs";
 import { pruneRunArtifacts, runArtifactRoots } from "./runner-retention.mjs";
 import {
   getRunnerCapacity,
@@ -1148,6 +1149,9 @@ async function runClaimedSigning(profile, claim, signal) {
   };
   const runDirectory = await mkdtemp(path.join(profile.directory, "signing-"));
   const contextFile = path.join(runDirectory, "context.json");
+  const receiptFile = path.join(runDirectory, "sdk-receipt.json");
+  const workflowFile = path.join(runDirectory, "workflow.yml");
+  const eventPayloadFile = path.join(runDirectory, "event.json");
   const heartbeatController = new AbortController();
   const runSignal = AbortSignal.any([signal, heartbeatController.signal]);
   let heartbeatFailure;
@@ -1158,31 +1162,79 @@ async function runClaimedSigning(profile, claim, signal) {
       const capacity = await getRunnerCapacity({
         workDirectories: [profile.directory, path.join(root, "work", "actions")],
       });
+      if (
+        typeof run.workflowSource !== "string" ||
+        typeof run.workflowPath !== "string" ||
+        !/^\.github\/workflows\/[A-Za-z0-9_.-]+\.(?:yml|yaml)$/.test(run.workflowPath) ||
+        typeof run.repository !== "string" ||
+        !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(run.repository) ||
+        !Array.isArray(run.labels) ||
+        typeof run.token !== "string" ||
+        !/^ge_job_[0-9a-f]{64}$/.test(run.token) ||
+        typeof run.sha !== "string" ||
+        !/^[0-9a-f]{40}$/i.test(run.sha) ||
+        typeof run.ref !== "string" ||
+        !/^refs\/(?:heads|tags)\/.+/.test(run.ref) ||
+        typeof run.event !== "string" ||
+        !["push", "workflow_dispatch", "schedule"].includes(run.event) ||
+        !["read", "write"].includes(run.permission)
+      )
+        throw new Error("Signing workflow metadata is incomplete.");
+      const jobClaim = parseJobClaim(run.labels, run.timeoutMinutes);
+      if (!jobClaim.valid) throw new Error("Signing workflow has invalid host requirements.");
       validateLocalJobClaim(run.labels, capacity, run.timeoutMinutes);
       await secureSigningPath(runDirectory, true);
       await writePrivate(contextFile, JSON.stringify(context));
       await secureSigningPath(contextFile);
-      child = spawn(
-        process.execPath,
-        [
-          path.join(root, "scripts", "signing", "client.mjs"),
-          "execute",
-          "--context-file",
-          contextFile,
-          "--output-parent",
-          runDirectory,
-        ],
-        {
-          cwd: root,
-          detached: process.platform !== "win32",
-          stdio: "inherit",
-          windowsHide: true,
-        }
-      );
+      const source = createSigningWorkflow(run.workflowSource, {
+        platform: run.platform,
+        clientPath: path.join(root, "scripts", "signing", "client.mjs"),
+        contextFile,
+        outputParent: runDirectory,
+        receiptFile,
+      });
+      await writeFile(workflowFile, source, { mode: 0o600 });
+      await writeFile(eventPayloadFile, JSON.stringify(run.eventPayload ?? {}), { mode: 0o600 });
+      const args = createGitEdgeExecutionArgs({
+        runnerScript: runnerScript(),
+        profile,
+        run,
+        workflowFile,
+        actionsState: path.join(root, "work", "actions"),
+        jobClaim,
+        demandLabels: run.labels,
+        eventPayloadFile,
+      });
+      const childEnvironment = { ...process.env };
+      for (const key of Object.keys(childEnvironment)) {
+        if (
+          /^(?:gitedge_token|gh_token|gh_enterprise_token|github_token|github_enterprise_token)$/i.test(
+            key
+          )
+        )
+          delete childEnvironment[key];
+      }
+      child = spawn(process.execPath, args, {
+        cwd: runDirectory,
+        env: {
+          ...childEnvironment,
+          GITEDGE_TOKEN: run.token,
+          GITEDGE_BROKER_SLOT_HELD: "1",
+        },
+        detached: process.platform !== "win32",
+        stdio: "inherit",
+        windowsHide: true,
+      });
       const heartbeat = async () => {
+        let lastHeartbeat = Date.now();
         while (!runSignal.aborted && childRunning(child)) {
-          await sleep(30_000, runSignal);
+          await sleep(1_000, runSignal);
           if (!childRunning(child)) return;
+          try {
+            await access(receiptFile);
+            return;
+          } catch {}
+          if (Date.now() - lastHeartbeat < 30_000) continue;
           const result = await apiRequest(
             profile.origin,
             secret.trim(),
@@ -1202,6 +1254,7 @@ async function runClaimedSigning(profile, claim, signal) {
             result.data.leaseExpiresAt <= Date.now()
           )
             throw new Error("GitEdge returned an invalid signing lease heartbeat response.");
+          lastHeartbeat = Date.now();
         }
       };
       renew = heartbeat().catch((error) => {
@@ -1211,6 +1264,7 @@ async function runClaimedSigning(profile, claim, signal) {
       });
       await waitChild(child, runSignal);
       if (heartbeatFailure) throw heartbeatFailure;
+      await readSigningReceipt(receiptFile, run.requestId);
     } catch (error) {
       if (child && childRunning(child)) await killChild(child);
       if (!signal.aborted) {
