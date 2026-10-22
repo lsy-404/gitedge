@@ -357,11 +357,17 @@ describe("AccountRunners", () => {
       "/_verify/account-runner-error",
       () => h(AccountRunners)
     );
-    await settle();
-    expect(mounted.root.textContent).toContain("Request failed. Try again later.");
-    findButton(mounted.root, "Retry").click();
-    await settle();
-    expect(get).toHaveBeenCalledTimes(2);
-    expect(mounted.root.textContent).toContain("No account Runner repository exists yet.");
+    await vi
+      .waitFor(() => {
+        expect(
+          mounted.root.querySelector(".account-runner-services [role=alert]")?.textContent
+        ).toContain("Request failed. Try again later.");
+        return findButton(mounted.root, "Retry");
+      })
+      .then((retry) => retry.click());
+    await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() =>
+      expect(mounted.root.textContent).toContain("No account Runner repository exists yet.")
+    );
   });
 });

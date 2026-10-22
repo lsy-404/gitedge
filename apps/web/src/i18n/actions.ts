@@ -2,6 +2,8 @@ export const actionsMessages = {
   "zh-CN": {
     auditAction_actions_runner_created: "注册了本机 runner",
     auditAction_actions_runner_revoked: "撤销了本机 runner",
+    auditAction_actions_runner_signing_approved: "批准了签名 runner",
+    auditAction_actions_runner_signing_revoked: "撤销了签名 runner 批准",
     actionsTitle: "Actions",
     actionsIntro: "在选定提交上运行仓库工作流。",
     actionsCronSchedule: "UTC Cron：{schedules}（使用默认分支；重复的排队运行会合并）。",
@@ -72,6 +74,8 @@ export const actionsMessages = {
   en: {
     auditAction_actions_runner_created: "Registered a local runner",
     auditAction_actions_runner_revoked: "Revoked a local runner",
+    auditAction_actions_runner_signing_approved: "Approved a signing runner",
+    auditAction_actions_runner_signing_revoked: "Revoked a signing runner approval",
     actionsTitle: "Actions",
     actionsIntro: "Run a supported repository workflow at a selected commit.",
     actionsCronSchedule:
