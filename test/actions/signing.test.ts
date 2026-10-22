@@ -76,45 +76,62 @@ const profile = {
   },
 };
 
-const cryptoWithDigest = crypto as unknown as {
-  DigestStream?: new (
-    algorithm: string
-  ) => WritableStream<Uint8Array> & { digest: Promise<ArrayBuffer> };
-};
-if (!cryptoWithDigest.DigestStream) {
-  cryptoWithDigest.DigestStream = class extends WritableStream<Uint8Array> {
-    readonly digest: Promise<ArrayBuffer>;
-    constructor(algorithm: string) {
-      const chunks: Uint8Array[] = [];
-      let resolveDigest!: (value: ArrayBuffer) => void;
-      let rejectDigest!: (reason: unknown) => void;
-      const digest = new Promise<ArrayBuffer>((resolve, reject) => {
-        resolveDigest = resolve;
-        rejectDigest = reject;
-      });
-      super({
-        write(chunk) {
-          chunks.push(chunk);
-        },
-        async close() {
-          const bytes = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0));
-          let offset = 0;
-          for (const chunk of chunks) {
-            bytes.set(chunk, offset);
-            offset += chunk.byteLength;
-          }
-          try {
-            resolveDigest(await crypto.subtle.digest(algorithm, bytes));
-          } catch (error) {
-            rejectDigest(error);
-          }
-        },
-      });
-      this.digest = digest;
-    }
-  };
+class TestDigestStream extends WritableStream<Uint8Array> {
+  readonly digest: Promise<ArrayBuffer>;
+
+  constructor(algorithm: string) {
+    const chunks: Uint8Array[] = [];
+    let resolveDigest!: (value: ArrayBuffer) => void;
+    let rejectDigest!: (reason: unknown) => void;
+    const digest = new Promise<ArrayBuffer>((resolve, reject) => {
+      resolveDigest = resolve;
+      rejectDigest = reject;
+    });
+    super({
+      write(chunk) {
+        chunks.push(chunk);
+      },
+      async close() {
+        const bytes = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0));
+        let offset = 0;
+        for (const chunk of chunks) {
+          bytes.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        try {
+          resolveDigest(await crypto.subtle.digest(algorithm, bytes));
+        } catch (error) {
+          rejectDigest(error);
+        }
+      },
+    });
+    this.digest = digest;
+  }
 }
-Object.defineProperty(globalThis, "DigestStream", { value: cryptoWithDigest.DigestStream });
+
+class TestFixedLengthStream {
+  readonly readable: ReadableStream<Uint8Array>;
+  readonly writable: WritableStream<Uint8Array>;
+
+  constructor(expectedLength: number) {
+    let length = 0;
+    const stream = new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        length += chunk.byteLength;
+        if (length > expectedLength) throw new RangeError("fixed_length_stream_overflow");
+        controller.enqueue(chunk);
+      },
+      flush() {
+        if (length !== expectedLength) throw new RangeError("fixed_length_stream_underflow");
+      },
+    });
+    this.readable = stream.readable;
+    this.writable = stream.writable;
+  }
+}
+
+Object.defineProperty(crypto, "DigestStream", { value: TestDigestStream });
+Object.defineProperty(globalThis, "FixedLengthStream", { value: TestFixedLengthStream });
 
 function environment() {
   let created = false;
@@ -204,6 +221,7 @@ function environment() {
       return {
         loadApprovedProfile: vi.fn(async () => profile),
         verifySource: vi.fn(async () => ({ body: new Response("abc").body! })),
+        verifySourceCurrent: vi.fn(async () => true),
         verifySigningHost: vi.fn(async () =>
           approved
             ? { operatorApproved: true as const, approvedBy: owner.id, approvedAt: Date.now() }
@@ -444,8 +462,8 @@ describe("native signing admission", () => {
         return Response.json({
           repository: { id: 1234 },
           head_sha: submission.sourceCommitOid,
-          status: "completed",
-          conclusion: "success",
+          status: "in_progress",
+          conclusion: null,
           path: ".github/workflows/build.yml@refs/heads/main",
           event: "workflow_dispatch",
           head_branch: "main",
@@ -496,10 +514,6 @@ describe("native signing admission", () => {
       expect(authorizations).toEqual([
         "Bearer source-token-one",
         "Bearer source-token-one",
-        "Bearer source-token-one",
-        "Bearer source-token-one",
-        "Bearer source-token-two",
-        "Bearer source-token-two",
         "Bearer source-token-two",
         "Bearer source-token-two",
       ]);
@@ -591,8 +605,8 @@ describe("native signing admission", () => {
         return Response.json({
           repository: { id: 1234 },
           head_sha: submission.sourceCommitOid,
-          status: "completed",
-          conclusion: "success",
+          status: "in_progress",
+          conclusion: null,
           path: ".github/workflows/build.yml@refs/tags/v1.2.3",
           event: "push",
           head_branch: "v1.2.3",
@@ -731,14 +745,30 @@ describe("native signing admission", () => {
           return [];
         },
       },
-      FORGE: {
+      GIT: {
         fetch: async (request: Request) => {
           const url = new URL(request.url);
           const path = url.searchParams.get("path");
           if (path === ".gitedge/signing/desktop-release.yml")
-            return Response.json({ data: { content: source, oid: "e".repeat(40), path } });
+            return Response.json({
+              data: {
+                content: source,
+                oid: "e".repeat(40),
+                path,
+                size: source.length,
+                binary: false,
+              },
+            });
           if (path === ".github/workflows/native-signing.yml")
-            return Response.json({ data: { content: workflow, path } });
+            return Response.json({
+              data: {
+                content: workflow,
+                oid: "e".repeat(40),
+                path,
+                size: workflow.length,
+                binary: false,
+              },
+            });
           return Response.json({ error: "not found" }, { status: 404 });
         },
       },
@@ -1220,7 +1250,7 @@ describe("native signing stage reconciliation", () => {
     expect(row.state).toBe("queued");
   });
 
-  it("recovers multipart verification after R2 committed the archive but its first read failed", async () => {
+  it("returns the stored multipart completion plan without accessing R2 from the coordinator", async () => {
     const row = {
       id: "11111111-1111-4111-8111-111111111111",
       repository_id: "runner-repo",
@@ -1299,15 +1329,16 @@ describe("native signing stage reconciliation", () => {
       operatorApproval: { operatorApproved: true as const, approvedBy: owner.id, approvedAt: 10 },
     };
 
-    await expect(coordinator.finishOutput(row.id, context)).rejects.toThrow(
-      "temporary R2 read failure"
-    );
-    await expect(coordinator.finishOutput(row.id, context)).resolves.toEqual({
+    expect(coordinator.outputCompletionPlan(row.id, context)).toEqual({
+      key: `signing/${owner.id}/${row.repository_id}/${row.id}/windows_sign.zip`,
+      uploadId: "upload-1",
       digest: submission.sourceDigest,
       size: 3,
-      verified: true,
+      verified: false,
+      parts: [{ partNumber: 1, etag: "etag-1" }],
     });
-    expect(artifact.resumeMultipartUpload).toHaveBeenCalledTimes(1);
+    expect(artifact.resumeMultipartUpload).not.toHaveBeenCalled();
+    expect(artifact.get).not.toHaveBeenCalled();
   });
 
   it("advances an approved request once and enqueues the next stage with the prior output digest", async () => {
@@ -1447,6 +1478,7 @@ describe("native signing stage reconciliation", () => {
         approvedBy: owner.id,
         approvedAt: 10,
       })),
+      verifySourceCurrent: vi.fn(async () => true),
       verifyNotarization: vi.fn(async () => "Accepted" as const),
       enqueue: vi.fn(async (input) => {
         attempts.push(input);
@@ -1591,6 +1623,7 @@ describe("native signing stage reconciliation", () => {
         approvedBy: owner.id,
         approvedAt: 10,
       })),
+      verifySourceCurrent: vi.fn(async () => true),
       verifyNotarization: vi.fn(async () => notarization),
       enqueue,
     } as unknown as SigningExecutionHooks;

@@ -1,3 +1,4 @@
+import { GitFileSchema } from "../../../../packages/contracts/src/forge";
 import {
   SigningPolicySchema,
   SigningProfileSchema,
@@ -30,13 +31,9 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 
 const sha = /^[a-f0-9]{40}$/;
 const githubOidcIssuer = "https://token.actions.githubusercontent.com";
-let githubOidcKeys: ReturnType<typeof createRemoteJWKSet> | null = null;
-function githubOidcKeySet() {
-  githubOidcKeys ??= createRemoteJWKSet(new URL(`${githubOidcIssuer}/.well-known/jwks`), {
-    timeoutDuration: 5000,
-  });
-  return githubOidcKeys;
-}
+const githubOidcKeys = createRemoteJWKSet(new URL(`${githubOidcIssuer}/.well-known/jwks`), {
+  timeoutDuration: 5000,
+});
 const digest = (bytes: Uint8Array) =>
   crypto.subtle
     .digest("SHA-256", new Uint8Array(bytes).buffer)
@@ -131,17 +128,17 @@ async function verifyGitHubRunIdentity(
   repo: SigningProfile["policy"]["sourceRepositories"][number],
   input: SigningSubmission,
   actorId: number,
-  tag: string
+  ref: string,
+  eventName: string
 ): Promise<boolean> {
   try {
-    const verified = await jwtVerify(token, githubOidcKeySet(), {
+    const verified = await jwtVerify(token, githubOidcKeys, {
       issuer: githubOidcIssuer,
       audience,
       algorithms: ["RS256"],
       clockTolerance: 30,
     });
     const claims = githubRunIdentitySchema.parse(verified.payload);
-    const ref = `refs/tags/${tag}`;
     const workflowRef = `${repo.fullName}/${repo.workflowPath}@${ref}`;
     return (
       claims.repository_id === repo.id &&
@@ -149,7 +146,7 @@ async function verifyGitHubRunIdentity(
       claims.run_attempt === "1" &&
       claims.actor_id === String(actorId) &&
       claims.ref === ref &&
-      claims.event_name === "push" &&
+      claims.event_name === eventName &&
       claims.workflow_sha === input.sourceCommitOid &&
       claims.workflow_ref.toLowerCase() === workflowRef.toLowerCase()
     );
@@ -241,8 +238,10 @@ async function verifySource(
     !run.success ||
     String(run.data.repository.id) !== repo.id ||
     run.data.head_sha !== input.sourceCommitOid ||
-    run.data.status !== "completed" ||
-    run.data.conclusion !== "success" ||
+    !(
+      run.data.status === "in_progress" ||
+      (run.data.status === "completed" && run.data.conclusion === "success")
+    ) ||
     run.data.path.split("@")[0] !== repo.workflowPath ||
     !repo.actorIds.includes(run.data.actor.id)
   )
@@ -260,9 +259,18 @@ async function verifySource(
       run.data.head_branch !== tag ||
       !new RegExp(repo.releaseTagPattern).test(tag) ||
       !repo.events.includes("push") ||
+      run.data.status !== "in_progress" ||
       !runIdentity ||
       runIdentity.length > 16_384 ||
-      !(await verifyGitHubRunIdentity(runIdentity, audience, repo, input, run.data.actor.id, tag))
+      !(await verifyGitHubRunIdentity(
+        runIdentity,
+        audience,
+        repo,
+        input,
+        run.data.actor.id,
+        `refs/tags/${tag}`,
+        "push"
+      ))
     )
       return null;
     const tagCommit = await githubTagCommit(token, repo.fullName, tag);
@@ -271,12 +279,28 @@ async function verifySource(
       !(await githubCommitOnDefaultBranch(token, repo.fullName, defaultBranch, run.data.head_sha))
     )
       return null;
-  } else if (
-    run.data.head_branch !== defaultBranch ||
-    !repo.events.includes(run.data.event) ||
-    !repo.refs.includes(run.data.head_branch)
-  ) {
-    return null;
+  } else {
+    if (
+      run.data.head_branch !== defaultBranch ||
+      !repo.events.includes(run.data.event) ||
+      !repo.refs.includes(run.data.head_branch)
+    )
+      return null;
+    if (
+      run.data.status === "in_progress" &&
+      (!runIdentity ||
+        runIdentity.length > 16_384 ||
+        !(await verifyGitHubRunIdentity(
+          runIdentity,
+          audience,
+          repo,
+          input,
+          run.data.actor.id,
+          `refs/heads/${defaultBranch}`,
+          run.data.event
+        )))
+    )
+      return null;
   }
   const artifact = githubArtifactSchema.safeParse(
     await githubJson(
@@ -327,12 +351,74 @@ async function verifySource(
     await response.body?.cancel();
     return null;
   }
+  await response.body?.cancel();
   const download = await fetch(target, { redirect: "error", signal: AbortSignal.timeout(60_000) });
   if (!download.ok || !download.body) {
     await download.body?.cancel();
     return null;
   }
   return { body: download.body };
+}
+
+async function verifySourceCurrent(
+  env: SigningEnv,
+  ownerId: string,
+  repositoryId: string,
+  input: SigningSubmission,
+  profile: SigningProfile
+): Promise<boolean> {
+  const token = await storedSourceCredential(env, ownerId, repositoryId, profile.revision);
+  const repo = profile.policy.sourceRepositories.find(
+    (item) => item.id === input.sourceRepositoryId
+  );
+  if (!token || !repo) return false;
+  const run = githubRunSchema.safeParse(
+    await githubJson(
+      token,
+      `/repos/${repo.fullName}/actions/runs/${encodeURIComponent(input.sourceRunId)}`
+    )
+  );
+  if (
+    !run.success ||
+    String(run.data.repository.id) !== repo.id ||
+    run.data.head_sha !== input.sourceCommitOid ||
+    !(
+      run.data.status === "in_progress" ||
+      (run.data.status === "completed" && run.data.conclusion === "success")
+    ) ||
+    run.data.path.split("@")[0] !== repo.workflowPath ||
+    !repo.actorIds.includes(run.data.actor.id)
+  )
+    return false;
+  const repositoryInfo = z
+    .object({ default_branch: z.string().min(1).max(256) })
+    .passthrough()
+    .safeParse(await githubJson(token, `/repos/${repo.fullName}`));
+  if (!repositoryInfo.success) return false;
+  if (repo.releaseTagPattern) {
+    const tag = `v${input.version}`;
+    if (
+      run.data.head_branch !== tag ||
+      run.data.event !== "push" ||
+      !new RegExp(repo.releaseTagPattern).test(tag) ||
+      !repo.events.includes("push")
+    )
+      return false;
+    return (
+      (await githubTagCommit(token, repo.fullName, tag)) === run.data.head_sha &&
+      (await githubCommitOnDefaultBranch(
+        token,
+        repo.fullName,
+        repositoryInfo.data.default_branch,
+        run.data.head_sha
+      ))
+    );
+  }
+  return (
+    run.data.head_branch === repositoryInfo.data.default_branch &&
+    repo.events.includes(run.data.event) &&
+    repo.refs.includes(run.data.head_branch)
+  );
 }
 
 async function storedSourceCredential(
@@ -553,28 +639,25 @@ export async function saveApprovedProfile(
   if (!/^[a-z][a-z0-9-]{0,63}$/.test(name)) throw new Error("signing_profile_name_invalid");
   const fileUrl = new URL(
     `/repositories/${encodeURIComponent(repositoryId)}/file`,
-    "https://forge.internal"
+    "https://git.internal"
   );
   fileUrl.searchParams.set("ref", "main");
   fileUrl.searchParams.set("path", `.gitedge/signing/${name}.yml`);
-  const fileResponse = await env.FORGE.fetch(
-    new Request(fileUrl, { headers: trustedHeaders(user) })
-  );
+  const fileResponse = await env.GIT.fetch(new Request(fileUrl, { headers: trustedHeaders(user) }));
   if (!fileResponse.ok) {
     await fileResponse.body?.cancel();
     throw new Error("signing_profile_file_unavailable");
   }
   const fileValue = z
-    .object({
-      data: z.object({ content: z.unknown(), oid: z.unknown(), path: z.unknown() }).strict(),
-    })
+    .object({ data: GitFileSchema })
     .strict()
     .parse(await readJsonLimited(fileResponse, 150_000));
-  const content = fileValue.data?.content;
+  const content = fileValue.data.content;
   if (
+    fileValue.data.binary ||
     typeof content !== "string" ||
     content.length > 100_000 ||
-    fileValue.data?.path !== `.gitedge/signing/${name}.yml`
+    fileValue.data.path !== `.gitedge/signing/${name}.yml`
   )
     throw new Error("signing_profile_file_invalid");
   const document = parseDocument(content, { schema: "core", uniqueKeys: true, strict: true });
@@ -607,11 +690,11 @@ export async function saveApprovedProfile(
   if (!/^[a-f0-9]{40}$/.test(parsed.workflowOid)) throw new Error("signing_workflow_invalid");
   const workflowUrl = new URL(
     `/repositories/${encodeURIComponent(repositoryId)}/file`,
-    "https://forge.internal"
+    "https://git.internal"
   );
   workflowUrl.searchParams.set("ref", parsed.workflowOid);
   workflowUrl.searchParams.set("path", parsed.workflowPath);
-  const workflowResponse = await env.FORGE.fetch(
+  const workflowResponse = await env.GIT.fetch(
     new Request(workflowUrl, { headers: trustedHeaders(user) })
   );
   if (!workflowResponse.ok) {
@@ -619,12 +702,13 @@ export async function saveApprovedProfile(
     throw new Error("signing_workflow_not_found");
   }
   const workflowFile = z
-    .object({ data: z.object({ content: z.unknown(), path: z.unknown() }).strict() })
+    .object({ data: GitFileSchema })
     .strict()
     .parse(await readJsonLimited(workflowResponse, 100_000));
-  const workflowSource = workflowFile.data?.content;
+  const workflowSource = workflowFile.data.content;
   if (
-    workflowFile.data?.path !== parsed.workflowPath ||
+    workflowFile.data.binary ||
+    workflowFile.data.path !== parsed.workflowPath ||
     typeof workflowSource !== "string" ||
     workflowSource.length > 65_536
   )
@@ -1032,6 +1116,8 @@ export function createSigningExecutionHooks(
       readProfile(env, user.id, repositoryId, name),
     verifySource: async (user, repositoryId, profile, submission, runIdentity, audience) =>
       verifySource(env, user.id, repositoryId, submission, profile, runIdentity, audience),
+    verifySourceCurrent: (ownerId, repositoryId, profile, input) =>
+      verifySourceCurrent(env, ownerId, repositoryId, input, profile),
     authorizeCredentials: (context, profile) => grantCredentials(env, context, profile),
     verifyOutput: ({
       context,
