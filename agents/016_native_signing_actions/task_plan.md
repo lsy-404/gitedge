@@ -23,4 +23,4 @@ Do not modify Actions routing, runner lifecycle/scheduler, Worker config, root p
 8. [x] Restore default-branch and release-tag source admission with GitHub OIDC run identity.
 9. [x] Keep R2 multipart operations in the Worker and limit the coordinator to SQLite upload plans and verification records.
 10. [x] Use Cloudflare's official streaming digest API and canonical Git file response for profile approval.
-11. [ ] Validate real Actions Worker end-to-end upload and callback flow after the execution adapter is integrated.
+11. [x] Validate real Actions Worker end-to-end upload and callback flow after the execution adapter is integrated.

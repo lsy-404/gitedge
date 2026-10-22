@@ -12,6 +12,7 @@
     "deploy:dry-run": "node scripts/deploy-stack.mjs --dry-run",
     "test": "vitest run --config vitest.unit.config.ts",
     "test:workers": "vitest run --config vitest.config.ts",
+    "test:signing": "vitest run --config test/config/actions-signing.vitest.config.ts",
     "test:auth": "vitest run --config vitest.config.ts test/agents test/account test/sso test/signatures",
     "test:web": "pnpm --dir apps/web run test",
     "check:migrations": "node scripts/check-migrations.mjs",

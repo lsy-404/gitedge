@@ -5,13 +5,9 @@
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
   "durable_objects": {
-    "bindings": [
-      { "name": "SIGNING_COORDINATORS", "class_name": "SigningCoordinator" }
-    ]
+    "bindings": [{ "name": "SIGNING_COORDINATORS", "class_name": "SigningCoordinator" }]
   },
-  "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["SigningCoordinator"] }
-  ],
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SigningCoordinator"] }],
   "d1_databases": [
     {
       "binding": "DB",

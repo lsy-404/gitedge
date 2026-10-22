@@ -26,6 +26,7 @@ jobs:
       - run: pnpm run typecheck
       - run: pnpm run test
       - run: pnpm run test:workers
+      - run: pnpm run test:signing
       - run: pnpm run test:web
       - run: pnpm run build
       - run: pnpm run format:check

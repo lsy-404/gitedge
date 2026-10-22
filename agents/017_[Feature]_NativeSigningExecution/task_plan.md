@@ -12,4 +12,4 @@
 - [x] 验证 Actions 类型检查、签名/调度测试、真实 Worker callback、UI panel 与 broker 脚本语法。
 - [x] 合入 core metadata/source credential 契约并通过完整前端类型检查。
 - [x] 同步 core output-init wire parser 修复及 native SDK cancellation checkpoint。
-- [ ] 合入 core R2 multipart route checkpoint，复跑真实 Worker callbacks/harness 并提交审计结论。
+- [x] 合入 core R2 multipart route checkpoint，复跑真实 Worker callbacks/harness 并提交审计结论。

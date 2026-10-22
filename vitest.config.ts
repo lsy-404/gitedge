@@ -11,7 +11,7 @@ export default defineConfig({
   ],
   test: {
     include: ["test/**/*.worker.test.ts"],
-    exclude: ["**/node_modules/**"],
+    exclude: ["**/node_modules/**", "test/signing-runtime/actions.worker.test.ts"],
     testTimeout: 30_000,
     hookTimeout: 60_000,
   },
