@@ -109,7 +109,6 @@ export const runnerMessages = {
     runnerSigningProfilePathHint:
       "配置文件路径：.gitedge/signing/[名称].yml。更改工作流后需要重新批准。",
     runnerSigningProfilesEmpty: "尚未批准签名配置。",
-    runnerSigningCredentialStatus: "凭据：{status}",
     runnerSigningPlatformCredential: "平台凭据：{status}",
     runnerSigningSourceCredential: "GitHub 源码读取凭据：{status}",
     runnerSigningCredentialConfigured: "已加密保存",
@@ -235,7 +234,6 @@ export const runnerMessages = {
     runnerSigningProfilePathHint:
       "Profile file: .gitedge/signing/[name].yml. Workflow changes require approval again.",
     runnerSigningProfilesEmpty: "No signing profiles are approved.",
-    runnerSigningCredentialStatus: "Credentials: {status}",
     runnerSigningPlatformCredential: "Platform credentials: {status}",
     runnerSigningSourceCredential: "GitHub source-read credential: {status}",
     runnerSigningCredentialConfigured: "Encrypted and stored",

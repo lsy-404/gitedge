@@ -43,6 +43,7 @@ const dynamicKeys: Record<string, readonly string[]> = {
   "deployWizard.state.": ["pending", "running", "done", "failed"],
   actionsConclusion_: ["success", "failure", "cancelled"],
   runnerState_: ["idle", "busy", "held", "offline", "revoked"],
+  runnerSigningPlatform_: ["windows", "macos", "ios"],
   runnerConclusion_: ["success", "failure", "cancelled", "running", "queued"],
   runnerReason_: [
     "scope",
