@@ -9,3 +9,5 @@
 - 本地unit整体新增4项失败来自旧SQL mock精确匹配CASE WHEN m.role，真实D1权限测试通过；更新fixture识别稳定role投影后5个Actions service测试均通过，不削弱断言。剩余Git transfer截断上游测试为既有Windows基线。
 - 一次Cloudflare D1查询7403，经whoami核实正确账户与scope，后续相同只读查询成功；不需要新增权限或替换凭据。
 - 首次查询不存在的历史文件路径无改动；已按 rg --files 发现真实 common/repositories 和 forge controls 等模块。
+
+- Existing ordinary broker configuration can be explicitly updated to executionClass=ordinary after verifying its server registration. This adds no signing authority and avoids revoking a valid ordinary identity merely to add local configuration; missing fields still fail closed at runtime. Production strict checks remain gated on all existing brokers being upgraded.
