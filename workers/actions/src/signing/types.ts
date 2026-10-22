@@ -10,7 +10,8 @@ import type { TrustedUser } from "../../../../packages/contracts/src/index";
 
 export interface SigningEnv {
   readonly DB: D1Database;
-  readonly FORGE: Fetcher;
+  readonly FORGE: Pick<Fetcher, "fetch">;
+  readonly GIT: Pick<Fetcher, "fetch">;
   readonly SIGNING_COORDINATORS: DurableObjectNamespace<import("./coordinator").SigningCoordinator>;
   readonly SIGNING_ARTIFACTS: R2Bucket;
   readonly SIGNING_ENCRYPTION_KEY: string;
@@ -48,6 +49,12 @@ export interface SigningExecutionHooks {
     repositoryId: string,
     name: string
   ): Promise<ApprovedSigningProfile | null>;
+  verifySourceCurrent(
+    ownerId: string,
+    repositoryId: string,
+    profile: ApprovedSigningProfile,
+    input: SigningSubmission
+  ): Promise<boolean>;
   verifySource(
     user: TrustedUser,
     repositoryId: string,
