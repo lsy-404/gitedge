@@ -98,18 +98,6 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
         PRIMARY KEY(request_id,stage)
       );
     `);
-    const columns = ctx.storage.sql
-      .exec<{ name: string }>("PRAGMA table_info(signing_requests)")
-      .toArray();
-    if (!columns.some((column) => column.name === "expires_at")) {
-      ctx.storage.sql.exec(
-        "ALTER TABLE signing_requests ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0"
-      );
-    }
-    ctx.storage.sql.exec(
-      "UPDATE signing_requests SET expires_at=created_at+? WHERE expires_at=0",
-      6 * 24 * 60 * 60 * 1000
-    );
     ctx.waitUntil?.(
       this.scheduleExpiry().catch((error) =>
         createLogger(undefined, { service: "actions-signing", doId: ctx.id.toString() }).warn(
@@ -1059,7 +1047,7 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
             payload: z.record(z.string(), z.unknown()).optional(),
           })
           .strict()
-          .parse(await readJsonLimited(request, 16_384));
+          .parse(await readJsonLimited(request, 262_144));
         if (parts[2] === "output-begin")
           return Response.json({
             data: await this.beginOutput(
