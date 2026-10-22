@@ -6,4 +6,5 @@
 - [x] Reproduce the 503 handling boundary locally; production logs do not preserve enough detail to identify the underlying branch yet.
 - [x] Add safe admission diagnostics and a focused regression test without changing source verification behavior.
 - [x] Run relevant tests and checks, then commit the isolated branch locally.
-- [ ] Capture a new first-attempt canary after the diagnostic deployment and repair the confirmed cause.
+- [x] Capture a new first-attempt canary after the diagnostic deployment and repair the confirmed cause.
+- [ ] Verify a new first-attempt canary after the download redirect fix is deployed.
