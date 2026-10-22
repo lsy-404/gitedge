@@ -26,7 +26,7 @@ import { trustedHeaders } from "../../../../packages/contracts/src/index";
 import { parseDocument } from "yaml";
 import { z } from "zod";
 import type { SigningEnv, SigningExecutionHooks } from "./types";
-import { parseRunnerWorkflow } from "../runner-workflow";
+import { validateSingleSigningJob } from "../runner-workflow";
 import { readJsonLimited } from "../../../../src/worker/common/readText";
 import {
   base64ToBytes,
@@ -714,7 +714,7 @@ export async function saveApprovedProfile(
     workflowSource.length > 65_536
   )
     throw new Error("signing_workflow_invalid");
-  parseRunnerWorkflow(parsed.workflowPath, workflowSource);
+  validateSingleSigningJob(parsed.workflowPath, workflowSource);
   const policyDigest = await digest(new TextEncoder().encode(JSON.stringify(parsed.policy)));
   const profile = SigningProfileSchema.parse({
     ...parsed,

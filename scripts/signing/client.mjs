@@ -102,7 +102,7 @@ function resultPayload(value) {
 
 function identityHeaders(context) {
   return {
-    authorization: `Bearer ${context.runnerToken}`,
+    authorization: `Bearer ${context.jobToken}`,
     accept: "application/json",
     "x-runner-run-id": context.runId,
     "x-runner-lease-token": context.leaseToken,
@@ -704,14 +704,19 @@ export function formatClientErrorOutput(error) {
 
 export async function main(args = process.argv.slice(2)) {
   try {
-    const [command, contextFlag, contextFile, outputFlag, outputParent] = args;
+    const [command, contextFlag, contextFile, outputFlag, outputParent, receiptFlag, receiptFile] =
+      args;
     if (
       command !== "execute" ||
       contextFlag !== "--context-file" ||
-      outputFlag !== "--output-parent"
+      outputFlag !== "--output-parent" ||
+      receiptFlag !== "--receipt-file" ||
+      typeof receiptFile !== "string" ||
+      !path.isAbsolute(receiptFile)
     )
       throw new ClientError("INVALID_COMMAND");
-    await runSigning({ contextFile, outputParent });
+    const result = await runSigning({ contextFile, outputParent });
+    await writeFile(receiptFile, JSON.stringify(result), { flag: "wx", mode: 0o600 });
   } catch (error) {
     writeSync(2, formatClientErrorOutput(error));
     process.exitCode = 1;

@@ -296,7 +296,7 @@ async function executeStage(input: {
         nonce: input.nonce,
         leaseToken: input.leaseToken,
         leaseExpiresAt: machineContext.leaseExpiresAt,
-        runnerToken: input.runnerToken,
+        jobToken: `ge_job_${"e".repeat(64)}`,
       }),
       platformExecutor: async (
         manifest,

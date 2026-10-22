@@ -7,6 +7,8 @@ import {
   type SigningQueueInput,
 } from "./signing";
 import { sha256Hex } from "../../../packages/contracts/src/index";
+import { parseJobClaim } from "../../../packages/contracts/runner-scheduling.mjs";
+import { validateSingleSigningJob } from "./runner-workflow";
 
 export interface SigningExecutionEnv
   extends
@@ -208,6 +210,19 @@ export async function enqueueNativeSigningRun(
   )
     throw new Error("invalid_signing_queue_input");
 
+  const workflow = validateSingleSigningJob(input.workflowPath, input.workflowSource);
+  const labels = [
+    "self-hosted",
+    input.platform === "windows" ? "Windows" : "macOS",
+    ...(input.platform === "ios" ? ["ARM64"] : []),
+    "need-tool-node",
+    "need-tool-python",
+    ...workflow.labels,
+  ];
+  const requiredLabels = [...new Set(labels.map((label) => label.toLowerCase()))];
+  if (!parseJobClaim(requiredLabels, input.timeoutMinutes).valid)
+    throw new Error("invalid_signing_workflow_requirements");
+
   const now = Date.now();
   const repository = await env.DB.prepare(
     `SELECT r.id,r.namespace_id,r.slug,n.slug AS owner
@@ -343,13 +358,7 @@ export async function enqueueNativeSigningRun(
       ).bind(
         runId,
         input.workflowSource,
-        JSON.stringify([
-          "self-hosted",
-          input.platform === "windows" ? "Windows" : "macOS",
-          ...(input.platform === "ios" ? ["ARM64"] : []),
-          "need-tool-node",
-          "need-tool-python",
-        ]),
+        JSON.stringify(requiredLabels),
         input.timeoutMinutes,
         event,
         runId

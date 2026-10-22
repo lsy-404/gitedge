@@ -1,6 +1,5 @@
 # GitEdge 任务追踪
 > 准则版本: v0.2.3
-
 | 编号 | 任务名称 | 任务描述 | 变更动机 | 状态 |
 | :--: | :-- | :-- | :-- | :-- |
 | 001 | [Design] runner分配与查看面板 | 已确认设计提交 5697d93 | 用户确认执行稿 | ✅ 已完成 |
@@ -29,3 +28,4 @@
 | 024 | [Ops] 签名凭据迁移准备 | 盘点旧签名凭据并准备IRIS Runner profile策略候选 | 统一GitEdge生产签名入口并保留凭据授权边界 | 🔄 进行中 |
 | 026 | [Fix] iOS Python runtime selection | Use the standard Python executable when `PYTHON` is unset | Align iOS SDK behavior with macOS native signer and allow host PATH provisioning | ✅ 已完成 |
 | 027 | [BugFix] PAT仓库选择包含账户Runner | 在owner token仓库范围选项中列出已存在的账户Runner仓库并去重 | CI凭据必须精确授权给账户Runner仓库 | ✅ 已完成 |
+| 028 | [Feature] Native signing workflow jobs | Run approved native signing through the standard one-job Runner.Server workflow and append the trusted SDK step | Preserve setup-action environment while keeping signing credentials protected | ✅ 已完成 |

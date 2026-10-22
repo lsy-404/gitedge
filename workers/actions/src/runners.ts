@@ -167,6 +167,92 @@ async function authenticateRunner(request: Request, env: RunnerEnv): Promise<Run
     : null;
 }
 
+async function authenticateSigningJob(request: Request, env: RunnerEnv): Promise<string | null> {
+  const token = /^Bearer (ge_job_[0-9a-f]{64})$/.exec(
+    request.headers.get("Authorization") ?? ""
+  )?.[1];
+  if (!token) return null;
+  const match =
+    /^\/runner\/signing\/requests\/([0-9a-f-]{36})\/(start|heartbeat|download|authorize-sign|output(?:\/parts\/\d+|\/complete)?|complete|fail)$/i.exec(
+      new URL(request.url).pathname
+    );
+  const runId = request.headers.get("X-Runner-Run-Id") ?? "";
+  const leaseToken = request.headers.get("X-Runner-Lease-Token") ?? "";
+  if (!match || !/^[0-9a-f-]{36}$/i.test(runId) || !/^[0-9a-f]{64}$/i.test(leaseToken)) return null;
+
+  const operation = match[2];
+  const requestId = match[1];
+  const now = Date.now();
+  const [tokenHash, leaseHash] = await Promise.all([sha256Hex(token), sha256Hex(leaseToken)]);
+  let authJob: { runId: string; repositoryId: string; ownerId: string } | null = null;
+  if (env.AUTH) {
+    try {
+      const response = await env.AUTH.fetch(
+        new Request("https://auth.internal/session", {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+      );
+      const body: unknown = JSON.parse((await readTextLimited(response.body, 8192)) ?? "null");
+      const session = z
+        .object({
+          data: z.object({
+            id: z.string().uuid(),
+            job: z.object({ runId: z.string().uuid(), repositoryId: z.string().uuid() }),
+          }),
+        })
+        .safeParse(body);
+      if (response.ok && session.success)
+        authJob = {
+          runId: session.data.data.job.runId,
+          repositoryId: session.data.data.job.repositoryId,
+          ownerId: session.data.data.id,
+        };
+    } catch {
+      authJob = null;
+    }
+  }
+  if (authJob?.runId === runId) {
+    const active = await env.DB.prepare(
+      `SELECT j.runner_id FROM actions_runner_runs j
+       JOIN actions_runs a ON a.id=j.run_id JOIN actions_signing_runs s ON s.run_id=j.run_id
+       JOIN actions_job_tokens t ON t.run_id=j.run_id
+       WHERE j.run_id=? AND a.repository_id=? AND a.created_by=? AND s.request_id=?
+         AND j.lease_hash=? AND j.status='running' AND j.cancel_requested=0
+         AND j.lease_expires_at>? AND j.started_at+j.timeout_minutes*60000>?
+         AND t.token_hash=? AND t.revoked_at IS NULL AND t.expires_at>?`
+    )
+      .bind(
+        runId,
+        authJob.repositoryId,
+        authJob.ownerId,
+        requestId,
+        leaseHash,
+        now,
+        now,
+        tokenHash,
+        now
+      )
+      .first<{ runner_id: string }>();
+    if (active) return active.runner_id;
+  }
+
+  const replayConclusion =
+    operation === "complete" ? "success" : operation === "fail" ? "failure" : null;
+  if (request.method !== "POST" || !replayConclusion) return null;
+  const replay = await env.DB.prepare(
+    `SELECT j.runner_id FROM actions_runner_runs j
+     JOIN actions_runs a ON a.id=j.run_id JOIN actions_signing_runs s ON s.run_id=j.run_id
+     JOIN actions_job_tokens t ON t.run_id=j.run_id
+     WHERE j.run_id=? AND s.request_id=? AND j.lease_hash=? AND j.status='completed'
+       AND j.conclusion=? AND j.cancel_requested=0 AND j.lease_expires_at>?
+       AND j.started_at+j.timeout_minutes*60000>? AND t.token_hash=?
+       AND t.revoked_at IS NULL AND t.expires_at>?`
+  )
+    .bind(runId, requestId, leaseHash, replayConclusion, now, now, tokenHash, now)
+    .first<{ runner_id: string }>();
+  return replay?.runner_id ?? null;
+}
+
 export async function runnerManagement(
   request: Request,
   env: RunnerEnv,
@@ -649,11 +735,43 @@ async function claim(request: Request, env: RunnerEnv, runner: RunnerRow): Promi
       .first<RunRow>();
     if (!row) return errorResponse(409, "conflict", "Claimed run is unavailable.");
     if (candidate.execution_kind === "signing") {
+      let jobToken: string;
+      try {
+        if (!env.AUTH) throw new Error("auth_unavailable");
+        const response = await env.AUTH.fetch(
+          new Request("https://auth.internal/internal/actions-job-token", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ runId: row.id, runnerId: fresh.id, leaseToken }),
+          })
+        );
+        const body: unknown = JSON.parse((await readTextLimited(response.body, 8192)) ?? "null");
+        const credential = z
+          .object({ data: z.object({ token: z.string().regex(/^ge_job_[0-9a-f]{64}$/) }) })
+          .safeParse(body);
+        if (!response.ok || !credential.success) throw new Error("invalid_job_token");
+        jobToken = credential.data.data.token;
+      } catch {
+        const failedAt = Date.now();
+        const failed = await env.DB.prepare(
+          "UPDATE actions_runner_runs SET status='completed',conclusion='failure',completed_at=?,log='The job credential could not be issued.' WHERE run_id=? AND lease_hash=? AND status='running' RETURNING run_id"
+        )
+          .bind(failedAt, row.id, leaseHash)
+          .first();
+        if (failed) await recordRunnerFailure(env, fresh.id, failedAt);
+        await env.DB.prepare("UPDATE actions_job_tokens SET revoked_at=? WHERE run_id=?")
+          .bind(failedAt, row.id)
+          .run();
+        const completed = await getRunnerRun(env, row.id);
+        if (completed) await publishCheck(env, completed);
+        return errorResponse(503, "internal_error", "The job credential could not be issued.");
+      }
       await publishCheck(env, runDetails(row));
       return dataResponse({
         run: {
           id: row.id,
           kind: "signing",
+          token: jobToken,
           labels: evaluated.labels,
           requestId: candidate.request_id,
           stage: candidate.stage,
@@ -759,15 +877,20 @@ export async function runnerMachineRequest(request: Request, env: RunnerEnv): Pr
   if (!signingMachineRoute && request.method !== "POST")
     return errorResponse(405, "method_not_allowed", "Runner operations require POST.");
   const runner = await authenticateRunner(request, env);
-  if (!runner) return errorResponse(401, "unauthorized", "Invalid or revoked runner registration.");
+  const signingJobRunnerId =
+    !runner && signingMachineRoute ? await authenticateSigningJob(request, env) : null;
+  const runnerId = runner?.id ?? signingJobRunnerId;
+  if (!runnerId)
+    return errorResponse(401, "unauthorized", "Invalid or revoked runner registration.");
   const now = Date.now();
-  await env.DB.prepare(
-    "UPDATE actions_runners SET last_seen_at=? WHERE id=? AND (last_seen_at IS NULL OR last_seen_at<?)"
-  )
-    .bind(now, runner.id, now - 30_000)
-    .run();
+  if (runner)
+    await env.DB.prepare(
+      "UPDATE actions_runners SET last_seen_at=? WHERE id=? AND (last_seen_at IS NULL OR last_seen_at<?)"
+    )
+      .bind(now, runnerId, now - 30_000)
+      .run();
   if (signingMachineRoute) {
-    const response = await handleSigningMachineCallback(request, env, runner.id);
+    const response = await handleSigningMachineCallback(request, env, runnerId);
     const signingOperation =
       request.method === "POST" &&
       /\/runner\/signing\/requests\/[0-9a-f-]{36}\/complete$/i.test(pathname);
@@ -798,7 +921,7 @@ export async function runnerMachineRequest(request: Request, env: RunnerEnv): Pr
             ? "Signing stage output verified by coordinator."
             : "Signing stage reported an execution failure.",
           runId,
-          runner.id,
+          runnerId,
           hash,
           now,
           now
@@ -809,18 +932,19 @@ export async function runnerMachineRequest(request: Request, env: RunnerEnv): Pr
           `SELECT 1 FROM actions_runner_runs WHERE run_id=? AND runner_id=? AND lease_hash=?
            AND status='completed' AND conclusion=?`
         )
-          .bind(runId, runner.id, hash, conclusion)
+          .bind(runId, runnerId, hash, conclusion)
           .first();
         if (!prior)
           return errorResponse(409, "conflict", "The signing runner lease is no longer active.");
       } else if (conclusion === "success") {
-        await clearRunnerFailures(env, runner.id);
+        await clearRunnerFailures(env, runnerId);
       }
       const run = await getRunnerRun(env, runId);
       if (run) await publishCheck(env, run);
     }
     return response;
   }
+  if (!runner) return errorResponse(401, "unauthorized", "Invalid or revoked runner registration.");
   const operation = new URL(request.url).pathname.split("/")[2];
   if (operation === "github") return githubRunnerLease(request, env, runner);
   if (operation === "claim") {
