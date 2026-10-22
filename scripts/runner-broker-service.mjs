@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { access, readFile, stat, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -150,6 +150,7 @@ async function linuxMain() {
     const unit = buildRunnerBrokerUnit({
       username,
       groupId: passwd[3],
+      homeDir: passwd[5],
       installDir,
       stateDir: state,
       nodePath: node,

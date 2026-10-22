@@ -53,6 +53,7 @@ describe("runner capacity probes", () => {
     const unit = buildRunnerBrokerUnit({
       username: "gitedge",
       groupId: "1001",
+      homeDir: "/var/lib/gitedge",
       installDir: "/opt/gitedge",
       stateDir: "/var/lib/gitedge/runner-broker",
       nodePath: "/usr/bin/node",
@@ -64,10 +65,12 @@ describe("runner capacity probes", () => {
     expect(unit).not.toContain("Environment=HOME=");
     expect(unit).toContain("Environment=CARGO_HOME=/var/lib/gitedge/runner-broker/.cargo");
     expect(unit).toContain("Environment=RUSTUP_HOME=/var/lib/gitedge/runner-broker/.rustup");
+    expect(unit).toContain("ReadWritePaths=/var/lib/gitedge /var/lib/gitedge/runner-broker");
     expect(() =>
       buildRunnerBrokerUnit({
         username: "gitedge",
         groupId: "1001",
+        homeDir: "/var/lib/gitedge",
         installDir: "/opt/gitedge\nExecStart=/bin/sh",
         stateDir: "/var/lib/gitedge/runner-broker",
         nodePath: "/usr/bin/node",
