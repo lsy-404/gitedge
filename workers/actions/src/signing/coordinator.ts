@@ -331,7 +331,10 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
   ) {
     const row = this.expire(id);
     const terminalRead =
-      ((operation === "complete" || operation === "profile" || operation === "output-target") &&
+      ((operation === "complete" ||
+        operation === "profile" ||
+        operation === "output-target" ||
+        operation === "output-complete") &&
         (row?.state === "awaiting_source" || row?.state === "succeeded")) ||
       (operation === "fail" && row?.state === "failed");
     if (
@@ -476,6 +479,7 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
         : null;
       return {
         profile,
+        submission,
         sourceDigest: previous?.digest ?? row.source_digest,
         sourceCommitOid: submission.sourceCommitOid,
         version: submission.version,
@@ -532,6 +536,8 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
         size: row.output_size,
       };
     }
+    if (operation === "output-complete") return { allowed: true };
+    if (operation === "output-verified") return { allowed: true };
     if (operation === "heartbeat") return { leaseExpiresAt: context.leaseExpiresAt };
     if (operation === "authorize-sign") {
       this.ctx.storage.sql.exec(
@@ -655,18 +661,15 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
     );
   }
 
-  async beginOutput(
-    id: string,
-    context: import("../../../../packages/contracts/src/signing").SigningMachineContext,
-    digest: string,
-    size: number
-  ) {
+  beginOutput(id: string, context: SigningMachineContext, digest: string, size: number) {
     this.machine(id, context, "output", { digest, size });
     const existing = this.outputUpload(id);
     if (existing) {
       if (existing.digest !== digest || existing.size !== size)
         throw new Error("signing_output_invalid");
       return {
+        key: this.outputKey(id),
+        uploadId: existing.upload_id,
         partSize: existing.part_size,
         partCount: existing.part_count,
         receivedParts: this.ctx.storage.sql
@@ -680,35 +683,22 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
       };
     }
     const owner = this.row(id)!;
-    const key = `signing/${owner.owner_id}/${owner.repository_id}/${id}/${owner.current_stage}.zip`;
     const partSize = 8 * 1024 * 1024;
     const partCount = Math.ceil(size / partSize);
-    const upload = await this.env.SIGNING_ARTIFACTS.createMultipartUpload(key, {
-      customMetadata: {
-        ownerId: owner.owner_id,
-        repositoryId: owner.repository_id,
-        requestId: id,
-        sha256: digest,
-        size: String(size),
-      },
-    });
-    const inserted = this.ctx.storage.transactionSync(
-      () =>
-        this.ctx.storage.sql.exec(
-          "INSERT OR IGNORE INTO signing_uploads(request_id,upload_id,digest,size,part_size,part_count) VALUES (?,?,?,?,?,?)",
-          id,
-          upload.uploadId,
-          digest,
-          size,
-          partSize,
-          partCount
-        ).rowsWritten > 0
+    this.ctx.storage.sql.exec(
+      "INSERT OR IGNORE INTO signing_uploads(request_id,upload_id,digest,size,part_size,part_count) VALUES (?,'pending',?,?,?,?)",
+      id,
+      digest,
+      size,
+      partSize,
+      partCount
     );
-    if (!inserted) await upload.abort();
     const current = this.outputUpload(id)!;
     if (current.digest !== digest || current.size !== size)
       throw new Error("signing_output_invalid");
     return {
+      key: `signing/${owner.owner_id}/${owner.repository_id}/${id}/${owner.current_stage}.zip`,
+      uploadId: current.upload_id,
       partSize: current.part_size,
       partCount: current.part_count,
       receivedParts: [],
@@ -716,15 +706,30 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
     };
   }
 
-  authorizeOutputPart(
-    id: string,
-    context: import("../../../../packages/contracts/src/signing").SigningMachineContext,
-    part: number,
-    length: number
-  ) {
+  outputKey(id: string) {
+    const row = this.row(id);
+    if (!row) throw new Error("signing_request_not_found");
+    return `signing/${row.owner_id}/${row.repository_id}/${id}/${row.current_stage}.zip`;
+  }
+
+  bindOutputUpload(id: string, context: SigningMachineContext, uploadId: string) {
+    this.machine(id, context, "output-upload");
+    if (!uploadId || uploadId === "pending") throw new Error("signing_output_invalid");
+    this.ctx.storage.sql.exec(
+      "UPDATE signing_uploads SET upload_id=? WHERE request_id=? AND upload_id='pending'",
+      uploadId,
+      id
+    );
+    const upload = this.outputUpload(id);
+    if (!upload) throw new Error("signing_output_invalid");
+    return { key: this.outputKey(id), uploadId: upload.upload_id };
+  }
+
+  authorizeOutputPart(id: string, context: SigningMachineContext, part: number, length: number) {
     this.machine(id, context, "output-upload");
     const upload = this.outputUpload(id);
-    if (!upload || upload.verified) throw new Error("signing_output_invalid");
+    if (!upload || upload.verified || upload.upload_id === "pending")
+      throw new Error("signing_output_invalid");
     if (!Number.isInteger(part) || part < 1 || part > upload.part_count)
       throw new Error("signing_part_invalid");
     const expected =
@@ -732,18 +737,12 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
         ? upload.part_size
         : upload.size - (upload.part_count - 1) * upload.part_size;
     if (length !== expected) throw new Error("signing_part_invalid");
-    const row = this.row(id)!;
-    return {
-      key: `signing/${row.owner_id}/${row.repository_id}/${id}/${row.current_stage}.zip`,
-      uploadId: upload.upload_id,
-      expected,
-      total: upload.size,
-    };
+    return { key: this.outputKey(id), uploadId: upload.upload_id, expected, total: upload.size };
   }
 
   recordOutputPart(
     id: string,
-    context: import("../../../../packages/contracts/src/signing").SigningMachineContext,
+    context: SigningMachineContext,
     part: number,
     etag: string,
     size: number
@@ -768,72 +767,50 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
     };
   }
 
-  async finishOutput(
-    id: string,
-    context: import("../../../../packages/contracts/src/signing").SigningMachineContext
-  ) {
-    this.machine(id, context, "output-upload");
+  outputCompletionPlan(id: string, context: SigningMachineContext) {
+    this.machine(id, context, "output-complete");
     const upload = this.outputUpload(id);
-    if (!upload) throw new Error("signing_output_invalid");
-    if (upload.verified) return { digest: upload.digest, size: upload.size, verified: true };
-    const row = this.row(id)!;
-    const key = `signing/${row.owner_id}/${row.repository_id}/${id}/${row.current_stage}.zip`;
-    const completed = await this.env.SIGNING_ARTIFACTS.get(key);
-    if (completed) {
-      const hash = new DigestStream("SHA-256");
-      await completed.body.pipeTo(hash);
-      const actual = `sha256:${Array.from(new Uint8Array(await hash.digest), (value) => value.toString(16).padStart(2, "0")).join("")}`;
-      if (completed.size === upload.size && actual === upload.digest) {
-        this.ctx.storage.sql.exec(
-          "UPDATE signing_uploads SET verified=1 WHERE request_id=? AND upload_id=?",
-          id,
-          upload.upload_id
-        );
-        return { digest: upload.digest, size: upload.size, verified: true };
-      }
-      await this.env.SIGNING_ARTIFACTS.delete(key);
-    }
-    const parts = this.ctx.storage.sql
+    if (!upload || upload.upload_id === "pending") throw new Error("signing_output_invalid");
+    const partRows = this.ctx.storage.sql
       .exec<{ part: number; etag: string; size: number }>(
         "SELECT part,etag,size FROM signing_upload_parts WHERE request_id=? ORDER BY part",
         id
       )
       .toArray();
     if (
-      parts.length !== upload.part_count ||
-      parts.some((value, index) => {
-        const expected =
-          index + 1 < upload.part_count
-            ? upload.part_size
-            : upload.size - (upload.part_count - 1) * upload.part_size;
-        return value.part !== index + 1 || value.size !== expected;
-      })
+      !upload.verified &&
+      (partRows.length !== upload.part_count ||
+        partRows.some((value, index) => {
+          const expected =
+            index + 1 < upload.part_count
+              ? upload.part_size
+              : upload.size - (upload.part_count - 1) * upload.part_size;
+          return value.part !== index + 1 || value.size !== expected;
+        }))
     )
       throw new Error("signing_parts_incomplete");
-    await this.env.SIGNING_ARTIFACTS.resumeMultipartUpload(key, upload.upload_id).complete(
-      parts.map((value) => ({ partNumber: value.part, etag: value.etag }))
-    );
-    const object = await this.env.SIGNING_ARTIFACTS.get(key);
-    if (!object || object.size !== upload.size) {
-      await object?.body.cancel();
-      await this.env.SIGNING_ARTIFACTS.delete(key);
+    return {
+      key: this.outputKey(id),
+      uploadId: upload.upload_id,
+      digest: upload.digest,
+      size: upload.size,
+      verified: Boolean(upload.verified),
+      parts: partRows.map((value) => ({ partNumber: value.part, etag: value.etag })),
+    };
+  }
+
+  recordVerifiedOutput(id: string, context: SigningMachineContext, digest: string, size: number) {
+    this.machine(id, context, "output-verified");
+    const upload = this.outputUpload(id);
+    if (!upload || upload.digest !== digest || upload.size !== size)
       throw new Error("signing_output_invalid");
-    }
-    const digest = new DigestStream("SHA-256");
-    await object.body.pipeTo(digest);
-    const actual = Array.from(new Uint8Array(await digest.digest), (value) =>
-      value.toString(16).padStart(2, "0")
-    ).join("");
-    if (`sha256:${actual}` !== upload.digest) {
-      await this.env.SIGNING_ARTIFACTS.delete(key);
-      throw new Error("signing_output_invalid");
-    }
     this.ctx.storage.sql.exec(
-      "UPDATE signing_uploads SET verified=1 WHERE request_id=? AND upload_id=?",
+      "UPDATE signing_uploads SET verified=1 WHERE request_id=? AND digest=? AND size=?",
       id,
-      upload.upload_id
+      digest,
+      size
     );
-    return { digest: upload.digest, size: upload.size, verified: true };
+    return { digest, size, verified: true as const };
   }
 
   bindRun(id: string, ownerId: string, repositoryId: string, runId: string): boolean {
@@ -919,6 +896,35 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
     };
   }
 
+  failRun(
+    id: string,
+    ownerId: string,
+    repositoryId: string,
+    runId: string,
+    conclusion: string
+  ): boolean {
+    const row = this.row(id);
+    if (
+      !row ||
+      row.owner_id !== ownerId ||
+      row.repository_id !== repositoryId ||
+      row.run_id !== runId
+    )
+      return false;
+    if (["succeeded", "failed", "cancelled"].includes(row.state)) return true;
+    const state = conclusion === "cancelled" ? "cancelled" : "failed";
+    this.ctx.storage.sql.exec(
+      "UPDATE signing_requests SET state=?,completed_at=? WHERE id=? AND owner_id=? AND repository_id=? AND run_id=? AND state IN ('queued','running','accepted')",
+      state,
+      Date.now(),
+      id,
+      ownerId,
+      repositoryId,
+      runId
+    );
+    return this.row(id)?.state === state;
+  }
+
   failNotarization(id: string, ownerId: string, repositoryId: string): boolean {
     const row = this.row(id);
     if (
@@ -995,6 +1001,43 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
       const repositoryId = request.headers.get("X-Signing-Repository") ?? "";
       return Response.json({ upload: this.expiredUpload(parts[1], ownerId, repositoryId) });
     }
+    if (request.method === "POST" && parts[0] === "fail-run" && parts[1]) {
+      try {
+        const body = z
+          .object({
+            ownerId: z.string().min(1),
+            repositoryId: z.string().min(1),
+            runId: z.uuid(),
+            conclusion: z.string().min(1).max(64),
+          })
+          .strict()
+          .parse(await readJsonLimited(request, 4096));
+        return Response.json({
+          failed: this.failRun(
+            parts[1],
+            body.ownerId,
+            body.repositoryId,
+            body.runId,
+            body.conclusion
+          ),
+        });
+      } catch {
+        return Response.json({ error: "signing_run_failure_invalid" }, { status: 400 });
+      }
+    }
+    if (request.method === "POST" && parts[0] === "fail-source" && parts[1]) {
+      try {
+        const body = z
+          .object({ ownerId: z.string().min(1), repositoryId: z.string().min(1) })
+          .strict()
+          .parse(await readJsonLimited(request, 4096));
+        return Response.json({
+          failed: this.failNotarization(parts[1], body.ownerId, body.repositoryId),
+        });
+      } catch {
+        return Response.json({ error: "signing_source_failure_invalid" }, { status: 400 });
+      }
+    }
     if (request.method === "POST" && parts[0] === "fail-notarization" && parts[1]) {
       try {
         const body = z
@@ -1045,8 +1088,21 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
               Number(body.payload?.size)
             ),
           });
+        if (parts[2] === "output-bind")
+          return Response.json({
+            data: this.bindOutputUpload(parts[1], body.context, String(body.payload?.uploadId)),
+          });
         if (parts[2] === "output-complete")
-          return Response.json({ data: await this.finishOutput(parts[1], body.context) });
+          return Response.json({ data: this.outputCompletionPlan(parts[1], body.context) });
+        if (parts[2] === "output-verified")
+          return Response.json({
+            data: this.recordVerifiedOutput(
+              parts[1],
+              body.context,
+              String(body.payload?.digest),
+              Number(body.payload?.size)
+            ),
+          });
         return Response.json({
           data: this.machine(parts[1], body.context, parts[2], body.payload),
         });

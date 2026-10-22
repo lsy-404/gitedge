@@ -20,4 +20,7 @@ Do not modify Actions routing, runner lifecycle/scheduler, Worker config, root p
 5. [x] Replace globally shared source GitHub token with owner/repository/profile-scoped encrypted credentials.
 6. [x] Fix machine profile read for queued start and strengthen end-to-end tests for DMG retries/stage transitions.
 7. [x] Add bounded fair stage reconciliation and preserve the official Worker digest stream and DO waitUntil logging boundaries.
-8. [x] Restore default-branch and release-tag source admission with GitHub OIDC run identity, then run focused validation and commit locally.
+8. [x] Restore default-branch and release-tag source admission with GitHub OIDC run identity.
+9. [x] Keep R2 multipart operations in the Worker and limit the coordinator to SQLite upload plans and verification records.
+10. [x] Use Cloudflare's official streaming digest API and canonical Git file response for profile approval.
+11. [ ] Validate real Actions Worker end-to-end upload and callback flow after the execution adapter is integrated.
