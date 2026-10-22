@@ -325,8 +325,7 @@ export function safeFileMode(zipMode) {
 }
 
 async function plist(file) {
-  const python = process.env.PYTHON;
-  if (typeof python !== "string" || !python.trim()) throw new RunnerFailure("python_runtime");
+  const python = process.env.PYTHON || "python3";
   const parser = [
     "import base64, datetime, json, plistlib, sys",
     "def encode(value):",
