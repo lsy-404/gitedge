@@ -32,3 +32,4 @@
 | 029 | [Fix] executor-specific run limits | Container actions retain their hourly cap while self-hosted and native signing admission do not share it | The current shared cap blocks legitimate self-hosted signing and runner workloads | ✅ 已完成 |
 | 030 | [Feature] Windows signing credential form | Add transient native inputs for Windows signing credentials with reauthentication retry | Allow owner-authorized credential installation without writing secrets to a local file | ✅ 已完成 |
 | 031 | [BugFix] iOS signing submit 503 | Locate and fix the source submission failure without bypassing GitHub source attestation | The first production iOS native-signing canary failed before source acceptance | 🔄 进行中 |
+| 032 | [Ops] Legacy signing retirement audit | Verify active callers, runs, preserved state and retirement prerequisites | Retire the old signing service without interrupting work or losing history | ✅ Complete |
