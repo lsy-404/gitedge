@@ -721,15 +721,6 @@ export const api = {
       `/api/actions/signing/profiles/${encodeURIComponent(name)}/credentials?repositoryId=${encodeURIComponent(repositoryId)}`,
       { method: "POST", body: JSON.stringify({ platform, credentials }) }
     ),
-  importSigningCredentials: (
-    repositoryId: string,
-    name: string,
-    importLegacy: "macos" | "ios" | "github-source"
-  ) =>
-    request<SigningCredentialStatus>(
-      `/api/actions/signing/profiles/${encodeURIComponent(name)}/credentials?repositoryId=${encodeURIComponent(repositoryId)}`,
-      { method: "POST", body: JSON.stringify({ importLegacy }) }
-    ),
   removeSigningCredentials: (
     repositoryId: string,
     name: string,

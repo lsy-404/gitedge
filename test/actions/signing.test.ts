@@ -7,7 +7,6 @@ import {
   SigningCoordinator,
 } from "../../workers/actions/src/signing";
 import {
-  importLegacySigningCredentials,
   installSigningCredentials,
   listApprovedProfiles,
   saveApprovedProfile,
@@ -363,26 +362,6 @@ describe("native signing admission", () => {
     expect(test.stub.fetch).not.toHaveBeenCalled();
   });
 
-  it("requires a recent human session to approve profiles", async () => {
-    const test = environment();
-    const response = await handleSigningRoute(
-      new Request("https://actions.test/signing/profiles?repositoryId=runner-repo", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "desktop-release" }),
-      }),
-      test.env,
-      {
-        ...owner,
-        job: { runId: "r", repositoryId: "runner-repo", commitOid: "a".repeat(40) },
-      } as TrustedUser,
-      test.hooks(true)
-    );
-
-    expect(response.status).toBe(403);
-    expect(test.stub.fetch).not.toHaveBeenCalled();
-  });
-
   it("offers browser reauthentication without permitting token approvals", async () => {
     const test = environment();
     const request = () =>
@@ -414,173 +393,24 @@ describe("native signing admission", () => {
     expect(test.stub.fetch).not.toHaveBeenCalled();
   });
 
-  it("rejects unsupported legacy kinds and unapproved profiles before calling the private service", async () => {
+  it("requires a recent human session to approve profiles", async () => {
     const test = environment();
-    const exportCredential = vi.fn(async () => ({
-      version: 1 as const,
-      kind: "macos",
-      wrappedKey: "wrapped",
-      iv: "iv",
-      ciphertext: "ciphertext",
-    }));
-    const env = { ...test.env, LEGACY_SIGNING: { exportCredential } } as unknown as SigningEnv;
-    const ownerSession = { ...owner, recentAuthAt: Date.now() };
-    const makeRequest = (importLegacy: string) =>
-      new Request(
-        "https://actions.test/signing/profiles/desktop-release/credentials?repositoryId=runner-repo",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ importLegacy }),
-        }
-      );
-
-    const unsupported = await handleSigningRoute(
-      makeRequest("windows"),
-      env,
-      ownerSession,
-      test.hooks(true)
-    );
-    expect(unsupported.status).toBe(400);
-    expect(exportCredential).not.toHaveBeenCalled();
-
-    const unapproved = await handleSigningRoute(
-      makeRequest("macos"),
-      env,
-      ownerSession,
-      test.hooks(true)
-    );
-    expect(unapproved.status).toBe(503);
-    expect(exportCredential).not.toHaveBeenCalled();
-  });
-
-  it("binds legacy import to one configured owner and Runner repository before RPC, then stores an approved transfer encrypted", async () => {
-    const digest = async (value: unknown) =>
-      `sha256:${Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(value)))), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
-    const approvedBase = SigningProfileSchema.parse({
-      ...profile,
-      policyDigest: await digest(profile.policy),
-      revision: "0".repeat(40),
-    });
-    const { revision: _revision, ...immutable } = approvedBase;
-    const approved = SigningProfileSchema.parse({
-      ...approvedBase,
-      revision: (await digest(immutable)).slice(7, 47),
-    });
-    const encryptionKey = new Uint8Array(32).fill(7);
-    const persisted = new Map<string, string>();
-    const env = {
-      SIGNING_ENCRYPTION_KEY: btoa(String.fromCharCode(...encryptionKey)),
-      LEGACY_SIGNING_OWNER_ID: owner.id,
-      LEGACY_SIGNING_REPOSITORY_ID: "runner-repo",
-      DB: {
-        prepare: (query: string) => ({
-          bind: (...values: string[]) => ({
-            first: async () =>
-              query.includes("SELECT profile_json")
-                ? { profile_json: JSON.stringify(approved), approved_by: owner.id, approved_at: 1 }
-                : null,
-            run: async () => {
-              if (query.startsWith("INSERT INTO actions_signing_source_credentials"))
-                persisted.set(`${values[0]}:${values[1]}:${values[2]}`, values[3]!);
-              return {};
-            },
-          }),
-        }),
-      },
-    } as unknown as SigningEnv;
-    const exportCredential = vi.fn(async (_kind: string, recipientKey: string) => {
-      const publicKey = await crypto.subtle.importKey(
-        "spki",
-        Uint8Array.from(atob(recipientKey), (character) => character.charCodeAt(0)),
-        { name: "RSA-OAEP", hash: "SHA-256" },
-        false,
-        ["encrypt"]
-      );
-      const rawKey = crypto.getRandomValues(new Uint8Array(32));
-      const contentKey = await crypto.subtle.importKey("raw", rawKey, "AES-GCM", false, [
-        "encrypt",
-      ]);
-      const iv = crypto.getRandomValues(new Uint8Array(12));
-      const aad = new TextEncoder().encode("gitedge-credential-migration:v1:github-source");
-      const ciphertext = await crypto.subtle.encrypt(
-        { name: "AES-GCM", iv, additionalData: aad },
-        contentKey,
-        new TextEncoder().encode(JSON.stringify({ token: "migrated-source-token" }))
-      );
-      const wrappedKey = await crypto.subtle.encrypt({ name: "RSA-OAEP" }, publicKey, rawKey);
-      const encode = (bytes: ArrayBuffer | Uint8Array) =>
-        btoa(String.fromCharCode(...new Uint8Array(bytes)));
-      return {
-        version: 1 as const,
-        kind: "github-source",
-        wrappedKey: encode(wrappedKey),
-        iv: encode(iv),
-        ciphertext: encode(ciphertext),
-      };
-    });
-    const configuredEnv = {
-      ...env,
-      LEGACY_SIGNING: { exportCredential },
-    } as unknown as SigningEnv;
-
-    await expect(
-      importLegacySigningCredentials(
-        configuredEnv,
-        "another-owner",
-        "runner-repo",
-        approved.name,
-        "github-source"
-      )
-    ).rejects.toThrow("legacy_credential_import_target_mismatch");
-    await expect(
-      importLegacySigningCredentials(
-        configuredEnv,
-        owner.id,
-        "another-runner",
-        approved.name,
-        "github-source"
-      )
-    ).rejects.toThrow("legacy_credential_import_target_mismatch");
-    await expect(
-      importLegacySigningCredentials(
-        {
-          ...configuredEnv,
-          LEGACY_SIGNING_OWNER_ID: "",
-        } as SigningEnv,
-        owner.id,
-        "runner-repo",
-        approved.name,
-        "github-source"
-      )
-    ).rejects.toThrow("legacy_credential_import_target_mismatch");
-    expect(exportCredential).not.toHaveBeenCalled();
-    expect(persisted.size).toBe(0);
-
-    await importLegacySigningCredentials(
-      configuredEnv,
-      owner.id,
-      "runner-repo",
-      approved.name,
-      "github-source"
-    );
-    expect(exportCredential).toHaveBeenCalledOnce();
-    const envelope = persisted.get(`${owner.id}:runner-repo:${approved.revision}`)!;
-    const [ivText, ciphertextText] = envelope.split(".");
-    const plaintext = await crypto.subtle.decrypt(
+    const response = await handleSigningRoute(
+      new Request("https://actions.test/signing/profiles?repositoryId=runner-repo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "desktop-release" }),
+      }),
+      test.env,
       {
-        name: "AES-GCM",
-        iv: Uint8Array.from(atob(ivText!), (character) => character.charCodeAt(0)),
-        additionalData: new TextEncoder().encode(
-          `${owner.id}:runner-repo:${approved.revision}:github-source`
-        ),
-      },
-      await crypto.subtle.importKey("raw", encryptionKey, "AES-GCM", false, ["decrypt"]),
-      Uint8Array.from(atob(ciphertextText!), (character) => character.charCodeAt(0))
+        ...owner,
+        job: { runId: "r", repositoryId: "runner-repo", commitOid: "a".repeat(40) },
+      } as TrustedUser,
+      test.hooks(true)
     );
-    expect(JSON.parse(new TextDecoder().decode(plaintext))).toEqual({
-      token: "migrated-source-token",
-    });
+
+    expect(response.status).toBe(403);
+    expect(test.stub.fetch).not.toHaveBeenCalled();
   });
 
   it("isolates encrypted GitHub source credentials by owner, Runner repository, and profile revision", async () => {

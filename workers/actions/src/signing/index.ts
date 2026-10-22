@@ -16,7 +16,6 @@ import { createLogger } from "../../../../src/worker/common/logger";
 import { SigningCoordinator, coordinator } from "./coordinator";
 import type { SigningEnv, SigningExecutionHooks } from "./types";
 import {
-  importLegacySigningCredentials,
   installSigningCredentials,
   listApprovedProfiles,
   removeSigningCredentials,
@@ -500,33 +499,18 @@ export async function handleSigningRoute(
         let platform;
         if (request.method === "POST") {
           const body = z
-            .union([
-              z
-                .object({ platform: SigningCredentialPlatformSchema, credentials: z.unknown() })
-                .strict(),
-              z.object({ importLegacy: z.enum(["macos", "ios", "github-source"]) }).strict(),
-            ])
+            .object({ platform: SigningCredentialPlatformSchema, credentials: z.unknown() })
+            .strict()
             .parse(await readJsonLimited(request, 1_048_576));
-          if ("importLegacy" in body) {
-            platform = body.importLegacy;
-            await importLegacySigningCredentials(
-              env,
-              user.id,
-              repository.id,
-              profileName,
-              body.importLegacy
-            );
-          } else {
-            platform = body.platform;
-            await installSigningCredentials(
-              env,
-              user.id,
-              repository.id,
-              profileName,
-              body.platform,
-              body.credentials
-            );
-          }
+          platform = body.platform;
+          await installSigningCredentials(
+            env,
+            user.id,
+            repository.id,
+            profileName,
+            body.platform,
+            body.credentials
+          );
         } else {
           const body = z
             .object({ platform: SigningCredentialPlatformSchema })
