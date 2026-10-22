@@ -8,4 +8,4 @@
 设计提交 5697d93。用户明确要求按此执行，稿内 D1 正向变更与旧 broker 规则均为本次已授权要求。
 
 ## 当前执行主机
-Mac保留1个普通broker，Windows更新为2个独立普通broker；真实Windows任务已同时成功执行，旧普通runner注册已退役，旧Windows独立签名runner已停用并删除注册，两个通用Windows broker保留原工作流路由标签。主机接入见019.md，通用签名迁移及环境修复见021.md。
+Mac保留1个普通broker，Windows更新为2个独立普通broker；真实Windows任务已同时成功执行，旧普通runner注册已退役，旧Windows独立签名runner已停用并删除注册，两个通用Windows broker保留原工作流路由标签。IRIS四平台reader与ARM Core发布已通过，Core 26.1022.23及Web UI已发布。主机接入见019.md，通用签名迁移及环境修复见021.md。
