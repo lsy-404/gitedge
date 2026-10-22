@@ -286,14 +286,13 @@ describe("native signing context and Actions client", () => {
     );
   });
 
-  it("sends the GitEdge UUID and lease proof on every authenticated callback", async () => {
+  it("sends the GitEdge UUID and lease proof only in authenticated headers", async () => {
     const runContext = context();
     const fetchImpl = vi.fn(async (_url, init) => {
       expect(init.method).toBe("POST");
-      expect(JSON.parse(init.body)).toMatchObject({
-        runId: runContext.runId,
-        leaseToken: runContext.leaseToken,
-      });
+      expect(init.headers["x-runner-run-id"]).toBe(runContext.runId);
+      expect(init.headers["x-runner-lease-token"]).toBe(runContext.leaseToken);
+      expect(JSON.parse(init.body)).toEqual({});
       return Response.json({ data: { leaseExpiresAt: Date.now() + 60_000 } });
     });
     const client = createSigningClient({ context: runContext, fetchImpl });

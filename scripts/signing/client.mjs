@@ -113,10 +113,6 @@ async function readAction(response, expectedStatus = 200) {
   return resultPayload(await readJson(response));
 }
 
-function actionBody(context, fields = {}) {
-  return { runId: context.runId, leaseToken: context.leaseToken, ...fields };
-}
-
 function requestSignal(signal) {
   const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
@@ -140,7 +136,7 @@ async function requestJson(
       method,
       redirect: "error",
       headers: { ...identityHeaders(context), "content-type": "application/json" },
-      body: method === "GET" ? undefined : JSON.stringify(actionBody(context, fields)),
+      body: method === "GET" ? undefined : JSON.stringify(fields ?? {}),
       signal: requestSignal(signal),
     });
     return readAction(response, expectedStatus);
