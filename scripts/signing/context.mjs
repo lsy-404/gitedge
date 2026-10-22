@@ -26,9 +26,6 @@ const CONTEXT_SCHEMA = z
     leaseToken: z.string().regex(/^[0-9a-f]{64}$/i),
     leaseExpiresAt: z.number().int().positive(),
     runnerToken: z.string().regex(/^ge_runner_[0-9a-f]{64}$/i),
-    operatorApproved: z.literal(true),
-    approvedBy: z.string().min(1).max(256),
-    approvedAt: z.number().int().positive(),
   })
   .strict();
 
@@ -47,8 +44,7 @@ export function parseSigningContext(value, now = Date.now()) {
     throw new SigningContextError("INVALID_CONTEXT");
   if (url.search || url.hash || !url.pathname.replace(/\/$/, "").endsWith("/api/actions"))
     throw new SigningContextError("INVALID_CONTEXT");
-  if (parsed.data.leaseExpiresAt <= now || parsed.data.approvedAt > now)
-    throw new SigningContextError("INVALID_CONTEXT");
+  if (parsed.data.leaseExpiresAt <= now) throw new SigningContextError("INVALID_CONTEXT");
   return { ...parsed.data, baseUrl: url.href.replace(/\/$/, "") };
 }
 
