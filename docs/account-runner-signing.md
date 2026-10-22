@@ -6,6 +6,14 @@ Signing runs through the private account Runner repository and dedicated signing
 
 Use a dedicated host, VM or OS service account that ordinary CI cannot read or impersonate. Separate labels or broker profiles do not provide that boundary. A broker service rejects a mixture of ordinary and signing profiles. Keep signing and ordinary service state directories separate.
 
+Give the signing account access only to the signing checkout, broker state and platform tools. Keep the state directory and registration credential readable only by that OS identity. Do not run an ordinary CI broker or ordinary workflow under the signing identity. The dashboard's dedicated-host approval records the owner's review; it does not prove hardware isolation.
+
+- **macOS:** create a separate macOS user for signing. Install and register the signing profile while logged in as that user, then install the LaunchAgent from the same account. It runs in that user's GUI session; do not install it under an ordinary CI account. Keep Apple signing credentials in the approved per-run keychain flow.
+- **Windows:** create a separate local or managed OS identity and run the broker from a Task Scheduler task under that identity. `runner-broker service install` does not support Windows. Restrict the checkout, broker state and task configuration to the signing identity; verify that the selected Azure managed/workload identity is the one authorized for the signing API.
+- **Linux:** use the supported systemd service with a dedicated non-root account and a private state directory owned by that account. Install with `service install --run-as-user <account>`; the installer checks the state directory ownership and mode.
+
+Upgrade an existing Mac ordinary broker before enabling strict execution-class checks. Re-register it explicitly as ordinary with the current broker, then verify its dashboard purpose is ordinary. Do not convert an ordinary registration or OS account into a signing identity. Signing requires a separate host or OS account and a fresh signing registration approved by the account owner. A GitEdge broker profile missing its execution class must be re-registered; do not edit the profile JSON to manufacture a class.
+
 Install Node.js 24 or newer and the repository dependencies. Install the platform runtime dependencies with:
 
 ```sh
