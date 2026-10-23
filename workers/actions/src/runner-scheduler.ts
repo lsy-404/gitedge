@@ -105,7 +105,10 @@ const usageExpression = (alias: string, now: number, cutoff: number) => `
       AND j.status IN ('running','completed') AND COALESCE(j.completed_at, ${now})>${cutoff}), 0) / 60000.0
   + COALESCE((SELECT SUM(MAX(0, MIN(COALESCE(j.completed_at, ${now}), ${now}) - MAX(j.started_at, ${cutoff})))
     FROM actions_github_runner_jobs j WHERE j.runner_id=${alias}.id AND j.started_at IS NOT NULL
-      AND j.status IN ('running','completed') AND COALESCE(j.completed_at, ${now})>${cutoff}), 0) / 60000.0`;
+      AND j.status IN ('running','completed') AND COALESCE(j.completed_at, ${now})>${cutoff}), 0) / 60000.0
+  + COALESCE((SELECT SUM(MAX(0, MIN(json_extract(e.metadata_json,'$.completedAt'), ${now}) - MAX(json_extract(e.metadata_json,'$.startedAt'), ${cutoff})))
+    FROM audit_events e WHERE e.subject_user_id=${alias}.created_by AND e.created_at>${cutoff}
+      AND e.action='actions.runner_demand_requeued' AND e.target_type='runner' AND e.target_id=${alias}.id), 0) / 60000.0`;
 
 export async function runnerUsageMinutes24h(
   env: RunnerEnv,

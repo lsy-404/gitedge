@@ -80,11 +80,13 @@ export function auditActor(user: TrustedUser): AuditActor {
 export function auditStatement(
   db: D1Database,
   input: AuditInput,
-  now = Date.now()
+  now = Date.now(),
+  ifChanged = false
 ): D1PreparedStatement {
   return db
     .prepare(
-      "INSERT INTO audit_events (id, actor_kind, actor_id, actor_name, actor_ref, action, target_type, target_id, target_label, repository_id, namespace_id, subject_user_id, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      `INSERT INTO audit_events (id, actor_kind, actor_id, actor_name, actor_ref, action, target_type, target_id, target_label, repository_id, namespace_id, subject_user_id, metadata_json, created_at)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${ifChanged ? " WHERE changes() = 1" : ""}`
     )
     .bind(
       crypto.randomUUID(),

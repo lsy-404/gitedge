@@ -3,6 +3,7 @@ export const AUDIT_MAX_PAGE_SIZE = 100;
 
 export const AuditActions = [
   "actions.runner_created",
+  "actions.runner_demand_requeued",
   "actions.runner_labels_updated",
   "actions.runner_revoked",
   "repository.visibility_changed",

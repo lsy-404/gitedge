@@ -1,6 +1,7 @@
 export const actionsMessages = {
   "zh-CN": {
     auditAction_actions_runner_created: "注册了本机 runner",
+    auditAction_actions_runner_demand_requeued: "重新排队了 GitHub runner 请求",
     auditAction_actions_runner_labels_updated: "更新了 runner 标签",
     auditAction_actions_runner_revoked: "撤销了本机 runner",
     actionsTitle: "Actions",
@@ -72,6 +73,7 @@ export const actionsMessages = {
   },
   en: {
     auditAction_actions_runner_created: "Registered a local runner",
+    auditAction_actions_runner_demand_requeued: "Requeued a GitHub runner demand",
     auditAction_actions_runner_labels_updated: "Updated runner labels",
     auditAction_actions_runner_revoked: "Revoked a local runner",
     actionsTitle: "Actions",

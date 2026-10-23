@@ -18,3 +18,5 @@
 - Actual routing completed: Linux839962e0 on ARM, AppleGPU4a9fbafb on Mac, Windowse2b9af8c on Windows. All three omitted timeout-minutes and stored360. GPUnegative62868c41 remained unassigned for the observation window, then was cancelled as an owned queued verification; no user job was cancelled.
 - Exact-source hostedCI39914279233 passed typecheck, unit and Worker suites but failed one Web locale reference test (415/416 passed). Added gpu to its existing dynamic-reference registry. Focused locale/dashboard suite passed16/16. Windows full Web run encountered file:///logo.svg URL parsing errors (42files passed,10failed); that local test-environment boundary is recorded rather than weakening assertions. The Linux hosted suite is the full supported CI gate.
 - New signing approvals, platform/source credentials and running IRIS jobs remain untouched. Signed-product publication is still in progress.
+
+- Full hostedCI39918940298 passed atfac944f. Native cleanup4a700ab7 removed the11 owned temporary workflow definitions through standard workflow permissions and its ephemeral GitEdge job token. Production signing files remained untouched.

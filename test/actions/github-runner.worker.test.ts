@@ -3,6 +3,7 @@ import { beforeAll, afterEach, describe, expect, it, vi } from "vitest";
 import { trustedHeaders } from "../../packages/contracts/src/trust";
 import { importSealingKey, sealText } from "../../src/worker/common/secret-box";
 import { githubRunnerOperation } from "../../workers/forge/src/github-runners";
+import { auditStatement } from "../../src/worker/common/audit";
 import { receiveGithubWebhook } from "../../workers/forge/src/github-sync";
 import { queueGithubRunner, expireGithubRunners } from "../../workers/actions/src/github-runners";
 import {
@@ -227,11 +228,24 @@ describe("single-registration GitHub runner bridge", () => {
       leaseToken: string;
     }>(await machine(token));
     const lease = { runId: claimed.run.id, leaseToken: claimed.leaseToken };
+    await env.DB.prepare("UPDATE actions_github_runner_jobs SET started_at=? WHERE id=?")
+      .bind(Date.now() - 4 * 60_000, claimed.run.id)
+      .run();
+    const assigned = await env.DB.prepare(
+      "SELECT runner_id FROM actions_github_runner_jobs WHERE id=?"
+    )
+      .bind(claimed.run.id)
+      .first<{ runner_id: string }>();
+    if (!assigned) throw new Error("The leased runner is missing.");
     await machine(token, "github/heartbeat", lease);
     remoteJobStates.set(910, "queued");
-    expect(
-      (await machine(token, "github/complete", { ...lease, conclusion: "success", log: "" })).status
-    ).toBe(200);
+    const completions = await Promise.all(
+      [0, 1].map(() =>
+        machine(token, "github/complete", { ...lease, conclusion: "success", log: "" })
+      )
+    );
+    expect(completions.some((response) => response.status === 200)).toBe(true);
+    expect(completions.every((response) => [200, 409].includes(response.status))).toBe(true);
     expect(deletions).toContain(claimed.run.githubRunnerId);
     expect(
       await env.DB.prepare(
@@ -247,10 +261,23 @@ describe("single-registration GitHub runner bridge", () => {
       assigned: 0,
       cleanup_pending: 0,
     });
+    expect(
+      await runnerUsageMinutes24h(machineEnv, assigned.runner_id, Date.now())
+    ).toBeGreaterThanOrEqual(4);
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM audit_events WHERE action='actions.runner_demand_requeued' AND target_id=?"
+      )
+        .bind(assigned.runner_id)
+        .first()
+    ).toEqual({ count: 1 });
+    expect(
+      await data(await machine(token, "claim", { budget: { dailyMinutes: 363 } }))
+    ).toMatchObject({ run: null });
     const retried = await data<{
       run: { id: string; githubRunnerId: number };
       leaseToken: string;
-    }>(await machine(token));
+    }>(await machine(token, "claim", { budget: { dailyMinutes: 720 } }));
     expect(retried.run.id).toBe(claimed.run.id);
     expect(retried.run.githubRunnerId).not.toBe(claimed.run.githubRunnerId);
     expect(retried.leaseToken).not.toBe(claimed.leaseToken);
@@ -267,6 +294,28 @@ describe("single-registration GitHub runner bridge", () => {
       log: "",
     });
     expect(await data(await machine(token))).toMatchObject({ run: null });
+    const now = Date.now();
+    const before = await runnerUsageMinutes24h(machineEnv, assigned.runner_id, now);
+    for (const [start, end] of [
+      [26, 23],
+      [28, 25],
+    ]) {
+      await auditStatement(
+        env.DB,
+        {
+          action: "actions.runner_demand_requeued",
+          actor: { kind: "system", id: assigned.runner_id, name: "GitEdge runner", ref: null },
+          target: { type: "runner", id: assigned.runner_id },
+          subjectUserId: owner.id,
+          metadata: { startedAt: now - start * 60 * 60_000, completedAt: now - end * 60 * 60_000 },
+        },
+        now - end * 60 * 60_000
+      ).run();
+    }
+    expect(await runnerUsageMinutes24h(machineEnv, assigned.runner_id, now)).toBeCloseTo(
+      before + 60,
+      6
+    );
   });
 
   it("returns the server label snapshot after the owner adds custom routing tags", async () => {
