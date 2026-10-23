@@ -443,6 +443,20 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
       return { state: "running", manifest };
     }
     if (operation === "fail" && row.state === "failed") return { state: "failed" };
+    if (operation === "heartbeat") return { leaseExpiresAt: context.leaseExpiresAt };
+    if (operation === "fail") {
+      const code =
+        typeof payload?.code === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(payload.code)
+          ? payload.code
+          : "signing_execution_failed";
+      this.ctx.storage.sql.exec(
+        "UPDATE signing_requests SET state='failed',completed_at=?,verification_json=? WHERE id=? AND state IN ('queued','running')",
+        Date.now(),
+        JSON.stringify({ error: code }),
+        id
+      );
+      return { state: "failed" };
+    }
     if (operation === "profile") {
       const submission = SigningSubmissionSchema.parse(JSON.parse(row.submission_json));
       const previous = previousStage(row.current_stage)
@@ -515,7 +529,6 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
     }
     if (operation === "output-complete") return { allowed: true };
     if (operation === "output-verified") return { allowed: true };
-    if (operation === "heartbeat") return { leaseExpiresAt: context.leaseExpiresAt };
     if (operation === "authorize-sign") {
       this.ctx.storage.sql.exec(
         "UPDATE signing_requests SET authorized_at=? WHERE id=? AND state='running'",
@@ -604,20 +617,6 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
         id
       );
       return { state };
-    }
-    if (operation === "fail") {
-      if (row.state !== "running") throw new Error("signing_lease_invalid");
-      const code =
-        typeof payload?.code === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(payload.code)
-          ? payload.code
-          : "signing_execution_failed";
-      this.ctx.storage.sql.exec(
-        "UPDATE signing_requests SET state='failed',completed_at=?,verification_json=? WHERE id=? AND state='running'",
-        Date.now(),
-        JSON.stringify({ error: code }),
-        id
-      );
-      return { state: "failed" };
     }
     throw new Error("signing_operation_invalid");
   }
