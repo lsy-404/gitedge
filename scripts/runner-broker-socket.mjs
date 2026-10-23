@@ -269,10 +269,6 @@ export function createDispatchSession({
     current = offer;
     handshaking = true;
     try {
-      if (frame.expiresAt <= Date.now()) {
-        await releaseOffer(offer);
-        return decline(frame.offerId, "expired");
-      }
       offer.release = await slot.tryAcquire();
       if (!offer.release) {
         current = undefined;
