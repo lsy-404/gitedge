@@ -1121,6 +1121,7 @@ async function runClaimedSigning(profile, claim, signal) {
     (run.platform === "ios" && run.stage !== "ios_sign") ||
     !Number.isSafeInteger(run.timeoutMinutes) ||
     run.timeoutMinutes < 1 ||
+    run.timeoutMinutes > 360 ||
     typeof claim.runnerId !== "string" ||
     String(claim.runnerId) !== String(profile.runnerId) ||
     typeof claim.leaseToken !== "string" ||
@@ -1195,6 +1196,7 @@ async function runClaimedSigning(profile, claim, signal) {
         contextFile,
         outputParent: runDirectory,
         receiptFile,
+        timeoutMinutes: run.timeoutMinutes,
       });
       await writeFile(workflowFile, source, { mode: 0o600 });
       await writeFile(eventPayloadFile, JSON.stringify(run.eventPayload ?? {}), { mode: 0o600 });

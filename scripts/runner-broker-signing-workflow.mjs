@@ -3,8 +3,10 @@ import { parseDocument, stringify } from "yaml";
 
 export function createSigningWorkflow(
   source,
-  { platform, clientPath, contextFile, outputParent, receiptFile }
+  { platform, clientPath, contextFile, outputParent, receiptFile, timeoutMinutes }
 ) {
+  if (!Number.isInteger(timeoutMinutes) || timeoutMinutes < 1 || timeoutMinutes > 360)
+    throw new Error("Signing workflow timeout is invalid.");
   const document = parseDocument(source, { schema: "core", uniqueKeys: true, strict: true });
   if (document.errors.length) throw new Error("The approved signing workflow is invalid YAML.");
   const workflow = document.toJS({ maxAliasCount: 0 });
@@ -25,6 +27,7 @@ export function createSigningWorkflow(
     throw new Error("Signing workflows cannot use matrix jobs.");
   if (job.if !== undefined)
     throw new Error("Signing workflow jobs cannot be conditionally skipped.");
+  job["timeout-minutes"] = timeoutMinutes;
   const shell = platform === "windows" ? "pwsh" : "bash";
   const command =
     platform === "windows"

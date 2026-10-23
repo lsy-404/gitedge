@@ -13,6 +13,7 @@ on: workflow_dispatch
 jobs:
   sign:
     runs-on: [self-hosted, macos, arm64]
+    timeout-minutes: 5
     env:
       PYTHON: /opt/toolchain/python
     steps:
@@ -51,12 +52,14 @@ describe("native signing workflow runner", () => {
       contextFile: "/private/context.json",
       outputParent: "/private/run",
       receiptFile: "/private/receipt.json",
+      timeoutMinutes: 90,
     });
     expect(source.indexOf("actions/setup-python")).toBeLessThan(
       source.indexOf("GitEdge native signing")
     );
     expect(source).toContain("/opt/toolchain/python");
     expect(source).toContain("GITEDGE_SIGNING_CONTEXT_FILE: /private/context.json");
+    expect(source).toContain("timeout-minutes: 90");
     expect(source).not.toContain("runnerToken");
     expect(source).not.toContain("certificate_password");
   });
@@ -85,9 +88,26 @@ describe("native signing workflow runner", () => {
         contextFile: "/context.json",
         outputParent: "/run",
         receiptFile: "/receipt.json",
+        timeoutMinutes: 90,
       })
     ).toThrow();
   });
+
+  it.each([0, 361, 1.5, Number.NaN])(
+    "rejects an invalid trusted signing job timeout (%s)",
+    (timeoutMinutes) => {
+      expect(() =>
+        createSigningWorkflow(workflow, {
+          platform: "macos",
+          clientPath: "/client.mjs",
+          contextFile: "/context.json",
+          outputParent: "/run",
+          receiptFile: "/receipt.json",
+          timeoutMinutes,
+        })
+      ).toThrow("Signing workflow timeout is invalid.");
+    }
+  );
 
   it("requires an SDK receipt even when the runner itself exits successfully", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "gitedge-signing-receipt-"));
