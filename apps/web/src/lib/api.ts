@@ -21,7 +21,11 @@ import type {
   OrganizationMember,
   User,
 } from "../../../../packages/contracts/src/account";
-import type { QuotaDetail, Usage } from "../../../../packages/contracts/src/ops";
+import {
+  QuotaDetailSchema,
+  type QuotaDetail,
+  type Usage,
+} from "../../../../packages/contracts/src/ops";
 import type { AuditPage } from "../../../../packages/contracts/src/audit";
 import type {
   CreatedInvitation,
@@ -488,19 +492,8 @@ function parseRetryAfter(value: unknown): number | null {
 }
 
 function parseQuota(value: unknown): QuotaDetail | null {
-  if (!isRecord(value)) return null;
-  const { resource, used, limit } = value;
-  if (
-    (resource === "repositories" || resource === "storage") &&
-    typeof used === "number" &&
-    Number.isSafeInteger(used) &&
-    used >= 0 &&
-    typeof limit === "number" &&
-    Number.isSafeInteger(limit) &&
-    limit > 0
-  )
-    return { resource, used, limit };
-  return null;
+  const parsed = QuotaDetailSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 interface ParsedErrorBody {

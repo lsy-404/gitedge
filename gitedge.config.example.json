@@ -3,15 +3,27 @@
   "databaseId": "REPLACE_WITH_D1_DATABASE_ID",
   "domain": "REPLACE_WITH_GATEWAY_HOSTNAME",
   "ssoProviders": [],
-  "vars": {
-    "auth": {
-      "ALLOW_PUBLIC_SIGNUP": "true",
-      "DEFAULT_USER_GROUP": "free",
-      "SITE_ADMINS": ""
-    },
-    "gateway": {
-      "IP_RPM_LIMIT": "300",
-      "PRIVATE_REPOSITORY_RESPONSE": "not_found"
+  "settings": {
+    "allowPublicSignup": true,
+    "defaultUserGroup": "free",
+    "siteAdmins": [],
+    "ipRpmLimit": 300,
+    "privateRepositoryResponse": "not_found",
+    "userGroups": {
+      "free": {
+        "rpm": 120,
+        "maxRepositories": 1000,
+        "maxPublicRepositories": 1000,
+        "maxPrivateRepositories": 1000,
+        "maxStorageBytes": 1099511627776,
+        "maxPublicStorageBytes": 1099511627776,
+        "maxPrivateStorageBytes": 1099511627776,
+        "maxRepositoryBytes": 1073741824,
+        "maxPushBytes": 268435456,
+        "builtinRunnerEnabled": true,
+        "maxBuiltinRunnerRunsPerHour": 60
+      }
     }
-  }
+  },
+  "vars": {}
 }

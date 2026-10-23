@@ -25,7 +25,7 @@ describe("production deployment preflight", () => {
   });
 
   it("keeps a direct Windows invocation explicit when pnpm context is missing", () => {
-    expect(() => pnpmInvocation([], { platform: "win32", cli: undefined })).toThrow(
+    expect(() => pnpmInvocation([], { platform: "win32", cli: "" })).toThrow(
       "Run the deploy stack through pnpm"
     );
   });

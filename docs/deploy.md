@@ -6,17 +6,20 @@ The committed `workers/*/wrangler.jsonc` files hold only neutral values: no `acc
 
 Production values come from `gitedge.config.json` at the repository root (ignored by Git; start from `gitedge.config.example.json`):
 
-| Field          | Applied to                                                                                               |
-| -------------- | -------------------------------------------------------------------------------------------------------- |
-| `accountId`    | `account_id` of every Worker, and `CLOUDFLARE_ACCOUNT_ID` for Wrangler calls.                            |
-| `databaseId`   | `database_id` of every D1 binding.                                                                       |
-| `domain`       | The Gateway's `custom_domain` route pattern.                                                             |
-| `ssoProviders` | The Auth Worker's `SSO_PROVIDERS_JSON` (serialized). See [SSO](sso.md).                                  |
-| `vars`         | Optional `{ "<worker>": { "<NAME>": "<value>" } }` overrides merged over each Worker's committed `vars`. |
+| Field          | Applied to                                                                                                          |
+| -------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `accountId`    | `account_id` of every Worker, and `CLOUDFLARE_ACCOUNT_ID` for Wrangler calls.                                       |
+| `databaseId`   | `database_id` of every D1 binding.                                                                                  |
+| `domain`       | The Gateway's `custom_domain` route pattern.                                                                        |
+| `ssoProviders` | The Auth Worker's `SSO_PROVIDERS_JSON` (serialized). See [SSO](sso.md).                                             |
+| `settings`     | Registration, access policy and user-group quotas. See [deployment settings](configuration.md#deployment-settings). |
+| `vars`         | Optional `{ "<worker>": { "<NAME>": "<value>" } }` overrides merged over each Worker's committed `vars`.            |
 
 `pnpm run deploy` validates the file (a missing file or a placeholder value stops the deployment before any remote call), writes `workers/<worker>/wrangler.production.jsonc` beside each original so relative `main` and asset paths still resolve, and deploys with those files. `pnpm run config:production` only renders them, which is what you need before `wrangler secret put ... --config workers/<worker>/wrangler.production.jsonc`. `pnpm run db:migrate` applies the D1 migrations remotely using the same rendered configs. `pnpm run build` and `pnpm run deploy:dry-run` use the operator file when present and inert sample values otherwise. Generated files are ignored by Git; never edit them.
 
 To change a name that is not account-specific (R2 bucket, queue, Artifacts namespace), edit the committed Worker config and the tests that assert it.
+
+Set shared policy only under `settings`. Rendering distributes identical user-group quotas to Auth, Gateway, Forge and Actions. Putting managed keys such as `USER_GROUP_LIMITS_JSON`, `ALLOW_PUBLIC_SIGNUP` or `IP_RPM_LIMIT` under `vars` stops validation: move their values to `settings` before deploying. Worker-specific optional features and secrets are described in [configuration](configuration.md).
 
 # Repository deployment manifest
 

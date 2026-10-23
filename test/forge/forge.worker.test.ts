@@ -1096,15 +1096,15 @@ describe("Merge authorization binding and closed pull request heads", () => {
   });
   it("reports repository usage against the caller's group quota", async () => {
     const created = await env.DB.prepare(
-      "SELECT COUNT(*) AS count FROM repositories WHERE created_by = 'u1'"
+      "SELECT COUNT(*) AS count FROM repositories WHERE created_by = 'u1' AND system_kind IS NULL"
     ).first<{ count: number }>();
     const response = await call("/usage", "GET", "u1", "alice");
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
       data: {
         groupKey: "free",
-        repositories: { used: created?.count, limit: 10 },
-        storage: { usedBytes: null, limitBytes: 5_368_709_120 },
+        repositories: { used: created?.count, limit: 1000 },
+        storage: { usedBytes: null, limitBytes: 1_099_511_627_776 },
         rpm: 120,
       },
     });
@@ -1114,7 +1114,7 @@ describe("Merge authorization binding and closed pull request heads", () => {
 
   it("rejects repository creation with structured quota details at the limit", async () => {
     const created = await env.DB.prepare(
-      "SELECT COUNT(*) AS count FROM repositories WHERE created_by = 'u1'"
+      "SELECT COUNT(*) AS count FROM repositories WHERE created_by = 'u1' AND system_kind IS NULL"
     ).first<{ count: number }>();
     const limited: typeof forgeEnv = {
       ...forgeEnv,

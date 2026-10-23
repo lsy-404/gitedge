@@ -4,7 +4,6 @@ import {
   REPOSITORY_IMPORT_ERROR_CODES,
   REPOSITORY_IMPORT_MAX_MS,
   REPOSITORY_IMPORT_STALE_MS,
-  parseUserGroupLimits,
   validateImportUrl,
   type GitImportState,
   type RepositoryImport,
@@ -16,6 +15,7 @@ import {
 import { createLogger, type Logger } from "../../../src/worker/common/logger";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 import { parseJson, type ForgeEnv } from "./common";
+import { checkRepositoryQuota, repositoryQuotaCondition } from "./quotas";
 
 export interface ImportOwner {
   readonly id: string;
@@ -350,17 +350,6 @@ async function loadImport(env: ForgeEnv, id: string, userId: string): Promise<Im
   return (await select.first<ImportRow>()) ?? row;
 }
 
-async function quotaReached(env: ForgeEnv, user: TrustedUser): Promise<boolean> {
-  const limits = parseUserGroupLimits(env.USER_GROUP_LIMITS_JSON);
-  const maxRepositories = (limits[user.groupKey] ?? limits.free).maxRepositories;
-  const counts = await env.DB.prepare(
-    "SELECT (SELECT COUNT(*) FROM repositories WHERE created_by = ?1) + (SELECT COUNT(*) FROM repository_imports WHERE created_by = ?1 AND status IN ('queued','running')) AS count"
-  )
-    .bind(user.id)
-    .first<{ count: number }>();
-  return (counts?.count ?? 0) >= maxRepositories;
-}
-
 async function pathTaken(env: ForgeEnv, namespaceId: string, slug: string): Promise<boolean> {
   return Boolean(
     await env.DB.prepare(
@@ -394,8 +383,6 @@ function activeConflict(cause: unknown): Response {
 
 const nameTaken = () =>
   errorResponse(409, "conflict", "Repository name is already used or reserved by a rename.");
-const quotaExceeded = () =>
-  errorResponse(403, "forbidden", "Repository limit reached for this user group.");
 const ownerRequired = () =>
   errorResponse(403, "forbidden", "Repository creation requires namespace owner access.");
 
@@ -421,13 +408,15 @@ async function createImport(context: ImportContext): Promise<Response> {
       "reserved_repository_name",
       "The name Runner is reserved in personal namespaces."
     );
-  if (await quotaReached(env, user)) return quotaExceeded();
+  const quota = await checkRepositoryQuota(env, user, parsed.data.visibility);
+  if (quota) return quota;
   if (await pathTaken(env, owner.id, parsed.data.slug)) return nameTaken();
   const id = crypto.randomUUID();
   const now = Date.now();
+  const capacity = repositoryQuotaCondition(env, user, parsed.data.visibility);
   try {
-    await env.DB.prepare(
-      "INSERT INTO repository_imports (id, namespace_id, created_by, slug, visibility, description, source_url, status, progress, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 'queued', ?, ?)"
+    const inserted = await env.DB.prepare(
+      `INSERT INTO repository_imports (id, namespace_id, created_by, slug, visibility, description, source_url, status, progress, created_at, updated_at) SELECT ?, ?, ?, ?, ?, ?, ?, 'queued', 'queued', ?, ? WHERE ${capacity.sql}`
     )
       .bind(
         id,
@@ -438,9 +427,15 @@ async function createImport(context: ImportContext): Promise<Response> {
         parsed.data.description,
         source.url,
         now,
-        now
+        now,
+        ...capacity.bindings
       )
       .run();
+    if (inserted.meta.changes < 1)
+      return (
+        (await checkRepositoryQuota(env, user, parsed.data.visibility)) ??
+        errorResponse(409, "conflict", "Repository capacity changed. Try again.")
+      );
   } catch (cause) {
     return activeConflict(cause);
   }
@@ -477,16 +472,25 @@ async function retryImport(context: ImportContext, id: string): Promise<Response
       "reserved_repository_name",
       "The name Runner is reserved in personal namespaces."
     );
-  if (await quotaReached(env, user)) return quotaExceeded();
+  const quota = await checkRepositoryQuota(env, user, row.visibility);
+  if (quota) return quota;
   if (await pathTaken(env, row.namespace_id, row.slug)) return nameTaken();
+  const capacity = repositoryQuotaCondition(env, user, row.visibility);
   try {
     const changed = await env.DB.prepare(
-      "UPDATE repository_imports SET status='queued', progress='queued', error_code=NULL, error=NULL, finished_at=NULL, updated_at=? WHERE id=? AND status='failed'"
+      `UPDATE repository_imports SET status='queued', progress='queued', error_code=NULL, error=NULL, finished_at=NULL, updated_at=? WHERE id=? AND status='failed' AND ${capacity.sql}`
     )
-      .bind(Date.now(), id)
+      .bind(Date.now(), id, ...capacity.bindings)
       .run();
     if (!changed.meta.changes)
-      return errorResponse(409, "conflict", "Only failed imports can be retried.");
+      return (
+        (await checkRepositoryQuota(env, user, row.visibility)) ??
+        errorResponse(
+          409,
+          "conflict",
+          "Only failed imports with available capacity can be retried."
+        )
+      );
   } catch (cause) {
     return activeConflict(cause);
   }

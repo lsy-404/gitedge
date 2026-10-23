@@ -369,7 +369,7 @@ async function enforceUserLimit(
   const decision = await consumeRateLimit(
     env.RATE_LIMITER,
     `user:${session.groupKey}:${session.id}`,
-    limits[session.groupKey]?.rpm ?? limits.free.rpm
+    (Object.hasOwn(limits, session.groupKey) ? limits[session.groupKey] : limits.free).rpm
   );
   return rateLimitedResponse(decision);
 }

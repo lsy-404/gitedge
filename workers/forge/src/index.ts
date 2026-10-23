@@ -41,6 +41,12 @@ import { agentFeedStatus, handleAgentFeed, purgeAgentFeeds } from "./agent-feed"
 import { publicProfile } from "./profiles";
 import { detachForks, publicForkList, repositoryForks, type ForkContext } from "./forks";
 import {
+  checkRepositoryQuota,
+  groupLimitsFor,
+  repositoryCounts,
+  repositoryQuotaCondition,
+} from "./quotas";
+import {
   handleExplore,
   handleStarred,
   repositorySocial,
@@ -95,10 +101,8 @@ import {
   SetAssignmentsInputSchema,
   UpdateIssueInputSchema,
   UpdatePullRequestInputSchema,
-  parseUserGroupLimits,
   type TrustedUser,
   type Usage,
-  type UserGroupLimits,
   CreateCommentInputSchema,
   CreateDiscussionInputSchema,
   CreateReviewInputSchema,
@@ -146,12 +150,7 @@ import {
   readTrustedUser,
   trustedHeaders,
 } from "../../../packages/contracts/src/trust";
-import {
-  dataResponse,
-  errorResponse,
-  jsonResponse,
-  quotaExceededResponse,
-} from "../../../src/worker/common/http";
+import { dataResponse, errorResponse, jsonResponse } from "../../../src/worker/common/http";
 
 type NamespaceKind = "personal" | "organization";
 type OrganizationRole = "owner" | "member";
@@ -2106,20 +2105,6 @@ async function featureRequest(
   return null;
 }
 
-function groupLimitsFor(env: ForgeEnv, user: TrustedUser): UserGroupLimits {
-  const limits = parseUserGroupLimits(env.USER_GROUP_LIMITS_JSON);
-  return limits[user.groupKey] ?? limits.free;
-}
-
-async function countCreatedRepositories(env: ForgeEnv, userId: string): Promise<number> {
-  const row = await env.DB.prepare(
-    "SELECT COUNT(*) AS count FROM repositories WHERE created_by = ?"
-  )
-    .bind(userId)
-    .first<{ count: number }>();
-  return row?.count ?? 0;
-}
-
 async function databaseHealth(env: ForgeEnv, logger: Logger) {
   try {
     await env.DB.prepare("SELECT 1").first();
@@ -2144,15 +2129,8 @@ function forkContext(env: ForgeEnv, user: TrustedUser): ForkContext {
           }
         : null;
     },
-    async checkQuota() {
-      const limits = groupLimitsFor(env, user);
-      const used = await countCreatedRepositories(env, user.id);
-      return used >= limits.maxRepositories
-        ? quotaExceededResponse(
-            "Repository limit reached for this user group. Deleted repositories count until they are purged.",
-            { resource: "repositories", used, limit: limits.maxRepositories }
-          )
-        : null;
+    checkQuota(visibility) {
+      return checkRepositoryQuota(env, user, visibility);
     },
   };
 }
@@ -2496,14 +2474,23 @@ const worker = {
     if (parts[0] === "deleted-repositories") return deletedRepositories(env, request, user, parts);
 
     if (request.method === "GET" && url.pathname === "/usage") {
-      const groupLimits = groupLimitsFor(env, user);
+      const groupLimits = groupLimitsFor(env, user.groupKey);
+      const counts = await repositoryCounts(env, user.id);
       const usage: Usage = {
         groupKey: user.groupKey,
         repositories: {
-          used: await countCreatedRepositories(env, user.id),
+          used: counts.total,
           limit: groupLimits.maxRepositories,
         },
         storage: { usedBytes: null, limitBytes: groupLimits.maxStorageBytes },
+        publicRepositories: { used: counts.public, limit: groupLimits.maxPublicRepositories },
+        privateRepositories: { used: counts.private, limit: groupLimits.maxPrivateRepositories },
+        publicStorage: { usedBytes: null, limitBytes: groupLimits.maxPublicStorageBytes },
+        privateStorage: { usedBytes: null, limitBytes: groupLimits.maxPrivateStorageBytes },
+        builtinRunner: {
+          enabled: groupLimits.builtinRunnerEnabled,
+          runsPerRepositoryPerHour: groupLimits.maxBuiltinRunnerRunsPerHour,
+        },
         maxPushBytes: groupLimits.maxPushBytes,
         maxRepositoryBytes: groupLimits.maxRepositoryBytes,
         rpm: groupLimits.rpm,
@@ -2532,17 +2519,8 @@ const worker = {
     if (request.method === "POST" && url.pathname === "/repositories") {
       const parsed = CreateRepositoryInputSchema.safeParse(await parseJson(request));
       if (!parsed.success) return errorResponse(400, "bad_request", "Invalid repository payload.");
-      const groupLimits = groupLimitsFor(env, user);
-      const repositoryCount = await countCreatedRepositories(env, user.id);
-      if (repositoryCount >= groupLimits.maxRepositories)
-        return quotaExceededResponse(
-          "Repository limit reached for this user group. Deleted repositories count until they are purged.",
-          {
-            resource: "repositories",
-            used: repositoryCount,
-            limit: groupLimits.maxRepositories,
-          }
-        );
+      const quota = await checkRepositoryQuota(env, user, parsed.data.visibility);
+      if (quota) return quota;
       const namespace = await namespaceForUser(env, user.id, parsed.data.owner);
       if (!namespace) return errorResponse(404, "not_found", "Repository owner was not found.");
       if (!canCreateRepository(namespace, user.id))
@@ -2566,9 +2544,10 @@ const worker = {
       const now = Date.now(),
         id = crypto.randomUUID(),
         artifactName = `repo-${id}`;
+      const capacity = repositoryQuotaCondition(env, user, parsed.data.visibility);
       try {
-        await env.DB.prepare(
-          "INSERT INTO repositories (id, namespace_id, created_by, slug, do_name, artifact_name, remote, default_branch, visibility, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NULL, NULL, 'main', ?, ?, ?, ?)"
+        const inserted = await env.DB.prepare(
+          `INSERT INTO repositories (id, namespace_id, created_by, slug, do_name, artifact_name, remote, default_branch, visibility, description, created_at, updated_at) SELECT ?, ?, ?, ?, ?, NULL, NULL, 'main', ?, ?, ?, ? WHERE ${capacity.sql}`
         )
           .bind(
             id,
@@ -2579,9 +2558,15 @@ const worker = {
             parsed.data.visibility,
             parsed.data.description,
             now,
-            now
+            now,
+            ...capacity.bindings
           )
           .run();
+        if (inserted.meta.changes < 1)
+          return (
+            (await checkRepositoryQuota(env, user, parsed.data.visibility)) ??
+            errorResponse(409, "conflict", "Repository capacity changed. Try again.")
+          );
       } catch (cause) {
         if (
           cause instanceof Error &&

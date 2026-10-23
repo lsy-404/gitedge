@@ -355,6 +355,7 @@ jobs:
       ...Array.from({ length: 7 }, () => ({ executor: "runner", created_at: now - 1000 })),
     ];
     const env = {
+      USER_GROUP_LIMITS_JSON: JSON.stringify({ free: { maxBuiltinRunnerRunsPerHour: 6 } }),
       DB: {
         prepare(sql: string) {
           return {

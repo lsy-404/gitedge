@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { i18n } from "../../apps/web/src/i18n";
 import { AuditActions } from "../../packages/contracts/src/audit";
+import { QuotaResourceSchema } from "../../packages/contracts/src/ops";
 import { mergePolicyCodes } from "../../apps/web/src/lib/mergePolicy";
 import { taskDocumentKinds, taskStatuses } from "../../apps/web/src/lib/tasks";
 import {
@@ -27,7 +28,7 @@ const nonMessageSources = Object.entries(sources).filter(
 
 /** Message keys built at runtime: prefix to the values appended to it. */
 const dynamicKeys: Record<string, readonly string[]> = {
-  quotaResource_: ["repositories", "storage"],
+  quotaResource_: QuotaResourceSchema.options,
   agentDeliveryMode_: ["webhook", "pull", "both"],
   actionsStatus_: ["queued", "running", "completed"],
   mergeCandidate_: ["preparing", "running", "passed", "failed"],

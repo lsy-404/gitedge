@@ -4,6 +4,7 @@ import { isAccountRunnerRepository } from "../../../src/worker/common/repositori
 import { createLogger } from "../../../src/worker/common/logger";
 import { parseJson, repoResponse, type ForgeEnv, type RepositoryRow } from "./common";
 import { activeImportPath } from "./imports";
+import { checkRepositoryQuota, repositoryQuotaCondition } from "./quotas";
 import { readableBy, repositorySocialFields, socialFieldsFor } from "./social";
 
 const FORK_LIST_LIMIT = 100;
@@ -17,7 +18,7 @@ export interface ForkOwner {
 export interface ForkContext {
   resolveOwner(slug: string): Promise<ForkOwner | null>;
   /** A response when the user may not create another repository. */
-  checkQuota(): Promise<Response | null>;
+  checkQuota(visibility: "public" | "private"): Promise<Response | null>;
 }
 
 async function listForks(
@@ -65,7 +66,7 @@ async function createFork(
       "fork_owner_not_allowed",
       "A private repository can only be forked into your own account or its owner."
     );
-  const quota = await context.checkQuota();
+  const quota = await context.checkQuota(parent.visibility);
   if (quota) return quota;
   const slug = parsed.data.name ?? parent.slug;
   if (await activeImportPath(env, owner.id, slug))
@@ -74,9 +75,10 @@ async function createFork(
   const id = crypto.randomUUID();
   const artifactName = `repo-${id}`;
   const now = Date.now();
+  const capacity = repositoryQuotaCondition(env, user, parent.visibility);
   try {
-    await env.DB.prepare(
-      "INSERT INTO repositories (id, namespace_id, created_by, slug, do_name, artifact_name, remote, default_branch, visibility, description, fork_of, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)"
+    const inserted = await env.DB.prepare(
+      `INSERT INTO repositories (id, namespace_id, created_by, slug, do_name, artifact_name, remote, default_branch, visibility, description, fork_of, created_at, updated_at) SELECT ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ? WHERE ${capacity.sql}`
     )
       .bind(
         id,
@@ -89,9 +91,15 @@ async function createFork(
         parent.description,
         parent.id,
         now,
-        now
+        now,
+        ...capacity.bindings
       )
       .run();
+    if (inserted.meta.changes < 1)
+      return (
+        (await checkRepositoryQuota(env, user, parent.visibility)) ??
+        errorResponse(409, "conflict", "Repository capacity changed. Try again.")
+      );
   } catch (cause) {
     if (
       cause instanceof Error &&

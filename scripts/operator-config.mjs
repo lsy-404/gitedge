@@ -2,6 +2,10 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import {
+  DeploymentSettingsSchema,
+  resolveUserGroupLimits,
+} from "../packages/contracts/src/deployment-settings.ts";
 
 export const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const operatorFile = resolve(root, "gitedge.config.json");
@@ -26,9 +30,39 @@ const OperatorSchema = z
         "must not be an example domain"
       ),
     ssoProviders: z.array(z.record(z.string(), z.unknown())).default([]),
+    settings: DeploymentSettingsSchema.prefault({}),
     vars: z.partialRecord(z.enum(services), varsSchema).default({}),
   })
-  .strict();
+  .strict()
+  .superRefine((operator, context) => {
+    for (const service of services) {
+      const managed = settingsVars(service, operator.settings);
+      for (const key of Object.keys(operator.vars[service] ?? {})) {
+        if (Object.hasOwn(managed, key))
+          context.addIssue({
+            code: "custom",
+            path: ["vars", service, key],
+            message: "configure this value in settings instead of per-Worker vars",
+          });
+      }
+    }
+  });
+
+function settingsVars(service, settings) {
+  const vars = {};
+  if (["auth", "gateway", "forge", "actions"].includes(service))
+    vars.USER_GROUP_LIMITS_JSON = JSON.stringify(resolveUserGroupLimits(settings.userGroups));
+  if (service === "auth") {
+    vars.ALLOW_PUBLIC_SIGNUP = String(settings.allowPublicSignup);
+    vars.DEFAULT_USER_GROUP = settings.defaultUserGroup;
+    vars.SITE_ADMINS = settings.siteAdmins.join(",");
+  }
+  if (service === "gateway") {
+    vars.IP_RPM_LIMIT = String(settings.ipRpmLimit);
+    vars.PRIVATE_REPOSITORY_RESPONSE = settings.privateRepositoryResponse;
+  }
+  return vars;
+}
 
 // Valid-looking values used only for offline dry-run builds when no operator file exists.
 const dryRunOperator = {
@@ -37,6 +71,7 @@ const dryRunOperator = {
   domain: "gitedge.example.com",
   ssoProviders: [],
   vars: {},
+  settings: DeploymentSettingsSchema.parse({}),
 };
 
 export function sourceConfigPath(service) {
@@ -80,7 +115,8 @@ export function renderWorkerConfig(service, operator) {
     for (const route of config.routes ?? [])
       if (route.custom_domain) route.pattern = operator.domain;
   }
-  const vars = { ...config.vars, ...operator.vars[service] };
+  const settings = DeploymentSettingsSchema.parse(operator.settings);
+  const vars = { ...config.vars, ...operator.vars[service], ...settingsVars(service, settings) };
   if (service === "auth") vars.SSO_PROVIDERS_JSON = JSON.stringify(operator.ssoProviders);
   if (Object.keys(vars).length > 0) config.vars = vars;
   return config;

@@ -6,6 +6,43 @@ Each Worker reads its settings from `workers/<worker>/wrangler.jsonc` (variables
 pnpm exec wrangler secret put <NAME> --config workers/<worker>/wrangler.production.jsonc
 ```
 
+## Deployment settings
+
+Edit `settings` in `gitedge.config.json`; the starting example is [gitedge.config.example.json](../gitedge.config.example.json). `pnpm run config:production` validates and renders it without deploying. Re-deploy the stack to apply changes. Existing accounts keep their assigned group; `defaultUserGroup` applies to new accounts.
+
+| Setting                     | Default               | Meaning                                                                                                          |
+| --------------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `allowPublicSignup`         | `true`                | Open password and GitHub account registration. SSO providers also have their own `allowSignup` policy.           |
+| `defaultUserGroup`          | `free`                | A built-in or configured group key for new accounts.                                                             |
+| `siteAdmins`                | `[]`                  | Usernames that always have site administrator access. The stored administrator flag remains managed in `/admin`. |
+| `ipRpmLimit`                | `300`                 | Per-IP requests/minute, 1–100,000. A saved site-admin IP policy in D1 takes precedence.                          |
+| `privateRepositoryResponse` | `not_found`           | `not_found` or `forbidden` for unauthorized private-repository requests.                                         |
+| `userGroups`                | Built-in groups below | Partial overrides per group. A new group inherits the configured `free` group.                                   |
+
+All numeric user-group quotas accept an integer: `-1` means unlimited by GitEdge, `0` means no allowance. Byte values use bytes, not GiB. Total and visibility-specific limits apply together; public and private allocations share the total allocation.
+
+| `settings.userGroups.<group>` field | `free`  | `team`  | `admin` |
+| ----------------------------------- | ------- | ------- | ------- |
+| `maxRepositories`                   | 1,000   | 10,000  | -1      |
+| `maxPublicRepositories`             | 1,000   | 10,000  | -1      |
+| `maxPrivateRepositories`            | 1,000   | 10,000  | -1      |
+| `maxStorageBytes`                   | 1 TiB   | 1 TiB   | -1      |
+| `maxPublicStorageBytes`             | 1 TiB   | 1 TiB   | -1      |
+| `maxPrivateStorageBytes`            | 1 TiB   | 1 TiB   | -1      |
+| `maxRepositoryBytes`                | 1 GiB   | 1 GiB   | -1      |
+| `maxPushBytes`                      | 256 MiB | 256 MiB | -1      |
+| `rpm`                               | 120     | 600     | 1,200   |
+| `builtinRunnerEnabled`              | `true`  | `true`  | `true`  |
+| `maxBuiltinRunnerRunsPerHour`       | 60      | 120     | -1      |
+
+Repository counts belong to the creating account, including repositories it creates in organizations, forks, soft-deleted repositories and queued/running imports. The private system Runner repository is excluded. New repositories, imports, retries, forks and visibility changes use these quotas. A visibility change uses the repository creator's group. The `admin` group is a quota tier; assigning it does not grant site administrator access.
+
+Built-in runner allowance counts container workflow runs per repository per rolling hour, using the repository creator's current group. `builtinRunnerEnabled: false` or a zero run allowance prevents new container runs. Self-hosted runners retain their own host budgets and scheduling policy. Inclusion requires an available Containers deployment; it does not provision capacity or credits.
+
+Artifacts currently reports no stored-byte usage. Total, public, private, single-repository and push byte budgets are declared and displayed, but are not enforced by GitEdge. Account Usage shows unmeasured storage explicitly. Cloudflare's own limits remain authoritative even for `-1`; see [Artifacts limits](https://developers.cloudflare.com/artifacts/platform/limits/).
+
+Other existing settings remain under `vars`: Pages (`SITES_HOST` on Gateway and Forge, `SITE_IP_RPM_LIMIT` on Gateway), AI summaries (`AI_SUMMARIES_DISABLED`, `AI_SUMMARY_MODEL`, `AI_SUMMARY_HOURLY_LIMIT` on Forge), email (`EMAIL_FROM` on Auth), public origins and log levels. Their bindings and secrets still need separate configuration as described below. The `-1` convention applies to user-group quotas, not these service-specific settings.
+
 ## Auth
 
 | Name                     | Kind    | Default                  | Purpose                                                                                                                  |
@@ -44,7 +81,7 @@ See the [Email Service Workers binding](https://developers.cloudflare.com/email-
 
 ### Site administration
 
-`SITE_ADMINS` lists the usernames that can open `/admin` and call `/api/auth/admin/*` (for example `"alice, bob"`). It is the way to appoint the first administrator; administrators can then grant or revoke the stored administrator flag for other users from the Users tab, and administrators named in `SITE_ADMINS` cannot be demoted there. Group assignment accepts the keys of `USER_GROUP_LIMITS_JSON` (the built-in `free`, `team` and `admin` plus your overrides), so set it on Auth to the same value as on the Gateway and Forge when you define custom groups. Administrator mutations require a password or second-factor confirmation from the last 10 minutes. Site administrators cannot be disabled until their administrator access is removed. Disabling a user revokes their browser and agent sessions and makes their tokens and Git credentials fail validation until the account is enabled again.
+`settings.siteAdmins` renders to `SITE_ADMINS` and lists the usernames that can open `/admin` and call `/api/auth/admin/*`. It is the way to appoint the first administrator; administrators can then grant or revoke the stored administrator flag for other users from the Users tab, and configured administrators cannot be demoted there. Group assignment accepts the built-in `free`, `team` and `admin` plus overrides from `settings.userGroups`; rendering distributes the same groups to Auth, Gateway, Forge and Actions. Administrator mutations require a password or second-factor confirmation from the last 10 minutes. Site administrators cannot be disabled until their administrator access is removed. Disabling a user revokes their browser and agent sessions and makes their tokens and Git credentials fail validation until the account is enabled again.
 
 ### Gateway and MCP
 
@@ -129,3 +166,7 @@ Cost and privacy:
 | Name        | Kind | Default | Purpose                       |
 | ----------- | ---- | ------- | ----------------------------- |
 | `LOG_LEVEL` | var  | `info`  | Minimum structured log level. |
+
+## Actions
+
+`USER_GROUP_LIMITS_JSON` is generated from `settings.userGroups`, identically to Auth, Gateway and Forge. Actions reads `builtinRunnerEnabled` and `maxBuiltinRunnerRunsPerHour` from the repository creator's group before reserving a container run. The existing per-run execution, snapshot, output and transfer bounds still apply. Self-hosted runners use the registered host's own capacity and budgets; see [Actions](actions.md).

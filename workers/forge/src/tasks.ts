@@ -1,4 +1,5 @@
 import { detachForks } from "./forks";
+import { checkRepositoryQuota, repositoryQuotaCondition } from "./quotas";
 import { agentEvent, revokeAgentSessions } from "./agent-events";
 import { z } from "zod";
 import {
@@ -1461,6 +1462,23 @@ async function settingsRequest(
       );
   }
   const visibility = input.visibility ?? null;
+  const visibilityChanges = visibility !== null && visibility !== repository.visibility;
+  const creator = visibilityChanges
+    ? await env.DB.prepare(
+        "SELECT u.id, u.group_key AS groupKey FROM users u JOIN repositories r ON r.created_by = u.id WHERE r.id = ?"
+      )
+        .bind(repository.id)
+        .first<Pick<TrustedUser, "id" | "groupKey">>()
+    : null;
+  if (visibilityChanges && visibility) {
+    if (!creator) return errorResponse(404, "not_found", "Repository owner was not found.");
+    const quota = await checkRepositoryQuota(env, creator, visibility, true);
+    if (quota) return quota;
+  }
+  const capacity =
+    creator && visibility
+      ? repositoryQuotaCondition(env, creator, visibility, true)
+      : { sql: "1", bindings: [] };
   if (visibility === "public" && repository.fork_of) {
     const parent = await env.DB.prepare(
       "SELECT visibility FROM repositories WHERE id = ? AND deleted_at IS NULL"
@@ -1477,7 +1495,7 @@ async function settingsRequest(
   const memoryVisibility = visibility === "private" ? "members" : (input.memoryVisibility ?? null);
   try {
     const mutation = env.DB.prepare(
-      "UPDATE repositories SET slug = COALESCE(?, slug), description = COALESCE(?, description), visibility = COALESCE(?, visibility), default_branch = COALESCE(?, default_branch), archived = COALESCE(?, archived), issues_enabled = COALESCE(?, issues_enabled), pulls_enabled = COALESCE(?, pulls_enabled), discussions_enabled = COALESCE(?, discussions_enabled), wiki_enabled = COALESCE(?, wiki_enabled), required_approvals = COALESCE(?, required_approvals), require_passing_checks = COALESCE(?, require_passing_checks), tasks_enabled = COALESCE(?, tasks_enabled), agents_enabled = COALESCE(?, agents_enabled), deployments_enabled = COALESCE(?, deployments_enabled), pages_enabled = CASE WHEN COALESCE(?, visibility) = 'public' THEN COALESCE(?, pages_enabled) ELSE 0 END, graph_enabled = COALESCE(?, graph_enabled), actions_enabled = COALESCE(?, actions_enabled), actions_network_enabled = COALESCE(?, actions_network_enabled), actions_runner_enabled = COALESCE(?, actions_runner_enabled), online_editing_enabled = COALESCE(?, online_editing_enabled), ai_summaries_enabled = COALESCE(?, ai_summaries_enabled), ai_summaries_private_consent = COALESCE(?, ai_summaries_private_consent), allow_merge_commit = COALESCE(?, allow_merge_commit), allow_squash_merge = COALESCE(?, allow_squash_merge), allow_rebase_merge = COALESCE(?, allow_rebase_merge), delete_branch_on_merge = COALESCE(?, delete_branch_on_merge), memory_visibility = COALESCE(?, memory_visibility), agent_assignment_policy = COALESCE(?, agent_assignment_policy), updated_at = ? WHERE id = ? AND deleted_at IS NULL AND (? IS NULL OR ? = 'members' OR COALESCE(?, visibility) = 'public')"
+      `UPDATE repositories SET slug = COALESCE(?, slug), description = COALESCE(?, description), visibility = COALESCE(?, visibility), default_branch = COALESCE(?, default_branch), archived = COALESCE(?, archived), issues_enabled = COALESCE(?, issues_enabled), pulls_enabled = COALESCE(?, pulls_enabled), discussions_enabled = COALESCE(?, discussions_enabled), wiki_enabled = COALESCE(?, wiki_enabled), required_approvals = COALESCE(?, required_approvals), require_passing_checks = COALESCE(?, require_passing_checks), tasks_enabled = COALESCE(?, tasks_enabled), agents_enabled = COALESCE(?, agents_enabled), deployments_enabled = COALESCE(?, deployments_enabled), pages_enabled = CASE WHEN COALESCE(?, visibility) = 'public' THEN COALESCE(?, pages_enabled) ELSE 0 END, graph_enabled = COALESCE(?, graph_enabled), actions_enabled = COALESCE(?, actions_enabled), actions_network_enabled = COALESCE(?, actions_network_enabled), actions_runner_enabled = COALESCE(?, actions_runner_enabled), online_editing_enabled = COALESCE(?, online_editing_enabled), ai_summaries_enabled = COALESCE(?, ai_summaries_enabled), ai_summaries_private_consent = COALESCE(?, ai_summaries_private_consent), allow_merge_commit = COALESCE(?, allow_merge_commit), allow_squash_merge = COALESCE(?, allow_squash_merge), allow_rebase_merge = COALESCE(?, allow_rebase_merge), delete_branch_on_merge = COALESCE(?, delete_branch_on_merge), memory_visibility = COALESCE(?, memory_visibility), agent_assignment_policy = COALESCE(?, agent_assignment_policy), updated_at = ? WHERE id = ? AND deleted_at IS NULL AND (? IS NULL OR ? = 'members' OR COALESCE(?, visibility) = 'public') AND ${capacity.sql}`
     ).bind(
       slug ?? null,
       input.description ?? null,
@@ -1514,9 +1532,14 @@ async function settingsRequest(
       repository.id,
       memoryVisibility,
       memoryVisibility,
-      visibility
+      visibility,
+      ...capacity.bindings
     );
     const changed = await mutation.run();
+    if (changed.meta.changes < 1 && creator && visibility) {
+      const quota = await checkRepositoryQuota(env, creator, visibility, true);
+      if (quota) return quota;
+    }
     if (changed.meta.changes < 1)
       return errorResponse(
         400,

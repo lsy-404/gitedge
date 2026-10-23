@@ -112,7 +112,12 @@ describe("Account usage card", () => {
   const usage: Usage = {
     groupKey: "free",
     repositories: { used: 3, limit: 10 },
+    publicRepositories: { used: 2, limit: 10 },
+    privateRepositories: { used: 1, limit: 10 },
     storage: { usedBytes: null, limitBytes: 5_368_709_120 },
+    publicStorage: { usedBytes: null, limitBytes: 5_368_709_120 },
+    privateStorage: { usedBytes: null, limitBytes: 5_368_709_120 },
+    builtinRunner: { enabled: true, runsPerRepositoryPerHour: 60 },
     maxPushBytes: 268_435_456,
     maxRepositoryBytes: 1_073_741_824,
     rpm: 120,
@@ -131,7 +136,7 @@ describe("Account usage card", () => {
     const bar = mounted.root.querySelector("progress");
     expect(bar?.getAttribute("max")).toBe("10");
     expect(bar?.getAttribute("value")).toBe("3");
-    expect(mounted.root.querySelectorAll("progress")).toHaveLength(1);
+    expect(mounted.root.querySelectorAll("progress")).toHaveLength(3);
   });
 
   it("shows measured storage use when the service reports it", async () => {
@@ -144,6 +149,6 @@ describe("Account usage card", () => {
     );
     await settle();
     expect(mounted.root.textContent).toContain("1.0 GiB of 5.0 GiB used");
-    expect(mounted.root.querySelectorAll("progress")).toHaveLength(2);
+    expect(mounted.root.querySelectorAll("progress")).toHaveLength(4);
   });
 });

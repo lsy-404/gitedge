@@ -24,7 +24,9 @@ import {
   accessTokenAllowsRepository,
   trustedHeaders,
   readTrustedUser,
+  parseUserGroupLimits,
   type TrustedUser,
+  type UserGroupLimits,
 } from "../../../packages/contracts/src/index";
 import {
   isActionWorkflowPath,
@@ -85,6 +87,7 @@ interface ActionsEnv extends Cloudflare.Env {
   readonly AUTH: Fetcher;
   readonly RELEASE_ASSETS: R2Bucket;
   readonly LOG_LEVEL?: string;
+  readonly USER_GROUP_LIMITS_JSON?: string;
 }
 
 function signingExecutionHooks(env: ActionsEnv) {
@@ -95,6 +98,7 @@ function signingExecutionHooks(env: ActionsEnv) {
 
 interface RepositoryRow {
   readonly id: string;
+  readonly owner_group_key: string;
   readonly visibility: "public" | "private";
   readonly archived: number;
   readonly actions_enabled: number;
@@ -154,10 +158,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 async function repositoryFor(env: ActionsEnv, id: string): Promise<RepositoryRow | null> {
   return env.DB.prepare(
-    "SELECT id, visibility, archived, actions_enabled, actions_network_enabled, actions_runner_enabled, default_branch, system_kind FROM repositories WHERE id = ? AND deleted_at IS NULL"
+    "SELECT r.id, r.visibility, r.archived, r.actions_enabled, r.actions_network_enabled, r.actions_runner_enabled, r.default_branch, r.system_kind, u.group_key AS owner_group_key FROM repositories r JOIN users u ON u.id = r.created_by WHERE r.id = ? AND r.deleted_at IS NULL"
   )
     .bind(id)
     .first<RepositoryRow>();
+}
+
+function builtinRunnerLimits(env: ActionsEnv, repo: RepositoryRow): UserGroupLimits {
+  const groups = parseUserGroupLimits(env.USER_GROUP_LIMITS_JSON);
+  return Object.hasOwn(groups, repo.owner_group_key) ? groups[repo.owner_group_key] : groups.free;
 }
 
 function parseRepositoryWorkflow(
@@ -887,7 +896,15 @@ async function listWorkflows(
         continue;
       }
       try {
-        workflows.push({ ...parseRepositoryWorkflow(repo, file.path, source), supported: true });
+        const workflow = parseRepositoryWorkflow(repo, file.path, source);
+        if (workflow.executor !== "runner" && !builtinRunnerLimits(env, repo).builtinRunnerEnabled)
+          workflows.push({
+            ...workflow,
+            supported: false,
+            unsupportedReason:
+              "The repository owner's user group does not include the built-in runner.",
+          });
+        else workflows.push({ ...workflow, supported: true });
       } catch (cause) {
         const unsupportedReason =
           cause instanceof WorkflowValidationError ? cause.message : "Workflow file is invalid.";
@@ -920,24 +937,24 @@ type QueueActionResult =
   | {
       readonly ok: false;
       readonly status: number;
-      readonly code: "conflict" | "run_limit" | "internal_error" | "bad_request";
+      readonly code: "conflict" | "run_limit" | "internal_error" | "bad_request" | "forbidden";
       readonly message: string;
       readonly retryAfter?: number;
     };
 
-const RUN_LIMIT_PER_HOUR = 6;
 const RUN_LIMIT_WINDOW_MS = 60 * 60 * 1000;
 
 // A slot frees once the oldest run counted in the window leaves it.
 async function runLimitRetryAfter(
   env: ActionsEnv,
   repositoryId: string,
-  now: number
+  now: number,
+  limit: number
 ): Promise<number> {
   const oldest = await env.DB.prepare(
     "SELECT created_at FROM actions_runs WHERE repository_id = ? AND executor = 'container' AND created_at > ? ORDER BY created_at DESC LIMIT 1 OFFSET ?"
   )
-    .bind(repositoryId, now - RUN_LIMIT_WINDOW_MS, RUN_LIMIT_PER_HOUR - 1)
+    .bind(repositoryId, now - RUN_LIMIT_WINDOW_MS, limit - 1)
     .first<{ created_at: number }>();
   if (!oldest) return 1;
   return Math.max(1, Math.ceil((oldest.created_at + RUN_LIMIT_WINDOW_MS - now) / 1000));
@@ -998,12 +1015,27 @@ async function queueActionRun(
       ? { ok: true, summary }
       : {
           ok: false,
-          status: 429,
-          code: "run_limit",
-          message: "This repository has reached its limit of six runs per hour.",
-          retryAfter: await runLimitRetryAfter(env, repositoryId, Date.now()),
+          status: 409,
+          code: "conflict",
+          message: "Runner execution could not be queued.",
         };
   }
+  const limits = builtinRunnerLimits(env, repo);
+  if (!limits.builtinRunnerEnabled)
+    return {
+      ok: false,
+      status: 403,
+      code: "forbidden",
+      message: "The repository owner's user group does not include the built-in runner.",
+    };
+  const runLimit = limits.maxBuiltinRunnerRunsPerHour;
+  if (runLimit === 0)
+    return {
+      ok: false,
+      status: 403,
+      code: "forbidden",
+      message: "The repository owner's user group has no built-in runner allowance.",
+    };
   ref = ref.replace(/^refs\/heads\//, "");
   if (context.candidateId) {
     const prior = await env.DB.prepare(
@@ -1064,7 +1096,7 @@ async function queueActionRun(
   }
   const now = Date.now();
   const created = await env.DB.prepare(
-    "INSERT INTO actions_runs (id, repository_id, commit_oid, workflow, path, source_ref, created_by, created_at, pull_request_id, candidate_id, trigger_kind, cache_key, lockfile_hash, cache_event_type, cache_status) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM actions_runs WHERE repository_id = ? AND executor = 'container' AND created_at > ?) < ?"
+    "INSERT INTO actions_runs (id, repository_id, commit_oid, workflow, path, source_ref, created_by, created_at, pull_request_id, candidate_id, trigger_kind, cache_key, lockfile_hash, cache_event_type, cache_status) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (? = -1 OR (SELECT COUNT(*) FROM actions_runs WHERE repository_id = ? AND executor = 'container' AND created_at > ?) < ?)"
   )
     .bind(
       id,
@@ -1082,9 +1114,10 @@ async function queueActionRun(
       cacheIdentity?.lockfileHash ?? null,
       workflow.cache ? eventType : null,
       cacheOutcome,
+      runLimit,
       repositoryId,
       now - RUN_LIMIT_WINDOW_MS,
-      RUN_LIMIT_PER_HOUR
+      runLimit
     )
     .run();
   if (created.meta.changes !== 1) {
@@ -1092,8 +1125,8 @@ async function queueActionRun(
       ok: false,
       status: 429,
       code: "run_limit",
-      message: "This repository has reached its limit of six runs per hour.",
-      retryAfter: await runLimitRetryAfter(env, repositoryId, now),
+      message: "This repository has reached its built-in runner allowance for the hour.",
+      retryAfter: await runLimitRetryAfter(env, repositoryId, now, runLimit),
     };
   }
 

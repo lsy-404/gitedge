@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { QuotaLimitSchema } from "./deployment-settings";
 
 export const ServiceHealthSchema = z.object({
   ok: z.boolean(),
@@ -13,31 +14,47 @@ export const HealthResponseSchema = z.object({
 export type ServiceHealth = z.infer<typeof ServiceHealthSchema>;
 export type HealthResponse = z.infer<typeof HealthResponseSchema>;
 
-export const QuotaResourceSchema = z.enum(["repositories", "storage"]);
+export const QuotaResourceSchema = z.enum([
+  "repositories",
+  "public_repositories",
+  "private_repositories",
+  "storage",
+]);
 
 /** Carried in `error.quota` of a 403 `quota_exceeded` response. */
 export const QuotaDetailSchema = z.object({
   resource: QuotaResourceSchema,
   used: z.number().int().nonnegative(),
-  limit: z.number().int().positive(),
+  limit: z.number().int().nonnegative(),
 });
 
 export type QuotaDetail = z.infer<typeof QuotaDetailSchema>;
 
+const RepositoryUsageSchema = z.object({
+  used: z.number().int().nonnegative(),
+  limit: QuotaLimitSchema,
+});
+const StorageUsageSchema = z.object({
+  usedBytes: z.number().int().nonnegative().nullable(),
+  limitBytes: QuotaLimitSchema,
+});
+
 export const UsageSchema = z.object({
   groupKey: z.string(),
-  repositories: z.object({
-    used: z.number().int().nonnegative(),
-    limit: z.number().int().positive(),
-  }),
+  repositories: RepositoryUsageSchema,
+  publicRepositories: RepositoryUsageSchema,
+  privateRepositories: RepositoryUsageSchema,
   // Artifacts does not report repository size, so usage is null until it does.
-  storage: z.object({
-    usedBytes: z.number().int().nonnegative().nullable(),
-    limitBytes: z.number().int().positive(),
+  storage: StorageUsageSchema,
+  publicStorage: StorageUsageSchema,
+  privateStorage: StorageUsageSchema,
+  builtinRunner: z.object({
+    enabled: z.boolean(),
+    runsPerRepositoryPerHour: QuotaLimitSchema,
   }),
-  maxPushBytes: z.number().int().positive(),
-  maxRepositoryBytes: z.number().int().positive(),
-  rpm: z.number().int().positive(),
+  maxPushBytes: QuotaLimitSchema,
+  maxRepositoryBytes: QuotaLimitSchema,
+  rpm: QuotaLimitSchema,
 });
 
 export type Usage = z.infer<typeof UsageSchema>;

@@ -468,7 +468,10 @@ async function updateUser(
   const parsed = UpdateAdminUserSchema.safeParse(await readJsonLimited(request, SMALL_JSON_BYTES));
   if (!parsed.success) return errorResponse(400, "bad_request", "Invalid user update.");
   const { groupKey, siteAdmin } = parsed.data;
-  if (groupKey !== undefined && !(groupKey in parseUserGroupLimits(env.USER_GROUP_LIMITS_JSON)))
+  if (
+    groupKey !== undefined &&
+    !Object.hasOwn(parseUserGroupLimits(env.USER_GROUP_LIMITS_JSON), groupKey)
+  )
     return errorResponse(400, "bad_request", "Unknown user group.");
   if (siteAdmin !== undefined && target === admin.id)
     return errorResponse(409, "conflict", "You cannot change your own administrator flag.");

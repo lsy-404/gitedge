@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { FluentButton } from "@platform-kit/fluent/vue";
 import type { Usage } from "../../../../packages/contracts/src/ops";
@@ -11,6 +11,28 @@ const { t } = useI18n();
 const usage = ref<Usage | null>(null);
 const loading = ref(true);
 const loadingError = ref("");
+const repositoryRows = computed(() =>
+  usage.value
+    ? [
+        { label: "usageRepositories", ...usage.value.repositories },
+        { label: "usagePublicRepositories", ...usage.value.publicRepositories },
+        { label: "usagePrivateRepositories", ...usage.value.privateRepositories },
+      ]
+    : []
+);
+const storageRows = computed(() =>
+  usage.value
+    ? [
+        { label: "usageStorage", ...usage.value.storage },
+        { label: "usagePublicStorage", ...usage.value.publicStorage },
+        { label: "usagePrivateStorage", ...usage.value.privateStorage },
+      ]
+    : []
+);
+
+function quotaValue(value: number, bytes = false): string {
+  return value === -1 ? t("usageUnlimited") : bytes ? formatBytes(value) : String(value);
+}
 
 async function load(): Promise<void> {
   loading.value = true;
@@ -42,53 +64,58 @@ onMounted(load);
     <div v-if="loading" class="box"><StatusState :loading="true" /></div>
     <section v-else-if="usage" class="box" :aria-label="t('settingsUsage')">
       <ul class="settings-list">
-        <li class="box-row settings-item">
+        <li v-for="row in repositoryRows" :key="row.label" class="box-row settings-item">
           <div class="settings-item-copy">
-            <div class="row-title">{{ t("usageRepositories") }}</div>
+            <div class="row-title">{{ t(row.label) }}</div>
             <div class="row-meta">
               <span>{{
                 t("usageUsedOfLimit", {
-                  used: usage.repositories.used,
-                  limit: usage.repositories.limit,
+                  used: row.used,
+                  limit: quotaValue(row.limit),
                 })
               }}</span>
             </div>
           </div>
           <progress
+            v-if="row.limit > 0"
             class="progress-bar"
-            :aria-label="t('usageRepositories')"
-            :value="usage.repositories.used"
-            :max="usage.repositories.limit"
+            :aria-label="t(row.label)"
+            :value="row.used"
+            :max="row.limit"
           ></progress>
         </li>
-        <li class="box-row settings-item">
+        <li v-for="row in storageRows" :key="row.label" class="box-row settings-item">
           <div class="settings-item-copy">
-            <div class="row-title">{{ t("usageStorage") }}</div>
+            <div class="row-title">{{ t(row.label) }}</div>
             <div class="row-meta">
-              <span v-if="usage.storage.usedBytes === null">{{
-                t("usageStorageNotMeasured", { limit: formatBytes(usage.storage.limitBytes) })
+              <span v-if="row.usedBytes === null">{{
+                t("usageStorageNotMeasured", { limit: quotaValue(row.limitBytes, true) })
               }}</span>
               <span v-else>{{
                 t("usageUsedOfLimit", {
-                  used: formatBytes(usage.storage.usedBytes),
-                  limit: formatBytes(usage.storage.limitBytes),
+                  used: formatBytes(row.usedBytes),
+                  limit: quotaValue(row.limitBytes, true),
                 })
               }}</span>
             </div>
           </div>
           <progress
-            v-if="usage.storage.usedBytes !== null"
+            v-if="row.usedBytes !== null && row.limitBytes > 0"
             class="progress-bar"
-            :aria-label="t('usageStorage')"
-            :value="usage.storage.usedBytes"
-            :max="usage.storage.limitBytes"
+            :aria-label="t(row.label)"
+            :value="row.usedBytes"
+            :max="row.limitBytes"
           ></progress>
         </li>
         <li class="box-row settings-item">
           <div class="settings-item-copy">
             <div class="row-title">{{ t("usageRequestRate") }}</div>
             <div class="row-meta">
-              <span>{{ t("usageRequestRateValue", { count: usage.rpm }) }}</span>
+              <span>{{
+                usage.rpm === -1
+                  ? t("usageUnlimited")
+                  : t("usageRequestRateValue", { count: usage.rpm })
+              }}</span>
             </div>
           </div>
         </li>
@@ -96,7 +123,7 @@ onMounted(load);
           <div class="settings-item-copy">
             <div class="row-title">{{ t("usagePushLimit") }}</div>
             <div class="row-meta">
-              <span>{{ formatBytes(usage.maxPushBytes) }}</span>
+              <span>{{ quotaValue(usage.maxPushBytes, true) }}</span>
             </div>
           </div>
         </li>
@@ -104,7 +131,21 @@ onMounted(load);
           <div class="settings-item-copy">
             <div class="row-title">{{ t("usageRepositorySize") }}</div>
             <div class="row-meta">
-              <span>{{ formatBytes(usage.maxRepositoryBytes) }}</span>
+              <span>{{ quotaValue(usage.maxRepositoryBytes, true) }}</span>
+            </div>
+          </div>
+        </li>
+        <li class="box-row settings-item">
+          <div class="settings-item-copy">
+            <div class="row-title">{{ t("usageBuiltinRunner") }}</div>
+            <div class="row-meta">
+              <span>{{
+                usage.builtinRunner.enabled
+                  ? t("usageRunnerAllowance", {
+                      count: quotaValue(usage.builtinRunner.runsPerRepositoryPerHour),
+                    })
+                  : t("usageRunnerNotIncluded")
+              }}</span>
             </div>
           </div>
         </li>
@@ -117,6 +158,7 @@ onMounted(load);
           </div>
         </li>
       </ul>
+      <p class="box-row row-meta">{{ t("usageStorageBudgetNote") }}</p>
     </section>
   </section>
 </template>
