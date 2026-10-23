@@ -125,6 +125,8 @@ describe("public user profiles", () => {
       bio: "A curious developer",
       location: "Toronto",
       website: "javascript:alert(1)",
+      avatarUrl: null,
+      joinedAt: 1_700_000_000,
       truncated: true,
       readme: {
         content: "# About\n\n<script>alert('unsafe')</script>",
@@ -133,6 +135,14 @@ describe("public user profiles", () => {
       },
       repositories: [
         { ...repository, owner: "octocat", name: "sample", slug: "sample" },
+        {
+          ...repository,
+          id: "another-repo",
+          owner: "octocat",
+          name: "another",
+          slug: "another",
+          starCount: 4,
+        },
         {
           ...repository,
           id: "private-repo",
@@ -160,6 +170,23 @@ describe("public user profiles", () => {
     expect(mounted.root.querySelector(".profile-panel-heading a")?.getAttribute("href")).toBe(
       "/octocat/sample/blob/README.md?ref=main"
     );
+    const repositoriesTab = [
+      ...mounted.root.querySelectorAll<HTMLButtonElement>("[role=tab]"),
+    ].find((button) => button.textContent?.includes("Public repositories"));
+    expect(repositoriesTab).toBeDefined();
+    repositoriesTab?.click();
+    await settle();
+    expect(mounted.root.querySelectorAll(".profile-repositories li")).toHaveLength(2);
+    const search = mounted.root.querySelector<HTMLInputElement>("input[type=search]");
+    expect(search).not.toBeNull();
+    if (search) {
+      search.value = "sample";
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      await settle();
+    }
+    expect(mounted.root.querySelectorAll(".profile-repositories li")).toHaveLength(1);
+    expect(mounted.root.textContent).toContain("octocat/sample");
+    expect(mounted.root.textContent).not.toContain("octocat/another");
     mounted.unmount();
   });
 });

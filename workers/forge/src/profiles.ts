@@ -18,7 +18,7 @@ export async function publicProfile(
   const parsed = NamespaceSlugSchema.safeParse(owner);
   if (!parsed.success) return errorResponse(404, "not_found", "Profile was not found.");
   const profile = await env.DB.prepare(
-    "SELECT n.slug AS owner,COALESCE(p.display_name,n.display_name,n.slug) AS displayName,COALESCE(p.bio,n.description,'') AS bio,COALESCE(p.location,'') AS location,COALESCE(p.website,'') AS website FROM namespaces n LEFT JOIN users u ON n.kind='personal' AND u.id=n.created_by LEFT JOIN auth_account_profiles p ON p.user_id=u.id WHERE n.slug=? AND (u.id IS NULL OR u.deleted_at IS NULL)"
+    "SELECT n.slug AS owner,COALESCE(p.display_name,n.display_name,n.slug) AS displayName,COALESCE(p.bio,n.description,'') AS bio,COALESCE(p.location,'') AS location,COALESCE(p.website,'') AS website,u.created_at AS joinedAt,ei.avatar_url AS avatarUrl FROM namespaces n LEFT JOIN users u ON n.kind='personal' AND u.id=n.created_by LEFT JOIN auth_account_profiles p ON p.user_id=u.id LEFT JOIN external_identities ei ON ei.user_id=u.id AND ei.provider='github' WHERE n.slug=? AND (u.id IS NULL OR (u.deleted_at IS NULL AND u.disabled_at IS NULL))"
   )
     .bind(parsed.data)
     .first<{
@@ -27,6 +27,8 @@ export async function publicProfile(
       bio: string;
       location: string;
       website: string;
+      joinedAt: number | null;
+      avatarUrl: string | null;
     }>();
   if (!profile) return errorResponse(404, "not_found", "Profile was not found.");
   const repos = await env.DB.prepare(

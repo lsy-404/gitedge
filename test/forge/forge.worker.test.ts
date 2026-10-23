@@ -935,9 +935,16 @@ INSERT INTO repositories (id,namespace_id,created_by,slug,do_name,visibility,des
     const response = await forge.fetch(new Request("https://forge.test/profiles/alice"), forgeEnv);
     expect(response.status).toBe(200);
     const profile = (await response.json()) as {
-      data: { owner: string; repositories: Array<Record<string, unknown>> };
+      data: {
+        owner: string;
+        joinedAt: number | null;
+        avatarUrl: string | null;
+        repositories: Array<Record<string, unknown>>;
+      };
     };
     expect(profile.data.owner).toBe("alice");
+    expect(profile.data.joinedAt).toEqual(expect.any(Number));
+    expect(profile.data.avatarUrl).toBeNull();
     expect(profile.data.repositories.length).toBeGreaterThan(0);
     for (const repository of profile.data.repositories) {
       expect(repository).not.toHaveProperty("artifactName");

@@ -12,11 +12,53 @@ const { t } = useI18n();
 const profile = ref<PublicProfile | null>(null);
 const loading = ref(true);
 const error = ref("");
+const activeTab = ref<"overview" | "repositories">("overview");
+const query = ref("");
+const sort = ref<"updated" | "name" | "stars">("updated");
 let loadVersion = 0;
 
 const publicRepositories = computed(() =>
-  (profile.value?.repositories ?? []).filter((repository) => repository.visibility === "public")
+  [...(profile.value?.repositories ?? [])]
+    .filter((repository) => repository.visibility === "public")
+    .filter((repository) => {
+      const search = query.value.trim().toLocaleLowerCase();
+      return (
+        !search ||
+        `${repository.name} ${repository.description} ${repository.topics.join(" ")}`
+          .toLocaleLowerCase()
+          .includes(search)
+      );
+    })
+    .sort((a, b) => {
+      if (sort.value === "name") return a.name.localeCompare(b.name);
+      if (sort.value === "stars") return b.starCount - a.starCount || a.name.localeCompare(b.name);
+      return b.updatedAt - a.updatedAt || a.name.localeCompare(b.name);
+    })
 );
+const totalStars = computed(() =>
+  publicRepositories.value.reduce((total, repository) => total + repository.starCount, 0)
+);
+const totalForks = computed(() =>
+  publicRepositories.value.reduce((total, repository) => total + repository.forkCount, 0)
+);
+const avatarUrl = computed(() => {
+  const value = profile.value?.avatarUrl;
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.username && !url.password ? url.href : null;
+  } catch {
+    return null;
+  }
+});
+const joinedDate = computed(() => {
+  const joinedAt = profile.value?.joinedAt;
+  return joinedAt
+    ? new Intl.DateTimeFormat(undefined, { year: "numeric", month: "long" }).format(
+        new Date(joinedAt * 1000)
+      )
+    : "";
+});
 const readmeRepository = computed(() =>
   profile.value?.readme
     ? publicRepositories.value.find(
@@ -73,15 +115,38 @@ watch(() => props.owner, load, { immediate: true });
         {{ t("profileRepositoriesTruncated") }}
       </NoticeBar>
       <header class="profile-header">
-        <div class="profile-avatar" aria-hidden="true">
+        <img v-if="avatarUrl" class="profile-avatar" :src="avatarUrl" alt="" />
+        <div v-else class="profile-avatar" aria-hidden="true">
           {{ profile.owner.slice(0, 1).toUpperCase() }}
         </div>
         <div>
           <p class="eyebrow">{{ t("profilePublic") }}</p>
           <h1>{{ profile.displayName || profile.owner }}</h1>
           <p class="muted">@{{ profile.owner }}</p>
+          <p v-if="joinedDate" class="muted joined-date">
+            {{ t("profileJoined", { date: joinedDate }) }}
+          </p>
         </div>
       </header>
+
+      <nav class="profile-tabs" :aria-label="t('profileNavigation')" role="tablist">
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="activeTab === 'overview'"
+          @click="activeTab = 'overview'"
+        >
+          {{ t("profileOverview") }}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="activeTab === 'repositories'"
+          @click="activeTab = 'repositories'"
+        >
+          {{ t("profileRepositories") }} <span>{{ publicRepositories.length }}</span>
+        </button>
+      </nav>
 
       <div class="profile-columns">
         <aside class="profile-sidebar">
@@ -99,7 +164,21 @@ watch(() => props.owner, load, { immediate: true });
         </aside>
 
         <div class="profile-content">
-          <section v-if="profile.readme" class="profile-panel">
+          <section class="profile-stats" :aria-label="t('profileStatistics')">
+            <div>
+              <strong>{{ publicRepositories.length }}</strong
+              ><span>{{ t("profileRepositories") }}</span>
+            </div>
+            <div>
+              <strong>{{ totalStars }}</strong
+              ><span>{{ t("profileStars") }}</span>
+            </div>
+            <div>
+              <strong>{{ totalForks }}</strong
+              ><span>{{ t("profileForks") }}</span>
+            </div>
+          </section>
+          <section v-if="activeTab === 'overview' && profile.readme" class="profile-panel">
             <div class="profile-panel-heading">
               <h2>{{ t("profileReadme") }}</h2>
               <a v-if="readmeSourcePath" :href="readmeSourcePath">{{ t("profileReadmeSource") }}</a>
@@ -111,19 +190,69 @@ watch(() => props.owner, load, { immediate: true });
             />
           </section>
 
-          <section class="profile-panel">
-            <h2>{{ t("profileRepositories") }}</h2>
+          <section v-if="activeTab === 'overview'" class="profile-panel">
+            <h2>{{ t("profilePinnedRepositories") }}</h2>
             <ul v-if="publicRepositories.length" class="profile-repositories">
-              <li v-for="repository in publicRepositories" :key="repository.id">
+              <li v-for="repository in publicRepositories.slice(0, 6)" :key="repository.id">
                 <RouterLink
                   :to="`/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.slug)}`"
                 >
                   {{ repository.owner }}/{{ repository.name }}
                 </RouterLink>
                 <p v-if="repository.description" class="muted">{{ repository.description }}</p>
+                <div class="repository-meta">
+                  <span v-for="topic in repository.topics.slice(0, 4)" :key="topic" class="topic">{{
+                    topic
+                  }}</span
+                  ><span v-if="repository.starCount">★ {{ repository.starCount }}</span
+                  ><span v-if="repository.forkCount">⑂ {{ repository.forkCount }}</span>
+                </div>
               </li>
             </ul>
             <p v-else class="muted">{{ t("profileNoRepositories") }}</p>
+          </section>
+          <section v-else class="profile-panel">
+            <div class="profile-panel-heading">
+              <h2>{{ t("profileRepositories") }}</h2>
+              <span class="muted">{{
+                t("profileRepositoryCount", { count: publicRepositories.length })
+              }}</span>
+            </div>
+            <div class="repository-controls">
+              <label class="search-field"
+                ><span class="visually-hidden">{{ t("profileSearchRepositories") }}</span
+                ><input
+                  v-model="query"
+                  type="search"
+                  :placeholder="t('profileSearchRepositories')" /></label
+              ><label
+                >{{ t("profileSort")
+                }}<select v-model="sort">
+                  <option value="updated">{{ t("profileSortUpdated") }}</option>
+                  <option value="name">{{ t("profileSortName") }}</option>
+                  <option value="stars">{{ t("profileSortStars") }}</option>
+                </select></label
+              >
+            </div>
+            <ul v-if="publicRepositories.length" class="profile-repositories">
+              <li v-for="repository in publicRepositories" :key="repository.id">
+                <RouterLink
+                  :to="`/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.slug)}`"
+                  >{{ repository.owner }}/{{ repository.name }}</RouterLink
+                >
+                <p v-if="repository.description" class="muted">{{ repository.description }}</p>
+                <div class="repository-meta">
+                  <span v-for="topic in repository.topics.slice(0, 4)" :key="topic" class="topic">{{
+                    topic
+                  }}</span
+                  ><span v-if="repository.starCount">★ {{ repository.starCount }}</span
+                  ><span v-if="repository.forkCount">⑂ {{ repository.forkCount }}</span>
+                </div>
+              </li>
+            </ul>
+            <p v-else class="muted">
+              {{ query ? t("profileNoSearchResults") : t("profileNoRepositories") }}
+            </p>
           </section>
         </div>
       </div>
@@ -150,6 +279,7 @@ watch(() => props.owner, load, { immediate: true });
   flex: 0 0 auto;
   place-items: center;
   border-radius: var(--radius-full);
+  object-fit: cover;
   background: var(--accent-subtle);
   color: var(--accent-fg);
   font-size: 32px;
@@ -172,6 +302,32 @@ watch(() => props.owner, load, { immediate: true });
   gap: var(--space-8);
   padding-top: var(--space-6);
 }
+.profile-tabs {
+  display: flex;
+  gap: var(--space-5);
+  border-bottom: 1px solid var(--border-default);
+  margin-top: var(--space-5);
+}
+.profile-tabs button {
+  padding: var(--space-3) var(--space-2);
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  color: var(--fg-secondary);
+  cursor: pointer;
+}
+.profile-tabs button[aria-selected="true"] {
+  border-bottom-color: var(--accent-strong);
+  color: var(--fg-default);
+  font-weight: var(--font-weight-semibold);
+}
+.profile-tabs span {
+  margin-left: var(--space-1);
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  background: var(--bg-selected);
+  font-size: var(--font-size-meta);
+}
 .profile-sidebar {
   min-width: 0;
 }
@@ -192,6 +348,60 @@ watch(() => props.owner, load, { immediate: true });
   display: grid;
   gap: var(--space-6);
   min-width: 0;
+}
+.profile-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-6);
+  padding: var(--space-3) 0;
+}
+.profile-stats div {
+  display: grid;
+  gap: var(--space-1);
+}
+.profile-stats strong {
+  font-size: var(--font-size-section);
+}
+.profile-stats span,
+.repository-meta {
+  color: var(--fg-muted);
+  font-size: var(--font-size-meta);
+}
+.repository-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  margin-top: var(--space-2);
+}
+.topic {
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: var(--accent-subtle);
+  color: var(--accent-fg);
+}
+.repository-controls {
+  display: flex;
+  gap: var(--space-3);
+  justify-content: space-between;
+  align-items: end;
+  padding: var(--space-4) 0;
+}
+.repository-controls label:not(.search-field) {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--fg-secondary);
+  font-size: var(--font-size-meta);
+}
+.repository-controls select {
+  min-width: 150px;
+}
+.search-field {
+  flex: 1;
+  max-width: 460px;
+}
+.search-field input {
+  width: 100%;
 }
 .profile-panel {
   min-width: 0;
@@ -252,6 +462,13 @@ watch(() => props.owner, load, { immediate: true });
     width: 64px;
     height: 64px;
     font-size: var(--font-size-section);
+  }
+  .repository-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .repository-controls select {
+    width: 100%;
   }
 }
 </style>

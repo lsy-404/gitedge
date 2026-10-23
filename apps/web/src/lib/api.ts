@@ -391,6 +391,8 @@ export interface PublicProfile {
   bio: string;
   location: string;
   website: string;
+  avatarUrl: string | null;
+  joinedAt: number | null;
   readme: { content: string; repositoryId: string; path: string } | null;
   repositories: Repository[];
   truncated: boolean;
