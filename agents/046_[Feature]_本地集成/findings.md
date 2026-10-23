@@ -6,3 +6,7 @@
 - [Local deployment health] Missing deployment session encryption key -> generate a fresh local-only ignored .dev.vars key and restart -> full health ok.
 - [Profile review] Timestamp incorrectly converted from milliseconds, filtered collection reused for totals/README, and false pinned label -> delegated corrections and regression coverage before integration.
 - [Sync review] Bootstrap can resurrect deleted refs after missed webhook -> delegate common ref state and bidirectional deletion regression fixes; equal-ref bootstrap also needs a recorded baseline.
+- [Full unit validation] Git for Windows reports truncated HTTP body as end-of-response bytes missing -> precise existing retry classification expanded -> full affected transport tests pass and auth errors remain single-attempt.
+- [Windows build] Bare pnpm subprocess cannot start from Node on Windows -> invoke the active package-manager CLI through Node with structured arguments -> deploy-stack tests pass and dry-run advances through Worker bundling.
+- [Container build boundary] Docker Desktop processes exist but docker version times out -> preserve existing backend rather than restart host workloads -> Actions container image verification remains an environment gate.
+- [Full validation boundary] Existing Windows SVG loader/navigation failures, missing runner audit translation and three untouched formatting failures -> report separately; no assertions weakened and no unrelated primary changes incorporated.

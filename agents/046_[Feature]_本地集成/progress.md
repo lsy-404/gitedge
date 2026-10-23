@@ -7,3 +7,11 @@
 - Initial health showed deployment service unconfigured. Generated an ignored local-only DEPLOY_SESSION_KEY and restarted the isolated stack.
 - Local stack ready at loopback port 8977; health status ok across auth/forge/git/deploy/actions/limits/D1.
 - Add a user-facing PowerShell launcher under the chat outputs directory to restart this configured isolated environment without changing production or other worktrees.
+- Integrated profile, synchronization, HTTP smoke, Windows transfer retry and Windows package-manager launch fixes from isolated agent branches. Resolved only audit task-index additions during integration.
+- Full typecheck passed. Full Worker suite 633/633 passed; signing suite 5/5 passed.
+- Full unit suite initially 505/506 passed. The failure reproduced a Windows truncated-response transport defect; after its fix all 20 ref-planner, Git-transfer and deploy-stack tests passed, including complete history and auth-failure negative control. Updated deploy-stack subprocess tests separately passed 5/5.
+- Profile UI suite 7/7 passed. Final locale suite 6/7 passed; the remaining missing auditAction_actions_runner_labels_updated messages are present in the remote main baseline, outside this change.
+- Real local HTTP smoke passed: register, edit, public/private repositories, stars and issues. Anonymous response includes only public data and correct millisecond timestamp. Browser verified overview, search no-match with unchanged summary stats, and public stars.
+- Web production build passed; all seven non-container Worker dry-run bundles passed. Actions Container image build requires Docker; existing Docker Desktop/backend were preserved, and docker version failed to respond within 8 seconds.
+- Full Web suite had Windows file:///logo.svg loader/navigation failures in untouched code and the missing existing audit messages. Full format check flagged three untouched files: CLAUDE.md, scripts/signing/client.mjs and test/signing-runtime/client.worker.test.ts. All changed supported source files pass Prettier and complete diff check.
+- Local health reports auth/forge/git/deploy/actions/limits/D1 all healthy. Main protection rechecked false; remote branch and main worktree remain at baseline and main worktree is clean before delivery.

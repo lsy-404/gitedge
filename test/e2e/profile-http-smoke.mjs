@@ -63,7 +63,12 @@ try {
   });
   assert.equal(edited.displayName, "Profile Smoke Fixture");
 
-  const profile = await api(`/api/forge/profiles/${encodeURIComponent(identifier)}`, "GET", undefined, false);
+  const profile = await api(
+    `/api/forge/profiles/${encodeURIComponent(identifier)}`,
+    "GET",
+    undefined,
+    false
+  );
   assert.equal(profile.owner, identifier);
   assert.equal(profile.displayName, "Profile Smoke Fixture");
   assert.equal(profile.bio, "Disposable profile verification");
