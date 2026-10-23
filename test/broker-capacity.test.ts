@@ -78,7 +78,7 @@ describe("runner capacity probes", () => {
     ).toThrow("install path");
   });
 
-  it("passes the clamped deadline through to runner args for an accepted GitEdge lease", () => {
+  it("uses the single normalized native-signing budget for the CLI and registered labels", () => {
     const capacity = {
       cpus: 2,
       memFreeMb: 900,
@@ -87,7 +87,7 @@ describe("runner capacity probes", () => {
       tools: ["docker"],
     };
     const jobClaim = validateLocalJobClaim(
-      ["self-hosted", "need-time-45m", "need-tool-docker"],
+      ["self-hosted", "need-time-90m", "need-tool-docker"],
       capacity,
       120
     );
@@ -108,17 +108,17 @@ describe("runner capacity probes", () => {
       workflowFile: "/var/lib/gitedge/runs/lease/.github/workflows/check.yml",
       actionsState: "/opt/gitedge/work/actions",
       jobClaim,
-      demandLabels: ["self-hosted", "ubuntu24-1gb-light", "need-time-45m", "need-tool-docker"],
+      demandLabels: ["self-hosted", "ubuntu24-1gb-light", "need-time-90m", "need-tool-docker"],
     });
     expect(args).toContain("--timeout-minutes");
-    expect(args[args.indexOf("--timeout-minutes") + 1]).toBe("45");
+    expect(args[args.indexOf("--timeout-minutes") + 1]).toBe("90");
     const labels = args.flatMap((arg, index) => (arg === "--label" ? [args[index + 1]] : []));
     expect(labels).toEqual([
       "self-hosted",
       "ubuntu24",
       "x64",
       "ubuntu24-1gb-light",
-      "need-time-45m",
+      "need-time-90m",
       "need-tool-docker",
     ]);
   });

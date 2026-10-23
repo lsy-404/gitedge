@@ -5,9 +5,12 @@ export function createSigningWorkflow(
   source,
   { platform, clientPath, contextFile, outputParent, receiptFile, timeoutMinutes }
 ) {
-  if (!Number.isInteger(timeoutMinutes) || timeoutMinutes < 1 || timeoutMinutes > 360)
-    throw new Error("Signing workflow timeout is invalid.");
-  const document = parseDocument(source, { schema: "core", uniqueKeys: true, strict: true });
+  const normalizedSource = normalizeSigningWorkflowTimeout(source, timeoutMinutes);
+  const document = parseDocument(normalizedSource, {
+    schema: "core",
+    uniqueKeys: true,
+    strict: true,
+  });
   if (document.errors.length) throw new Error("The approved signing workflow is invalid YAML.");
   const workflow = document.toJS({ maxAliasCount: 0 });
   const jobs = workflow?.jobs;
@@ -27,7 +30,6 @@ export function createSigningWorkflow(
     throw new Error("Signing workflows cannot use matrix jobs.");
   if (job.if !== undefined)
     throw new Error("Signing workflow jobs cannot be conditionally skipped.");
-  job["timeout-minutes"] = timeoutMinutes;
   const shell = platform === "windows" ? "pwsh" : "bash";
   const command =
     platform === "windows"
@@ -49,6 +51,32 @@ export function createSigningWorkflow(
     run: command,
   });
   jobs[jobId] = job;
+  return stringify(workflow);
+}
+
+export function normalizeSigningWorkflowTimeout(source, timeoutMinutes) {
+  if (!Number.isInteger(timeoutMinutes) || timeoutMinutes < 1 || timeoutMinutes > 360)
+    throw new Error("Signing workflow timeout is invalid.");
+  const document = parseDocument(source, { schema: "core", uniqueKeys: true, strict: true });
+  if (document.errors.length) throw new Error("The approved signing workflow is invalid YAML.");
+  const workflow = document.toJS({ maxAliasCount: 0 });
+  if (!workflow?.jobs || typeof workflow.jobs !== "object")
+    throw new Error("The approved signing workflow has no job.");
+  for (const job of Object.values(workflow.jobs)) {
+    if (!job || typeof job !== "object") continue;
+    const requested = typeof job["runs-on"] === "string" ? [job["runs-on"]] : job["runs-on"];
+    if (Array.isArray(requested) && requested.every((label) => typeof label === "string")) {
+      const labels = requested.filter((label) => {
+        const match = /^need-time-(\d+)m$/i.exec(label);
+        if (!match) return true;
+        const minutes = Number(match[1]);
+        return !Number.isInteger(minutes) || minutes < 1 || minutes > 360;
+      });
+      labels.push(`need-time-${timeoutMinutes}m`);
+      job["runs-on"] = labels;
+    }
+    job["timeout-minutes"] = timeoutMinutes;
+  }
   return stringify(workflow);
 }
 
