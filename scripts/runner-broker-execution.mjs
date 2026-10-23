@@ -31,15 +31,6 @@ export function runnerJobMatches(labels, profileLabels, hostLabels) {
   );
 }
 
-export function runnerLabelsForJit(profileLabels, hostLabels) {
-  const labels = new Map();
-  for (const label of [...hostLabels, ...profileLabels]) {
-    const key = label.toLowerCase();
-    if (!labels.has(key)) labels.set(key, label);
-  }
-  return [...labels.values()];
-}
-
 export function createGitEdgeExecutionArgs({
   runnerScript,
   profile,

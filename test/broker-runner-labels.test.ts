@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   createGitEdgeExecutionArgs,
   runnerJobMatches,
-  runnerLabelsForJit,
   runnerProfileForClaim,
 } from "../scripts/runner-broker-execution.mjs";
 
@@ -19,14 +18,6 @@ describe("server-authoritative runner label snapshots", () => {
 
     expect(executionProfile.labels).toEqual(claim.runnerLabels);
     expect(localProfile.labels).toEqual(["self-hosted", "Linux", "X64", "old-label"]);
-    expect(runnerLabelsForJit(executionProfile.labels, ["self-hosted", "Linux", "X64"])).toEqual([
-      "self-hosted",
-      "Linux",
-      "X64",
-      "device",
-      "ip-residential",
-      "gpu",
-    ]);
     const args = createGitEdgeExecutionArgs({
       runnerScript: "actions-runner.mjs",
       profile: executionProfile,
