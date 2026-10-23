@@ -37,3 +37,4 @@
 | 034 | [BugFix] Native signing timeout propagation | Apply the approved signing timeout consistently to queue labels, trusted workflow, scheduler claim, and CLI | Readiness labels otherwise cap approved signing runs at the shorter setup-job budget | ✅ Complete |
 | 035 | [Ops] Windows broker runtime recovery | Under the existing idle slot, replace only the exact old broker processes and verify both fresh runtimes | Updated checkout did not replace the old live Node processes | ✅ 已完成 |
 | 037 | [BugFix] Native signing credential lease snapshot | Bind credential grant expiry validation to the server lease snapshot used to issue that grant | Parent broker renewal can advance the server lease beyond the SDK heartbeat snapshot | 🔄 进行中 |
+| 038 | [BugFix] Windows signing context ACL | Make the context ACL checker parse in Windows PowerShell 5.1 and retain safe context error codes | A production Windows signer rejected its context before SDK startup | 🔄 进行中 |

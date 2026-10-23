@@ -14,8 +14,9 @@ try {
   $rules = $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])
   if ($rules.Count -lt 1) { exit 5 }
   foreach ($rule in $rules) {
-    if ($rule.IsInherited -or $rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow
-      -or $rule.IdentityReference.Value -ne $currentSid) { exit 6 }
+    if ($rule.IsInherited -or
+        $rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or
+        $rule.IdentityReference.Value -ne $currentSid) { exit 6 }
   }
   exit 0
 } catch {

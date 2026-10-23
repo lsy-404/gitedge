@@ -23,7 +23,12 @@ import {
   verificationSchema,
   windowsCredentialsSchema,
 } from "./contract.mjs";
-import { parseSigningContext, readSigningContext, removeSigningContext } from "./context.mjs";
+import {
+  parseSigningContext,
+  readSigningContext,
+  removeSigningContext,
+  SigningContextError,
+} from "./context.mjs";
 
 export { readSigningContext } from "./context.mjs";
 
@@ -797,14 +802,19 @@ export async function runSigning({
 }
 
 export function formatClientErrorOutput(error) {
-  const code = error instanceof ClientError ? error.code : "SIGNING_FAILED";
+  const contextCode =
+    error instanceof SigningContextError &&
+    ["INSECURE_CONTEXT_FILE", "INVALID_CONTEXT", "INVALID_CONTEXT_FILE"].includes(error.code)
+      ? error.code
+      : undefined;
+  const code = error instanceof ClientError ? error.code : contextCode ?? "SIGNING_FAILED";
   const lines = [code];
   const causeDescriptor =
     error instanceof ClientError ? Object.getOwnPropertyDescriptor(error, "cause") : undefined;
   const cause =
     error instanceof ClientError
       ? causeDescriptor?.value
-      : error instanceof Error
+      : error instanceof Error && !(error instanceof SigningContextError)
         ? error
         : undefined;
   if (cause instanceof Error) {

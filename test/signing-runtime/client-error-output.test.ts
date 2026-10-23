@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ClientError, formatClientErrorOutput } from "../../scripts/signing/client.mjs";
+import { SigningContextError } from "../../scripts/signing/context.mjs";
 
 function signingFailure(message: string, cause: Error = new Error(message)) {
   const error = new ClientError("SIGNING_FAILED");
@@ -75,6 +76,20 @@ describe("safe signing client error output", () => {
     expect(formatClientErrorOutput(new Error("no message output"))).toBe(
       "SIGNING_FAILED\ncause: Error\n"
     );
+  });
+
+  it.each(["INSECURE_CONTEXT_FILE", "INVALID_CONTEXT", "INVALID_CONTEXT_FILE"])(
+    "preserves the fixed signing context error %s",
+    (code) => {
+      expect(formatClientErrorOutput(new SigningContextError(code))).toBe(`${code}\n`);
+    }
+  );
+
+  it("does not print an unknown context error code", () => {
+    const error = new SigningContextError("INVALID_CONTEXT");
+    error.code = "secret=https://private.example/token";
+
+    expect(formatClientErrorOutput(error)).toBe("SIGNING_FAILED\n");
   });
 
   it("never emits secret-like text, URLs, paths, or stack data from an unknown error", () => {
