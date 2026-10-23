@@ -36,6 +36,9 @@ const diagnostics = new Set([
   'squirrel_setup_verify', 'squirrel_output_copy', 'nsis_tool_makensis_failed',
 ]);
 const safeCodes = new Set();
+const causeClasses = new Set(['Error', 'TypeError', 'RangeError', 'URIError', 'ReferenceError', 'SyntaxError', 'EvalError', 'AggregateError']);
+const safeCauseClasses = new Set();
+let firstCauseAt = null;
 const safeDiagnostics = new Set();
 let firstFailureAt = null;
 const flags = {
@@ -116,6 +119,8 @@ if (!limitExceeded && candidates.length === 1) {
             if (!Number.isFinite(time) || time < start || time > end) continue;
             windowLineCount += 1;
             const message = match[2].replace(/\u001b\[[0-9;]*m/g, '').trim();
+            const causeMatch = /(?:^|\s)cause: (Error|TypeError|RangeError|URIError|ReferenceError|SyntaxError|EvalError|AggregateError)(?:\s|$)/.exec(message);
+            if (causeMatch && causeClasses.has(causeMatch[1])) { safeCauseClasses.add(causeMatch[1]); firstCauseAt ??= match[1]; }
             for (const code of sdkCodes) {
               if (new RegExp(`(^|\\W)${code}(\\W|$)`).test(message)) {
                 safeCodes.add(code);
@@ -136,4 +141,4 @@ if (!limitExceeded && candidates.length === 1) {
     } catch { readErrorCount += 1; }
   }
 }
-console.log(JSON.stringify({ requestId, nativeRunId, expectedRunner: 'windows-broker-2', root: 'windows-root-2', rootAvailable: true, runDirectoryCount: runDirs.length, candidateCount, ambiguous: candidateCount > 1, windowLineCount, readErrorCount, limitExceeded, firstFailureAt, sdkCodes: [...safeCodes].sort(), diagnostics: [...safeDiagnostics].sort(), heartbeat: flags }));
+console.log(JSON.stringify({ requestId, nativeRunId, expectedRunner: 'windows-broker-2', root: 'windows-root-2', rootAvailable: true, runDirectoryCount: runDirs.length, candidateCount, ambiguous: candidateCount > 1, windowLineCount, readErrorCount, limitExceeded, firstFailureAt, sdkCodes: [...safeCodes].sort(), causeClasses: [...safeCauseClasses].sort(), firstCauseAt, diagnostics: [...safeDiagnostics].sort(), heartbeat: flags }));

@@ -5,3 +5,4 @@
 - [x] Validate the fixed workflow with GitEdge's parser and review output bounds.
 - [x] Run the initial read-only probe and verify that runner metadata selects the correct fixed root.
 - [x] Run the corrected root-two probe once and record the safe result.
+- [x] Extract the fixed error class and run the synthetic context/ACL smoke on root two.
