@@ -48,4 +48,4 @@
 | 046 | [Feature] 本地集成 | 隔离setup、实际服务验证、集成与交付 | 保留原工作目录并完整交付新增功能 | ✅ 已完成 |
 | 047 | [Test] Profile HTTP smoke verification | Verify account profile edits and anonymous public profile data against the local stack | Review the requested profile behavior through real authenticated and anonymous API flows | ✅ 已完成 |
 | 048 | [BugFix] Windows构建 | 安全调用当前pnpm CLI进行Windows构建 | 原脚本无法在Windows直接启动pnpm子进程 | ✅ 已完成 |
-| 049 | [Feature] [部署设置与配额](049.md) | 统一部署配置、分类仓库配额与内置 runner 开关 | 提供宽裕默认值和 -1 无限语义 | 🔄 进行中 |
+| 049 | [Feature] [部署设置与配额](049.md) | 统一部署配置、分类仓库配额与内置 runner 开关 | 提供宽裕默认值和 -1 无限语义 | ✅ 已完成 |
