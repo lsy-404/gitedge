@@ -158,6 +158,8 @@ async function removeRunner(runner: RunnerOverviewRunner): Promise<void> {
   removeErrors.value = new Set([...removeErrors.value].filter((id) => id !== runner.id));
   try {
     await api.removeRunner(runner.id);
+    // An in-flight poll may still return the removed runner.
+    overviewController?.abort();
     if (overview.value)
       overview.value = {
         ...overview.value,
@@ -280,9 +282,10 @@ onUnmounted(() => {
               }}<template v-if="runner.scope.repository">/{{ runner.scope.repository }}</template>
             </div>
           </header>
-          <div v-if="runner.state === 'offline'" class="runner-remove">
+          <div v-if="runner.state !== 'idle' && runner.state !== 'busy'" class="runner-remove">
             <ConfirmButton
               :label="t('runnerRemove')"
+              :accessible-name="`${t('runnerRemove')} · ${runner.name}`"
               :prompt="t('runnerRemovePrompt')"
               :busy="removingRunners.has(runner.id)"
               @confirm="removeRunner(runner)"
@@ -556,7 +559,7 @@ onUnmounted(() => {
 }
 .runner-remove {
   display: grid;
-  gap: 0.35rem;
+  gap: var(--space-2);
 }
 .runner-card {
   display: grid;

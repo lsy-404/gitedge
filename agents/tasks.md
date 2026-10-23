@@ -51,3 +51,4 @@
 | 049 | [Feature] [部署设置与配额](049.md) | 统一部署配置、分类仓库配额与内置 runner 开关 | 提供宽裕默认值和 -1 无限语义 | ✅ 已完成 |
 | 050 | [BugFix] GitHub demand reconciliation | Requeue an original queued job after another job consumes its temporary runner | Prevent stranded GitHub demands without replaying unknown outcomes | 🔄 进行中 |
 | 051 | [Feature] Semantic runner resources | Match measured RAM, disk and GPU requirements and default builds to six hours | Reject runners with insufficient performance using standard runs-on syntax | 🔄 进行中 |
+| 052 | [Feature] Runner status and removal | Top status summary, remove offline runners, diagnose Tokyo ARM | User reported the runner UI update missing and the ARM node offline | ✅ 已完成 |

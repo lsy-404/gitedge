@@ -96,7 +96,8 @@ const MAX_CONNECTIONS = 50;
 const MAX_QUEUE = 50;
 const MAX_SAMPLES = 96;
 const MAX_HISTORY = 50;
-const OFFLINE_MS = 60_000;
+// Brokers heartbeat about every 35 seconds; tolerate two missed beats.
+const OFFLINE_MS = 90_000;
 const HistoryCursorSchema = z
   .object({
     startedAt: z.number().int().nonnegative(),
