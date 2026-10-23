@@ -43,3 +43,6 @@
 | 041 | [Feature] Native runner custom labels | Manage GitHub-compatible custom runner labels and match requested labels using existing scheduler semantics | Users need explicit server, device and network-category routing tags without inferred reputation or new workflow syntax | ✅ 已完成 |
 | 042 | [BugFix] Windows PowerShell child environment | Remove inherited PSModulePath from Windows PowerShell ACL helper child processes | PowerShell environment pollution prevents built-in ACL commands from loading in signer subprocesses | ✅ 已完成 |
 | 043 | [Ops] Legacy signing resource removal | Verify dependencies and delete the authorized legacy repositories, Worker and dedicated storage | User requests removal after successful signing migration | ✅ 已完成 |
+| 044 | [Feature] 个人主页 | 真实公开资料、概览、仓库检索与收藏和活动详情 | 完善个人主页与GitHub式信息组织 | 🔄 进行中 |
+| 045 | [BugFix] 双向同步 | 引用共同状态、删除同步、并发冲突和状态保留 | 防止漏Webhook后复活已删除引用或覆盖分歧 | 🔄 进行中 |
+| 046 | [Feature] 本地集成 | 隔离setup、实际服务验证、集成与交付 | 保留原工作目录并完整交付新增功能 | 🔄 进行中 |
