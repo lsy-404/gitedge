@@ -15,3 +15,6 @@
 - 执行 `pnpm exec prettier --check` 覆盖所有改动源文件与测试：通过；`git diff --check`：通过。
 - reviewer 复核未发现剩余具体问题；提交前关键词检查无违规项。
 - 在 `codex/bidirectional-sync` 创建本地提交 `17ac1315e213972aadb33a7bec8147d08c695dd9`；未推送、未创建 PR，工作区干净。
+- 将 Git for Windows 的 `end of response with N bytes missing` 加入 prepare-fetch 现有窄瞬时错误匹配；未改变尝试次数或退避。
+- 扩展认证错误回归，断言服务端只收到一次请求；截断历史恢复与认证负控两项真实传输测试通过（其他 8 项按筛选跳过）。Prettier 与 `git diff --check` 通过。
+- 待本地提交此 follow-up，不推送、不创建 PR。

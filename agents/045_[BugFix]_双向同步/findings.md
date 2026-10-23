@@ -11,3 +11,4 @@
 - 测试问题：purge SQL 初稿运行时 D1 报 `near LIMIT: syntax error`；重写为多行子查询后集成测试通过。
 - PowerShell 在 `New-Item -Path` 上将任务目录名中的 `[]` 解释为通配符；改用 .NET `Directory.CreateDirectory` 创建要求的审计目录。
 - Cloudflare 官方 Workers best-practices 页面已检索；最新 `@cloudflare/workers-types` 版本为 `5.20261023.1`。本次未改变平台 API 或 bindings，仅使用现有 D1 能力。
+- 后续集成全量单测发现 Git for Windows 对截断 HTTP body 报告 `end of response with N bytes missing`，当前 prepare-fetch 瞬时错误正则未覆盖；按既有三次有界重试策略补充该具体报错，避免扩大到一般 fatal/auth 错误。

@@ -51,7 +51,7 @@ process.stdin.on('end', async () => {
           const fetched = git(['--git-dir=' + directory, 'fetch', '--no-tags', plan.source.url, plan.ref]);
           if (fetched.status === 0) break;
           diagnostic = failure(fetched);
-          const transient = fetched.error?.code === 'ETIMEDOUT' || /early EOF|unexpected disconnect|bytes (?:of body are still expected|remaining to read)|Could not resolve host|Failed to connect|Connection reset|timed out|Recv failure|Empty reply from server|HTTP (?:500|502|503|504)/i.test(fetched.stderr || '');
+          const transient = fetched.error?.code === 'ETIMEDOUT' || /early EOF|unexpected disconnect|end of response with \d+ bytes missing|bytes (?:of body are still expected|remaining to read)|Could not resolve host|Failed to connect|Connection reset|timed out|Recv failure|Empty reply from server|HTTP (?:500|502|503|504)/i.test(fetched.stderr || '');
           const delay = 1000 * (attempt + 1);
           if (!transient || attempt === 2 || Date.now() + delay >= deadline) throw Error('git_failed');
           await new Promise(resolve => setTimeout(resolve, delay));

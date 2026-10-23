@@ -58,6 +58,7 @@ async function fixture(large = false) {
   git(local, "tag", "-a", "release", "-m", "Release");
   git(local, "push", source, "HEAD:refs/heads/main", "refs/tags/release:refs/tags/release");
   let rejectedSecret: string | undefined;
+  let rejectedRequests = 0;
   let sourceDelay = 0;
   let truncatedResponses = 0;
   const server = createServer(async (request, response) => {
@@ -85,6 +86,7 @@ async function fixture(large = false) {
       if (response.destroyed) return;
     }
     if (rejectedSecret && url.pathname.startsWith("/source.git/")) {
+      rejectedRequests++;
       const pkt = (text: string) => (text.length + 4).toString(16).padStart(4, "0") + text;
       response.setHeader("Content-Type", "application/x-git-upload-pack-advertisement");
       response.end(
@@ -168,6 +170,9 @@ async function fixture(large = false) {
     execute,
     rejectSource(secret: string) {
       rejectedSecret = secret;
+    },
+    get rejectedRequests() {
+      return rejectedRequests;
     },
     delaySource(milliseconds: number) {
       sourceDelay = milliseconds;
@@ -262,6 +267,7 @@ it("redacts the decoded HTTP credential from bounded native Git failure diagnost
     },
   });
   expect(result.status).toBe("failed");
+  expect(f.rejectedRequests).toBe(1);
   expect(result.diagnostic).toContain("[REDACTED]");
   expect(result.diagnostic).not.toContain(secret);
   expect(Buffer.byteLength(result.diagnostic!)).toBeLessThanOrEqual(1024);
