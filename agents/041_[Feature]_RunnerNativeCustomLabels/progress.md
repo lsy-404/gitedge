@@ -13,3 +13,6 @@
 - Validation passed: Actions signing/GitHub worker tests (12), broker label contract tests (2), Actions TypeScript typecheck, and `git diff --check`. Prettier completed on all modified files.
 - No host, deployment, or production operation was performed.
 - Additional verification: runner-scheduling unit tests passed (12), including scheduler label semantics.
+- Post-merge read-only review completed against main `0403aafc7306ef6dad8d2b2acca0cb5e90b2f17b`; no concrete API, scheduler, snapshot, or broker matching defect found.
+- Revalidated the existing projectless routing workflow with the service parser and scheduler claim parser after the `need-time-5m` correction. Workflow is read-only, five-minute, and requires `routing-verification` plus Node.
+- No dispatch, deployment, host, credential, runner-label, or active-job mutation was performed.
