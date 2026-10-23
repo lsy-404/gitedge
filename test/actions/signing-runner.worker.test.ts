@@ -269,6 +269,121 @@ describe("general-purpose native signing execution", () => {
       .run();
   });
 
+  it("returns the authoritative registration labels with an ordinary workflow claim", async () => {
+    const runId = crypto.randomUUID();
+    const customRunnerId = crypto.randomUUID();
+    const runnerToken = `ge_runner_${"d".repeat(64)}`;
+    const jobToken = `ge_job_${"e".repeat(64)}`;
+    const now = Date.now();
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO actions_runs(id,repository_id,commit_oid,workflow,path,source_ref,created_by,created_at,trigger_kind,executor)
+         VALUES(?,?,?,'build','.github/workflows/build.yml','refs/heads/main',?,?,'workflow_dispatch','runner')`
+      ).bind(runId, repositoryId, "a".repeat(40), owner.id, now),
+      env.DB.prepare(
+        `INSERT INTO actions_runner_runs(run_id,workflow_source,labels_json,permission,timeout_minutes,event_json)
+         VALUES(?,'name: build','["self-hosted","Windows","device","ip-residential"]','read',30,'{}')`
+      ).bind(runId),
+      env.DB.prepare(
+        `INSERT INTO actions_runners(id,name,namespace_id,repository_id,created_by,labels_json,token_hash,created_at)
+         VALUES(?,'tagged-workflow-runner',?,?,?,'["self-hosted","Windows","x64","old-tag"]',?,?)`
+      ).bind(
+        customRunnerId,
+        namespaceId,
+        repositoryId,
+        owner.id,
+        await sha256Hex(runnerToken),
+        now
+      ),
+    ]);
+    const updated = await runnerManagement(
+      request(`/runners/${customRunnerId}/labels`, "PUT", {
+        labels: ["device", "ip-residential"],
+      }),
+      actionEnv,
+      trusted(owner)
+    );
+    expect(updated.status).toBe(200);
+    const staleRunner = await env.DB.prepare(
+      "SELECT r.*,n.slug AS owner,p.slug AS repository FROM actions_runners r JOIN namespaces n ON n.id=r.namespace_id LEFT JOIN repositories p ON p.id=r.repository_id WHERE r.id=?"
+    )
+      .bind(customRunnerId)
+      .first<RunnerRow>();
+    const candidate = (await listRunnerCandidates(actionEnv, staleRunner!)).find(
+      (item) => item.id === runId
+    );
+    if (!candidate) throw new Error("The tagged workflow was not a scheduler candidate.");
+    await env.DB.prepare("UPDATE actions_runners SET labels_json=? WHERE id=?")
+      .bind(JSON.stringify(["self-hosted", "Windows", "x64"]), customRunnerId)
+      .run();
+    expect(
+      await claimRunnerCandidate(
+        actionEnv,
+        staleRunner!,
+        candidate,
+        30,
+        "b".repeat(64),
+        now + 1,
+        null
+      )
+    ).toBe(false);
+    expect(
+      await env.DB.prepare("SELECT status FROM actions_runner_runs WHERE run_id=?")
+        .bind(runId)
+        .first<{ status: string }>()
+    ).toEqual({ status: "queued" });
+    await runnerManagement(
+      request(`/runners/${customRunnerId}/labels`, "PUT", {
+        labels: ["device", "ip-residential"],
+      }),
+      actionEnv,
+      trusted(owner)
+    );
+    const response = await runnerMachineRequest(
+      new Request("https://actions.internal/runner/claim", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${runnerToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          capacity: {
+            os: "windows",
+            arch: "x64",
+            cpus: 2,
+            load1: 0,
+            memTotalMb: 4096,
+            memFreeMb: 2048,
+            diskFreeMb: 20_000,
+            tools: ["node"],
+            slots: 1,
+            busy: 0,
+          },
+        }),
+      }),
+      {
+        ...actionEnv,
+        AUTH: {
+          fetch: async () => {
+            await env.DB.prepare(
+              "INSERT INTO actions_job_tokens(run_id,token_hash,expires_at) VALUES(?,?,?)"
+            )
+              .bind(runId, await sha256Hex(jobToken), Date.now() + 60_000)
+              .run();
+            return Response.json({ data: { token: jobToken } });
+          },
+        },
+      }
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      data: {
+        run: { id: runId, kind: "workflow" },
+        runnerLabels: ["self-hosted", "Windows", "x64", "device", "ip-residential"],
+      },
+    });
+  });
+
   it("admits more than six approved native signing requests in an hour", async () => {
     const now = Date.now();
     const runIds: string[] = [];
@@ -526,6 +641,7 @@ describe("general-purpose native signing execution", () => {
     const signingClaim = (await claimResponse.json()) as {
       data: {
         run: { kind: string; token: string; repository: string; sha: string };
+        runnerLabels: string[];
         leaseToken: string;
       };
     };
@@ -536,6 +652,7 @@ describe("general-purpose native signing execution", () => {
       repository: "signing-runner-owner/runner",
       sha: "c".repeat(40),
     });
+    expect(signingClaim.data.runnerLabels).toEqual(["self-hosted", "Windows", "ci"]);
     const outputBytes = new TextEncoder().encode("verified signing archive");
     const outputDigest = `sha256:${await sha256Hex(new TextDecoder().decode(outputBytes))}`;
     const outputKey = `signing/${owner.id}/${repositoryId}/${requestId}/output.zip`;
@@ -749,7 +866,7 @@ describe("general-purpose native signing execution", () => {
       ),
     ]);
     const failedRunnerId = crypto.randomUUID();
-    const failedRunnerToken = `ge_runner_${"d".repeat(64)}`;
+    const failedRunnerToken = `ge_runner_${"f".repeat(64)}`;
     await env.DB.prepare(
       `INSERT INTO actions_runners (id,name,namespace_id,repository_id,created_by,labels_json,token_hash,created_at)
        VALUES (?,'failure-node',?,?,?,'["self-hosted","Windows","ci"]',?,?)`

@@ -1,4 +1,44 @@
+import { parseJobClaim, matchesLabels } from "../packages/contracts/runner-scheduling.mjs";
 import { localExecutionMinutes } from "./runner-capacity.mjs";
+
+export function runnerProfileForClaim(profile, claim) {
+  const labels = claim?.runnerLabels;
+  if (
+    !Array.isArray(labels) ||
+    labels.length < 1 ||
+    labels.length > 40 ||
+    labels.some(
+      (label) =>
+        typeof label !== "string" ||
+        label.trim() !== label ||
+        label.length < 1 ||
+        label.length > 100 ||
+        !/^[A-Za-z0-9_. -]+$/.test(label)
+    ) ||
+    new Set(labels.map((label) => label.toLowerCase())).size !== labels.length
+  )
+    throw new Error("GitEdge returned an invalid runner label snapshot.");
+  return { ...profile, labels: [...labels] };
+}
+
+export function runnerJobMatches(labels, profileLabels, hostLabels) {
+  const claim = parseJobClaim(labels);
+  const available = new Set([...hostLabels, ...profileLabels].map((label) => label.toLowerCase()));
+  return (
+    claim.valid &&
+    claim.labels.includes("self-hosted") &&
+    matchesLabels(claim.labels, [...available])
+  );
+}
+
+export function runnerLabelsForJit(profileLabels, hostLabels) {
+  const labels = new Map();
+  for (const label of [...hostLabels, ...profileLabels]) {
+    const key = label.toLowerCase();
+    if (!labels.has(key)) labels.set(key, label);
+  }
+  return [...labels.values()];
+}
 
 export function createGitEdgeExecutionArgs({
   runnerScript,

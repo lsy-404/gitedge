@@ -9,3 +9,7 @@
 References:
 - https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/apply-labels
 - https://docs.github.com/en/actions/how-tos/write-workflows/choose-where-workflows-run/choose-the-runner-for-a-job
+- Extended the shared claim contract with a mandatory server registration-label snapshot for idle, busy, GitHub, ordinary workflow, and native signing responses.
+- Bound candidate claim to the exact registration-label JSON used during scheduling. A concurrent label edit now makes the atomic claim fail and the run stays queued.
+- Broker validates each required snapshot and uses it only for that execution's profile across ordinary GitEdge workflows, native signing, and GitHub JIT. Host OS/architecture validation and local capacity checks remain authoritative; workflow demand labels never populate the host profile.
+- Regression coverage includes an old local label set, newly configured server tags, successful native/GitHub matching, rejection of absent tags, and a stale-snapshot claim race.

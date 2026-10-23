@@ -348,6 +348,7 @@ export async function claimRunnerCandidate(
     )))`;
   const runnerGuard = `EXISTS (SELECT 1 FROM actions_runners r WHERE r.id=? AND r.revoked_at IS NULL
     AND r.namespace_id=? AND r.created_by=? AND r.repository_id IS ?
+    AND r.labels_json IS ?
     AND (r.held_until IS NULL OR r.held_until<=?) AND r.capacity_reported_at IS ?
     AND r.capacity_json IS ? AND r.budget_json IS ?
     AND (json_extract(r.budget_json,'$.maxJobMinutes') IS NULL OR ?<=json_extract(r.budget_json,'$.maxJobMinutes'))
@@ -357,6 +358,7 @@ export async function claimRunnerCandidate(
     runner.namespace_id,
     runner.created_by,
     runner.repository_id,
+    runner.labels_json,
     now,
     capacityReportedAt,
     runner.capacity_json,

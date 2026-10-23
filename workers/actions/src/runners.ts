@@ -3,6 +3,7 @@ import {
   RegisterRunnerInputSchema,
   RunnerCustomLabelsSchema,
   RunnerLabelsSchema,
+  RunnerClaimLabelSnapshotSchema,
   RunnerCompleteInputSchema,
   RunnerLeaseInputSchema,
   RunnerClaimInputSchema,
@@ -702,7 +703,13 @@ async function claim(request: Request, env: RunnerEnv, runner: RunnerRow): Promi
       .bind(fresh.id, fresh.id)
       .first())
   )
-    return dataResponse({ run: null, pollAfterSeconds: 5 });
+    return dataResponse({
+      run: null,
+      pollAfterSeconds: 5,
+      runnerLabels: RunnerClaimLabelSnapshotSchema.parse({
+        runnerLabels: labels(fresh.labels_json),
+      }).runnerLabels,
+    });
 
   const used = await runnerUsageMinutes24h(env, fresh.id, now);
   const candidates = await listRunnerCandidates(env, fresh);
@@ -752,6 +759,9 @@ async function claim(request: Request, env: RunnerEnv, runner: RunnerRow): Promi
       fresh.capacity_reported_at
     );
     if (!claimed) continue;
+    const runnerLabels = RunnerClaimLabelSnapshotSchema.parse({
+      runnerLabels: labels(fresh.labels_json),
+    }).runnerLabels;
     await clearRunnerDeferral(env, candidate.kind, candidate.id);
     if (candidate.kind === "github") {
       const response = await claimGithubRunner(
@@ -761,7 +771,8 @@ async function claim(request: Request, env: RunnerEnv, runner: RunnerRow): Promi
         evaluated.claim,
         leaseToken,
         leaseHash,
-        now
+        now,
+        runnerLabels
       );
       if (response) return response;
       continue;
@@ -830,6 +841,7 @@ async function claim(request: Request, env: RunnerEnv, runner: RunnerRow): Promi
           timeoutMinutes: row.timeout_minutes,
         },
         runnerId: fresh.id,
+        runnerLabels,
         leaseToken,
         leaseExpiresAt: row.lease_expires_at,
       });
@@ -867,6 +879,7 @@ async function claim(request: Request, env: RunnerEnv, runner: RunnerRow): Promi
           permission: row.permission,
           timeoutMinutes: row.timeout_minutes,
         },
+        runnerLabels,
         leaseToken,
         leaseExpiresAt: row.lease_expires_at,
       });
@@ -890,7 +903,13 @@ async function claim(request: Request, env: RunnerEnv, runner: RunnerRow): Promi
       return errorResponse(503, "internal_error", "The job credential could not be issued.");
     }
   }
-  return dataResponse({ run: null, pollAfterSeconds: 5 });
+  return dataResponse({
+    run: null,
+    pollAfterSeconds: 5,
+    runnerLabels: RunnerClaimLabelSnapshotSchema.parse({
+      runnerLabels: labels(fresh.labels_json),
+    }).runnerLabels,
+  });
 }
 
 async function isSigningRun(env: RunnerEnv, runId: string): Promise<boolean> {

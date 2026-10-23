@@ -19,8 +19,13 @@ import { fileURLToPath } from "node:url";
 import { windowsPowerShellEnvironment } from "./signing/windows-process.mjs";
 import { parseArgs } from "node:util";
 import { parseDocument } from "yaml";
-import { parseJobClaim, matchesLabels } from "../packages/contracts/runner-scheduling.mjs";
-import { createGitEdgeExecutionArgs } from "./runner-broker-execution.mjs";
+import { parseJobClaim } from "../packages/contracts/runner-scheduling.mjs";
+import {
+  createGitEdgeExecutionArgs,
+  runnerJobMatches,
+  runnerLabelsForJit,
+  runnerProfileForClaim,
+} from "./runner-broker-execution.mjs";
 import {
   createSigningWorkflow,
   normalizeSigningWorkflowTimeout,
@@ -549,14 +554,7 @@ const orgPollOffsets = new Map();
 const githubRunPages = new Map();
 
 function eligible(labels, profile) {
-  const claim = parseJobClaim(labels);
-  const available = hostLabels();
-  for (const label of profile.labels) available.add(label.toLowerCase());
-  return (
-    claim.valid &&
-    claim.labels.includes("self-hosted") &&
-    matchesLabels(claim.labels, [...available])
-  );
+  return runnerJobMatches(labels, profile.labels, hostLabels());
 }
 
 async function queuedGitHubJob(profile, fullScan = false) {
@@ -635,7 +633,7 @@ async function generateJit(profile) {
   const groupId = profile.scope === "repo" ? 1 : await resolveOrgRunnerGroup(profile);
   const runnerName = `broker-${profile.id.slice(0, 45)}-${randomUUID().slice(0, 8)}`;
   const params = ["--method", "POST", "-f", `name=${runnerName}`, "-F", "work_folder=_work"];
-  for (const label of mergeLabels([...hostLabels()], profile.labels))
+  for (const label of runnerLabelsForJit(profile.labels, hostLabels()))
     params.push("-f", `labels[]=${label}`);
   params.push("-F", `runner_group_id=${groupId}`);
   let response = await gh(profile, [route, ...params]);
@@ -852,6 +850,8 @@ async function runGitHub(profile, queued, signal) {
 }
 
 async function runClaimedGitHub(profile, claim, signal) {
+  profile = runnerProfileForClaim(profile, claim);
+  validateProfileHostLabels(profile.labels);
   const { run, leaseToken } = claim;
   if (
     typeof run.id !== "string" ||
@@ -1094,6 +1094,8 @@ async function secureSigningPath(target, directory = false) {
 }
 
 async function runClaimedSigning(profile, claim, signal) {
+  profile = runnerProfileForClaim(profile, claim);
+  validateProfileHostLabels(profile.labels);
   const { run } = claim;
   if (
     typeof run.id !== "string" ||
@@ -1680,6 +1682,7 @@ async function claimGitEdge(profile, signal) {
   const claim = response?.data;
   if (!claim || typeof claim !== "object" || Array.isArray(claim) || !("run" in claim))
     throw new Error("GitEdge returned an invalid runner claim response.");
+  runnerProfileForClaim(profile, claim);
   if (claim.run === null) {
     const delay = Number(claim.pollAfterSeconds);
     if (!Number.isFinite(delay) || delay < 1 || delay > 120)
@@ -1791,7 +1794,12 @@ async function serve(state, { once, pollSeconds }) {
                 await runClaimedSigning(profile, claim, controller.signal);
               } else {
                 console.log(`GitEdge profile ${profile.id}: running ${claim.run.id}.`);
-                await runGitEdge(profile, claim.run, claim.leaseToken, controller.signal);
+                await runGitEdge(
+                  runnerProfileForClaim(profile, claim),
+                  claim.run,
+                  claim.leaseToken,
+                  controller.signal
+                );
               }
             }
           } finally {

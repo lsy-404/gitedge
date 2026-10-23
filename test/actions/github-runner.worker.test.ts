@@ -211,6 +211,59 @@ function remoteApi(): void {
 }
 
 describe("single-registration GitHub runner bridge", () => {
+  it("returns the server label snapshot after the owner adds custom routing tags", async () => {
+    remoteApi();
+    const connectionId = await connection(repositoryA, "custom-label-snapshot");
+    const token = await registration();
+    const registrationRow = await env.DB.prepare(
+      "SELECT id FROM actions_runners WHERE created_by=? ORDER BY created_at DESC LIMIT 1"
+    )
+      .bind(owner.id)
+      .first<{ id: string }>();
+    if (!registrationRow) throw new Error("Runner registration is missing.");
+    const updated = await runnerManagement(
+      new Request(`https://actions.internal/runners/${registrationRow.id}/labels`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ labels: ["device", "ip-residential"] }),
+      }),
+      machineEnv,
+      owner
+    );
+    expect(updated.status).toBe(200);
+    const requested = ["self-hosted", "macOS", "ARM64", "device", "ip-residential"];
+    expect(
+      (await queueGithubRunner(demand(connectionId, 900, "queued", requested), machineEnv)).status
+    ).toBe(202);
+    const claimed = await data<{
+      run: { labels: string[] };
+      runnerLabels: string[];
+    }>(
+      await machine(token, "claim", {
+        capacity: {
+          os: "macos",
+          arch: "arm64",
+          cpus: 4,
+          load1: 0.1,
+          memTotalMb: 8192,
+          memFreeMb: 4096,
+          diskFreeMb: 100_000,
+          tools: ["node"],
+          slots: 1,
+          busy: 0,
+        },
+      })
+    );
+    expect(claimed.run.labels).toEqual(requested);
+    expect(claimed.runnerLabels).toEqual([
+      "self-hosted",
+      "macOS",
+      "ARM64",
+      "device",
+      "ip-residential",
+    ]);
+  });
+
   it("leaves a resource-incompatible job queued for a capable runner", async () => {
     remoteApi();
     const connectionId = await connection(repositoryA, "resource-claim");

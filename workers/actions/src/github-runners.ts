@@ -114,7 +114,8 @@ export async function claimGithubRunner(
   claim: JobClaim,
   leaseToken: string,
   hash: string,
-  now: number
+  now: number,
+  runnerLabels: string[]
 ): Promise<Response | null> {
   const job = await env.DB.prepare(
     "SELECT * FROM actions_github_runner_jobs WHERE id=? AND status='running' AND runner_id=? AND lease_hash=?"
@@ -155,6 +156,7 @@ export async function claimGithubRunner(
         githubRunnerId: result.githubRunnerId,
         timeoutMinutes: claim.minutes,
       },
+      runnerLabels,
       leaseToken,
       leaseExpiresAt: now + RUNNER_LEASE_MS,
     });

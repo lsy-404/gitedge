@@ -79,6 +79,10 @@ export const RunnerLabelsSchema = z
   .min(1)
   .max(40)
   .refine((labels) => new Set(labels.map((label) => label.toLowerCase())).size === labels.length);
+export const RunnerClaimLabelSnapshotSchema = z
+  .object({ runnerLabels: RunnerLabelsSchema })
+  .strict();
+export type RunnerClaimLabelSnapshot = z.infer<typeof RunnerClaimLabelSnapshotSchema>;
 export function isRunnerSystemLabel(label: string): boolean {
   const normalized = label.toLowerCase();
   return (
