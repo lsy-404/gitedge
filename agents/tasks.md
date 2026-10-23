@@ -49,3 +49,5 @@
 | 047 | [Test] Profile HTTP smoke verification | Verify account profile edits and anonymous public profile data against the local stack | Review the requested profile behavior through real authenticated and anonymous API flows | ✅ 已完成 |
 | 048 | [BugFix] Windows构建 | 安全调用当前pnpm CLI进行Windows构建 | 原脚本无法在Windows直接启动pnpm子进程 | ✅ 已完成 |
 | 049 | [Feature] [部署设置与配额](049.md) | 统一部署配置、分类仓库配额与内置 runner 开关 | 提供宽裕默认值和 -1 无限语义 | ✅ 已完成 |
+| 050 | [BugFix] GitHub demand reconciliation | Requeue an original queued job after another job consumes its temporary runner | Prevent stranded GitHub demands without replaying unknown outcomes | 🔄 进行中 |
+| 051 | [Feature] Semantic runner resources | Match measured RAM, disk and GPU requirements and default builds to six hours | Reject runners with insufficient performance using standard runs-on syntax | 🔄 进行中 |

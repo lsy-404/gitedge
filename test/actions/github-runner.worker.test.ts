@@ -38,6 +38,7 @@ let remoteRunnerId = 500;
 let lostResponse = false;
 const deletions: number[] = [];
 const inventory = new Map<number, string>();
+const remoteJobStates = new Map<number, "queued" | "completed">();
 const bridgeEnv = {
   ...forgeEnv,
   WEBHOOK_ENCRYPTION_KEY: encryption,
@@ -60,7 +61,10 @@ beforeAll(async () => {
   repositoryA = await createRepository(owner, "first");
   repositoryB = await createRepository(owner, "second");
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  remoteJobStates.clear();
+});
 
 async function connection(
   repositoryId: string,
@@ -165,15 +169,17 @@ function remoteApi(): void {
       const job = /\/actions\/jobs\/(\d+)$/.exec(url.pathname);
       if (job) {
         const queued = await env.DB.prepare(
-          "SELECT labels_json FROM actions_github_runner_jobs WHERE github_job_id=? ORDER BY created_at DESC LIMIT 1"
+          "SELECT labels_json,status FROM actions_github_runner_jobs WHERE github_job_id=? ORDER BY created_at DESC LIMIT 1"
         )
           .bind(Number(job[1]))
-          .first<{ labels_json: string }>();
+          .first<{ labels_json: string; status: string }>();
         return Response.json({
           id: Number(job[1]),
           run_id: Number(job[1]) + 100,
           head_sha: "a".repeat(40),
-          status: "queued",
+          status:
+            remoteJobStates.get(Number(job[1])) ??
+            (queued?.status === "completed" ? "completed" : "queued"),
           labels: queued ? JSON.parse(queued.labels_json) : ["self-hosted", "macOS", "ARM64", "ci"],
         });
       }
@@ -211,6 +217,58 @@ function remoteApi(): void {
 }
 
 describe("single-registration GitHub runner bridge", () => {
+  it("requeues the original job when another compatible job consumes its temporary runner", async () => {
+    remoteApi();
+    const connectionId = await connection(repositoryA, "reconcile-demand");
+    const token = await registration();
+    await queueGithubRunner(demand(connectionId, 910), machineEnv);
+    const claimed = await data<{
+      run: { id: string; githubRunnerId: number };
+      leaseToken: string;
+    }>(await machine(token));
+    const lease = { runId: claimed.run.id, leaseToken: claimed.leaseToken };
+    await machine(token, "github/heartbeat", lease);
+    remoteJobStates.set(910, "queued");
+    expect(
+      (await machine(token, "github/complete", { ...lease, conclusion: "success", log: "" })).status
+    ).toBe(200);
+    expect(deletions).toContain(claimed.run.githubRunnerId);
+    expect(
+      await env.DB.prepare(
+        "SELECT status,runner_id,github_runner_id,lease_hash,assigned,cleanup_pending FROM actions_github_runner_jobs WHERE id=?"
+      )
+        .bind(claimed.run.id)
+        .first()
+    ).toEqual({
+      status: "queued",
+      runner_id: null,
+      github_runner_id: null,
+      lease_hash: null,
+      assigned: 0,
+      cleanup_pending: 0,
+    });
+    const retried = await data<{
+      run: { id: string; githubRunnerId: number };
+      leaseToken: string;
+    }>(await machine(token));
+    expect(retried.run.id).toBe(claimed.run.id);
+    expect(retried.run.githubRunnerId).not.toBe(claimed.run.githubRunnerId);
+    expect(retried.leaseToken).not.toBe(claimed.leaseToken);
+    expect((await machine(token, "github/heartbeat", lease)).status).toBe(409);
+    remoteJobStates.set(910, "completed");
+    await machine(token, "github/heartbeat", {
+      runId: retried.run.id,
+      leaseToken: retried.leaseToken,
+    });
+    await machine(token, "github/complete", {
+      runId: retried.run.id,
+      leaseToken: retried.leaseToken,
+      conclusion: "success",
+      log: "",
+    });
+    expect(await data(await machine(token))).toMatchObject({ run: null });
+  });
+
   it("returns the server label snapshot after the owner adds custom routing tags", async () => {
     remoteApi();
     const connectionId = await connection(repositoryA, "custom-label-snapshot");
@@ -527,6 +585,8 @@ describe("single-registration GitHub runner bridge", () => {
     await env.DB.prepare("UPDATE forge_github_connections SET runner_enabled=0 WHERE id IN (?,?)")
       .bind(first, second)
       .run();
+    remoteJobStates.set(1, "queued");
+    remoteJobStates.set(2, "queued");
     expect(
       await data(
         await machine(token, "github/heartbeat", {
@@ -536,6 +596,11 @@ describe("single-registration GitHub runner bridge", () => {
       )
     ).toMatchObject({ cancelled: true });
     expect(deletions).toContain(next.run.githubRunnerId);
+    expect(
+      await env.DB.prepare("SELECT status FROM actions_github_runner_jobs WHERE id=?")
+        .bind(next.run.id)
+        .first()
+    ).toEqual({ status: "completed" });
   });
 
   it("accepts only a correctly signed webhook for its bound repository", async () => {

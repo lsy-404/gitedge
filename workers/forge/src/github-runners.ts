@@ -86,8 +86,55 @@ async function cleanup(
       if (!(cause instanceof GithubApiError && cause.status === 404)) throw cause;
     }
   }
-  await env.DB.prepare("UPDATE actions_github_runner_jobs SET cleanup_pending=0 WHERE id=?")
-    .bind(job.id)
+  if (
+    job.github_runner_id !== null &&
+    job.assigned === 1 &&
+    job.conclusion !== "cancelled" &&
+    (await allowed(env, connection, job.runner_id))
+  ) {
+    let remote;
+    try {
+      remote = JobSchema.parse(
+        await githubRequest(
+          credentials.token,
+          `${githubRepoPath(connection.owner, connection.name)}/actions/jobs/${job.github_job_id}`
+        )
+      );
+    } catch (cause) {
+      if (!(cause instanceof GithubApiError && cause.status === 404)) throw cause;
+    }
+    if (
+      remote?.status === "queued" &&
+      remote.id === job.github_job_id &&
+      remote.run_id === job.github_run_id &&
+      remote.head_sha === job.head_oid
+    ) {
+      const changed = await env.DB.prepare(
+        `UPDATE actions_github_runner_jobs SET status='queued',runner_id=NULL,github_runner_id=NULL,
+         lease_hash=NULL,lease_expires_at=NULL,assigned=0,started_at=NULL,completed_at=NULL,
+         conclusion=NULL,cleanup_pending=0
+         WHERE id=? AND status='completed' AND cleanup_pending=1
+         AND github_runner_id IS ? AND lease_hash IS ?
+         AND EXISTS (SELECT 1 FROM forge_github_connections c JOIN repositories p ON p.id=c.repository_id
+           WHERE c.id=connection_id AND c.enabled=1 AND c.runner_enabled=1
+           AND p.deleted_at IS NULL AND p.archived=0 AND p.actions_enabled=1)`
+      )
+        .bind(job.id, job.github_runner_id, job.lease_hash)
+        .run();
+      if (changed.meta.changes === 1) {
+        createLogger(env.LOG_LEVEL, { service: "github-runner" }).info(
+          "github-runner:demand-requeued",
+          { id: job.id, githubJobId: job.github_job_id }
+        );
+        return;
+      }
+    }
+  }
+  await env.DB.prepare(
+    `UPDATE actions_github_runner_jobs SET cleanup_pending=0 WHERE id=? AND status='completed'
+     AND github_runner_id IS ? AND lease_hash IS ?`
+  )
+    .bind(job.id, job.github_runner_id, job.lease_hash)
     .run();
 }
 
