@@ -1040,7 +1040,11 @@ export async function handleSigningMachineRoute(
           "signing_credentials_unavailable",
           "A request-scoped signing credential grant is unavailable."
         );
-      return dataResponse({ credentials: grant.credentials, expiresAt: grant.expiresAt });
+      return dataResponse({
+        credentials: grant.credentials,
+        expiresAt: grant.expiresAt,
+        leaseExpiresAt: context.leaseExpiresAt,
+      });
     }
     if (operation === "output" && parts.length === 5 && request.method === "POST") {
       if (request.headers.get("Content-Type") !== "application/json")

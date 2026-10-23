@@ -219,7 +219,9 @@ async function executeStage(input: {
   leaseToken: string;
   generation: number;
   nonce: string;
+  clientLeaseExpiresAt?: number;
 }) {
+  const clientLeaseExpiresAt = input.clientLeaseExpiresAt ?? Date.now() + 60_000;
   const machineContext: SigningMachineContext = {
     ownerId: owner.id,
     runnerId: input.runnerId,
@@ -271,7 +273,13 @@ async function executeStage(input: {
     const url = new URL(String(inputUrl));
     url.pathname = url.pathname.replace(/^\/api\/actions/, "");
     const request = new Request(url, { ...init, redirect: "manual" });
-    return handleSigningMachineRoute(request, signingEnv, machineContext, hooks);
+    const response = await handleSigningMachineRoute(request, signingEnv, machineContext, hooks);
+    if (url.pathname.endsWith("/authorize-sign")) {
+      expect(await response.clone().json()).toMatchObject({
+        data: { leaseExpiresAt: machineContext.leaseExpiresAt },
+      });
+    }
+    return response;
   };
   const root = await mkdtemp(path.join(os.tmpdir(), "signing-worker-e2e-"));
   const contextFile = path.join(root, "context.json");
@@ -296,7 +304,7 @@ async function executeStage(input: {
         generation: input.generation,
         nonce: input.nonce,
         leaseToken: input.leaseToken,
-        leaseExpiresAt: machineContext.leaseExpiresAt,
+        leaseExpiresAt: clientLeaseExpiresAt,
         jobToken: `ge_job_${"e".repeat(64)}`,
       }),
       platformExecutor: async (
@@ -415,7 +423,7 @@ describe("Actions signing Worker integration", () => {
     ["macos", "sign", "zip"],
     ["macos", "sign", "dmg"],
   ] as const)(
-    "creates, executes, uploads, verifies, and reconciles %s (%s) with the real DO and R2",
+    "creates, executes, uploads, verifies, and reconciles %s (%s) with a newer server lease snapshot",
     async (platform, stage, outputFormat) => {
       const runner = await createRunner(platform);
       const sourceBytes = new TextEncoder().encode(`validated source archive ${platform}`);

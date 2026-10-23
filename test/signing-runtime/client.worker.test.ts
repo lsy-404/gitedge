@@ -294,6 +294,36 @@ describe("native signing context and Actions client", () => {
     expect(client.getLeaseExpiresAt()).toBeGreaterThan(previousExpiry);
   });
 
+  it("validates a credential grant against its authoritative server lease snapshot", async () => {
+    const runContext = context({ leaseExpiresAt: Date.now() + 30_000 });
+    const leaseExpiresAt = Date.now() + 120_000;
+    const expiresAt = Date.now() + 60_000;
+    const fetchImpl = vi.fn(async () =>
+      Response.json({ data: { credentials: {}, expiresAt, leaseExpiresAt } })
+    );
+    const client = createSigningClient({ context: runContext, fetchImpl });
+
+    await expect(client.authorizeSign("sign")).resolves.toMatchObject({
+      expiresAt,
+      leaseExpiresAt,
+    });
+    expect(client.getLeaseExpiresAt()).toBe(leaseExpiresAt);
+  });
+
+  it.each([
+    ["missing lease snapshot", { expiresAt: Date.now() + 60_000 }],
+    ["expired lease snapshot", { expiresAt: Date.now() + 60_000, leaseExpiresAt: Date.now() - 1 }],
+    ["non-integer lease snapshot", { expiresAt: Date.now() + 60_000, leaseExpiresAt: Date.now() + 60_000.5 }],
+    ["grant beyond lease snapshot", { expiresAt: Date.now() + 120_000, leaseExpiresAt: Date.now() + 60_000 }],
+  ])("rejects an invalid authorization lease snapshot: %s", async (_name, authorization) => {
+    const client = createSigningClient({
+      context: context(),
+      fetchImpl: vi.fn(async () => Response.json({ data: { credentials: {}, ...authorization } })),
+    });
+
+    await expect(client.authorizeSign("sign")).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+  });
+
   it("aborts the active platform executor when the signing lease heartbeat fails", async () => {
     const dir = await temporaryDirectory();
     const contextFile = path.join(dir, "run-context.json");
@@ -384,6 +414,7 @@ describe("native signing context and Actions client", () => {
               },
             },
             expiresAt: Date.now() + 30_000,
+            leaseExpiresAt: runContext.leaseExpiresAt,
           },
         });
       if (action === "output")
@@ -482,6 +513,7 @@ describe("native signing context and Actions client", () => {
               client_secret: "task-scoped-secret",
             },
             expiresAt: Date.now() + 30_000,
+            leaseExpiresAt: runContext.leaseExpiresAt,
           },
         });
       if (action === "output")
@@ -566,6 +598,7 @@ describe("native signing context and Actions client", () => {
         return Response.json({
           data: {
             expiresAt: Date.now() + 30_000,
+            leaseExpiresAt: runContext.leaseExpiresAt,
           },
         });
       if (action === "output")
@@ -654,6 +687,7 @@ describe("native signing context and Actions client", () => {
               provisioning_profile: "YQ==",
             },
             expiresAt: Date.now() + 30_000,
+            leaseExpiresAt: runContext.leaseExpiresAt,
           },
         });
       if (action === "output")

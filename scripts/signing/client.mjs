@@ -282,13 +282,24 @@ export function createSigningClient({
     const result = await request("heartbeat", {}, { retry: true });
     if (!Number.isSafeInteger(result.leaseExpiresAt) || result.leaseExpiresAt <= Date.now())
       throw new ClientError("INVALID_RESPONSE");
-    currentLeaseExpiresAt = result.leaseExpiresAt;
+    currentLeaseExpiresAt = Math.max(currentLeaseExpiresAt, result.leaseExpiresAt);
     return result;
   };
   const authorizeSign = async (operation) => {
     if (typeof operation !== "string" || !/^[a-z][a-z0-9_-]{0,63}$/.test(operation))
       throw new ClientError("INVALID_OPERATION");
-    return request("authorize-sign", { operation });
+    const authorization = await request("authorize-sign", { operation });
+    const now = Date.now();
+    if (
+      !Number.isSafeInteger(authorization.expiresAt) ||
+      authorization.expiresAt <= now ||
+      !Number.isSafeInteger(authorization.leaseExpiresAt) ||
+      authorization.leaseExpiresAt <= now ||
+      authorization.expiresAt > authorization.leaseExpiresAt
+    )
+      throw new ClientError("INVALID_RESPONSE");
+    currentLeaseExpiresAt = Math.max(currentLeaseExpiresAt, authorization.leaseExpiresAt);
+    return authorization;
   };
 
   const download = async (object, destination, { digest, maxBytes }) => {
@@ -734,12 +745,6 @@ export async function runSigning({
       credentialsProvided = true;
       if (heartbeatError) throw new ClientError("HEARTBEAT_FAILED");
       const authorization = await client.authorizeSign(manifest.stage);
-      if (
-        !Number.isSafeInteger(authorization.expiresAt) ||
-        authorization.expiresAt <= Date.now() ||
-        authorization.expiresAt > client.getLeaseExpiresAt()
-      )
-        throw new ClientError("INVALID_RESPONSE");
       if (family.windows) {
         return windowsCredentialsSchema.parse(authorization.credentials);
       }
