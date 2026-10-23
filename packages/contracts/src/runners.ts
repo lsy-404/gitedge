@@ -65,6 +65,7 @@ export interface JobClaim {
   vramMb: number;
   tools: string[];
   minutes: number;
+  preferCpu: boolean;
   valid: boolean;
 }
 

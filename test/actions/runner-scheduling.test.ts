@@ -53,6 +53,7 @@ describe("runner scheduling contracts", () => {
       vramMb: 0,
       tools: ["node", "pnpm"],
       minutes: 60,
+      preferCpu: false,
       valid: true,
     });
   });

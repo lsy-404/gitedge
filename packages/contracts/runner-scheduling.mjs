@@ -3,6 +3,7 @@ const MAX_MEMORY_MB = 1_048_576;
 const MAX_CPUS = 512;
 const MAX_DISK_MB = 1_048_576_000;
 const MAX_MINUTES = 360;
+const CPU_PREFERENCE_WEIGHT = 10;
 const TOOL_NAME = /^[a-z0-9][a-z0-9._+-]{0,63}$/;
 export const RESOURCE_LABEL_PREFIXES = Object.freeze([
   "need-",
@@ -23,6 +24,7 @@ function invalidClaim(labels, minutes) {
     vramMb: 0,
     tools: [],
     minutes,
+    preferCpu: false,
     valid: false,
   };
 }
@@ -58,6 +60,7 @@ export function parseJobClaim(labels, defaultMinutes = 360) {
   let vramMb = 0;
   let minutes = defaultMinutes;
   let declaredMinutes = 0;
+  let preferCpu = false;
   let valid = true;
   const tools = new Set();
   const ordinary = [];
@@ -74,6 +77,11 @@ export function parseJobClaim(labels, defaultMinutes = 360) {
       const value = Number(match[1]) * (match[2] === "g" ? 1024 : 1);
       if (!Number.isSafeInteger(value) || value < 1 || value > MAX_MEMORY_MB) valid = false;
       else memMb = Math.max(memMb, value);
+      continue;
+    }
+
+    if (lower === "cpu-prefer") {
+      preferCpu = true;
       continue;
     }
 
@@ -134,6 +142,7 @@ export function parseJobClaim(labels, defaultMinutes = 360) {
     vramMb,
     tools: [...tools],
     minutes: declaredMinutes || minutes,
+    preferCpu,
     valid,
   };
 }
@@ -197,12 +206,10 @@ export function scoreRunner(capacity, budget, usedMinutes24h, claim) {
   const memSurplus = (capacity.memFreeMb - claim.memMb) / capacity.memTotalMb;
   const cpuSurplus = (capacity.cpus - claim.cpus) / capacity.cpus;
   const loadRatio = Math.min((capacity.load1 ?? 0) / capacity.cpus, 1.5) / 1.5;
+  const idleCpus = capacity.cpus * (1 - Math.min((capacity.load1 ?? 0) / capacity.cpus, 1));
+  const cpuTerm = claim.preferCpu ? -CPU_PREFERENCE_WEIGHT * idleCpus : 25 * cpuSurplus;
   const budgetUsedRatio = budget?.dailyMinutes ? usedMinutes24h / budget.dailyMinutes : 0;
   return (
-    40 * memSurplus +
-    25 * cpuSurplus +
-    20 * loadRatio +
-    10 * budgetUsedRatio +
-    (budget?.cost ?? 0) / 10
+    40 * memSurplus + cpuTerm + 20 * loadRatio + 10 * budgetUsedRatio + (budget?.cost ?? 0) / 10
   );
 }
