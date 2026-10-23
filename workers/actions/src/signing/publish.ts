@@ -47,7 +47,7 @@ export function resolvePublishDispatch(
   });
 }
 
-/** Records the outbox row once per request; replays of the completion are no-ops. */
+/** Records the outbox row once per request; a storage failure surfaces so the completion is retried. */
 export async function recordPublishDispatch(
   env: PublishEnv,
   profile: SigningProfile,
@@ -72,7 +72,7 @@ export async function recordPublishDispatch(
       "signing-publish:record-failed",
       { requestId, reason: cause instanceof Error ? cause.message : "unknown" }
     );
-    return false;
+    throw new Error("signing_publish_record_failed");
   }
 }
 

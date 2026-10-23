@@ -1284,7 +1284,9 @@ function assertGitEdgeProfile(profile) {
     );
 }
 
-async function serve(state) {
+const supersededExitStatus = 78;
+
+async function serve(state, exitStatusOnSupersede) {
   const controller = new AbortController();
   for (const signal of ["SIGINT", "SIGTERM"])
     process.once(signal, () => controller.abort(new Error("Stopped.")));
@@ -1301,7 +1303,7 @@ async function serve(state) {
   }
   await mkdir(actionsState, { recursive: true, mode: 0o700 });
   const slot = createExecutionSlot();
-  let fatal;
+  let superseded = false;
   const clients = profiles.map((profile) => {
     const label = `GitEdge profile ${profile.id}`;
     const session = createDispatchSession({
@@ -1313,11 +1315,12 @@ async function serve(state) {
       signal: controller.signal,
     });
     const unsubscribe = slot.subscribe(() => session.onSlotChange());
+    const reconnect = new AbortController();
     const done = runDispatchSocket({
       label,
       origin: profile.origin,
       credential: profile.credential,
-      signal: controller.signal,
+      signal: AbortSignal.any([controller.signal, reconnect.signal]),
       buildReport: async () => ({
         type: "report",
         capacity: await getRunnerCapacity({
@@ -1332,8 +1335,11 @@ async function serve(state) {
     })
       .catch((error) => {
         if (!(error instanceof SupersededError)) throw error;
-        fatal = error;
-        controller.abort(new Error("Stopped."));
+        superseded = true;
+        reconnect.abort();
+        console.error(
+          `${error.message} Running jobs will finish; this broker then exits with status ${exitStatusOnSupersede}.`
+        );
       })
       .finally(unsubscribe);
     return { session, done };
@@ -1363,7 +1369,7 @@ async function serve(state) {
   } finally {
     clearInterval(retention);
   }
-  if (fatal) throw fatal;
+  if (superseded) process.exitCode = exitStatusOnSupersede;
 }
 
 async function removeProfile(state, id) {
@@ -1387,6 +1393,13 @@ async function removeProfile(state, id) {
   console.log(`Removed profile ${id}.`);
 }
 
+function supersedeExitStatus(value) {
+  if (value === undefined) return supersededExitStatus;
+  if (!/^\d{1,3}$/.test(value) || Number(value) > 255)
+    throw new Error("--supersede-exit-status must be an exit status from 0 to 255.");
+  return Number(value);
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args[0] === "--") args.shift();
@@ -1407,6 +1420,7 @@ async function main() {
       "daily-minutes": { type: "string" },
       cost: { type: "string" },
       "run-as-user": { type: "string" },
+      "supersede-exit-status": { type: "string" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -1414,7 +1428,7 @@ async function main() {
   const state = path.resolve(values["state-dir"] ?? stateDefault);
   if (!action || values.help) {
     console.log(
-      "Usage: pnpm run runner-broker -- init|register-gitedge|list|remove|serve|service [options]\n\nregister-gitedge --origin URL --owner OWNER [--repository REPO] --label LABEL --runner-path DIR [--max-job-minutes N] [--daily-minutes N] [--cost N]\nA generic GitEdge runner executes matched workflow, GitHub and native signing jobs. Native signing uses the SDK and receives protected secrets for each task.\nserve: keeps one outbound WebSocket per profile to GitEdge and runs the jobs it assigns, one at a time.\nservice install|start|stop|status --install-dir DIR [--state-dir DIR] [--run-as-user USER]\nAll commands accept --state-dir DIR. Registration reads GITEDGE_TOKEN."
+      "Usage: pnpm run runner-broker -- init|register-gitedge|list|remove|serve|service [options]\n\nregister-gitedge --origin URL --owner OWNER [--repository REPO] --label LABEL --runner-path DIR [--max-job-minutes N] [--daily-minutes N] [--cost N]\nA generic GitEdge runner executes matched workflow, GitHub and native signing jobs. Native signing uses the SDK and receives protected secrets for each task.\nserve [--supersede-exit-status N]: keeps one outbound WebSocket per profile to GitEdge and runs the jobs it assigns, one at a time. Run one broker per registration; a profile whose credential another broker took over stops reconnecting, lets running jobs finish, and the broker exits with status 78 (or N).\nservice install|start|stop|status --install-dir DIR [--state-dir DIR] [--run-as-user USER]\nAll commands accept --state-dir DIR. Registration reads GITEDGE_TOKEN."
     );
     return;
   }
@@ -1433,7 +1447,7 @@ async function main() {
   if (action === "serve") {
     const release = await acquireStateLock(state, "serve");
     try {
-      await serve(state);
+      await serve(state, supersedeExitStatus(values["supersede-exit-status"]));
     } catch (error) {
       if (error.message !== "Stopped.") throw error;
     } finally {

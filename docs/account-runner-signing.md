@@ -79,9 +79,21 @@ policy:
 
 Input values are never free text. Each is one of the fixed templates `sourceRunId`, `sourceCommitOid`, `version` or `requestId`, resolved from the submission. `publish` is part of `policy`, so adding or changing it changes the policy digest and revision: the owner must approve the profile again before it takes effect. A source repository without `publish` triggers nothing.
 
-The dispatch uses the GitHub sync connection of the signing owner whose GitHub repository ID and `owner/name` equal the entry's `id` and `fullName`. Its token needs Actions read and write permission on that repository. Without an enabled connection, or with a missing permission, the dispatch fails and the signing result is unaffected.
+The dispatch uses the GitHub sync connection of the signing owner whose GitHub repository ID equals the entry's `id` and whose `owner/name` equals `fullName` (case-insensitive), and for whose GitEdge repository the owner is an administrator. The request path uses the connection's stored owner and name. Its token needs Actions read and write permission on that repository. Without an enabled connection, or with a missing permission, the dispatch fails and the signing result is unaffected.
 
-The Actions Worker records an outbox row per request (`actions_signing_publish_dispatches`: `pending`, `dispatched` or `failed`) when signing succeeds and attempts it immediately in the background. Retryable failures (network, 5xx, 429) are retried by the minute cron up to 6 attempts with a delay that starts at one minute and doubles. Permanent failures (no matching connection, 403/404 for missing permission, 422 for an unknown workflow, ref or input) set `failed` at once; `last_error` holds the error code.
+The Actions Worker records an outbox row per request (`actions_signing_publish_dispatches`: `pending`, `dispatched` or `failed`) when signing succeeds and attempts it immediately in the background. Retryable failures (network, 5xx, 429) are retried by the minute cron up to 6 attempts with a delay that starts at one minute and doubles. Permanent failures set `failed` at once; `last_error` holds the error code:
+
+| Code                          | Cause                                                                                                    |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `github_connection_not_found` | No enabled connection of the signing owner (with repository admin access) matches the ID and name        |
+| `github_dispatch_forbidden`   | GitHub answered 403: the token lacks Actions read and write permission                                   |
+| `github_dispatch_not_found`   | GitHub answered 404: the token lacks Actions write permission, or the workflow file is absent on the ref |
+| `github_dispatch_rejected`    | GitHub answered 422: unknown ref, workflow without `workflow_dispatch`, or an input it does not accept   |
+| `github_dispatch_redirected`  | GitHub answered 3xx: the repository was renamed or moved; update the connection and the profile          |
+
+Network errors, 5xx and 429 (`github_dispatch_unavailable`, `forge_unreachable`) are retried.
+
+Delivery is at least once. A dispatch GitHub accepted can still be recorded as failed (for example when the response is lost), and a retry then dispatches again, so duplicates are possible. Declare an input mapped to `requestId` and use it in the workflow for deduplication or a `concurrency` group so a repeated dispatch does not publish twice.
 
 ## HTTP endpoints
 
