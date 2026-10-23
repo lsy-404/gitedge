@@ -56,6 +56,7 @@ const dynamicKeys: Record<string, readonly string[]> = {
     "mem",
     "cpu",
     "disk",
+    "gpu",
     "load",
     "label",
     "tool",
