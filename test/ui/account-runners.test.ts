@@ -3,7 +3,8 @@ import { h } from "vue";
 import AccountRunners from "../../apps/web/src/components/AccountRunners.vue";
 import AccountRunnerSigningProfiles from "../../apps/web/src/components/AccountRunnerSigningProfiles.vue";
 import { api, ApiError } from "../../apps/web/src/lib/api";
-import { i18n } from "../../apps/web/src/i18n";
+import { applyAccountPreferences } from "../../apps/web/src/lib/preferences";
+import { DefaultAccountPreferences } from "../../packages/contracts/src/account";
 import { router } from "../../apps/web/src/router";
 import type { RunnerOverview } from "../../packages/contracts/src/runners";
 import {
@@ -92,7 +93,7 @@ function overview(overrides: Partial<RunnerOverview> = {}): RunnerOverview {
 }
 
 beforeEach(() => {
-  i18n.global.locale.value = "en";
+  applyAccountPreferences({ ...DefaultAccountPreferences, locale: "en" });
   Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
 });
 afterEach(async () => {

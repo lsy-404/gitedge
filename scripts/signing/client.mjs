@@ -807,7 +807,7 @@ export function formatClientErrorOutput(error) {
     ["INSECURE_CONTEXT_FILE", "INVALID_CONTEXT", "INVALID_CONTEXT_FILE"].includes(error.code)
       ? error.code
       : undefined;
-  const code = error instanceof ClientError ? error.code : contextCode ?? "SIGNING_FAILED";
+  const code = error instanceof ClientError ? error.code : (contextCode ?? "SIGNING_FAILED");
   const lines = [code];
   const causeDescriptor =
     error instanceof ClientError ? Object.getOwnPropertyDescriptor(error, "cause") : undefined;

@@ -1,6 +1,7 @@
 export const actionsMessages = {
   "zh-CN": {
     auditAction_actions_runner_created: "注册了本机 runner",
+    auditAction_actions_runner_labels_updated: "更新了 runner 标签",
     auditAction_actions_runner_revoked: "撤销了本机 runner",
     actionsTitle: "Actions",
     actionsIntro: "在选定提交上运行仓库工作流。",
@@ -71,6 +72,7 @@ export const actionsMessages = {
   },
   en: {
     auditAction_actions_runner_created: "Registered a local runner",
+    auditAction_actions_runner_labels_updated: "Updated runner labels",
     auditAction_actions_runner_revoked: "Revoked a local runner",
     actionsTitle: "Actions",
     actionsIntro: "Run a supported repository workflow at a selected commit.",

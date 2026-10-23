@@ -314,7 +314,7 @@ describe("native signing context and Actions client", () => {
       expect(init.headers["x-runner-run-id"]).toBe(runContext.runId);
       expect(init.headers["x-runner-lease-token"]).toBe(runContext.leaseToken);
       expect(JSON.parse(init.body)).toEqual({});
-      return Response.json({ data: { leaseExpiresAt: Date.now() + 60_000 } });
+      return Response.json({ data: { leaseExpiresAt: runContext.leaseExpiresAt + 30_000 } });
     });
     const client = createSigningClient({ context: runContext, fetchImpl });
     const previousExpiry = client.getLeaseExpiresAt();
@@ -343,8 +343,14 @@ describe("native signing context and Actions client", () => {
   it.each([
     ["missing lease snapshot", { expiresAt: Date.now() + 60_000 }],
     ["expired lease snapshot", { expiresAt: Date.now() + 60_000, leaseExpiresAt: Date.now() - 1 }],
-    ["non-integer lease snapshot", { expiresAt: Date.now() + 60_000, leaseExpiresAt: Date.now() + 60_000.5 }],
-    ["grant beyond lease snapshot", { expiresAt: Date.now() + 120_000, leaseExpiresAt: Date.now() + 60_000 }],
+    [
+      "non-integer lease snapshot",
+      { expiresAt: Date.now() + 60_000, leaseExpiresAt: Date.now() + 60_000.5 },
+    ],
+    [
+      "grant beyond lease snapshot",
+      { expiresAt: Date.now() + 120_000, leaseExpiresAt: Date.now() + 60_000 },
+    ],
   ])("rejects an invalid authorization lease snapshot: %s", async (_name, authorization) => {
     const client = createSigningClient({
       context: context(),
