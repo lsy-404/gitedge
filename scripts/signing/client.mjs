@@ -789,7 +789,7 @@ export async function runSigning({
     return { requestId: context.requestId, outputDigest: bundle.digest, outputSize: bundle.size };
   } catch (error) {
     if (heartbeatError) throw new ClientError("HEARTBEAT_FAILED");
-    if (error instanceof ClientError) throw error;
+    if (error instanceof ClientError || error instanceof SigningContextError) throw error;
     const failure = new ClientError("SIGNING_FAILED");
     failure.cause = error;
     throw failure;

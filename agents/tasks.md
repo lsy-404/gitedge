@@ -39,3 +39,4 @@
 | 037 | [BugFix] Native signing credential lease snapshot | Bind credential grant expiry validation to the server lease snapshot used to issue that grant | Parent broker renewal can advance the server lease beyond the SDK heartbeat snapshot | 🔄 进行中 |
 | 038 | [BugFix] Windows signing context ACL | Make the context ACL checker parse in Windows PowerShell 5.1 and retain safe context error codes | A production Windows signer rejected its context before SDK startup | 🔄 进行中 |
 | 039 | [Ops] Windows native signing failure probe | Read fixed allowlisted diagnostics for one terminal Windows native run | Identify the exact failure phase without exposing raw host logs | 🔄 进行中 |
+| 040 | [BugFix] Signing context error propagation | Preserve allowlisted context errors through the native signing SDK | runSigning wraps context-reader errors and hides the fixed cause needed for safe diagnostics | ✅ 已完成 |

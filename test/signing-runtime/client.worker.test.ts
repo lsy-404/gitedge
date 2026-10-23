@@ -3,7 +3,11 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSigningClient, runSigning } from "../../scripts/signing/client.mjs";
+import {
+  createSigningClient,
+  formatClientErrorOutput,
+  runSigning,
+} from "../../scripts/signing/client.mjs";
 import {
   parseSigningContext,
   readSigningContext,
@@ -201,6 +205,32 @@ afterEach(async () => {
 });
 
 describe("native signing context and Actions client", () => {
+  it.each([
+    ["INVALID_CONTEXT", "INVALID_CONTEXT\n"],
+    ["TOKEN=private-value", "SIGNING_FAILED\n"],
+  ])("formats context reader error %s safely after runSigning", async (code, expected) => {
+    const dir = await temporaryDirectory();
+    const contextError = new SigningContextError(code);
+    let failure: unknown;
+
+    try {
+      await runSigning({
+        contextFile: path.join(dir, "run-context.json"),
+        outputParent: path.join(dir, "work"),
+        contextReader: async () => {
+          throw contextError;
+        },
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBe(contextError);
+    const output = formatClientErrorOutput(failure);
+    expect(output).toBe(expected);
+    expect(output).not.toContain("private-value");
+  });
+
   it("requires a GitEdge UUID context", () => {
     expect(parseSigningContext(context()).requestId).toBe(requestId);
     expect(() => parseSigningContext(context({ runId: "1234567890" }))).toThrow(
