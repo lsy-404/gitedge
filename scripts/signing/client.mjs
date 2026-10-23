@@ -35,6 +35,99 @@ const MAX_PARTS = 10_000;
 const MAX_ATTEMPTS = 5;
 const BACKOFF_MS = [500, 1_000, 2_000, 4_000];
 const REQUEST_TIMEOUT_MS = 300_000;
+const MACOS_FAILURE_PHASES = new Set([
+  "input_archive",
+  "archive_validation",
+  "source_binding",
+  "static_verification",
+  "credential_release",
+  "keychain_import",
+  "codesign",
+  "codesign_identity",
+  "codesign_chain",
+  "codesign_acl",
+  "codesign_resources",
+  "codesign_unsigned_child",
+  "codesign_timestamp",
+  "signature_chain",
+  "signature_team",
+  "signature_timestamp",
+  "codesign_options",
+  "codesign_failed",
+  "signature_verification",
+  "notarization",
+  "artifact_packaging",
+  "stapling",
+  "gatekeeper_verification",
+  "keychain_cleanup",
+]);
+const DMG_FAILURE_PHASES = new Set([
+  "input",
+  "app-verification",
+  "image-layout",
+  "image-capacity",
+  "image-copy",
+  "credentials",
+  "image-signing",
+  "notarization-submit",
+  "image-verification",
+  "stapling",
+  "image-staple-validation",
+  "image-signature-verification",
+  "image-gatekeeper",
+  "image-mount",
+  "app-staple-validation",
+  "app-gatekeeper",
+  "image-detach",
+  "output",
+]);
+const WINDOWS_FAILURE_PHASES = new Set([
+  "input_archive",
+  "archive_validation",
+  "static_verification",
+  "authorization",
+  "codesign",
+  "packaging",
+  "signature_verification",
+]);
+const WINDOWS_SIGNING_SCOPES = new Set(["app", "nsis", "squirrel"]);
+const WINDOWS_SIGNING_MODES = new Set(["Inspect", "Sign", "SignFolder", "Verify"]);
+const WINDOWS_SIGNING_DIAGNOSTICS = new Set([
+  "ps_product_version_missing",
+  "ps_authenticode_invalid",
+  "ps_signer_missing",
+  "ps_subject_unexpected",
+  "ps_timestamp_missing",
+  "ps_path_outside_root",
+  "ps_inspection_outside_app",
+  "ps_directory_outside_app",
+  "ps_directory_missing",
+  "ps_file_missing",
+  "ps_file_type_unsupported",
+  "ps_module_missing",
+  "ps_command_missing",
+  "ps_no_files_to_sign",
+  "ps_dotnet8_missing",
+  "nsis_configuration",
+  "nsis_dependency_missing",
+  "nsis_access_denied",
+  "nsis_builder",
+  "nsis_output_verify",
+  "nsis_output_copy",
+  "nsis_app_verify",
+  "squirrel_vendor_prepare",
+  "squirrel_vendor_sign",
+  "squirrel_temp_validate",
+  "squirrel_setup_verify",
+  "squirrel_output_copy",
+  "nsis_tool_makensis_failed",
+  "nsis_tool_makensis_status_0x00000000",
+  "nsis_tool_execution",
+  "process_unavailable",
+  "output_limit",
+  "response_invalid",
+  "powershell_failed",
+]);
 const SAFE_OUTPUTS = new Set([
   "signed.tar.gz",
   "product.zip",
@@ -699,7 +792,79 @@ export async function runSigning({
 }
 
 export function formatClientErrorOutput(error) {
-  return `${error instanceof ClientError ? error.code : "SIGNING_FAILED"}\n`;
+  const code = error instanceof ClientError ? error.code : "SIGNING_FAILED";
+  const lines = [code];
+  const causeDescriptor =
+    error instanceof ClientError ? Object.getOwnPropertyDescriptor(error, "cause") : undefined;
+  const cause =
+    error instanceof ClientError
+      ? causeDescriptor?.value
+      : error instanceof Error
+        ? error
+        : undefined;
+  if (cause instanceof Error) {
+    const messageDescriptor = Object.getOwnPropertyDescriptor(cause, "message");
+    const message = typeof messageDescriptor?.value === "string" ? messageDescriptor.value : "";
+    const diagnostic = safeSigningDiagnostic(message);
+    if (diagnostic) lines.push(`diagnostic: ${diagnostic}`);
+    else lines.push(`cause: ${safeErrorClass(cause)}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function safeSigningDiagnostic(message) {
+  const macos = /^macOS signing operation failed: ([a-z_]+)$/.exec(message);
+  if (macos && MACOS_FAILURE_PHASES.has(macos[1])) return `macos:${macos[1]}`;
+
+  const dmg = /^disk image operation failed: ([a-z0-9_-]+)$/.exec(message);
+  if (dmg) {
+    if (DMG_FAILURE_PHASES.has(dmg[1])) return `dmg:${dmg[1]}`;
+    if (/^stapling_(?:command_failed|exit_(?:[1-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-5]))$/.test(dmg[1]))
+      return `dmg:${dmg[1]}`;
+  }
+
+  const windows = /^Windows signing operation failed: ([a-z_]+)(?: \[([^\]\r\n]{0,160})\])?$/.exec(
+    message
+  );
+  if (windows && WINDOWS_FAILURE_PHASES.has(windows[1])) {
+    const detail = safeWindowsDiagnostic(windows[2]);
+    return `windows:${windows[1]}${detail ? `:${detail}` : ""}`;
+  }
+  return undefined;
+}
+
+function safeWindowsDiagnostic(value) {
+  if (typeof value !== "string") return undefined;
+  const parts = value.split(":");
+  if (parts.length !== 3) return undefined;
+  const [scope, mode, diagnostic] = parts;
+  if (!WINDOWS_SIGNING_SCOPES.has(scope) || !WINDOWS_SIGNING_MODES.has(mode)) return undefined;
+  if (WINDOWS_SIGNING_DIAGNOSTICS.has(diagnostic)) return diagnostic;
+  if (/^aadsts_\d{5,9}$/.test(diagnostic)) return diagnostic;
+  if (/^hresult_0x[0-9a-f]{8}$/.test(diagnostic)) return diagnostic;
+  if (/^http_status_[45]\d{2}$/.test(diagnostic)) return diagnostic;
+  if (
+    /^(?:signtool|signcli|powershell)_exit_(?:0|[1-9]\d?|1\d\d|2[0-4]\d|25[0-5])$/.test(diagnostic)
+  )
+    return diagnostic;
+  if (
+    /^nsis_tool_(?:makensis|7z|rcedit|signtool)_(?:exit_(?:[1-9]\d?|1\d\d|2[0-4]\d|25[0-5])|status_0x[0-9a-f]{8})$/.test(
+      diagnostic
+    )
+  )
+    return diagnostic;
+  return undefined;
+}
+
+function safeErrorClass(error) {
+  if (error instanceof AggregateError) return "AggregateError";
+  if (error instanceof TypeError) return "TypeError";
+  if (error instanceof RangeError) return "RangeError";
+  if (error instanceof URIError) return "URIError";
+  if (error instanceof ReferenceError) return "ReferenceError";
+  if (error instanceof SyntaxError) return "SyntaxError";
+  if (error instanceof EvalError) return "EvalError";
+  return "Error";
 }
 
 export async function main(args = process.argv.slice(2)) {

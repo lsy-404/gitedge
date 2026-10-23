@@ -6,6 +6,7 @@ import { type RunnerEnv, type RunnerRow } from "../../workers/actions/src/runner
 import { runnerMachineRequest, runnerManagement } from "../../workers/actions/src/runners";
 import {
   claimRunnerCandidate,
+  evaluateRunnerCandidate,
   listRunnerCandidates,
 } from "../../workers/actions/src/runner-scheduler";
 import { enqueueNativeSigningRun } from "../../workers/actions/src/signing-execution";
@@ -41,7 +42,7 @@ function request(path: string, method: string, body?: unknown): Request {
 }
 
 const profileRevision = "d".repeat(40);
-const signingWorkflowSource = `name: signing\non: workflow_dispatch\njobs:\n  sign:\n    runs-on: [self-hosted, Windows, ci, need-time-5m, need-mem-2g, need-tool-python]\n    steps:\n      - run: echo signing\n`;
+const signingWorkflowSource = `name: signing\non: workflow_dispatch\njobs:\n  sign:\n    runs-on: [self-hosted, Windows, ci, need-time-5m, need-mem-2g, need-cpu-2, need-tool-python]\n    steps:\n      - run: echo signing\n`;
 const signingProfile = {
   name: "release",
   revision: profileRevision,
@@ -152,14 +153,50 @@ describe("general-purpose native signing execution", () => {
       .bind(input.requestId)
       .first<{ count: number }>();
     expect(count?.count).toBe(1);
-    const queuedLabels = await env.DB.prepare(
-      "SELECT labels_json FROM actions_runner_runs WHERE run_id=?"
+    const queuedRun = await env.DB.prepare(
+      "SELECT labels_json,timeout_minutes,workflow_source FROM actions_runner_runs WHERE run_id=?"
     )
       .bind(first.runId)
-      .first<{ labels_json: string }>();
-    expect(JSON.parse(queuedLabels!.labels_json)).toEqual(
-      expect.arrayContaining(["windows", "ci", "need-time-5m", "need-mem-2g", "need-tool-python"])
+      .first<{ labels_json: string; timeout_minutes: number; workflow_source: string }>();
+    const queuedLabels = JSON.parse(queuedRun!.labels_json) as string[];
+    expect(queuedLabels).toEqual(
+      expect.arrayContaining([
+        "windows",
+        "ci",
+        "need-time-60m",
+        "need-mem-2g",
+        "need-cpu-2",
+        "need-tool-python",
+      ])
     );
+    expect(queuedLabels).not.toContain("need-time-5m");
+    expect(queuedRun!.timeout_minutes).toBe(60);
+    expect(queuedRun!.workflow_source).toBe(signingWorkflowSource);
+    const schedulerRunner = await env.DB.prepare(
+      "SELECT r.*,n.slug AS owner,p.slug AS repository FROM actions_runners r JOIN namespaces n ON n.id=r.namespace_id LEFT JOIN repositories p ON p.id=r.repository_id WHERE r.id=?"
+    )
+      .bind(runnerId)
+      .first<RunnerRow>();
+    const candidates = await listRunnerCandidates(actionEnv, schedulerRunner!);
+    expect(candidates.map((entry) => entry.id)).toContain(first.runId);
+    const candidate = candidates.find((entry) => entry.id === first.runId);
+    const evaluated = evaluateRunnerCandidate(
+      schedulerRunner!,
+      {
+        os: "windows",
+        arch: "x64",
+        cpus: 4,
+        memTotalMb: 8192,
+        memFreeMb: 4096,
+        diskFreeMb: 20_000,
+        load1: 0,
+        tools: ["node", "python"],
+      },
+      null,
+      0,
+      candidate!
+    );
+    expect(evaluated.claim.minutes).toBe(60);
     await expect(
       enqueueNativeSigningRun(actionEnv, {
         ...input,
@@ -167,6 +204,13 @@ describe("general-purpose native signing execution", () => {
         workflowSource: signingWorkflowSource.replace("need-tool-python", "need-tool-invalid!"),
       })
     ).rejects.toThrow("literal runs-on labels");
+    await expect(
+      enqueueNativeSigningRun(actionEnv, {
+        ...input,
+        requestId: crypto.randomUUID(),
+        workflowSource: signingWorkflowSource.replace("need-time-5m", "need-time-999m"),
+      })
+    ).rejects.toThrow("invalid_signing_workflow_requirements");
     await env.DB.prepare(
       "UPDATE actions_runner_runs SET status='completed',conclusion='success',completed_at=? WHERE run_id=?"
     )

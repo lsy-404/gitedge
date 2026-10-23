@@ -217,7 +217,13 @@ export async function enqueueNativeSigningRun(
     ...(input.platform === "ios" ? ["ARM64"] : []),
     "need-tool-node",
     "need-tool-python",
-    ...workflow.labels,
+    ...workflow.labels.filter((label) => {
+      const match = /^need-time-(\d+)m$/i.exec(label);
+      if (!match) return true;
+      const minutes = Number(match[1]);
+      return !Number.isInteger(minutes) || minutes < 1 || minutes > 360;
+    }),
+    `need-time-${input.timeoutMinutes}m`,
   ];
   const requiredLabels = [...new Set(labels.map((label) => label.toLowerCase()))];
   if (!parseJobClaim(requiredLabels, input.timeoutMinutes).valid)

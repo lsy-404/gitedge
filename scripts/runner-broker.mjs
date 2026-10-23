@@ -20,7 +20,11 @@ import { parseArgs } from "node:util";
 import { parseDocument } from "yaml";
 import { parseJobClaim, matchesLabels } from "../packages/contracts/runner-scheduling.mjs";
 import { createGitEdgeExecutionArgs } from "./runner-broker-execution.mjs";
-import { createSigningWorkflow, readSigningReceipt } from "./runner-broker-signing-workflow.mjs";
+import {
+  createSigningWorkflow,
+  normalizeSigningWorkflowTimeout,
+  readSigningReceipt,
+} from "./runner-broker-signing-workflow.mjs";
 import { pruneRunArtifacts, runArtifactRoots } from "./runner-retention.mjs";
 import {
   getRunnerCapacity,
@@ -1121,6 +1125,7 @@ async function runClaimedSigning(profile, claim, signal) {
     (run.platform === "ios" && run.stage !== "ios_sign") ||
     !Number.isSafeInteger(run.timeoutMinutes) ||
     run.timeoutMinutes < 1 ||
+    run.timeoutMinutes > 360 ||
     typeof claim.runnerId !== "string" ||
     String(claim.runnerId) !== String(profile.runnerId) ||
     typeof claim.leaseToken !== "string" ||
@@ -1180,8 +1185,17 @@ async function runClaimedSigning(profile, claim, signal) {
         !["read", "write"].includes(run.permission)
       )
         throw new Error("Signing workflow metadata is incomplete.");
-      const workflowDemand = validateGitEdgeWorkflow(run.workflowSource, profile);
-      const requiredLabels = [...new Set([...run.labels, ...workflowDemand.labels])];
+      const budgetedWorkflowSource = normalizeSigningWorkflowTimeout(
+        run.workflowSource,
+        run.timeoutMinutes
+      );
+      const workflowDemand = validateGitEdgeWorkflow(budgetedWorkflowSource, profile);
+      const requiredLabels = [
+        ...new Set([
+          ...signingLabelsForTimeout(run.labels, run.timeoutMinutes),
+          ...workflowDemand.labels,
+        ]),
+      ];
       const jobClaim = parseJobClaim(requiredLabels, run.timeoutMinutes);
       if (!workflowDemand.claim.valid || !jobClaim.valid)
         throw new Error("Signing workflow has invalid host requirements.");
@@ -1189,12 +1203,13 @@ async function runClaimedSigning(profile, claim, signal) {
       await secureSigningPath(runDirectory, true);
       await writePrivate(contextFile, JSON.stringify(context));
       await secureSigningPath(contextFile);
-      const source = createSigningWorkflow(run.workflowSource, {
+      const source = createSigningWorkflow(budgetedWorkflowSource, {
         platform: run.platform,
         clientPath: path.join(root, "scripts", "signing", "client.mjs"),
         contextFile,
         outputParent: runDirectory,
         receiptFile,
+        timeoutMinutes: run.timeoutMinutes,
       });
       await writeFile(workflowFile, source, { mode: 0o600 });
       await writeFile(eventPayloadFile, JSON.stringify(run.eventPayload ?? {}), { mode: 0o600 });
@@ -1205,7 +1220,7 @@ async function runClaimedSigning(profile, claim, signal) {
         workflowFile,
         actionsState: path.join(root, "work", "actions"),
         jobClaim,
-        demandLabels: workflowDemand.labels,
+        demandLabels: requiredLabels,
         eventPayloadFile,
       });
       const childEnvironment = { ...process.env };
@@ -1349,6 +1364,17 @@ function validateGitEdgeWorkflow(source, profile) {
   const claim = parseJobClaim(labelsUnion, workflowMaximum);
   if (!claim.valid) throw new Error("The workflow has an invalid runner resource requirement.");
   return { claim, labels: labelsUnion };
+}
+
+function signingLabelsForTimeout(labels, timeoutMinutes) {
+  const retained = labels.filter((label) => {
+    const match = /^need-time-(\d+)m$/i.exec(label);
+    if (!match) return true;
+    const minutes = Number(match[1]);
+    return !Number.isInteger(minutes) || minutes < 1 || minutes > 360;
+  });
+  retained.push(`need-time-${timeoutMinutes}m`);
+  return [...new Set(retained.map((label) => label.toLowerCase()))];
 }
 
 function waitChild(child, signal) {
