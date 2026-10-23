@@ -46,3 +46,4 @@
 | 044 | [Feature] 个人主页 | 真实公开资料、概览、仓库检索与收藏和活动详情 | 完善个人主页与GitHub式信息组织 | 🔄 进行中 |
 | 045 | [BugFix] 双向同步 | 引用共同状态、删除同步、并发冲突和状态保留 | 防止漏Webhook后复活已删除引用或覆盖分歧 | 🔄 进行中 |
 | 046 | [Feature] 本地集成 | 隔离setup、实际服务验证、集成与交付 | 保留原工作目录并完整交付新增功能 | 🔄 进行中 |
+| 047 | [Test] Profile HTTP smoke verification | Verify account profile edits and anonymous public profile data against the local stack | Review the requested profile behavior through real authenticated and anonymous API flows | ✅ 已完成 |
