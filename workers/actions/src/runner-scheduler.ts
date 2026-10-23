@@ -112,14 +112,20 @@ export async function runnerUsageMinutes24h(
   return row?.used_minutes_24h ?? 0;
 }
 
-export async function listRunnerCandidates(
+type CandidateTarget = { kind: RunnerJobKind; id: string } | null;
+
+// One query serves the ranked queue and the re-read of an offered job so both apply identical filters.
+async function queryRunnerCandidates(
   env: RunnerEnv,
-  runner: RunnerRow
+  runner: RunnerRow,
+  target: CandidateTarget
 ): Promise<RunnerCandidate[]> {
   const runnerLabels = JSON.stringify(parseLabels(runner.labels_json) ?? []);
   const ordinaryLabel = RESOURCE_LABEL_PREFIXES.map(
     (prefix) => `lower(required.value) NOT LIKE '${prefix}%'`
   ).join(" AND ");
+  const gitedgeTarget = target === null ? null : target.kind === "gitedge" ? target.id : "";
+  const githubTarget = target === null ? null : target.kind === "github" ? target.id : "";
   const rows = await env.DB.prepare(
     `SELECT * FROM (
       SELECT 'gitedge' AS kind,CASE WHEN s.run_id IS NULL THEN 'workflow' ELSE 'signing' END AS execution_kind,
@@ -128,7 +134,7 @@ export async function listRunnerCandidates(
       FROM actions_runner_runs j JOIN actions_runs a ON a.id=j.run_id
         JOIN repositories p ON p.id=a.repository_id JOIN users u ON u.id=a.created_by
         LEFT JOIN actions_signing_runs s ON s.run_id=j.run_id
-      WHERE j.status='queued' AND p.namespace_id=? AND (? IS NULL OR p.id=?)
+      WHERE j.status='queued' AND (? IS NULL OR j.run_id=?) AND p.namespace_id=? AND (? IS NULL OR p.id=?)
         AND p.deleted_at IS NULL AND p.archived=0 AND p.actions_enabled=1
         AND p.actions_runner_enabled=1 AND u.disabled_at IS NULL
         AND (s.run_id IS NULL OR (s.owner_id=? AND s.repository_id=p.id))
@@ -141,7 +147,7 @@ export async function listRunnerCandidates(
         NULL AS input_digest,NULL AS workflow_oid,NULL AS profile_revision,NULL AS generation,NULL AS nonce,NULL AS platform
       FROM actions_github_runner_jobs j JOIN forge_github_connections c ON c.id=j.connection_id
         JOIN repositories p ON p.id=c.repository_id JOIN users u ON u.id=c.created_by
-      WHERE j.status='queued' AND c.enabled=1 AND c.runner_enabled=1
+      WHERE j.status='queued' AND (? IS NULL OR j.id=?) AND c.enabled=1 AND c.runner_enabled=1
         AND p.namespace_id=? AND (? IS NULL OR p.id=?)
         AND p.deleted_at IS NULL AND p.archived=0 AND p.actions_enabled=1 AND u.disabled_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM json_each(j.labels_json) required
@@ -150,19 +156,39 @@ export async function listRunnerCandidates(
     ) ORDER BY created_at,id LIMIT ?`
   )
     .bind(
+      gitedgeTarget,
+      gitedgeTarget,
       runner.namespace_id,
       runner.repository_id,
       runner.repository_id,
       runner.created_by,
       runnerLabels,
+      githubTarget,
+      githubTarget,
       runner.namespace_id,
       runner.repository_id,
       runner.repository_id,
       runnerLabels,
-      RUNNER_CLAIM_CANDIDATE_LIMIT
+      target === null ? RUNNER_CLAIM_CANDIDATE_LIMIT : 1
     )
     .all<RunnerCandidate>();
   return rows.results;
+}
+
+export function listRunnerCandidates(
+  env: RunnerEnv,
+  runner: RunnerRow
+): Promise<RunnerCandidate[]> {
+  return queryRunnerCandidates(env, runner, null);
+}
+
+export async function loadRunnerCandidate(
+  env: RunnerEnv,
+  runner: RunnerRow,
+  kind: RunnerJobKind,
+  id: string
+): Promise<RunnerCandidate | null> {
+  return (await queryRunnerCandidates(env, runner, { kind, id }))[0] ?? null;
 }
 
 export function evaluateRunnerCandidate(
@@ -212,57 +238,12 @@ export function evaluateRunnerCandidate(
   return { candidate, labels: labels ?? [], claim, reasons: [...reasons] };
 }
 
-export async function saveRunnerDeferral(
-  env: RunnerEnv,
-  kind: RunnerJobKind,
-  jobId: string,
-  runnerId: string,
-  reasons: string[],
-  now: number
-): Promise<void> {
-  const json = JSON.stringify(reasons);
-  await env.DB.prepare(
-    `INSERT INTO actions_runner_deferrals (job_kind,job_id,reasons_json,updated_at) VALUES (?,?,json_object(?,json(?)),?)
-     ON CONFLICT(job_kind,job_id) DO UPDATE SET
-       reasons_json=json_set(actions_runner_deferrals.reasons_json, '$."' || ? || '"', json(?)),
-       updated_at=excluded.updated_at`
-  )
-    .bind(kind, jobId, runnerId, json, now, runnerId, json)
-    .run();
-}
-
-export async function clearRunnerDeferral(
-  env: RunnerEnv,
-  kind: RunnerJobKind,
-  jobId: string
-): Promise<void> {
-  await env.DB.prepare("DELETE FROM actions_runner_deferrals WHERE job_kind=? AND job_id=?")
-    .bind(kind, jobId)
-    .run();
-}
-
 export async function cleanRunnerSchedulingData(env: RunnerEnv, now: number): Promise<void> {
   await env.DB.prepare(
     `DELETE FROM actions_runner_samples WHERE (runner_id,minute) IN (
       SELECT runner_id,minute FROM actions_runner_samples WHERE minute<? ORDER BY minute LIMIT ?)`
   )
     .bind(Math.floor((now - RUNNER_SAMPLE_RETENTION_MS) / 60_000), RUNNER_SAMPLE_CLEANUP_LIMIT)
-    .run();
-  await env.DB.prepare(
-    `DELETE FROM actions_runner_deferrals WHERE job_kind='gitedge' AND job_id IN (
-      SELECT d.job_id FROM actions_runner_deferrals d WHERE d.job_kind='gitedge'
-        AND NOT EXISTS (SELECT 1 FROM actions_runner_runs j WHERE j.run_id=d.job_id AND j.status='queued')
-      ORDER BY d.updated_at LIMIT ?)`
-  )
-    .bind(RUNNER_SAMPLE_CLEANUP_LIMIT)
-    .run();
-  await env.DB.prepare(
-    `DELETE FROM actions_runner_deferrals WHERE job_kind='github' AND job_id IN (
-      SELECT d.job_id FROM actions_runner_deferrals d WHERE d.job_kind='github'
-        AND NOT EXISTS (SELECT 1 FROM actions_github_runner_jobs j WHERE j.id=d.job_id AND j.status='queued')
-      ORDER BY d.updated_at LIMIT ?)`
-  )
-    .bind(RUNNER_SAMPLE_CLEANUP_LIMIT)
     .run();
 }
 

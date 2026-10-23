@@ -6,6 +6,8 @@ import {
   RUNNER_CAPACITY_STALE_MS,
   RUNNER_DECLINE_HOLD_MS,
   RUNNER_DISPATCH_FRAME_BYTES,
+  RUNNER_DISPATCH_FRAME_LIMIT,
+  RUNNER_DISPATCH_FRAME_WINDOW_MS,
   RUNNER_DISPATCH_MAX_RUNNERS,
   RUNNER_OFFER_TIMEOUT_MS,
   type RunnerBudget,
@@ -16,8 +18,11 @@ import { scoreRunner } from "../../../packages/contracts/runner-scheduling.mjs";
 import { createLogger } from "../../../src/worker/common/logger";
 import {
   claimSpecificCandidate,
+  ownsScope,
+  releaseUndeliveredClaim,
   runnersSelect,
   storeRunnerReport,
+  touchRunnerPresence,
   type ClaimOutcome,
   type ClaimedJob,
   type RunnerEnv,
@@ -26,10 +31,10 @@ import {
 import {
   evaluateRunnerCandidate,
   listRunnerCandidates,
+  loadRunnerCandidate,
   readRunnerBudget,
   readRunnerCapacity,
   runnerUsageMinutes24h,
-  saveRunnerDeferral,
   type RunnerCandidate,
 } from "./runner-scheduler";
 
@@ -38,11 +43,16 @@ const CLOSE_PROTOCOL = 4002;
 const CLOSE_SUPERSEDED = 4003;
 // Upper bound for an accepted offer to finish its guarded claim before it is reaped.
 const CLAIM_HOLD_MS = 60_000;
+// Broker decline reasons that mean its execution slot is occupied, not that the job is unsuitable.
+const SLOT_DECLINES = new Set(["busy", "slot-busy"]);
 
 const SocketStateSchema = z.object({
   runnerId: z.string(),
   ready: z.boolean(),
   busy: z.boolean(),
+  reportedAt: z.number(),
+  windowStart: z.number(),
+  frames: z.number(),
 });
 type SocketState = z.infer<typeof SocketStateSchema>;
 
@@ -120,15 +130,15 @@ export async function notifyRunnerDispatch(
 export async function kickRunnerDispatch(env: RunnerEnv): Promise<void> {
   if (!env.RUNNER_DISPATCH) return;
   const namespaces = await env.DB.prepare(
-    `SELECT DISTINCT namespace_id FROM (
-      SELECT p.namespace_id FROM actions_runner_runs j JOIN actions_runs a ON a.id=j.run_id
+    `SELECT namespace_id, MIN(created_at) AS oldest FROM (
+      SELECT p.namespace_id, a.created_at FROM actions_runner_runs j JOIN actions_runs a ON a.id=j.run_id
         JOIN repositories p ON p.id=a.repository_id
         WHERE j.status='queued' AND p.deleted_at IS NULL AND p.archived=0 AND p.actions_runner_enabled=1
       UNION ALL
-      SELECT p.namespace_id FROM actions_github_runner_jobs j
+      SELECT p.namespace_id, j.created_at FROM actions_github_runner_jobs j
         JOIN forge_github_connections c ON c.id=j.connection_id JOIN repositories p ON p.id=c.repository_id
         WHERE j.status='queued' AND c.enabled=1 AND c.runner_enabled=1 AND p.deleted_at IS NULL AND p.archived=0
-    ) LIMIT ?`
+    ) GROUP BY namespace_id ORDER BY oldest, namespace_id LIMIT ?`
   )
     .bind(RUNNER_DISPATCH_MAX_RUNNERS * 2)
     .all<{ namespace_id: string }>();
@@ -138,6 +148,9 @@ export async function kickRunnerDispatch(env: RunnerEnv): Promise<void> {
 export class RunnerDispatch extends DurableObject<RunnerEnv> {
   private passing = false;
   private rerun = false;
+  // Runners whose accepted offer is being committed; their reports must not move the claim snapshot.
+  private readonly committing = new Set<string>();
+  private rotation = 0;
 
   constructor(ctx: DurableObjectState, env: RunnerEnv) {
     super(ctx, env);
@@ -175,7 +188,14 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
     const client = pair[0];
     const server = pair[1];
     this.ctx.acceptWebSocket(server, [runnerId]);
-    server.serializeAttachment({ runnerId, ready: false, busy: false } satisfies SocketState);
+    server.serializeAttachment({
+      runnerId,
+      ready: false,
+      busy: false,
+      reportedAt: 0,
+      windowStart: Date.now(),
+      frames: 0,
+    } satisfies SocketState);
     this.logger.info("runner-dispatch:connected", { runnerId });
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -185,8 +205,8 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
   }
 
   async disconnect(runnerId: string): Promise<void> {
-    for (const socket of this.openSockets(runnerId)) socket.close(CLOSE_UNAUTHORIZED, "revoked");
-    await this.socketGone(runnerId);
+    await this.revokeRunner(runnerId);
+    await this.dispatch();
   }
 
   async alarm(): Promise<void> {
@@ -194,8 +214,16 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    const state = this.socketState(ws);
-    if (!state) return this.violation(ws, "state-missing");
+    const current = this.socketState(ws);
+    if (!current) return this.violation(ws, "state-missing");
+    const now = Date.now();
+    const state: SocketState =
+      now - current.windowStart >= RUNNER_DISPATCH_FRAME_WINDOW_MS
+        ? { ...current, windowStart: now, frames: 1 }
+        : { ...current, frames: current.frames + 1 };
+    if (state.frames > RUNNER_DISPATCH_FRAME_LIMIT)
+      return this.violation(ws, "rate-limited", state.runnerId);
+    ws.serializeAttachment(state);
     if (
       typeof message !== "string" ||
       message.length > RUNNER_DISPATCH_FRAME_BYTES ||
@@ -214,7 +242,7 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
       return this.violation(ws, "report-required", state.runnerId);
     if (frame.type === "report") await this.handleReport(ws, state, frame);
     else if (frame.type === "accept") await this.handleAccept(ws, state, frame.offerId);
-    else await this.handleDecline(state, frame.offerId, frame.reason);
+    else await this.handleDecline(ws, state, frame.offerId, frame.reason);
   }
 
   async webSocketClose(ws: WebSocket): Promise<void> {
@@ -236,6 +264,12 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
     return parsed.success ? parsed.data : null;
   }
 
+  // Re-reads the attachment so concurrent handlers do not overwrite each other's fields.
+  private updateState(ws: WebSocket, patch: Partial<Omit<SocketState, "runnerId">>): void {
+    const current = this.socketState(ws);
+    if (current) ws.serializeAttachment({ ...current, ...patch } satisfies SocketState);
+  }
+
   private openSockets(runnerId?: string): WebSocket[] {
     return this.ctx
       .getWebSockets(runnerId)
@@ -246,15 +280,19 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
     ws.send(JSON.stringify(frame));
   }
 
-  private sendToRunner(runnerId: string, frame: OutboundFrame): boolean {
-    const target = this.openSockets(runnerId).find((socket) => this.socketState(socket)?.ready);
-    if (!target) return false;
+  private trySend(ws: WebSocket, frame: OutboundFrame): boolean {
+    if (ws.readyState !== WebSocket.OPEN) return false;
     try {
-      this.send(target, frame);
+      this.send(ws, frame);
       return true;
     } catch {
       return false;
     }
+  }
+
+  private sendToRunner(runnerId: string, frame: OutboundFrame): boolean {
+    const target = this.openSockets(runnerId).find((socket) => this.socketState(socket)?.ready);
+    return target ? this.trySend(target, frame) : false;
   }
 
   private async violation(ws: WebSocket, code: string, runnerId?: string): Promise<void> {
@@ -268,14 +306,28 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
     if (runnerId) await this.socketGone(runnerId);
   }
 
+  // Applies the same authorization as the connect handshake; a runner that fails it is disconnected.
   private async loadRunner(runnerId: string): Promise<RunnerRow | null> {
-    return this.env.DB.prepare(
+    const row = await this.env.DB.prepare(
       `${runnersSelect} JOIN users u ON u.id = r.created_by
        WHERE r.id=? AND r.revoked_at IS NULL AND u.disabled_at IS NULL
        AND (r.repository_id IS NULL OR (p.deleted_at IS NULL AND p.namespace_id = r.namespace_id))`
     )
       .bind(runnerId)
       .first<RunnerRow>();
+    if (row && (await ownsScope(this.env, row.created_by, row.namespace_id, row.repository_id)))
+      return row;
+    this.logger.warn("runner-dispatch:runner-unauthorized", { runnerId });
+    await this.revokeRunner(runnerId);
+    return null;
+  }
+
+  private async revokeRunner(runnerId: string): Promise<void> {
+    for (const socket of this.openSockets(runnerId)) socket.close(CLOSE_UNAUTHORIZED, "revoked");
+    this.ctx.storage.sql.exec("DELETE FROM offers WHERE runner_id=?", runnerId);
+    await this.env.DB.prepare("UPDATE actions_runners SET connected=0 WHERE id=?")
+      .bind(runnerId)
+      .run();
   }
 
   private async handleReport(
@@ -283,21 +335,20 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
     state: SocketState,
     frame: Extract<z.infer<typeof InboundFrameSchema>, { type: "report" }>
   ): Promise<void> {
+    const now = Date.now();
     const runner = await this.loadRunner(state.runnerId);
-    if (!runner) {
-      ws.close(CLOSE_UNAUTHORIZED, "revoked");
-      await this.socketGone(state.runnerId);
-      return;
-    }
-    await storeRunnerReport(this.env, runner, frame.capacity, frame.budget ?? null, Date.now());
+    if (!runner) return this.dispatch();
+    if (this.committing.has(runner.id)) await touchRunnerPresence(this.env, runner.id, now);
+    else await storeRunnerReport(this.env, runner, frame.capacity, frame.budget ?? null, now);
     const busy = frame.capacity.busy === 1;
-    ws.serializeAttachment({ runnerId: state.runnerId, ready: true, busy } satisfies SocketState);
+    this.updateState(ws, { ready: true, busy, reportedAt: now });
     if (!state.ready)
       this.send(ws, {
         type: "ready",
         runnerLabels: z.array(z.string()).parse(JSON.parse(runner.labels_json)),
       });
-    if (!state.ready || (state.busy && !busy)) await this.dispatch();
+    if (!state.ready || (state.busy && !busy) || state.reportedAt < now - RUNNER_CAPACITY_STALE_MS)
+      await this.dispatch();
   }
 
   private async handleAccept(ws: WebSocket, state: SocketState, offerId: string): Promise<void> {
@@ -312,6 +363,7 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
       offerId
     );
     let outcome: ClaimOutcome;
+    this.committing.add(offer.runner_id);
     try {
       outcome = await this.commitOffer(offer);
     } catch (cause) {
@@ -320,16 +372,14 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
         reason: cause instanceof Error ? cause.message : "unknown",
       });
       outcome = { kind: "failed", reason: "claim-error" };
+    } finally {
+      this.committing.delete(offer.runner_id);
     }
     this.ctx.storage.sql.exec("DELETE FROM offers WHERE offer_id=?", offerId);
-    if (outcome.kind === "claimed") {
-      if (!this.sendToRunner(state.runnerId, { type: "assign", offerId, claim: outcome.claim }))
-        this.logger.warn("runner-dispatch:assign-undelivered", {
-          runnerId: state.runnerId,
-          jobId: offer.job_id,
-        });
-    } else {
-      this.sendToRunner(state.runnerId, {
+    if (outcome.kind === "claimed") await this.deliver(ws, offer, outcome.claim);
+    else {
+      this.holdDecline(offer, Date.now());
+      this.trySend(ws, {
         type: "withdraw",
         offerId,
         reason: outcome.kind === "failed" ? outcome.reason : "unavailable",
@@ -338,13 +388,45 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
     await this.dispatch();
   }
 
+  // The assignment goes only to the socket that accepted; if it is gone the committed claim is undone.
+  private async deliver(ws: WebSocket, offer: OfferRow, claim: ClaimedJob): Promise<void> {
+    if (this.trySend(ws, { type: "assign", offerId: offer.offer_id, claim })) {
+      this.updateState(ws, { busy: true });
+      this.logger.info("runner-dispatch:assigned", {
+        runnerId: offer.runner_id,
+        kind: offer.job_kind,
+        jobId: offer.job_id,
+      });
+      return;
+    }
+    let released = false;
+    try {
+      released = await releaseUndeliveredClaim(
+        this.env,
+        offer.job_kind,
+        offer.job_id,
+        claim.leaseToken
+      );
+    } catch (cause) {
+      this.logger.error("runner-dispatch:assign-rollback-failed", {
+        runnerId: offer.runner_id,
+        jobId: offer.job_id,
+        reason: cause instanceof Error ? cause.message : "unknown",
+      });
+    }
+    this.logger.warn("runner-dispatch:assign-undelivered", {
+      runnerId: offer.runner_id,
+      kind: offer.job_kind,
+      jobId: offer.job_id,
+      released,
+    });
+  }
+
   // Re-checks the offered job against fresh runner state; the guarded D1 update is the commit point.
   private async commitOffer(offer: OfferRow): Promise<ClaimOutcome> {
     const runner = await this.loadRunner(offer.runner_id);
     if (!runner) return { kind: "skipped" };
-    const candidate = (await listRunnerCandidates(this.env, runner)).find(
-      (item) => item.kind === offer.job_kind && item.id === offer.job_id
-    );
+    const candidate = await loadRunnerCandidate(this.env, runner, offer.job_kind, offer.job_id);
     if (!candidate) return { kind: "skipped" };
     const now = Date.now();
     const evaluated = evaluateRunnerCandidate(
@@ -358,11 +440,18 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
     return claimSpecificCandidate(this.env, runner, candidate, evaluated, now);
   }
 
-  private async handleDecline(state: SocketState, offerId: string, reason: string): Promise<void> {
+  private async handleDecline(
+    ws: WebSocket,
+    state: SocketState,
+    offerId: string,
+    reason: string
+  ): Promise<void> {
     const offer = this.findOffer(offerId, state.runnerId);
     if (!offer) return;
     this.ctx.storage.sql.exec("DELETE FROM offers WHERE offer_id=?", offerId);
-    this.holdDecline(offer, Date.now());
+    // An occupied slot excludes the runner until its next idle report instead of holding the job.
+    if (SLOT_DECLINES.has(reason)) this.updateState(ws, { busy: true });
+    else this.holdDecline(offer, Date.now());
     this.logger.info("runner-dispatch:offer-declined", {
       runnerId: offer.runner_id,
       jobId: offer.job_id,
@@ -462,17 +551,25 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
     const ids = new Set<string>();
     for (const socket of this.openSockets()) {
       const state = this.socketState(socket);
-      if (state?.ready && !offered.has(state.runnerId)) ids.add(state.runnerId);
+      if (
+        state?.ready &&
+        !state.busy &&
+        state.reportedAt >= now - RUNNER_CAPACITY_STALE_MS &&
+        !offered.has(state.runnerId)
+      )
+        ids.add(state.runnerId);
     }
-    if (ids.size > RUNNER_DISPATCH_MAX_RUNNERS)
-      this.logger.warn("runner-dispatch:runner-limit", { connected: ids.size });
+    // Stable order rotated across passes so a capped pass does not always favour the same runners.
+    const ordered = [...ids].sort();
+    const start = ordered.length ? this.rotation % ordered.length : 0;
+    const rotated = [...ordered.slice(start), ...ordered.slice(0, start)];
     const idle: IdleRunner[] = [];
-    for (const id of [...ids].slice(0, RUNNER_DISPATCH_MAX_RUNNERS)) {
+    let inspected = 0;
+    for (const id of rotated) {
+      if (idle.length >= RUNNER_DISPATCH_MAX_RUNNERS) break;
+      inspected += 1;
       const row = await this.loadRunner(id);
-      if (!row) {
-        for (const socket of this.openSockets(id)) socket.close(CLOSE_UNAUTHORIZED, "revoked");
-        continue;
-      }
+      if (!row) continue;
       const capacity = readRunnerCapacity(row.capacity_json);
       if (
         !capacity ||
@@ -496,6 +593,12 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
         used: await runnerUsageMinutes24h(this.env, id, now),
       });
     }
+    this.rotation = start + inspected;
+    if (inspected < rotated.length)
+      this.logger.warn("runner-dispatch:runner-limit", {
+        candidates: rotated.length,
+        inspected,
+      });
     return idle;
   }
 
@@ -536,18 +639,7 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
           runner.used,
           candidate
         );
-        if (evaluated.reasons.length) {
-          if (!evaluated.reasons.includes("scope"))
-            await saveRunnerDeferral(
-              this.env,
-              candidate.kind,
-              candidate.id,
-              runner.row.id,
-              evaluated.reasons,
-              now
-            );
-          continue;
-        }
+        if (evaluated.reasons.length) continue;
         const score = scoreRunner(runner.capacity, runner.budget, runner.used, evaluated.claim);
         if (!best || score < best.score) best = { runner, labels: evaluated.labels, score };
       }

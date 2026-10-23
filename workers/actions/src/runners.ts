@@ -8,6 +8,7 @@ import {
   RunnerLeaseInputSchema,
   type RunnerBudget,
   type RunnerCapacity,
+  type RunnerJobKind,
   RUNNER_TOKEN_PREFIX,
   RUNNER_LEASE_MS,
   RUNNER_LOG_BYTES,
@@ -37,7 +38,6 @@ import { notifyRunnerDispatch, type RunnerDispatch } from "./runner-dispatch";
 import { handleSigningMachineCallback } from "./signing-execution";
 import {
   claimRunnerCandidate,
-  clearRunnerDeferral,
   clearRunnerFailures,
   type EvaluatedRunnerCandidate,
   type RunnerCandidate,
@@ -124,7 +124,7 @@ function presentedRunner(row: RunnerRow): RegisteredRunner {
     revokedAt: row.revoked_at,
   };
 }
-async function ownsScope(
+export async function ownsScope(
   env: RunnerEnv,
   userId: string,
   namespaceId: string,
@@ -678,6 +678,54 @@ export async function storeRunnerReport(
     .run();
 }
 
+export async function touchRunnerPresence(
+  env: RunnerEnv,
+  runnerId: string,
+  now: number
+): Promise<void> {
+  await env.DB.prepare(
+    "UPDATE actions_runners SET last_seen_at=?,connected=1 WHERE id=? AND revoked_at IS NULL"
+  )
+    .bind(now, runnerId)
+    .run();
+}
+
+// Undoes a committed claim whose assignment never reached the broker; it is not a runner failure.
+export async function releaseUndeliveredClaim(
+  env: RunnerEnv,
+  kind: RunnerJobKind,
+  jobId: string,
+  leaseToken: string
+): Promise<boolean> {
+  const leaseHash = await sha256Hex(leaseToken);
+  if (kind === "github") {
+    // The JIT runner already exists; completing the row keeps cleanup_pending so the cron deletes it.
+    const released = await env.DB.prepare(
+      `UPDATE actions_github_runner_jobs SET status='completed',conclusion='cancelled',completed_at=?
+       WHERE id=? AND lease_hash=? AND status='running' RETURNING id`
+    )
+      .bind(Date.now(), jobId, leaseHash)
+      .first();
+    return released !== null;
+  }
+  // The job token row is deleted rather than revoked so a later claim can issue a fresh one.
+  const [released] = await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE actions_runner_runs SET status='queued',runner_id=NULL,lease_hash=NULL,
+         lease_expires_at=NULL,started_at=NULL
+       WHERE run_id=? AND lease_hash=? AND status='running' AND cancel_requested=0 RETURNING run_id`
+    ).bind(jobId, leaseHash),
+    env.DB.prepare(
+      `DELETE FROM actions_job_tokens WHERE run_id=? AND EXISTS (
+         SELECT 1 FROM actions_runner_runs WHERE run_id=? AND status='queued')`
+    ).bind(jobId, jobId),
+  ]);
+  if (released.results.length === 0) return false;
+  const run = await getRunnerRun(env, jobId);
+  if (run) await publishCheck(env, run);
+  return true;
+}
+
 export interface ClaimedJob {
   run: Record<string, unknown>;
   runnerId?: string;
@@ -755,7 +803,6 @@ export async function claimSpecificCandidate(
   const runnerLabels = RunnerClaimLabelSnapshotSchema.parse({
     runnerLabels: labels(runner.labels_json),
   }).runnerLabels;
-  await clearRunnerDeferral(env, candidate.kind, candidate.id);
   if (candidate.kind === "github") {
     try {
       const github = await claimGithubRunner(
@@ -873,6 +920,13 @@ async function disconnectRunner(
   }
 }
 
+async function notifyRunnerNamespace(env: RunnerEnv, runnerId: string): Promise<void> {
+  const runner = await env.DB.prepare("SELECT namespace_id FROM actions_runners WHERE id=?")
+    .bind(runnerId)
+    .first<{ namespace_id: string }>();
+  if (runner) await notifyRunnerDispatch(env, runner.namespace_id);
+}
+
 async function connectRunner(request: Request, env: RunnerEnv): Promise<Response> {
   if (request.method !== "GET" || request.headers.get("Upgrade")?.toLowerCase() !== "websocket")
     return errorResponse(
@@ -969,12 +1023,18 @@ export async function runnerMachineRequest(request: Request, env: RunnerEnv): Pr
       }
       const run = await getRunnerRun(env, runId);
       if (run) await publishCheck(env, run);
+      await notifyRunnerNamespace(env, runnerId);
     }
     return response;
   }
   if (!runner) return errorResponse(401, "unauthorized", "Invalid or revoked runner registration.");
   const operation = new URL(request.url).pathname.split("/")[2];
-  if (operation === "github") return githubRunnerLease(request, env, runner);
+  if (operation === "github") {
+    const response = await githubRunnerLease(request, env, runner);
+    if (pathname.endsWith("/complete") && response.ok)
+      await notifyRunnerDispatch(env, runner.namespace_id);
+    return response;
+  }
   const body = await readJsonLimited(
     request,
     operation === "complete" ? RUNNER_LOG_BYTES * 6 + 4096 : 8192
@@ -1048,6 +1108,7 @@ export async function runnerMachineRequest(request: Request, env: RunnerEnv): Pr
       .run();
     const run = await getRunnerRun(env, parsed.data.runId);
     if (run) await publishCheck(env, run);
+    await notifyRunnerDispatch(env, runner.namespace_id);
     return dataResponse({ completed: true });
   }
   return errorResponse(404, "not_found", "Runner operation was not found.");
