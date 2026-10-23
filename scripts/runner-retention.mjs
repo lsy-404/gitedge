@@ -1,5 +1,6 @@
 import { lstat, readdir, realpath, rm, stat } from "node:fs/promises";
 import path from "node:path";
+import { RUN_DIRECTORY_PATTERN, runRootPath } from "./runner-run-root.mjs";
 
 export const RUN_RETENTION_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 export const RUN_RETENTION_MAX_BYTES = 1024 * 1024 * 1024;
@@ -84,16 +85,13 @@ export async function pruneRunArtifacts(roots, options = {}) {
 export function runArtifactRoots(state, profiles, actionsState) {
   return [
     {
-      directory: path.join(state, "runs"),
-      match: (entry) => entry.isDirectory() && /^[a-zA-Z0-9._-]+-[a-f0-9-]{36}-/i.test(entry.name),
+      directory: runRootPath(state),
+      match: (entry) => entry.isDirectory() && RUN_DIRECTORY_PATTERN.test(entry.name),
     },
-    ...profiles.flatMap((profile) => [
-      { directory: path.join(profile.directory, "runs"), match: (entry) => entry.isDirectory() },
-      {
-        directory: path.join(profile.directory, "logs"),
-        match: (entry) => entry.isFile() && entry.name.endsWith(".log"),
-      },
-    ]),
+    ...profiles.map((profile) => ({
+      directory: path.join(profile.directory, "logs"),
+      match: (entry) => entry.isFile() && entry.name.endsWith(".log"),
+    })),
     {
       directory: path.join(actionsState, "runs"),
       match: (entry) => entry.isDirectory() && entry.name.startsWith("run-"),

@@ -31,6 +31,7 @@ import {
   normalizeSigningWorkflowTimeout,
   readSigningReceipt,
 } from "./runner-broker-signing-workflow.mjs";
+import { createRunDirectory } from "./runner-run-root.mjs";
 import { pruneRunArtifacts, runArtifactRoots } from "./runner-retention.mjs";
 import {
   getRunnerCapacity,
@@ -99,6 +100,10 @@ function repositorySegment(value, label) {
 function validateLabels(labels) {
   if (labels.some((label) => label.length > 100 || /[\r\n\0]/.test(label)))
     throw new Error("Runner labels must be at most 100 characters and contain no line breaks.");
+}
+
+function profileState(profile) {
+  return path.resolve(profile.directory, "..", "..");
 }
 
 function safeRunId(value) {
@@ -771,7 +776,6 @@ async function runGitHub(profile, queued, signal) {
   const releaseSlot = await acquireActionsSlot();
   if (!releaseSlot) return false;
   let jit;
-  const runRoot = path.join(profile.directory, "runs");
   let runDir;
   let runner;
   let child;
@@ -784,9 +788,7 @@ async function runGitHub(profile, queued, signal) {
     console.log(
       `GitHub profile ${profile.id}: starting a temporary runner for ${queued.repository}.`
     );
-    await mkdir(runRoot, { recursive: true, mode: 0o700 });
-    await chmod(runRoot, 0o700);
-    runDir = await mkdtemp(path.join(runRoot, `${safeRunId(queued.run.id)}-`));
+    runDir = await createRunDirectory(profileState(profile), "run");
     runner = path.join(runDir, "runner");
     await mkdir(runner);
     await cp(path.join(profile.runnerPath, "bin"), path.join(runner, "bin"), {
@@ -900,11 +902,7 @@ async function runClaimedGitHub(profile, claim, signal) {
     signal,
     AbortSignal.timeout(localExecutionMinutes(jobClaim, run.timeoutMinutes) * 60_000),
   ]);
-  const runRoot = path.join(profile.directory, "runs");
-  await mkdir(runRoot, { recursive: true, mode: 0o700 });
-  await chmod(runRoot, 0o700);
-  const runDir = await mkdtemp(path.join(runRoot, `${runId}-`));
-  await chmod(runDir, 0o700);
+  const runDir = await createRunDirectory(profileState(profile), "run");
   const runner = path.join(runDir, "runner");
   let child;
   let output = "";
@@ -1155,7 +1153,7 @@ async function runClaimedSigning(profile, claim, signal) {
     leaseExpiresAt: claim.leaseExpiresAt,
     jobToken: run.token,
   };
-  const runDirectory = await mkdtemp(path.join(profile.directory, "signing-"));
+  const runDirectory = await createRunDirectory(profileState(profile), "signing");
   const contextFile = path.join(runDirectory, "context.json");
   const receiptFile = path.join(runDirectory, "sdk-receipt.json");
   const workflowFile = path.join(runDirectory, "workflow.yml");
@@ -1537,12 +1535,7 @@ async function runGitEdge(profile, run, leaseToken, signal) {
     console.error(`GitEdge run ${run.id} was rejected: ${reason}`);
     return;
   }
-  const state = path.resolve(profile.directory, "..", "..");
-  const runRoot = path.join(state, "runs");
-  await mkdir(runRoot, { recursive: true, mode: 0o700 });
-  await chmod(runRoot, 0o700);
-  const runDir = await mkdtemp(path.join(runRoot, `${profile.id}-${run.id}-`));
-  await chmod(runDir, 0o700);
+  const runDir = await createRunDirectory(profileState(profile), "run");
   const workflowFile = path.join(runDir, run.workflowPath);
   const logFile = path.join(runDir, "runner.log");
   const eventPayloadFile = eventPayload ? path.join(runDir, "event.json") : undefined;
