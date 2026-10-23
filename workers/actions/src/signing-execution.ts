@@ -9,9 +9,11 @@ import {
 import { sha256Hex } from "../../../packages/contracts/src/index";
 import { parseJobClaim } from "../../../packages/contracts/runner-scheduling.mjs";
 import { validateSingleSigningJob } from "./runner-workflow";
+import { notifyRunnerDispatch, type RunnerDispatchBinding } from "./runner-dispatch";
 
 export interface SigningExecutionEnv
   extends
+    RunnerDispatchBinding,
     Pick<SigningEnv, "DB" | "FORGE">,
     Partial<
       Pick<
@@ -396,5 +398,6 @@ export async function enqueueNativeSigningRun(
       .run();
     throw new Error("signing_run_enqueue_failed");
   }
+  await notifyRunnerDispatch(env, repository.namespace_id);
   return { runId };
 }

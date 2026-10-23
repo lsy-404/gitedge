@@ -1,4 +1,5 @@
 import { env } from "cloudflare:workers";
+import { z } from "zod";
 import { beforeAll, afterEach, describe, expect, it, vi } from "vitest";
 import { trustedHeaders } from "../../packages/contracts/src/trust";
 import { importSealingKey, sealText } from "../../src/worker/common/secret-box";
@@ -8,14 +9,20 @@ import { receiveGithubWebhook } from "../../workers/forge/src/github-sync";
 import { queueGithubRunner, expireGithubRunners } from "../../workers/actions/src/github-runners";
 import {
   claimRunnerCandidate,
+  evaluateRunnerCandidate,
   listRunnerCandidates,
+  readRunnerBudget,
   recordRunnerFailure,
   runnerUsageMinutes24h,
   type RunnerCandidate,
 } from "../../workers/actions/src/runner-scheduler";
 import {
+  authenticateRunner,
+  claimSpecificCandidate,
   runnerMachineRequest,
   runnerManagement,
+  runnersSelect,
+  storeRunnerReport,
   type RunnerRow,
   type RunnerEnv,
 } from "../../workers/actions/src/runners";
@@ -27,7 +34,11 @@ import {
   migrate,
   type Person,
 } from "../support/stack";
-import type { RegisteredRunner } from "../../packages/contracts/src/runners";
+import {
+  RunnerBudgetSchema,
+  RunnerCapacitySchema,
+  type RegisteredRunner,
+} from "../../packages/contracts/src/runners";
 
 const secret = "signed-webhook-fixture";
 const credential = "server-only-github-management-credential";
@@ -144,7 +155,65 @@ async function registration(): Promise<string> {
   return (await data<{ runner: RegisteredRunner; token: string }>(response)).token;
 }
 
+// One dispatch pass for a single connected runner: report, rank its candidates, commit the first.
+async function claimPass(token: string, body: unknown): Promise<Response> {
+  const input = z
+    .object({ capacity: RunnerCapacitySchema.optional(), budget: RunnerBudgetSchema.optional() })
+    .strict()
+    .parse(body);
+  const runner = await authenticateRunner(
+    new Request("https://actions.internal/runner/connect", {
+      headers: { Authorization: `Bearer ${token}` },
+    }),
+    machineEnv
+  );
+  if (!runner) return new Response(null, { status: 401 });
+  const now = Date.now();
+  if (input.capacity)
+    await storeRunnerReport(machineEnv, runner, input.capacity, input.budget ?? null, now);
+  else if (input.budget)
+    await env.DB.prepare("UPDATE actions_runners SET budget_json=?,last_seen_at=? WHERE id=?")
+      .bind(JSON.stringify(input.budget), now, runner.id)
+      .run();
+  const fresh = await env.DB.prepare(`${runnersSelect} WHERE r.id=? AND r.revoked_at IS NULL`)
+    .bind(runner.id)
+    .first<RunnerRow>();
+  if (!fresh) return new Response(null, { status: 401 });
+  const idle = {
+    data: { run: null, runnerLabels: JSON.parse(fresh.labels_json) as string[] },
+  };
+  const running = await env.DB.prepare(
+    `SELECT 1 AS busy FROM actions_runner_runs WHERE runner_id=? AND status='running'
+     UNION ALL SELECT 1 AS busy FROM actions_github_runner_jobs WHERE runner_id=? AND status='running' LIMIT 1`
+  )
+    .bind(fresh.id, fresh.id)
+    .first();
+  if (
+    input.capacity?.busy === 1 ||
+    (fresh.held_until !== null && fresh.held_until > now) ||
+    running
+  )
+    return Response.json(idle);
+  const used = await runnerUsageMinutes24h(machineEnv, fresh.id, now);
+  const budget = input.budget ?? readRunnerBudget(fresh.budget_json);
+  for (const candidate of await listRunnerCandidates(machineEnv, fresh)) {
+    const evaluated = evaluateRunnerCandidate(
+      fresh,
+      input.capacity ?? null,
+      budget,
+      used,
+      candidate
+    );
+    if (evaluated.reasons.length) continue;
+    const outcome = await claimSpecificCandidate(machineEnv, fresh, candidate, evaluated, now);
+    if (outcome.kind === "failed") throw new Error(outcome.reason);
+    if (outcome.kind === "claimed") return Response.json({ data: outcome.claim });
+  }
+  return Response.json(idle);
+}
+
 function machine(token: string, path = "claim", body: unknown = {}): Promise<Response> {
+  if (path === "claim") return claimPass(token, body);
   return runnerMachineRequest(
     new Request(`https://actions.internal/runner/${path}`, {
       method: "POST",

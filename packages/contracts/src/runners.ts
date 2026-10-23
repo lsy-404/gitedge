@@ -9,8 +9,10 @@ export const RUNNER_LEASE_MS = 120_000;
 export const RUNNER_LOG_BYTES = 16_384;
 export const RUNNER_CAPACITY_STALE_MS = 45_000;
 export const RUNNER_OFFLINE_MS = 60_000;
-export const RUNNER_PEER_SCORE_MARGIN = 5;
-export const RUNNER_DEFERRAL_AGE_MS = 120_000;
+export const RUNNER_OFFER_TIMEOUT_MS = 15_000;
+export const RUNNER_DECLINE_HOLD_MS = 30_000;
+export const RUNNER_DISPATCH_FRAME_BYTES = 16_384;
+export const RUNNER_DISPATCH_MAX_RUNNERS = 50;
 export const RUNNER_FAILURE_HOLD_THRESHOLD = 3;
 export const RUNNER_FAILURE_HOLD_BASE_MS = 10 * 60_000;
 export const RUNNER_FAILURE_HOLD_MAX_MS = 60 * 60_000;
@@ -68,14 +70,6 @@ export interface JobClaim {
   preferCpu: boolean;
   valid: boolean;
 }
-
-export const RunnerClaimInputSchema = z
-  .object({
-    capacity: RunnerCapacitySchema.optional(),
-    budget: RunnerBudgetSchema.optional(),
-  })
-  .strict();
-export type RunnerClaimInput = z.infer<typeof RunnerClaimInputSchema>;
 
 export const RunnerScopeSchema = z
   .object({

@@ -107,6 +107,8 @@ export function withSecurityHeaders(
   pathname: string,
   siteHost = false
 ): Response {
+  // A WebSocket upgrade response must be returned as-is to keep its socket.
+  if (response.webSocket) return response;
   const headers = new Headers(response.headers);
   for (const [name, value] of Object.entries(securityHeaders)) {
     // Pages content brings its own policy; the application policy would break it.
@@ -684,7 +686,7 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
   if (isGitHubApiPath(url.pathname)) return handleGitHubCompatibility(request, env);
 
   if (
-    /^\/api\/actions\/runner\/(?:claim|heartbeat|complete|github\/(?:heartbeat|complete)|signing\/requests\/[0-9a-f-]{36}\/(?:start|heartbeat|download|authorize-sign|output(?:\/parts\/\d+|\/complete)?|complete|fail))$/.test(
+    /^\/api\/actions\/runner\/(?:connect|heartbeat|complete|github\/(?:heartbeat|complete)|signing\/requests\/[0-9a-f-]{36}\/(?:start|heartbeat|download|authorize-sign|output(?:\/parts\/\d+|\/complete)?|complete|fail))$/.test(
       url.pathname
     )
   ) {

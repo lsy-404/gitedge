@@ -87,7 +87,7 @@ function overview(overrides: Partial<RunnerOverview> = {}): RunnerOverview {
           valid: true,
         },
         createdAt: Date.now() - 15_000,
-        blockedBy: { "runner-1": ["mem", "gpu", "peer-preferred"] },
+        blockedBy: { "runner-1": ["mem", "gpu"] },
       },
     ],
     truncated: false,
@@ -120,7 +120,6 @@ describe("AccountRunners", () => {
     expect(mounted.root.textContent).toContain(
       "No verified GPU meets the vendor and VRAM requirements"
     );
-    expect(mounted.root.textContent).toContain("Waiting briefly for a better-fit runner");
     expect(mounted.root.textContent).toContain("github_auth_failed");
     expect(mounted.root.textContent).not.toContain("credential");
   });

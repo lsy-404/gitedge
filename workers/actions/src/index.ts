@@ -64,10 +64,12 @@ import {
   reconcileSigningRequests,
 } from "./signing";
 import { enqueueNativeSigningRun } from "./signing-execution";
+import { kickRunnerDispatch } from "./runner-dispatch";
 
 export { ActionRunDurableObject as ActionRun };
 export { GitTransfer } from "./git-transfer";
 export { SigningCoordinator } from "./signing";
+export { RunnerDispatch } from "./runner-dispatch";
 
 const MAX_SNAPSHOT_FILES = 2048;
 const MAX_SNAPSHOT_BYTES = 24 * 1024 * 1024;
@@ -1782,7 +1784,7 @@ export default {
       if (url.pathname === "/internal/push") return await handleInternalPush(request, env);
       if (url.pathname === "/internal/github-runner") return await queueGithubRunner(request, env);
       if (
-        /^\/runner\/(?:claim|heartbeat|complete|github\/(?:heartbeat|complete)|signing\/requests\/[0-9a-f-]{36}\/(?:start|heartbeat|download|authorize-sign|output(?:\/parts\/\d+|\/complete)?|complete|fail))$/.test(
+        /^\/runner\/(?:connect|heartbeat|complete|github\/(?:heartbeat|complete)|signing\/requests\/[0-9a-f-]{36}\/(?:start|heartbeat|download|authorize-sign|output(?:\/parts\/\d+|\/complete)?|complete|fail))$/.test(
           url.pathname
         )
       )
@@ -1854,6 +1856,7 @@ export default {
         await expireRunnerRuns(env);
         await expireGithubRunners(env);
         await cleanRunnerSchedulingData(env, Date.now());
+        await kickRunnerDispatch(env);
         await publishPendingChecks(env);
       })().catch((cause: unknown) => {
         const logger = createLogger(env.LOG_LEVEL, { service: "actions" });

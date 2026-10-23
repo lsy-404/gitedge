@@ -12,6 +12,7 @@ import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 import { readJsonLimited } from "../../../src/worker/common/readText";
 import { createLogger } from "../../../src/worker/common/logger";
 import type { RunnerEnv, RunnerRow } from "./runners";
+import { notifyRunnerDispatch } from "./runner-dispatch";
 import { clearRunnerFailures, recordRunnerFailure } from "./runner-scheduler";
 
 export async function queueGithubRunner(request: Request, env: RunnerEnv): Promise<Response> {
@@ -59,6 +60,14 @@ export async function queueGithubRunner(request: Request, env: RunnerEnv): Promi
       "runner_queue_unavailable",
       "The runner connection is unavailable or its queue is full."
     );
+  if (input.action === "queued") {
+    const namespace = await env.DB.prepare(
+      "SELECT p.namespace_id FROM forge_github_connections c JOIN repositories p ON p.id=c.repository_id WHERE c.id=?"
+    )
+      .bind(input.connectionId)
+      .first<{ namespace_id: string }>();
+    if (namespace) await notifyRunnerDispatch(env, namespace.namespace_id);
+  }
   return dataResponse({ accepted: true }, 202);
 }
 
@@ -112,11 +121,9 @@ export async function claimGithubRunner(
   runner: RunnerRow,
   jobId: string,
   claim: JobClaim,
-  leaseToken: string,
   hash: string,
-  now: number,
-  runnerLabels: string[]
-): Promise<Response | null> {
+  now: number
+): Promise<{ run: Record<string, unknown>; leaseExpiresAt: number } | null> {
   const job = await env.DB.prepare(
     "SELECT * FROM actions_github_runner_jobs WHERE id=? AND status='running' AND runner_id=? AND lease_hash=?"
   )
@@ -142,7 +149,7 @@ export async function claimGithubRunner(
       .bind(job.connection_id)
       .first<{ owner: string; name: string; slug: string; namespace: string }>();
     if (!source) throw new Error("GitHub runner connection disappeared.");
-    return dataResponse({
+    return {
       run: {
         kind: "github",
         id: job.id,
@@ -156,10 +163,8 @@ export async function claimGithubRunner(
         githubRunnerId: result.githubRunnerId,
         timeoutMinutes: claim.minutes,
       },
-      runnerLabels,
-      leaseToken,
       leaseExpiresAt: now + RUNNER_LEASE_MS,
-    });
+    };
   } catch (cause) {
     await finish(env, job.id, "failure", true);
     createLogger(env.LOG_LEVEL, { service: "github-runner" }).warn("github-runner:start-failed", {

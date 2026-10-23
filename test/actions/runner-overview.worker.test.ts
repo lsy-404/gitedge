@@ -24,8 +24,8 @@ beforeAll(async () => {
   runnerId = crypto.randomUUID();
   await env.DB.prepare(
     `INSERT INTO actions_runners
-      (id,name,namespace_id,repository_id,created_by,labels_json,token_hash,created_at,last_seen_at)
-      VALUES (?,?,?,?,?,?,?,?,?)`
+      (id,name,namespace_id,repository_id,created_by,labels_json,token_hash,created_at,last_seen_at,connected)
+      VALUES (?,?,?,?,?,?,?,?,?,1)`
   )
     .bind(
       runnerId,
@@ -362,76 +362,6 @@ describe("runner overview and history", () => {
       expect(queued.blockedBy[runnerId]).toContain("budget-daily");
       expect(queued.blockedBy[runnerId]).not.toContain("label:need-mem-4g");
     }
-  });
-
-  it("shows only fresh peer-preferred deferrals when the runner has no live blockers", async () => {
-    const now = Date.now();
-    const runId = crypto.randomUUID();
-    await env.DB.prepare(
-      "UPDATE actions_runners SET last_seen_at=?,capacity_json=?,capacity_reported_at=?,budget_json=NULL WHERE id=?"
-    )
-      .bind(
-        now,
-        JSON.stringify({
-          os: "linux",
-          arch: "x64",
-          cpus: 4,
-          load1: null,
-          memTotalMb: 8192,
-          memFreeMb: 8192,
-          diskFreeMb: 100_000,
-          tools: [],
-          slots: 1,
-          busy: 0,
-        }),
-        now,
-        runnerId
-      )
-      .run();
-    await env.DB.prepare(
-      `INSERT INTO actions_runs (id,repository_id,commit_oid,workflow,path,source_ref,created_by,created_at)
-      VALUES (?,?,?,?,?,?,?,?)`
-    )
-      .bind(
-        runId,
-        repositoryId,
-        "c".repeat(40),
-        "Peer preferred",
-        ".github/workflows/peer.yml",
-        "main",
-        owner.id,
-        now
-      )
-      .run();
-    await env.DB.prepare(
-      `INSERT INTO actions_runner_runs (run_id,workflow_source,labels_json,permission,timeout_minutes,event_json,status)
-      VALUES (?,?,?,?,?,?,'queued')`
-    )
-      .bind(runId, "github", '["linux","x64"]', "read", 30, "{}")
-      .run();
-    await env.DB.prepare(
-      "INSERT INTO actions_runner_deferrals (job_kind,job_id,reasons_json,updated_at) VALUES ('gitedge',?,?,?)"
-    )
-      .bind(runId, JSON.stringify({ [runnerId]: ["peer-preferred", "offline"] }), now)
-      .run();
-
-    const request = url("/api/actions/runners/overview");
-    const freshResponse = await handleRunnerOverview(trusted(owner), { DB: env.DB }, request);
-    const fresh = (await freshResponse.json()) as {
-      data: { queue: Array<{ id: string; blockedBy: Record<string, string[]> }> };
-    };
-    expect(fresh.data.queue.find((item) => item.id === runId)?.blockedBy[runnerId]).toEqual([
-      "peer-preferred",
-    ]);
-
-    await env.DB.prepare("UPDATE actions_runner_deferrals SET updated_at=? WHERE job_id=?")
-      .bind(now - 46_000, runId)
-      .run();
-    const staleResponse = await handleRunnerOverview(trusted(owner), { DB: env.DB }, request);
-    const stale = (await staleResponse.json()) as {
-      data: { queue: Array<{ id: string; blockedBy: Record<string, string[]> }> };
-    };
-    expect(stale.data.queue.find((item) => item.id === runId)?.blockedBy[runnerId]).toBeUndefined();
   });
 
   it("uses a composite cursor to retain rows that share the same start time", async () => {

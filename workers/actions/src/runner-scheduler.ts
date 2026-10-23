@@ -2,13 +2,10 @@ import {
   RunnerBudgetSchema,
   RunnerCapacitySchema,
   RUNNER_CLAIM_CANDIDATE_LIMIT,
-  RUNNER_CAPACITY_STALE_MS,
   RUNNER_LEASE_MS,
-  RUNNER_DEFERRAL_AGE_MS,
   RUNNER_FAILURE_HOLD_BASE_MS,
   RUNNER_FAILURE_HOLD_MAX_MS,
   RUNNER_FAILURE_HOLD_THRESHOLD,
-  RUNNER_PEER_SCORE_MARGIN,
   RUNNER_SAMPLE_RETENTION_MS,
   RUNNER_SAMPLE_CLEANUP_LIMIT,
   type JobClaim,
@@ -22,7 +19,6 @@ import {
   hasNeedLabels,
   matchesLabels,
   parseJobClaim,
-  scoreRunner,
 } from "../../../packages/contracts/runner-scheduling.mjs";
 import type { RunnerEnv, RunnerRow } from "./runners";
 
@@ -42,15 +38,6 @@ export interface RunnerCandidate {
   generation: number | null;
   nonce: string | null;
   platform: "macos" | "windows" | "ios" | null;
-}
-
-export interface RunnerPeer {
-  id: string;
-  repository_id: string | null;
-  labels_json: string;
-  capacity_json: string;
-  budget_json: string | null;
-  used_minutes_24h: number;
 }
 
 export interface EvaluatedRunnerCandidate {
@@ -223,58 +210,6 @@ export function evaluateRunnerCandidate(
   }))
     reasons.add(reason);
   return { candidate, labels: labels ?? [], claim, reasons: [...reasons] };
-}
-
-export async function runnerPeersForJob(
-  env: RunnerEnv,
-  runner: RunnerRow,
-  repositoryId: string,
-  now: number
-): Promise<RunnerPeer[]> {
-  const cutoff = now - RUNNER_CAPACITY_STALE_MS;
-  const used = usageExpression("r", now, now - RUNNER_SAMPLE_RETENTION_MS);
-  const rows = await env.DB.prepare(
-    `SELECT r.id,r.repository_id,r.labels_json,r.capacity_json,r.budget_json,${used} AS used_minutes_24h
-     FROM actions_runners r JOIN users u ON u.id=r.created_by
-     WHERE r.id!=? AND r.namespace_id=? AND (r.repository_id IS NULL OR r.repository_id=?)
-       AND r.revoked_at IS NULL AND u.disabled_at IS NULL
-       AND (r.held_until IS NULL OR r.held_until<=?) AND r.capacity_reported_at>=?
-       AND json_extract(r.capacity_json,'$.busy')=0
-       AND NOT EXISTS (SELECT 1 FROM actions_runner_runs busy WHERE busy.runner_id=r.id AND busy.status='running')
-       AND NOT EXISTS (SELECT 1 FROM actions_github_runner_jobs busy WHERE busy.runner_id=r.id AND busy.status='running')
-     ORDER BY r.last_seen_at DESC LIMIT 100`
-  )
-    .bind(runner.id, runner.namespace_id, repositoryId, now, cutoff)
-    .all<RunnerPeer>();
-  return rows.results;
-}
-
-export function betterPeerExists(
-  peers: RunnerPeer[],
-  requiredLabels: string[],
-  claim: JobClaim,
-  capacity: RunnerCapacity | null,
-  budget: RunnerBudget | null,
-  usedMinutes24h: number,
-  createdAt: number,
-  now: number
-): boolean {
-  if (now - createdAt >= RUNNER_DEFERRAL_AGE_MS || capacity === null) return false;
-  const ownScore = scoreRunner(capacity, budget, usedMinutes24h, claim);
-  for (const peer of peers) {
-    const peerCapacity = parsedCapacity(peer.capacity_json);
-    const peerBudget = parsedBudget(peer.budget_json);
-    const peerLabels = parseLabels(peer.labels_json);
-    if (!peerCapacity || !peerLabels || !matchesLabels(requiredLabels, peerLabels)) continue;
-    if (eligibilityReasons(peerCapacity, peerBudget, peer.used_minutes_24h, claim).length > 0)
-      continue;
-    if (
-      scoreRunner(peerCapacity, peerBudget, peer.used_minutes_24h, claim) <
-      ownScore - RUNNER_PEER_SCORE_MARGIN
-    )
-      return true;
-  }
-  return false;
 }
 
 export async function saveRunnerDeferral(

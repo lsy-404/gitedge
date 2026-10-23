@@ -6,9 +6,8 @@ import {
   RunnerClaimLabelSnapshotSchema,
   RunnerCompleteInputSchema,
   RunnerLeaseInputSchema,
-  RunnerClaimInputSchema,
-  RunnerCapacitySchema,
-  RunnerBudgetSchema,
+  type RunnerBudget,
+  type RunnerCapacity,
   RUNNER_TOKEN_PREFIX,
   RUNNER_LEASE_MS,
   RUNNER_LOG_BYTES,
@@ -34,20 +33,15 @@ import { createLogger } from "../../../src/worker/common/logger";
 import { publishCheck } from "./check-delivery";
 import type { RunnerWorkflow } from "./runner-workflow";
 import { claimGithubRunner, githubRunnerLease } from "./github-runners";
+import { notifyRunnerDispatch, type RunnerDispatch } from "./runner-dispatch";
 import { handleSigningMachineCallback } from "./signing-execution";
 import {
-  betterPeerExists,
   claimRunnerCandidate,
   clearRunnerDeferral,
   clearRunnerFailures,
-  evaluateRunnerCandidate,
-  listRunnerCandidates,
+  type EvaluatedRunnerCandidate,
+  type RunnerCandidate,
   recordRunnerFailure,
-  readRunnerBudget,
-  runnerPeersForJob,
-  runnerUsageMinutes24h,
-  saveRunnerDeferral,
-  type RunnerPeer,
 } from "./runner-scheduler";
 
 export interface RunnerEnv {
@@ -55,6 +49,7 @@ export interface RunnerEnv {
   AUTH?: Pick<Fetcher, "fetch">;
   FORGE: Pick<Fetcher, "fetch">;
   GIT?: Pick<Fetcher, "fetch">;
+  RUNNER_DISPATCH?: DurableObjectNamespace<RunnerDispatch>;
   LOG_LEVEL?: string;
 }
 export interface RunnerRow {
@@ -74,6 +69,7 @@ export interface RunnerRow {
   capacity_reported_at: number | null;
   consecutive_failures: number;
   held_until: number | null;
+  connected: number;
 }
 interface RunRow {
   id: string;
@@ -104,7 +100,7 @@ interface RunRow {
   repository: string;
   namespace_id: string;
 }
-const runnersSelect = `SELECT r.*, n.slug AS owner, p.slug AS repository FROM actions_runners r
+export const runnersSelect = `SELECT r.*, n.slug AS owner, p.slug AS repository FROM actions_runners r
   JOIN namespaces n ON n.id = r.namespace_id LEFT JOIN repositories p ON p.id = r.repository_id`;
 const runsSelect = `SELECT a.*, j.*, n.slug AS owner, p.slug AS repository, p.namespace_id FROM actions_runs a
   JOIN actions_runner_runs j ON j.run_id = a.id JOIN repositories p ON p.id = a.repository_id
@@ -156,7 +152,10 @@ function registrationScopeAllowed(user: TrustedUser, repositoryId: string | null
   );
 }
 
-async function authenticateRunner(request: Request, env: RunnerEnv): Promise<RunnerRow | null> {
+export async function authenticateRunner(
+  request: Request,
+  env: RunnerEnv
+): Promise<RunnerRow | null> {
   const token = tokenPattern.exec(request.headers.get("Authorization") ?? "")?.[1];
   if (!token) return null;
   const row = await env.DB.prepare(
@@ -382,6 +381,7 @@ export async function runnerManagement(
         "UPDATE actions_github_runner_jobs SET status='completed',conclusion='cancelled',completed_at=? WHERE runner_id=? AND status='running'"
       ).bind(now, row.id),
     ]);
+    await disconnectRunner(env, row.namespace_id, row.id);
     await recordAudit(env, {
       action: "actions.runner_revoked",
       actor: auditActor(user),
@@ -581,10 +581,16 @@ export async function queueRunnerRun(
   const id = crypto.randomUUID(),
     now = Date.now();
   const repo = await env.DB.prepare(
-    "SELECT n.slug AS owner,p.slug,p.visibility,p.default_branch FROM repositories p JOIN namespaces n ON n.id=p.namespace_id WHERE p.id=? AND p.deleted_at IS NULL"
+    "SELECT n.slug AS owner,p.namespace_id,p.slug,p.visibility,p.default_branch FROM repositories p JOIN namespaces n ON n.id=p.namespace_id WHERE p.id=? AND p.deleted_at IS NULL"
   )
     .bind(repositoryId)
-    .first<{ owner: string; slug: string; visibility: string; default_branch: string }>();
+    .first<{
+      owner: string;
+      namespace_id: string;
+      slug: string;
+      visibility: string;
+      default_branch: string;
+    }>();
   if (!repo) throw new Error("Repository disappeared before queueing.");
   const sourceRef = ref.startsWith("refs/") ? ref : `refs/heads/${ref}`;
   const payload = {
@@ -634,6 +640,7 @@ export async function queueRunnerRun(
   const run = await getRunnerRun(env, id);
   if (!run) throw new Error("Runner run could not be initialized.");
   await publishCheck(env, run);
+  await notifyRunnerDispatch(env, repo.namespace_id);
   return {
     id,
     commitOid: oid,
@@ -650,266 +657,196 @@ export async function queueRunnerRun(
   };
 }
 
-async function claim(request: Request, env: RunnerEnv, runner: RunnerRow): Promise<Response> {
-  const input = RunnerClaimInputSchema.safeParse(await readJsonLimited(request, 4096));
-  if (!input.success) return errorResponse(400, "bad_request", "Invalid runner capacity report.");
-  const now = Date.now();
-  const capacity = input.data.capacity ? RunnerCapacitySchema.parse(input.data.capacity) : null;
-  const budget = input.data.budget ? RunnerBudgetSchema.parse(input.data.budget) : null;
-  if (capacity || budget) {
-    await env.DB.prepare(
-      `UPDATE actions_runners SET
-        capacity_json=COALESCE(?,capacity_json),budget_json=COALESCE(?,budget_json),
-        capacity_reported_at=CASE WHEN ? IS NULL THEN capacity_reported_at ELSE ? END,
-        last_seen_at=? WHERE id=? AND revoked_at IS NULL`
-    )
-      .bind(
-        capacity ? JSON.stringify(capacity) : null,
-        budget ? JSON.stringify(budget) : null,
-        capacity ? now : null,
-        now,
-        now,
-        runner.id
-      )
-      .run();
-    if (capacity) {
-      await env.DB.prepare(
-        `INSERT OR IGNORE INTO actions_runner_samples (runner_id,minute,load1,mem_free_mb,busy)
-         VALUES (?,?,?,?,?)`
-      )
-        .bind(
-          runner.id,
-          Math.floor(now / 60_000),
-          capacity.load1,
-          capacity.memFreeMb,
-          capacity.busy
-        )
-        .run();
+export async function storeRunnerReport(
+  env: RunnerEnv,
+  runner: RunnerRow,
+  capacity: RunnerCapacity,
+  budget: RunnerBudget | null,
+  now: number
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE actions_runners SET capacity_json=?,budget_json=COALESCE(?,budget_json),
+      capacity_reported_at=?,last_seen_at=?,connected=1 WHERE id=? AND revoked_at IS NULL`
+  )
+    .bind(JSON.stringify(capacity), budget ? JSON.stringify(budget) : null, now, now, runner.id)
+    .run();
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO actions_runner_samples (runner_id,minute,load1,mem_free_mb,busy)
+     VALUES (?,?,?,?,?)`
+  )
+    .bind(runner.id, Math.floor(now / 60_000), capacity.load1, capacity.memFreeMb, capacity.busy)
+    .run();
+}
+
+export interface ClaimedJob {
+  run: Record<string, unknown>;
+  runnerId?: string;
+  runnerLabels: string[];
+  leaseToken: string;
+  leaseExpiresAt: number | null;
+}
+
+export type ClaimOutcome =
+  { kind: "claimed"; claim: ClaimedJob } | { kind: "skipped" } | { kind: "failed"; reason: string };
+
+async function issueJobToken(
+  env: RunnerEnv,
+  runId: string,
+  runnerId: string,
+  leaseToken: string
+): Promise<string> {
+  if (!env.AUTH) throw new Error("auth_unavailable");
+  const response = await env.AUTH.fetch(
+    new Request("https://auth.internal/internal/actions-job-token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ runId, runnerId, leaseToken }),
+    })
+  );
+  const body: unknown = JSON.parse((await readTextLimited(response.body, 8192)) ?? "null");
+  const credential = z
+    .object({ data: z.object({ token: z.string().regex(/^ge_job_[0-9a-f]{64}$/) }) })
+    .safeParse(body);
+  if (!response.ok || !credential.success) throw new Error("invalid_job_token");
+  return credential.data.data.token;
+}
+
+async function failUnissuedJob(
+  env: RunnerEnv,
+  runId: string,
+  runnerId: string,
+  leaseHash: string
+): Promise<void> {
+  const failedAt = Date.now();
+  const failed = await env.DB.prepare(
+    "UPDATE actions_runner_runs SET status='completed',conclusion='failure',completed_at=?,log='The job credential could not be issued.' WHERE run_id=? AND lease_hash=? AND status='running' RETURNING run_id"
+  )
+    .bind(failedAt, runId, leaseHash)
+    .first();
+  if (failed) await recordRunnerFailure(env, runnerId, failedAt);
+  await env.DB.prepare("UPDATE actions_job_tokens SET revoked_at=? WHERE run_id=?")
+    .bind(failedAt, runId)
+    .run();
+  const completed = await getRunnerRun(env, runId);
+  if (completed) await publishCheck(env, completed);
+}
+
+const eventRef = (ref: string): string => (ref.startsWith("refs/") ? ref : `refs/heads/${ref}`);
+
+export async function claimSpecificCandidate(
+  env: RunnerEnv,
+  runner: RunnerRow,
+  candidate: RunnerCandidate,
+  evaluated: EvaluatedRunnerCandidate,
+  now: number
+): Promise<ClaimOutcome> {
+  const leaseToken = randomHex(32);
+  const leaseHash = await sha256Hex(leaseToken);
+  const claimed = await claimRunnerCandidate(
+    env,
+    runner,
+    candidate,
+    evaluated.claim.minutes,
+    leaseHash,
+    now,
+    runner.capacity_reported_at
+  );
+  if (!claimed) return { kind: "skipped" };
+  const runnerLabels = RunnerClaimLabelSnapshotSchema.parse({
+    runnerLabels: labels(runner.labels_json),
+  }).runnerLabels;
+  await clearRunnerDeferral(env, candidate.kind, candidate.id);
+  if (candidate.kind === "github") {
+    try {
+      const github = await claimGithubRunner(
+        env,
+        runner,
+        candidate.id,
+        evaluated.claim,
+        leaseHash,
+        now
+      );
+      return github
+        ? { kind: "claimed", claim: { ...github, runnerLabels, leaseToken } }
+        : { kind: "skipped" };
+    } catch {
+      return { kind: "failed", reason: "github-runner-start-failed" };
     }
   }
-  const fresh = await env.DB.prepare(`${runnersSelect} WHERE r.id=? AND r.revoked_at IS NULL`)
-    .bind(runner.id)
-    .first<RunnerRow>();
-  if (!fresh) return errorResponse(401, "unauthorized", "Invalid or revoked runner registration.");
-  const cap = capacity;
-  const budgetData = budget ?? readRunnerBudget(fresh.budget_json);
-  if (
-    cap?.busy === 1 ||
-    (fresh.held_until !== null && fresh.held_until > now) ||
-    (await env.DB.prepare(
-      `SELECT 1 AS busy FROM actions_runner_runs WHERE runner_id=? AND status='running'
-       UNION ALL SELECT 1 AS busy FROM actions_github_runner_jobs WHERE runner_id=? AND status='running' LIMIT 1`
-    )
-      .bind(fresh.id, fresh.id)
-      .first())
-  )
-    return dataResponse({
-      run: null,
-      pollAfterSeconds: 5,
-      runnerLabels: RunnerClaimLabelSnapshotSchema.parse({
-        runnerLabels: labels(fresh.labels_json),
-      }).runnerLabels,
-    });
-
-  const used = await runnerUsageMinutes24h(env, fresh.id, now);
-  const candidates = await listRunnerCandidates(env, fresh);
-  const peerCache = new Map<string, RunnerPeer[]>();
-  for (const candidate of candidates) {
-    const evaluated = evaluateRunnerCandidate(fresh, cap, budgetData, used, candidate);
-    if (evaluated.reasons.length) {
-      await saveRunnerDeferral(env, candidate.kind, candidate.id, fresh.id, evaluated.reasons, now);
-      continue;
-    }
-    let peers = peerCache.get(candidate.repository_id);
-    if (!peers) {
-      peers = await runnerPeersForJob(env, fresh, candidate.repository_id, now);
-      peerCache.set(candidate.repository_id, peers);
-    }
-    if (
-      betterPeerExists(
-        peers,
-        evaluated.claim.labels,
-        evaluated.claim,
-        cap,
-        budgetData,
-        used,
-        candidate.created_at,
-        now
-      )
-    ) {
-      await saveRunnerDeferral(
-        env,
-        candidate.kind,
-        candidate.id,
-        fresh.id,
-        ["peer-preferred"],
-        now
-      );
-      continue;
-    }
-    const leaseToken = randomHex(32);
-    const leaseHash = await sha256Hex(leaseToken);
-    const claimed = await claimRunnerCandidate(
-      env,
-      fresh,
-      candidate,
-      evaluated.claim.minutes,
-      leaseHash,
-      now,
-      fresh.capacity_reported_at
-    );
-    if (!claimed) continue;
-    const runnerLabels = RunnerClaimLabelSnapshotSchema.parse({
-      runnerLabels: labels(fresh.labels_json),
-    }).runnerLabels;
-    await clearRunnerDeferral(env, candidate.kind, candidate.id);
-    if (candidate.kind === "github") {
-      const response = await claimGithubRunner(
-        env,
-        fresh,
-        candidate.id,
-        evaluated.claim,
-        leaseToken,
-        leaseHash,
-        now,
-        runnerLabels
-      );
-      if (response) return response;
-      continue;
-    }
-    const row = await env.DB.prepare(`${runsSelect} WHERE a.id=?`)
-      .bind(candidate.id)
-      .first<RunRow>();
-    if (!row) return errorResponse(409, "conflict", "Claimed run is unavailable.");
-    if (candidate.execution_kind === "signing") {
-      let jobToken: string;
-      try {
-        if (!env.AUTH) throw new Error("auth_unavailable");
-        const response = await env.AUTH.fetch(
-          new Request("https://auth.internal/internal/actions-job-token", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ runId: row.id, runnerId: fresh.id, leaseToken }),
-          })
-        );
-        const body: unknown = JSON.parse((await readTextLimited(response.body, 8192)) ?? "null");
-        const credential = z
-          .object({ data: z.object({ token: z.string().regex(/^ge_job_[0-9a-f]{64}$/) }) })
-          .safeParse(body);
-        if (!response.ok || !credential.success) throw new Error("invalid_job_token");
-        jobToken = credential.data.data.token;
-      } catch {
-        const failedAt = Date.now();
-        const failed = await env.DB.prepare(
-          "UPDATE actions_runner_runs SET status='completed',conclusion='failure',completed_at=?,log='The job credential could not be issued.' WHERE run_id=? AND lease_hash=? AND status='running' RETURNING run_id"
-        )
-          .bind(failedAt, row.id, leaseHash)
-          .first();
-        if (failed) await recordRunnerFailure(env, fresh.id, failedAt);
-        await env.DB.prepare("UPDATE actions_job_tokens SET revoked_at=? WHERE run_id=?")
-          .bind(failedAt, row.id)
-          .run();
-        const completed = await getRunnerRun(env, row.id);
-        if (completed) await publishCheck(env, completed);
-        return errorResponse(503, "internal_error", "The job credential could not be issued.");
-      }
-      await publishCheck(env, runDetails(row));
-      return dataResponse({
-        run: {
-          id: row.id,
-          kind: "signing",
-          token: jobToken,
-          labels: evaluated.labels,
-          requestId: candidate.request_id,
-          stage: candidate.stage,
-          inputDigest: candidate.input_digest,
-          ownerId: row.created_by,
-          repositoryId: row.repository_id,
-          repository: `${row.owner}/${row.repository}`,
-          workflowPath: row.path,
-          workflowSource: row.workflow_source,
-          workflowOid: candidate.workflow_oid,
-          profileRevision: candidate.profile_revision,
-          generation: candidate.generation,
-          nonce: candidate.nonce,
-          platform: candidate.platform,
-          sha: row.commit_oid,
-          ref: row.source_ref.startsWith("refs/") ? row.source_ref : `refs/heads/${row.source_ref}`,
-          event: row.trigger_kind,
-          eventPayload: JSON.parse(row.event_json),
-          permission: row.permission,
-          timeoutMinutes: row.timeout_minutes,
+  const row = await env.DB.prepare(`${runsSelect} WHERE a.id=?`).bind(candidate.id).first<RunRow>();
+  if (!row) return { kind: "skipped" };
+  try {
+    const token = await issueJobToken(env, row.id, runner.id, leaseToken);
+    await publishCheck(env, runDetails(row));
+    const repository = `${row.owner}/${row.repository}`;
+    const ref = eventRef(row.source_ref);
+    const eventPayload: unknown = JSON.parse(row.event_json);
+    if (candidate.execution_kind === "signing")
+      return {
+        kind: "claimed",
+        claim: {
+          run: {
+            id: row.id,
+            kind: "signing",
+            token,
+            labels: evaluated.labels,
+            requestId: candidate.request_id,
+            stage: candidate.stage,
+            inputDigest: candidate.input_digest,
+            ownerId: row.created_by,
+            repositoryId: row.repository_id,
+            repository,
+            workflowPath: row.path,
+            workflowSource: row.workflow_source,
+            workflowOid: candidate.workflow_oid,
+            profileRevision: candidate.profile_revision,
+            generation: candidate.generation,
+            nonce: candidate.nonce,
+            platform: candidate.platform,
+            sha: row.commit_oid,
+            ref,
+            event: row.trigger_kind,
+            eventPayload,
+            permission: row.permission,
+            timeoutMinutes: row.timeout_minutes,
+          },
+          runnerId: runner.id,
+          runnerLabels,
+          leaseToken,
+          leaseExpiresAt: row.lease_expires_at,
         },
-        runnerId: fresh.id,
-        runnerLabels,
-        leaseToken,
-        leaseExpiresAt: row.lease_expires_at,
-      });
-    }
-    if (!env.AUTH)
-      return errorResponse(503, "internal_error", "Job authentication is unavailable.");
-    try {
-      const response = await env.AUTH.fetch(
-        new Request("https://auth.internal/internal/actions-job-token", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ runId: row.id, runnerId: fresh.id, leaseToken }),
-        })
-      );
-      const body: unknown = JSON.parse((await readTextLimited(response.body, 8192)) ?? "null");
-      const credential = z
-        .object({ data: z.object({ token: z.string().regex(/^ge_job_[0-9a-f]{64}$/) }) })
-        .safeParse(body);
-      if (!response.ok || !credential.success)
-        throw new Error("Job credential could not be issued.");
-      await publishCheck(env, runDetails(row));
-      return dataResponse({
+      };
+    return {
+      kind: "claimed",
+      claim: {
         run: {
           id: row.id,
           kind: "workflow",
           repositoryId: row.repository_id,
-          repository: `${row.owner}/${row.repository}`,
+          repository,
           workflowPath: row.path,
           workflowSource: row.workflow_source,
           sha: row.commit_oid,
-          ref: row.source_ref.startsWith("refs/") ? row.source_ref : `refs/heads/${row.source_ref}`,
+          ref,
           event: row.trigger_kind,
-          eventPayload: JSON.parse(row.event_json),
-          token: credential.data.data.token,
+          eventPayload,
+          token,
           permission: row.permission,
           timeoutMinutes: row.timeout_minutes,
         },
         runnerLabels,
         leaseToken,
         leaseExpiresAt: row.lease_expires_at,
-      });
-    } catch {
-      const failedAt = Date.now();
-      const failed = await env.DB.prepare(
-        "UPDATE actions_runner_runs SET status='completed',conclusion='failure',completed_at=?,log='The job credential could not be issued.' WHERE run_id=? AND lease_hash=? AND status='running' RETURNING run_id"
-      )
-        .bind(failedAt, row.id, leaseHash)
-        .first();
-      if (failed) await recordRunnerFailure(env, fresh.id, failedAt);
-      await env.DB.prepare("UPDATE actions_job_tokens SET revoked_at=? WHERE run_id=?")
-        .bind(failedAt, row.id)
-        .run();
-      const completed = await getRunnerRun(env, row.id);
-      if (completed) await publishCheck(env, completed);
-      createLogger(env.LOG_LEVEL, { service: "runner-broker" }).error(
-        "runner:job-credential-failed",
-        { runId: row.id }
-      );
-      return errorResponse(503, "internal_error", "The job credential could not be issued.");
-    }
+      },
+    };
+  } catch {
+    await failUnissuedJob(env, row.id, runner.id, leaseHash);
+    createLogger(env.LOG_LEVEL, { service: "runner-dispatch" }).error(
+      "runner-dispatch:job-credential-failed",
+      { runId: row.id }
+    );
+    return { kind: "failed", reason: "job-credential-failed" };
   }
-  return dataResponse({
-    run: null,
-    pollAfterSeconds: 5,
-    runnerLabels: RunnerClaimLabelSnapshotSchema.parse({
-      runnerLabels: labels(fresh.labels_json),
-    }).runnerLabels,
-  });
 }
 
 async function isSigningRun(env: RunnerEnv, runId: string): Promise<boolean> {
@@ -920,8 +857,44 @@ async function isSigningRun(env: RunnerEnv, runId: string): Promise<boolean> {
   );
 }
 
+async function disconnectRunner(
+  env: RunnerEnv,
+  namespaceId: string,
+  runnerId: string
+): Promise<void> {
+  if (!env.RUNNER_DISPATCH) return;
+  try {
+    await env.RUNNER_DISPATCH.get(env.RUNNER_DISPATCH.idFromName(namespaceId)).disconnect(runnerId);
+  } catch (cause) {
+    createLogger(env.LOG_LEVEL, { service: "runner-dispatch" }).warn(
+      "runner-dispatch:disconnect-failed",
+      { runnerId, reason: cause instanceof Error ? cause.message : "unknown" }
+    );
+  }
+}
+
+async function connectRunner(request: Request, env: RunnerEnv): Promise<Response> {
+  if (request.method !== "GET" || request.headers.get("Upgrade")?.toLowerCase() !== "websocket")
+    return errorResponse(
+      426,
+      "upgrade_required",
+      "Runner connections require a WebSocket upgrade."
+    );
+  const runner = await authenticateRunner(request, env);
+  if (!runner) return errorResponse(401, "unauthorized", "Invalid or revoked runner registration.");
+  if (!env.RUNNER_DISPATCH)
+    return errorResponse(503, "internal_error", "Runner dispatch is unavailable.");
+  const headers = new Headers(request.headers);
+  headers.delete("Authorization");
+  headers.set("X-Runner-Id", runner.id);
+  return env.RUNNER_DISPATCH.get(env.RUNNER_DISPATCH.idFromName(runner.namespace_id)).fetch(
+    new Request(request, { headers })
+  );
+}
+
 export async function runnerMachineRequest(request: Request, env: RunnerEnv): Promise<Response> {
   const pathname = new URL(request.url).pathname;
+  if (pathname === "/runner/connect") return connectRunner(request, env);
   const signingMachineRoute = pathname.startsWith("/runner/signing/requests/");
   if (signingMachineRoute && !["POST", "GET", "PUT"].includes(request.method))
     return errorResponse(
@@ -1002,9 +975,6 @@ export async function runnerMachineRequest(request: Request, env: RunnerEnv): Pr
   if (!runner) return errorResponse(401, "unauthorized", "Invalid or revoked runner registration.");
   const operation = new URL(request.url).pathname.split("/")[2];
   if (operation === "github") return githubRunnerLease(request, env, runner);
-  if (operation === "claim") {
-    return claim(request, env, runner);
-  }
   const body = await readJsonLimited(
     request,
     operation === "complete" ? RUNNER_LOG_BYTES * 6 + 4096 : 8192

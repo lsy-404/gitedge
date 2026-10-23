@@ -2,8 +2,17 @@ import { env } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { TrustedUser } from "../../packages/contracts/src/index";
 import { sha256Hex } from "../../packages/contracts/src/index";
-import { type RunnerEnv, type RunnerRow } from "../../workers/actions/src/runners";
-import { runnerMachineRequest, runnerManagement } from "../../workers/actions/src/runners";
+import type { RunnerCapacity } from "../../packages/contracts/src/runners";
+import {
+  claimSpecificCandidate,
+  runnerMachineRequest,
+  runnerManagement,
+  runnersSelect,
+  storeRunnerReport,
+  type ClaimedJob,
+  type RunnerEnv,
+  type RunnerRow,
+} from "../../workers/actions/src/runners";
 import {
   claimRunnerCandidate,
   evaluateRunnerCandidate,
@@ -22,6 +31,30 @@ const actionEnv: RunnerEnv = {
   FORGE: { fetch: async () => Response.json({ data: {} }) },
   GIT: { fetch: async () => Response.json({ data: {} }) },
 };
+
+// Mirrors one dispatch pass for a single connected runner: report, list, evaluate, commit.
+async function claimThroughScheduler(
+  claimEnv: RunnerEnv,
+  id: string,
+  capacity: RunnerCapacity
+): Promise<ClaimedJob | null> {
+  const stored = await env.DB.prepare(`${runnersSelect} WHERE r.id=?`).bind(id).first<RunnerRow>();
+  await storeRunnerReport(claimEnv, stored!, capacity, null, Date.now());
+  const runner = await env.DB.prepare(`${runnersSelect} WHERE r.id=?`).bind(id).first<RunnerRow>();
+  for (const candidate of await listRunnerCandidates(claimEnv, runner!)) {
+    const evaluated = evaluateRunnerCandidate(runner!, capacity, null, 0, candidate);
+    if (evaluated.reasons.length) continue;
+    const outcome = await claimSpecificCandidate(
+      claimEnv,
+      runner!,
+      candidate,
+      evaluated,
+      Date.now()
+    );
+    if (outcome.kind === "claimed") return outcome.claim;
+  }
+  return null;
+}
 
 function trusted(person: Person, extra: Partial<TrustedUser> = {}): TrustedUser {
   return {
@@ -341,28 +374,7 @@ describe("general-purpose native signing execution", () => {
       actionEnv,
       trusted(owner)
     );
-    const response = await runnerMachineRequest(
-      new Request("https://actions.internal/runner/claim", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${runnerToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          capacity: {
-            os: "windows",
-            arch: "x64",
-            cpus: 2,
-            load1: 0,
-            memTotalMb: 4096,
-            memFreeMb: 2048,
-            diskFreeMb: 20_000,
-            tools: ["node"],
-            slots: 1,
-            busy: 0,
-          },
-        }),
-      }),
+    const claimed = await claimThroughScheduler(
       {
         ...actionEnv,
         AUTH: {
@@ -375,14 +387,24 @@ describe("general-purpose native signing execution", () => {
             return Response.json({ data: { token: jobToken } });
           },
         },
+      },
+      customRunnerId,
+      {
+        os: "windows",
+        arch: "x64",
+        cpus: 2,
+        load1: 0,
+        memTotalMb: 4096,
+        memFreeMb: 2048,
+        diskFreeMb: 20_000,
+        tools: ["node"],
+        slots: 1,
+        busy: 0,
       }
     );
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({
-      data: {
-        run: { id: runId, kind: "workflow" },
-        runnerLabels: ["self-hosted", "Windows", "x64", "device", "ip-residential"],
-      },
+    expect(claimed).toMatchObject({
+      run: { id: runId, kind: "workflow" },
+      runnerLabels: ["self-hosted", "Windows", "x64", "device", "ip-residential"],
     });
   });
 
@@ -593,28 +615,7 @@ describe("general-purpose native signing execution", () => {
       )
     ).toBe(true);
     const signingJobToken = `ge_job_${"a".repeat(64)}`;
-    const claimResponse = await runnerMachineRequest(
-      new Request("https://actions.internal/runner/claim", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${runnerToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          capacity: {
-            os: "windows",
-            arch: "x64",
-            cpus: 4,
-            load1: 0,
-            memTotalMb: 8192,
-            memFreeMb: 4096,
-            diskFreeMb: 100000,
-            tools: [],
-            slots: 1,
-            busy: 0,
-          },
-        }),
-      }),
+    const signingClaim = await claimThroughScheduler(
       {
         ...actionEnv,
         AUTH: {
@@ -628,33 +629,37 @@ describe("general-purpose native signing execution", () => {
             return Response.json({ data: { token: signingJobToken } });
           },
         },
+      },
+      runnerId,
+      {
+        os: "windows",
+        arch: "x64",
+        cpus: 4,
+        load1: 0,
+        memTotalMb: 8192,
+        memFreeMb: 4096,
+        diskFreeMb: 100000,
+        tools: [],
+        slots: 1,
+        busy: 0,
       }
     );
-    expect(claimResponse.status).toBe(200);
-    const jobTokenCannotClaim = await runnerMachineRequest(
-      new Request("https://actions.internal/runner/claim", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${signingJobToken}` },
-        body: "{}",
+    if (!signingClaim) throw new Error("The signing job was not claimed.");
+    const jobTokenCannotConnect = await runnerMachineRequest(
+      new Request("https://actions.internal/runner/connect", {
+        headers: { Authorization: `Bearer ${signingJobToken}`, Upgrade: "websocket" },
       }),
       actionEnv
     );
-    expect(jobTokenCannotClaim.status).toBe(401);
-    const signingClaim = (await claimResponse.json()) as {
-      data: {
-        run: { kind: string; token: string; repository: string; sha: string };
-        runnerLabels: string[];
-        leaseToken: string;
-      };
-    };
-    const signingLeaseToken = signingClaim.data.leaseToken;
-    expect(signingClaim.data.run).toMatchObject({
+    expect(jobTokenCannotConnect.status).toBe(401);
+    const signingLeaseToken = signingClaim.leaseToken;
+    expect(signingClaim.run).toMatchObject({
       kind: "signing",
       token: signingJobToken,
       repository: "signing-runner-owner/runner",
       sha: "c".repeat(40),
     });
-    expect(signingClaim.data.runnerLabels).toEqual(["self-hosted", "Windows", "ci"]);
+    expect(signingClaim.runnerLabels).toEqual(["self-hosted", "Windows", "ci"]);
     const outputBytes = new TextEncoder().encode("verified signing archive");
     const outputDigest = `sha256:${await sha256Hex(new TextDecoder().decode(outputBytes))}`;
     const outputKey = `signing/${owner.id}/${repositoryId}/${requestId}/output.zip`;

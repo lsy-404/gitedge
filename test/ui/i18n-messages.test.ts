@@ -63,7 +63,6 @@ const dynamicKeys: Record<string, readonly string[]> = {
     "budget_job",
     "budget_daily",
     "claim_invalid",
-    "peer_preferred",
     "offline",
   ],
   taskStatus_: taskStatuses,

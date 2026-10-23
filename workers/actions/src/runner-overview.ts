@@ -8,7 +8,6 @@ import {
   RunnerBudgetSchema,
   RunnerCapacitySchema,
   RUNNER_CAPACITY_STALE_MS,
-  RUNNER_DEFERRAL_AGE_MS,
   type JobClaim,
   type RegisteredRunner,
   type RunnerHistory,
@@ -44,6 +43,7 @@ interface RunnerDbRow {
   budget_json: string | null;
   held_until: number | null;
   consecutive_failures: number;
+  connected: number;
   owner: string;
   repository: string | null;
 }
@@ -83,20 +83,12 @@ interface QueueDbRow {
   minutes: number;
 }
 
-interface DeferralDbRow {
-  job_kind: "gitedge" | "github";
-  job_id: string;
-  runner_id: string;
-  reasons_json: string;
-  updated_at: number;
-}
-
 const MAX_RUNNERS = 100;
 const MAX_CONNECTIONS = 50;
 const MAX_QUEUE = 50;
 const MAX_SAMPLES = 96;
 const MAX_HISTORY = 50;
-// Brokers heartbeat about every 35 seconds; tolerate two missed beats.
+// Brokers report about every 30 seconds; tolerate two missed reports.
 const OFFLINE_MS = 90_000;
 const HistoryCursorSchema = z
   .object({
@@ -138,7 +130,7 @@ function parseRunner(row: RunnerDbRow): RegisteredRunner {
 
 const runnerSelect = `SELECT r.id,r.name,r.namespace_id,r.repository_id,r.created_by,r.labels_json,r.created_at,
   r.last_seen_at,r.revoked_at,r.capacity_json,r.capacity_reported_at,r.budget_json,r.held_until,
-  r.consecutive_failures,n.slug AS owner,p.slug AS repository
+  r.consecutive_failures,r.connected,n.slug AS owner,p.slug AS repository
   FROM actions_runners r JOIN namespaces n ON n.id=r.namespace_id
   LEFT JOIN repositories p ON p.id=r.repository_id`;
 
@@ -176,9 +168,13 @@ async function visibleRunners(
   };
 }
 
+function runnerOffline(row: RunnerDbRow, now: number): boolean {
+  return row.connected === 0 || row.last_seen_at === null || row.last_seen_at < now - OFFLINE_MS;
+}
+
 function displayState(row: RunnerDbRow, busy: boolean, now: number): RunnerOverviewRunner["state"] {
   if (row.held_until !== null && row.held_until > now) return "held";
-  if (row.last_seen_at === null || row.last_seen_at < now - OFFLINE_MS) return "offline";
+  if (runnerOffline(row, now)) return "offline";
   return busy ? "busy" : "idle";
 }
 
@@ -233,7 +229,7 @@ function runnerUsageReasons(
   }
   if (busy) reasons.push("busy");
   if (row.held_until !== null && row.held_until > now) reasons.push("held");
-  if (row.last_seen_at === null || row.last_seen_at < now - OFFLINE_MS) reasons.push("offline");
+  if (runnerOffline(row, now)) reasons.push("offline");
   const capacity =
     row.capacity_reported_at !== null && row.capacity_reported_at >= now - RUNNER_CAPACITY_STALE_MS
       ? parseJson(row.capacity_json, (value) => RunnerCapacitySchema.parse(value))
@@ -413,26 +409,6 @@ export async function handleRunnerOverview(
           }>(),
         queueRows(env, user),
       ]);
-    const deferrals = queue.rows.length
-      ? await env.DB.prepare(
-          `SELECT d.job_kind,d.job_id,reason.key AS runner_id,reason.value AS reasons_json,d.updated_at
-          FROM actions_runner_deferrals d,json_each(d.reasons_json) reason
-          WHERE d.job_kind||':'||d.job_id IN (SELECT value FROM json_each(?))
-            AND reason.key IN (SELECT value FROM json_each(?)) AND d.updated_at>=? AND d.updated_at<=?`
-        )
-          .bind(
-            JSON.stringify(queue.rows.map((job) => `${job.kind}:${job.id}`)),
-            JSON.stringify(ids),
-            now - RUNNER_CAPACITY_STALE_MS,
-            now
-          )
-          .all<DeferralDbRow>()
-      : { results: [] as DeferralDbRow[] };
-    const recentPeerDeferrals = new Set(
-      deferrals.results
-        .filter((row) => safeLabels(row.reasons_json).includes("peer-preferred"))
-        .map((row) => `${row.job_kind}:${row.job_id}:${row.runner_id}`)
-    );
     truncated ||=
       statsResult.results.length > ids.length ||
       sampleResult.results.length > ids.length * MAX_SAMPLES ||
@@ -482,7 +458,7 @@ export async function handleRunnerOverview(
         const namespaceMatches = runner.owner === job.repository.split("/")[0];
         const repositoryMatches =
           runner.repository === null || runner.repository === job.repository.split("/")[1];
-        let reasons =
+        const reasons =
           namespaceMatches && repositoryMatches
             ? runnerUsageReasons(
                 runner,
@@ -493,14 +469,6 @@ export async function handleRunnerOverview(
                 running.has(runner.id)
               )
             : ["scope"];
-        if (
-          reasons.length === 0 &&
-          now - job.created_at < RUNNER_DEFERRAL_AGE_MS &&
-          now >= job.created_at &&
-          recentPeerDeferrals.has(`${job.kind}:${job.id}:${runnerView.id}`)
-        ) {
-          reasons = ["peer-preferred"];
-        }
         if (reasons.length) blockedBy[runnerView.id] = reasons;
       }
       return {

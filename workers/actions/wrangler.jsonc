@@ -38,6 +38,10 @@
       {
         "name": "SIGNING_COORDINATORS",
         "class_name": "SigningCoordinator"
+      },
+      {
+        "name": "RUNNER_DISPATCH",
+        "class_name": "RunnerDispatch"
       }
     ]
   },
@@ -51,6 +55,10 @@
       "storage": "sqlite"
     },
     "SigningCoordinator": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "RunnerDispatch": {
       "type": "durable-object",
       "storage": "sqlite"
     }
