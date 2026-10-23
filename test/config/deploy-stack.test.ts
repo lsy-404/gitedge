@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { findUnresolvedResourceIds } from "../../scripts/deploy-stack.mjs";
+import { findUnresolvedResourceIds, pnpmInvocation } from "../../scripts/deploy-stack.mjs";
 import {
   dryRunOperatorConfig,
   renderWorkerConfig,
@@ -11,6 +11,25 @@ import {
 } from "../../scripts/operator-config.mjs";
 
 describe("production deployment preflight", () => {
+  it("invokes the active pnpm JavaScript CLI directly on Windows", () => {
+    const invocation = pnpmInvocation(["exec", "tool", "--config", "path with spaces.jsonc"], {
+      platform: "win32",
+      executable: "C:/node/node.exe",
+      cli: "C:/pnpm/pnpm.cjs",
+    });
+
+    expect(invocation).toEqual({
+      command: "C:/node/node.exe",
+      args: ["C:/pnpm/pnpm.cjs", "exec", "tool", "--config", "path with spaces.jsonc"],
+    });
+  });
+
+  it("keeps a direct Windows invocation explicit when pnpm context is missing", () => {
+    expect(() => pnpmInvocation([], { platform: "win32", cli: undefined })).toThrow(
+      "Run the deploy stack through pnpm"
+    );
+  });
+
   it("resolves every placeholder once operator values are applied", () => {
     const fixtureDir = mkdtempSync(join(tmpdir(), "gitedge-deploy-"));
     try {

@@ -15,6 +15,30 @@ const deployOrder = ["limits", "auth", "forge", "actions", "git", "deploy", "mcp
 
 let activeAccountId;
 
+export function pnpmInvocation(
+  args,
+  {
+    platform = process.platform,
+    executable = process.execPath,
+    cli = process.env.npm_execpath,
+  } = {}
+) {
+  if (cli) return { command: executable, args: [cli, ...args] };
+  if (platform === "win32")
+    throw new Error("Run the deploy stack through pnpm so Windows can locate the pnpm CLI safely.");
+  return { command: "pnpm", args };
+}
+
+function runPnpm(args, options) {
+  const invocation = pnpmInvocation(args);
+  return run(invocation.command, invocation.args, options);
+}
+
+function spawnPnpmSync(args, options) {
+  const invocation = pnpmInvocation(args);
+  return spawnSync(invocation.command, invocation.args, options);
+}
+
 function cloudflareEnvironment() {
   return { ...process.env, CLOUDFLARE_ACCOUNT_ID: activeAccountId };
 }
@@ -66,8 +90,7 @@ function readConfig(path) {
 }
 
 function workerExists(configPath, service) {
-  const result = spawnSync(
-    "pnpm",
+  const result = spawnPnpmSync(
     ["exec", "wrangler", "deployments", "list", "--config", configPath],
     { encoding: "utf8", env: cloudflareEnvironment() }
   );
@@ -85,8 +108,7 @@ function bootstrapCyclicWorkers(configs) {
     const config = readConfig(configs[service]);
     console.log(`Creating placeholder Worker ${config.name}`);
     if (
-      !run(
-        "pnpm",
+      !runPnpm(
         [
           "exec",
           "wrangler",
@@ -116,18 +138,14 @@ function ensureAssetBuckets(configs) {
     const config = readConfig(configs[service]);
     const bucket = config.r2_buckets?.find((entry) => entry.binding === binding);
     if (!bucket) throw new Error(`${service} must bind ${binding}.`);
-    const info = spawnSync(
-      "pnpm",
-      ["exec", "wrangler", "r2", "bucket", "info", bucket.bucket_name],
-      {
-        encoding: "utf8",
-        env: cloudflareEnvironment(),
-      }
-    );
+    const info = spawnPnpmSync(["exec", "wrangler", "r2", "bucket", "info", bucket.bucket_name], {
+      encoding: "utf8",
+      env: cloudflareEnvironment(),
+    });
     if (info.status === 0) continue;
     console.log(`Creating R2 bucket ${bucket.bucket_name}`);
     if (
-      !run("pnpm", ["exec", "wrangler", "r2", "bucket", "create", bucket.bucket_name], {
+      !runPnpm(["exec", "wrangler", "r2", "bucket", "create", bucket.bucket_name], {
         cloudflare: true,
       })
     )
@@ -136,8 +154,7 @@ function ensureAssetBuckets(configs) {
   const signingBucket = readConfig(configs.actions).r2_buckets.find(
     (entry) => entry.binding === "SIGNING_ARTIFACTS"
   );
-  return run(
-    "pnpm",
+  return runPnpm(
     [
       "exec",
       "wrangler",
@@ -160,7 +177,7 @@ function ensureGithubSyncQueue(configs) {
     (entry) => entry.binding === "GITHUB_SYNC_QUEUE"
   )?.queue;
   if (!queue) throw new Error("Forge must bind GITHUB_SYNC_QUEUE.");
-  const info = spawnSync("pnpm", ["exec", "wrangler", "queues", "info", queue], {
+  const info = spawnPnpmSync(["exec", "wrangler", "queues", "info", queue], {
     encoding: "utf8",
     env: cloudflareEnvironment(),
   });
@@ -168,12 +185,11 @@ function ensureGithubSyncQueue(configs) {
   const output = `${info.stdout ?? ""}${info.stderr ?? ""}`;
   if (!/does not exist|not found|10024/i.test(output))
     throw new Error("Cannot inspect the GitHub synchronization queue.");
-  return run("pnpm", ["exec", "wrangler", "queues", "create", queue], { cloudflare: true });
+  return runPnpm(["exec", "wrangler", "queues", "create", queue], { cloudflare: true });
 }
 
 function migrateRemote(configs) {
-  return run(
-    "pnpm",
+  return runPnpm(
     [
       "exec",
       "wrangler",
@@ -209,7 +225,7 @@ export function renderStack() {
 export function deployStack({ dryRun = false } = {}) {
   const configs = prepareConfigs({ dryRun });
   if (!configs) return false;
-  if (!run("pnpm", ["--dir", "apps/web", "run", "build"])) return false;
+  if (!runPnpm(["--dir", "apps/web", "run", "build"])) return false;
 
   if (!dryRun) {
     if (!migrateRemote(configs)) return false;
@@ -221,7 +237,7 @@ export function deployStack({ dryRun = false } = {}) {
   for (const service of deployOrder) {
     const args = ["exec", "wrangler", "deploy", "--config", configs[service]];
     if (dryRun) args.push("--dry-run");
-    if (!run("pnpm", args, { cloudflare: true })) return false;
+    if (!runPnpm(args, { cloudflare: true })) return false;
   }
 
   return true;
