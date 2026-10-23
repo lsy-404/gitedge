@@ -385,6 +385,12 @@ export async function handleGithubGitSync(request: Request, env: GitEnv): Promis
       } satisfies GitHubSyncTransferResult);
     if (sourceOid !== input.after) return result("stale");
     if (before === input.after) return result("unchanged");
+    if (input.before !== null && before !== input.before)
+      return errorResponse(
+        409,
+        "sync_ref_conflict",
+        "The destination ref changed before synchronization."
+      );
     if (input.targetRef.startsWith("refs/tags/") && before !== ZERO_OID && input.after !== ZERO_OID)
       return errorResponse(
         409,

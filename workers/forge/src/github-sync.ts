@@ -25,12 +25,18 @@ import {
   enqueueGithubJob,
   githubConnection,
   githubCredentials,
+  githubLastSyncedRef,
   presentGithubJob,
   type GithubConnectionRow,
   type GithubCredentials,
   type GithubJobRow,
 } from "./github-sync-store";
-import { githubSyncRefs, syncGithubRef } from "./github-sync-git";
+import {
+  githubSyncRefs,
+  planGithubRefSync,
+  syncGithubRef,
+  type GithubRef,
+} from "./github-sync-git";
 import { syncGithubCollaboration } from "./github-sync-collaboration";
 import { GitHubRunnerWebhookSchema } from "../../../packages/contracts/src/runners";
 import { stopGithubRunners } from "./github-runners";
@@ -505,6 +511,43 @@ export async function receiveGithubWebhook(
   return dataResponse({ accepted: true }, 202);
 }
 
+export async function enqueueGithubRefReconciliation(
+  db: D1Database,
+  connectionId: string,
+  localRefs: GithubRef[],
+  remoteRefs: GithubRef[]
+): Promise<void> {
+  const local = new Map(localRefs.map((ref) => [ref.ref, ref.oid]));
+  const remote = new Map(remoteRefs.map((ref) => [ref.ref, ref.oid]));
+  const names = [...new Set([...local.keys(), ...remote.keys()])].sort();
+  for (const ref of names) {
+    if (ref.startsWith("refs/heads/gitedge/pr/")) continue;
+    const edge = local.get(ref);
+    const github = remote.get(ref);
+    const previous = await githubLastSyncedRef(db, connectionId, ref);
+    if (edge === github) {
+      if (edge && previous?.oid !== edge)
+        await enqueueGithubJob(db, connectionId, "outbound", "push", {
+          ref,
+          before: edge,
+          after: edge,
+        });
+      continue;
+    }
+    const plan = planGithubRefSync(edge ?? null, github ?? null, previous?.oid ?? null);
+    if (plan.status === "unchanged") continue;
+    if (plan.status === "conflict") {
+      await enqueueGithubJob(db, connectionId, "inbound", "ref_conflict", { ref });
+      continue;
+    }
+    await enqueueGithubJob(db, connectionId, plan.direction, "push", {
+      ref,
+      before: plan.before,
+      after: plan.after,
+    });
+  }
+}
+
 async function bootstrapGithub(
   env: ForgeEnv,
   connection: GithubConnectionRow,
@@ -516,33 +559,24 @@ async function bootstrapGithub(
   const path = githubRepoPath(connection.owner, connection.name);
   if (input.phase === "refs") {
     const refs = await githubSyncRefs(env, connection, credentials, job);
-    const local = new Map(refs.local.map((r) => [r.ref, r.oid]));
-    const remote = new Map(refs.remote.map((r) => [r.ref, r.oid]));
-    const names = [...new Set([...local.keys(), ...remote.keys()])]
-      .sort()
-      .filter((ref) => ref > (input.cursor ?? ""));
-    for (const ref of names.slice(0, 20)) {
-      const edge = local.get(ref),
-        github = remote.get(ref);
-      if (edge === github) continue;
-      if (github)
-        await enqueueGithubJob(env.DB, connection.id, "inbound", "push", {
-          ref,
-          before: null,
-          after: github,
-        });
-      if (edge)
-        await enqueueGithubJob(env.DB, connection.id, "outbound", "push", {
-          ref,
-          before: null,
-          after: edge,
-        });
-    }
-    if (names.length > 20)
+    const local = refs.local.filter((ref) => ref.ref > (input.cursor ?? ""));
+    const remote = refs.remote.filter((ref) => ref.ref > (input.cursor ?? ""));
+    const allNames = [
+      ...new Set([...local.map((ref) => ref.ref), ...remote.map((ref) => ref.ref)]),
+    ].sort();
+    const names = allNames.slice(0, 20);
+    const selected = new Set(names);
+    await enqueueGithubRefReconciliation(
+      env.DB,
+      connection.id,
+      local.filter((ref) => selected.has(ref.ref)),
+      remote.filter((ref) => selected.has(ref.ref))
+    );
+    if (allNames.length > names.length)
       await enqueueGithubJob(env.DB, connection.id, "inbound", "bootstrap", {
         ...input,
         page: input.page + 1,
-        cursor: names[19],
+        cursor: names.at(-1) ?? input.cursor,
       });
     return;
   }
@@ -766,26 +800,46 @@ export async function drainGithubSync(env: ForgeEnv, connectionId?: string): Pro
         try {
           let status: "success" | "ignored" = "success";
           if (job.event === "bootstrap") await bootstrapGithub(env, claimed, credentials, job);
-          else if (job.event === "push") {
-            const input = PushSchema.extend({ before: PushSchema.shape.before.nullable() }).parse(
-              JSON.parse(job.payload)
-            );
-            if (!/^refs\/(heads|tags)\//.test(input.ref)) status = "ignored";
-            else {
-              const linked =
-                job.direction === "inbound"
-                  ? await env.DB.prepare(
-                      "SELECT p.id,p.head_ref FROM forge_pull_requests p JOIN forge_github_mappings m ON m.local_id=p.id AND m.kind='pull_request' AND m.connection_id=? WHERE p.repository_id=? AND 'refs/heads/gitedge/pr/'||p.number=? AND p.state='open'"
-                    )
-                      .bind(claimed.id, claimed.repository_id, input.ref)
-                      .first<{ id: string; head_ref: string }>()
-                  : null;
-              const result = await syncGithubRef(env, claimed, credentials, job, {
-                ...input,
-                targetRef: linked ? `refs/heads/${linked.head_ref}` : input.ref,
-                ...(linked ? { pullRequestId: linked.id } : {}),
-              });
-              if (result.status === "stale") status = "ignored";
+          else if (job.event === "push" || job.event === "ref_conflict") {
+            if (job.event === "ref_conflict") {
+              const input = z.object({ ref: z.string() }).parse(JSON.parse(job.payload));
+              const refs = await githubSyncRefs(env, claimed, credentials, job);
+              const local = refs.local.find((ref) => ref.ref === input.ref)?.oid ?? null;
+              const remote = refs.remote.find((ref) => ref.ref === input.ref)?.oid ?? null;
+              const previous = await githubLastSyncedRef(env.DB, claimed.id, input.ref);
+              const plan = planGithubRefSync(local, remote, previous?.oid ?? null);
+              if (plan.status === "conflict")
+                throw new GithubSyncConflict("concurrent_ref_changes");
+              if (plan.status === "unchanged") {
+                status = "ignored";
+              } else {
+                await enqueueGithubJob(env.DB, claimed.id, plan.direction, "push", {
+                  ref: input.ref,
+                  before: plan.before,
+                  after: plan.after,
+                });
+              }
+            } else {
+              const input = PushSchema.extend({ before: PushSchema.shape.before.nullable() }).parse(
+                JSON.parse(job.payload)
+              );
+              if (!/^refs\/(heads|tags)\//.test(input.ref)) status = "ignored";
+              else {
+                const linked =
+                  job.direction === "inbound"
+                    ? await env.DB.prepare(
+                        "SELECT p.id,p.head_ref FROM forge_pull_requests p JOIN forge_github_mappings m ON m.local_id=p.id AND m.kind='pull_request' AND m.connection_id=? WHERE p.repository_id=? AND 'refs/heads/gitedge/pr/'||p.number=? AND p.state='open'"
+                      )
+                        .bind(claimed.id, claimed.repository_id, input.ref)
+                        .first<{ id: string; head_ref: string }>()
+                    : null;
+                const result = await syncGithubRef(env, claimed, credentials, job, {
+                  ...input,
+                  targetRef: linked ? `refs/heads/${linked.head_ref}` : input.ref,
+                  ...(linked ? { pullRequestId: linked.id } : {}),
+                });
+                if (result.status === "stale") status = "ignored";
+              }
             }
           } else status = await syncGithubCollaboration(env, claimed, credentials, job);
           await env.DB.batch([
@@ -858,7 +912,33 @@ export async function drainGithubSync(env: ForgeEnv, connectionId?: string): Pro
 
 export async function purgeGithubSyncJobs(env: ForgeEnv): Promise<void> {
   await env.DB.prepare(
-    "DELETE FROM forge_github_jobs WHERE id IN (SELECT id FROM forge_github_jobs WHERE completed_at<? AND status IN ('success','ignored') LIMIT 200)"
+    `DELETE FROM forge_github_jobs
+     WHERE id IN (
+       SELECT old.id
+       FROM forge_github_jobs old
+       WHERE old.completed_at<?
+         AND old.status IN ('success','ignored')
+         AND NOT (
+           old.event='push'
+           AND old.status='success'
+           AND json_valid(old.payload)
+           AND NOT EXISTS (
+             SELECT 1
+             FROM forge_github_jobs newer
+             WHERE newer.connection_id=old.connection_id
+               AND newer.event='push'
+               AND newer.status='success'
+               AND json_valid(newer.payload)
+               AND json_extract(newer.payload,'$.ref')=json_extract(old.payload,'$.ref')
+               AND (
+                 newer.completed_at>old.completed_at
+                 OR (newer.completed_at=old.completed_at AND newer.created_at>old.created_at)
+                 OR (newer.completed_at=old.completed_at AND newer.created_at=old.created_at AND newer.id>old.id)
+               )
+           )
+         )
+       LIMIT 200
+     )`
   )
     .bind(Date.now() - 30 * 86_400_000)
     .run();

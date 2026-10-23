@@ -106,6 +106,19 @@ export async function enqueueGithubJob(
     .run();
 }
 
+export async function githubLastSyncedRef(
+  db: D1Database,
+  connectionId: string,
+  ref: string
+): Promise<{ oid: string } | null> {
+  return db
+    .prepare(
+      "SELECT json_extract(payload,'$.after') AS oid FROM forge_github_jobs WHERE connection_id=? AND event='push' AND status='success' AND json_valid(payload) AND json_extract(payload,'$.ref')=? ORDER BY completed_at DESC,created_at DESC,id DESC LIMIT 1"
+    )
+    .bind(connectionId, ref)
+    .first<{ oid: string }>();
+}
+
 export async function githubMapping(
   db: D1Database,
   connectionId: string,

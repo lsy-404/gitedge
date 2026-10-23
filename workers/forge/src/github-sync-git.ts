@@ -14,6 +14,41 @@ import {
 } from "./github-sync-store";
 
 const RefSchema = z.object({ ref: z.string(), oid: GitOidSchema });
+const ZERO_OID = "0".repeat(40);
+export type GithubRef = z.infer<typeof RefSchema>;
+
+export type GithubRefSyncPlan =
+  | { status: "unchanged" }
+  | {
+      status: "sync";
+      direction: "inbound" | "outbound";
+      before: string;
+      after: string;
+    }
+  | { status: "conflict" };
+
+export function planGithubRefSync(
+  localOid: string | null,
+  remoteOid: string | null,
+  lastSyncedOid: string | null
+): GithubRefSyncPlan {
+  const local = localOid ?? ZERO_OID;
+  const remote = remoteOid ?? ZERO_OID;
+  if (local === remote) return { status: "unchanged" };
+  if (lastSyncedOid === null) {
+    if (local === ZERO_OID)
+      return { status: "sync", direction: "inbound", before: ZERO_OID, after: remote };
+    if (remote === ZERO_OID)
+      return { status: "sync", direction: "outbound", before: ZERO_OID, after: local };
+    return { status: "conflict" };
+  }
+  if (local === lastSyncedOid)
+    return { status: "sync", direction: "inbound", before: lastSyncedOid, after: remote };
+  if (remote === lastSyncedOid)
+    return { status: "sync", direction: "outbound", before: lastSyncedOid, after: local };
+  return { status: "conflict" };
+}
+
 const RefListSchema = z.object({
   data: z.object({ local: z.array(RefSchema).max(1000), remote: z.array(RefSchema).max(1000) }),
 });
