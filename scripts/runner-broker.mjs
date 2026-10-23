@@ -1344,7 +1344,10 @@ function validateGitEdgeWorkflow(source, profile) {
     throw new Error("The queued workflow has no jobs.");
   const workflowMaximum = Math.min(
     360,
-    Object.values(workflow.jobs).reduce((total, job) => total + (job?.["timeout-minutes"] ?? 60), 0)
+    Object.values(workflow.jobs).reduce(
+      (total, job) => total + (job?.["timeout-minutes"] ?? 360),
+      0
+    )
   );
   if (!Number.isInteger(workflowMaximum) || workflowMaximum < 1)
     throw new Error("The queued workflow has an invalid total timeout.");
@@ -1359,7 +1362,7 @@ function validateGitEdgeWorkflow(source, profile) {
       throw new Error(
         `Job ${name} does not target this host's self-hosted operating system, architecture, and labels.`
       );
-    const timeout = job?.["timeout-minutes"] ?? 60;
+    const timeout = job?.["timeout-minutes"] ?? 360;
     if (!Number.isInteger(timeout) || timeout < 1 || timeout > 360)
       throw new Error(`Job ${name} has an invalid timeout-minutes value.`);
     labelsUnion.push(...labels);

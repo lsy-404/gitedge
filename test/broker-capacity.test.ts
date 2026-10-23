@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createToolProbeCache,
+  createGpuProbeCache,
   localExecutionMinutes,
   parseRunnerBudget,
   runnerCapacityInternals,
@@ -8,8 +9,59 @@ import {
 } from "../scripts/runner-capacity.mjs";
 import { buildRunnerBrokerUnit } from "../scripts/runner-systemd-unit.mjs";
 import { createGitEdgeExecutionArgs } from "../scripts/runner-broker-execution.mjs";
+import { normalizeGpuControllers } from "../scripts/runner-gpu-probe.mjs";
 
 describe("runner capacity probes", () => {
+  it("reports one dedicated VRAM size per detected card and never claims shared system memory", () => {
+    expect(
+      normalizeGpuControllers([
+        { vendor: "NVIDIA Corporation", vram: 4096, memoryTotal: 8192, vramDynamic: false },
+        { vendor: "Advanced Micro Devices, Inc.", vram: 16384, vramDynamic: false },
+        { vendor: "Apple", model: "Apple M4", vram: 24576, vramDynamic: true },
+        { vendor: "Intel", vram: -1 },
+      ])
+    ).toEqual([
+      { vendor: "nvidia", vramMb: 8192 },
+      { vendor: "amd", vramMb: 16384 },
+      { vendor: "apple", vramMb: null },
+      { vendor: "intel", vramMb: null },
+    ]);
+  });
+
+  it("bounds the GPU probe, caches its result and fails closed on probe errors", async () => {
+    let now = 1000;
+    let calls = 0;
+    const getGpus = createGpuProbeCache({
+      now: () => now,
+      execute: async (_command, args, options) => {
+        expect(args[0]).toContain("runner-gpu-probe.mjs");
+        expect(options).toMatchObject({ timeout: 8000, maxBuffer: 16384, windowsHide: true });
+        calls++;
+        if (calls > 1) throw new Error("probe timed out");
+        return { stdout: '[{"vendor":"nvidia","vramMb":8192}]' };
+      },
+    });
+    expect(await getGpus()).toEqual([{ vendor: "nvidia", vramMb: 8192 }]);
+    await getGpus();
+    expect(calls).toBe(1);
+    now += 600001;
+    expect(await getGpus()).toBeNull();
+    expect(calls).toBe(2);
+    expect(() =>
+      validateLocalJobClaim(
+        ["GPU-NVIDIA", "VRAM-8G"],
+        {
+          cpus: 2,
+          memFreeMb: 4096,
+          diskFreeMb: 50000,
+          load1: null,
+          tools: [],
+          gpus: null,
+        },
+        360
+      )
+    ).toThrow("capacity");
+  });
   it("validates profile budget bounds and enforces need-label capacity plus local timeout", () => {
     expect(
       parseRunnerBudget({ "max-job-minutes": "60", "daily-minutes": "240", cost: "10" })

@@ -17,6 +17,7 @@ import {
   type RunnerJobKind,
 } from "../../../packages/contracts/src/runners";
 import {
+  RESOURCE_LABEL_PREFIXES,
   eligibilityReasons,
   hasNeedLabels,
   matchesLabels,
@@ -126,6 +127,9 @@ export async function listRunnerCandidates(
   runner: RunnerRow
 ): Promise<RunnerCandidate[]> {
   const runnerLabels = JSON.stringify(parseLabels(runner.labels_json) ?? []);
+  const ordinaryLabel = RESOURCE_LABEL_PREFIXES.map(
+    (prefix) => `lower(required.value) NOT LIKE '${prefix}%'`
+  ).join(" AND ");
   const rows = await env.DB.prepare(
     `SELECT * FROM (
       SELECT 'gitedge' AS kind,CASE WHEN s.run_id IS NULL THEN 'workflow' ELSE 'signing' END AS execution_kind,
@@ -139,7 +143,7 @@ export async function listRunnerCandidates(
         AND p.actions_runner_enabled=1 AND u.disabled_at IS NULL
         AND (s.run_id IS NULL OR (s.owner_id=? AND s.repository_id=p.id))
         AND NOT EXISTS (SELECT 1 FROM json_each(j.labels_json) required
-          WHERE lower(required.value) NOT LIKE 'need-%'
+          WHERE ${ordinaryLabel}
             AND lower(required.value) NOT IN (SELECT lower(value) FROM json_each(?)))
       UNION ALL
       SELECT 'github' AS kind,'workflow' AS execution_kind,j.id,p.id AS repository_id,j.created_at,
@@ -151,7 +155,7 @@ export async function listRunnerCandidates(
         AND p.namespace_id=? AND (? IS NULL OR p.id=?)
         AND p.deleted_at IS NULL AND p.archived=0 AND p.actions_enabled=1 AND u.disabled_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM json_each(j.labels_json) required
-          WHERE lower(required.value) NOT LIKE 'need-%'
+          WHERE ${ordinaryLabel}
             AND lower(required.value) NOT IN (SELECT lower(value) FROM json_each(?)))
     ) ORDER BY created_at,id LIMIT ?`
   )

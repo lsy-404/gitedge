@@ -4,15 +4,40 @@ const MAX_CPUS = 512;
 const MAX_DISK_MB = 1_048_576_000;
 const MAX_MINUTES = 360;
 const TOOL_NAME = /^[a-z0-9][a-z0-9._+-]{0,63}$/;
+export const RESOURCE_LABEL_PREFIXES = Object.freeze([
+  "need-",
+  "ram-",
+  "cpu-",
+  "disk-",
+  "gpu-",
+  "vram-",
+]);
 
 function invalidClaim(labels, minutes) {
-  return { labels, memMb: DEFAULT_MEMORY_MB, cpus: 1, diskMb: 0, tools: [], minutes, valid: false };
+  return {
+    labels,
+    memMb: DEFAULT_MEMORY_MB,
+    cpus: 1,
+    diskMb: 0,
+    gpuVendor: null,
+    vramMb: 0,
+    tools: [],
+    minutes,
+    valid: false,
+  };
 }
 
 export function hasNeedLabels(labels) {
   return (
     Array.isArray(labels) &&
-    labels.some((label) => typeof label === "string" && /^need-/i.test(label))
+    labels.some((label) => typeof label === "string" && isResourceLabel(label))
+  );
+}
+
+export function isResourceLabel(label) {
+  return (
+    typeof label === "string" &&
+    RESOURCE_LABEL_PREFIXES.some((prefix) => label.toLowerCase().startsWith(prefix))
   );
 }
 
@@ -26,9 +51,11 @@ export function parseJobClaim(labels, defaultMinutes = 360) {
   )
     return invalidClaim([], 360);
 
-  let memMb = DEFAULT_MEMORY_MB;
+  let memMb = 0;
   let cpus = 1;
   let diskMb = 0;
+  let gpuVendor = null;
+  let vramMb = 0;
   let minutes = defaultMinutes;
   let declaredMinutes = 0;
   let valid = true;
@@ -37,12 +64,12 @@ export function parseJobClaim(labels, defaultMinutes = 360) {
 
   for (const label of labels) {
     const lower = label.toLowerCase();
-    if (!lower.startsWith("need-")) {
+    if (!isResourceLabel(lower)) {
       ordinary.push(lower);
       continue;
     }
 
-    let match = /^need-mem-(\d+)(g|m)$/.exec(lower);
+    let match = /^(?:need-mem|ram)-(\d+)(g|m)$/.exec(lower);
     if (match) {
       const value = Number(match[1]) * (match[2] === "g" ? 1024 : 1);
       if (!Number.isSafeInteger(value) || value < 1 || value > MAX_MEMORY_MB) valid = false;
@@ -50,7 +77,7 @@ export function parseJobClaim(labels, defaultMinutes = 360) {
       continue;
     }
 
-    match = /^need-cpu-(\d+)$/.exec(lower);
+    match = /^(?:need-cpu|cpu)-(\d+)$/.exec(lower);
     if (match) {
       const value = Number(match[1]);
       if (!Number.isSafeInteger(value) || value < 1 || value > MAX_CPUS) valid = false;
@@ -58,11 +85,26 @@ export function parseJobClaim(labels, defaultMinutes = 360) {
       continue;
     }
 
-    match = /^need-disk-(\d+)g$/.exec(lower);
+    match = /^(?:need-disk-(\d+)(g)|disk-(\d+)(g|m))$/.exec(lower);
     if (match) {
-      const value = Number(match[1]) * 1024;
+      const value = Number(match[1] ?? match[3]) * ((match[2] ?? match[4]) === "g" ? 1024 : 1);
       if (!Number.isSafeInteger(value) || value < 1 || value > MAX_DISK_MB) valid = false;
       else diskMb = Math.max(diskMb, value);
+      continue;
+    }
+
+    match = /^gpu-(nvidia|amd|intel|apple)$/.exec(lower);
+    if (match) {
+      if (gpuVendor !== null && gpuVendor !== match[1]) valid = false;
+      else gpuVendor = match[1];
+      continue;
+    }
+
+    match = /^vram-(\d+)(g|m)$/.exec(lower);
+    if (match) {
+      const value = Number(match[1]) * (match[2] === "g" ? 1024 : 1);
+      if (!Number.isSafeInteger(value) || value < 1 || value > MAX_MEMORY_MB) valid = false;
+      else vramMb = Math.max(vramMb, value);
       continue;
     }
 
@@ -85,13 +127,24 @@ export function parseJobClaim(labels, defaultMinutes = 360) {
 
   return {
     labels: [...new Set(ordinary)],
-    memMb,
+    memMb: memMb || DEFAULT_MEMORY_MB,
     cpus,
     diskMb,
+    gpuVendor,
+    vramMb,
     tools: [...tools],
     minutes: declaredMinutes || minutes,
     valid,
   };
+}
+
+function matchesGpu(capacity, claim) {
+  if (claim.gpuVendor === null && claim.vramMb === 0) return true;
+  return (capacity.gpus ?? []).some(
+    (gpu) =>
+      (claim.gpuVendor === null || gpu.vendor === claim.gpuVendor) &&
+      (claim.vramMb === 0 || (gpu.vramMb !== null && gpu.vramMb >= claim.vramMb))
+  );
 }
 
 export function matchesLabels(required, available) {
@@ -110,6 +163,7 @@ export function matchesCapacity(capacity, claim, options = {}) {
     capacity.diskFreeMb < claim.diskMb
   )
     return false;
+  if (!matchesGpu(capacity, claim)) return false;
   const tools = new Set(capacity.tools.map((tool) => tool.toLowerCase()));
   if (claim.tools.some((tool) => !tools.has(tool))) return false;
   return capacity.load1 === null || capacity.load1 / capacity.cpus <= 1.5;
@@ -125,6 +179,7 @@ export function eligibilityReasons(capacity, budget, usedMinutes24h, claim, opti
     if (capacity.memFreeMb < claim.memMb) reasons.push("mem");
     if (capacity.cpus < claim.cpus) reasons.push("cpu");
     if (capacity.diskFreeMb < claim.diskMb) reasons.push("disk");
+    if (!matchesGpu(capacity, claim)) reasons.push("gpu");
     const tools = new Set(capacity.tools.map((tool) => tool.toLowerCase()));
     for (const tool of claim.tools) if (!tools.has(tool)) reasons.push(`tool:${tool}`);
     if (capacity.load1 !== null && capacity.load1 / capacity.cpus > 1.5) reasons.push("load");

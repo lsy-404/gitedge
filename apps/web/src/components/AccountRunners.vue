@@ -322,6 +322,23 @@ onUnmounted(() => {
             <div>
               <span>{{ t("runnerDiskFree") }} · {{ runner.capacity.diskFreeMb }} MB</span>
             </div>
+            <div>
+              <span
+                >{{ t("runnerGpu") }} ·
+                {{
+                  runner.capacity.gpus == null
+                    ? t("runnerCapacityUnknown")
+                    : runner.capacity.gpus.length
+                      ? runner.capacity.gpus
+                          .map(
+                            (gpu) =>
+                              `${gpu.vendor.toUpperCase()}${gpu.vramMb === null ? "" : ` / ${gpu.vramMb} MiB`}`
+                          )
+                          .join(", ")
+                      : t("runnerGpuNone")
+                }}</span
+              >
+            </div>
           </div>
           <p v-else class="row-meta">{{ t("runnerCapacityUnknown") }}</p>
           <div v-if="runner.budget" class="runner-metrics">
@@ -464,6 +481,14 @@ onUnmounted(() => {
                 <span>{{ t("runnerClaimCpu", { value: job.claim.cpus }) }}</span>
                 <span v-if="job.claim.diskMb">{{
                   t("runnerClaimDisk", { value: `${job.claim.diskMb} MB` })
+                }}</span>
+                <span v-if="job.claim.gpuVendor || job.claim.vramMb">{{
+                  t("runnerClaimGpu", {
+                    value: job.claim.gpuVendor?.toUpperCase() ?? t("runnerGpuAny"),
+                  })
+                }}</span>
+                <span v-if="job.claim.vramMb">{{
+                  t("runnerClaimVram", { value: `${job.claim.vramMb} MiB` })
                 }}</span>
                 <span v-if="job.claim.tools.length">{{
                   t("runnerClaimTools", { value: job.claim.tools.join(", ") })

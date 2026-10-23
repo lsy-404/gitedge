@@ -44,11 +44,20 @@ describe("parseRunnerWorkflow public contract", () => {
     });
     expect(parsed.permission).toBe("write");
     expect(parsed.labels).toEqual(["self-hosted", "linux", "x64", "ci"]);
-    expect(parsed.timeoutMinutes).toBe(60);
+    expect(parsed.timeoutMinutes).toBe(360);
   });
 
   it("defaults contents permission to read", () => {
     expect(parseRunnerWorkflow(".github/workflows/verify.yml", workflow()).permission).toBe("read");
+  });
+
+  it("retains an explicit shorter deadline", () => {
+    expect(
+      parseRunnerWorkflow(
+        ".github/workflows/verify.yml",
+        workflow().replace("    steps:", "    timeout-minutes: 25\n    steps:")
+      ).timeoutMinutes
+    ).toBe(25);
   });
 
   it.each([

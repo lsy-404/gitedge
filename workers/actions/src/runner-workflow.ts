@@ -128,7 +128,7 @@ export function parseRunnerWorkflow(path: string, source: string): RunnerWorkflo
       .int()
       .min(1)
       .max(360)
-      .safeParse(job.data["timeout-minutes"] ?? 60);
+      .safeParse(job.data["timeout-minutes"] ?? 360);
     if (!timeout.success) fail("Job timeout-minutes must be between 1 and 360.");
     timeoutMinutes += timeout.data;
     if (!Array.isArray(job.data.steps) || job.data.steps.length < 1 || job.data.steps.length > 128)

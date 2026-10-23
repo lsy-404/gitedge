@@ -3,6 +3,7 @@ import os from "node:os";
 import { readFile, statfs } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import { matchesCapacity, parseJobClaim } from "../packages/contracts/runner-scheduling.mjs";
 
 const megabyte = 1024 * 1024;
@@ -107,6 +108,37 @@ export function createToolProbeCache({ now = Date.now, probe = runProbe } = {}) 
 
 const getTools = createToolProbeCache();
 
+export function createGpuProbeCache({ now = Date.now, execute = execFileAsync } = {}) {
+  let expiresAt = 0;
+  let cachedGpus = null;
+  let pending;
+  return async function getGpus() {
+    if (now() < expiresAt) return cachedGpus;
+    if (pending) return pending;
+    pending = (async () => {
+      try {
+        const { stdout } = await execute(
+          process.execPath,
+          [fileURLToPath(new URL("./runner-gpu-probe.mjs", import.meta.url))],
+          { encoding: "utf8", timeout: 8_000, maxBuffer: 16_384, windowsHide: true }
+        );
+        cachedGpus = JSON.parse(stdout);
+      } catch {
+        cachedGpus = null;
+      }
+      expiresAt = now() + toolCacheMs;
+      return cachedGpus;
+    })();
+    try {
+      return await pending;
+    } finally {
+      pending = undefined;
+    }
+  };
+}
+
+const getGpus = createGpuProbeCache();
+
 async function linuxAvailableMemoryMb(read = readFile) {
   const info = await read("/proc/meminfo", "utf8");
   const match = /^MemAvailable:\s+(\d+)\s+kB\s*$/m.exec(info);
@@ -166,11 +198,12 @@ export async function getRunnerCapacity({ workDirectories, busy = 0 } = {}) {
   );
   if (!directories.length) throw new Error("At least one runner work directory is required.");
   const platform = os.platform();
-  const [diskFreeMb, tools] = await Promise.all([
+  const [diskFreeMb, tools, gpus] = await Promise.all([
     Promise.all(directories.map((directory) => freeDiskMb(directory))).then((values) =>
       Math.min(...values)
     ),
     getTools(),
+    getGpus(),
   ]);
   const memFreeMb =
     platform === "linux"
@@ -187,6 +220,7 @@ export async function getRunnerCapacity({ workDirectories, busy = 0 } = {}) {
     memFreeMb,
     diskFreeMb,
     tools,
+    gpus,
     slots: 1,
     busy,
   };

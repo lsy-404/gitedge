@@ -63,6 +63,9 @@ importers:
       picomatch:
         specifier: ^4.0.7
         version: 4.0.7
+      systeminformation:
+        specifier: ^5.33.16
+        version: 5.33.16
       yaml:
         specifier: ^2.9.1
         version: 2.9.1
@@ -1688,6 +1691,12 @@ packages:
   supports-color@10.2.2:
     resolution: {integrity: sha512-SS+jx45GF1QjgEXQx4NJZV9ImqmO2NPz5FNsIHrsDjh2YsHnawpan7SNQ1o8NuhrbHZy9AZhIoCUiCeaW/C80g==}
     engines: {node: '>=18'}
+
+  systeminformation@5.33.16:
+    resolution: {integrity: sha512-R+Lh69IJXfJj6bfyH1In5cIR9FTr4hBS39YvlZHZjsK1p9cuELPq7hplZZIb56ZESMMb+DzdKqqE6Iomi01Mvg==}
+    engines: {node: '>=10.0.0'}
+    os: [darwin, linux, win32, freebsd, openbsd, netbsd, sunos, android]
+    hasBin: true
 
   thingies@2.6.1:
     resolution: {integrity: sha512-cV/CMGTK3M4MlnJ/0At6ismOw/A0EEniDNScajjz/Br3c1sqE72YD01rGpPTKwd27wAxI5Pr+6+0w8yofzFRYw==}
@@ -3471,6 +3480,8 @@ snapshots:
       safe-buffer: 5.2.1
 
   supports-color@10.2.2: {}
+
+  systeminformation@5.33.16: {}
 
   thingies@2.6.1(tslib@2.8.1):
     dependencies:

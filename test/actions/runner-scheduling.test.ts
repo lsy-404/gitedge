@@ -49,6 +49,8 @@ describe("runner scheduling contracts", () => {
       memMb: 1536,
       cpus: 4,
       diskMb: 20_480,
+      gpuVendor: null,
+      vramMb: 0,
       tools: ["node", "pnpm"],
       minutes: 60,
       valid: true,
@@ -60,12 +62,99 @@ describe("runner scheduling contracts", () => {
     expect(parseJobClaim(["self-hosted", "need-time-10m"], 360).minutes).toBe(10);
   });
 
-  it.each(["need-memory-1g", "need-cpu-0", "need-disk-1m", "need-time-361m", "need-tool-!"])(
-    "marks unsupported or out-of-range claim %s invalid",
-    (label) => {
-      expect(parseJobClaim(["self-hosted", label]).valid).toBe(false);
-    }
-  );
+  it("parses case-insensitive semantic minima and permits an explicitly small RAM claim", () => {
+    const claim = parseJobClaim([
+      "self-hosted",
+      "Linux",
+      "RAM-56M",
+      "ram-2g",
+      "CPU-4",
+      "DISK-50G",
+      "GPU-NVIDIA",
+      "VRAM-8G",
+    ]);
+    expect(claim).toMatchObject({
+      labels: ["self-hosted", "linux"],
+      memMb: 2048,
+      cpus: 4,
+      diskMb: 51200,
+      gpuVendor: "nvidia",
+      vramMb: 8192,
+      minutes: 360,
+      valid: true,
+    });
+    expect(parseJobClaim(["RAM-56M"]).memMb).toBe(56);
+    expect(hasNeedLabels(["ram-2g"])).toBe(true);
+    expect(matchesCapacity(null, claim, { allowUnknownLegacy: true })).toBe(false);
+    expect(matchesCapacity(capacity({ memFreeMb: 56 }), parseJobClaim(["RAM-56M"]))).toBe(true);
+  });
+
+  it("requires the requested vendor and VRAM on one detected GPU", () => {
+    const claim = parseJobClaim(["GPU-NVIDIA", "VRAM-8G"]);
+    expect(matchesCapacity(capacity(), claim)).toBe(false);
+    expect(matchesCapacity(capacity({ gpus: null }), claim)).toBe(false);
+    expect(matchesCapacity(capacity({ gpus: [{ vendor: "nvidia", vramMb: 8192 }] }), claim)).toBe(
+      true
+    );
+    expect(matchesCapacity(capacity({ gpus: [{ vendor: "nvidia", vramMb: 8191 }] }), claim)).toBe(
+      false
+    );
+    expect(
+      matchesCapacity(
+        capacity({
+          gpus: [
+            { vendor: "nvidia", vramMb: 4096 },
+            { vendor: "amd", vramMb: 16384 },
+          ],
+        }),
+        claim
+      )
+    ).toBe(false);
+    expect(
+      matchesCapacity(
+        capacity({
+          gpus: [
+            { vendor: "nvidia", vramMb: 4096 },
+            { vendor: "nvidia", vramMb: 4096 },
+          ],
+        }),
+        claim
+      )
+    ).toBe(false);
+    expect(eligibilityReasons(capacity(), null, 0, claim)).toEqual(["gpu"]);
+    expect(
+      matchesCapacity(
+        capacity({ gpus: [{ vendor: "apple", vramMb: null }] }),
+        parseJobClaim(["GPU-APPLE"])
+      )
+    ).toBe(true);
+    expect(
+      matchesCapacity(
+        capacity({ gpus: [{ vendor: "apple", vramMb: null }] }),
+        parseJobClaim(["GPU-APPLE", "VRAM-2G"])
+      )
+    ).toBe(false);
+  });
+
+  it.each([
+    "need-memory-1g",
+    "need-cpu-0",
+    "need-disk-1m",
+    "need-time-361m",
+    "need-tool-!",
+    "RAM-0G",
+    "RAM-1.5G",
+    "RAM-9007199254740992G",
+    "DISK-0M",
+    "GPU-INVIDA",
+    "VRAM-0G",
+  ])("marks unsupported or out-of-range claim %s invalid", (label) => {
+    expect(parseJobClaim(["self-hosted", label]).valid).toBe(false);
+  });
+
+  it("rejects contradictory vendor requirements", () => {
+    expect(parseJobClaim(["GPU-NVIDIA", "GPU-AMD"]).valid).toBe(false);
+  });
 
   it("matches resource minima, tool names, and load gate", () => {
     const claim = parseJobClaim([

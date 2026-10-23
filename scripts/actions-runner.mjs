@@ -292,7 +292,7 @@ async function runWorkflow(values, state) {
     throw new Error("--repository must be owner/name.");
   if (!/^[0-9a-f]{40}$/.test(values.sha) || !/^refs\/(?:heads|tags)\/.+/.test(values.ref))
     throw new Error("--sha must be a complete commit ID and --ref must be a branch or tag ref.");
-  const timeout = Number(values["timeout-minutes"] ?? "60");
+  const timeout = Number(values["timeout-minutes"] ?? "360");
   if (!Number.isInteger(timeout) || timeout < 1 || timeout > 360)
     throw new Error("--timeout-minutes must be between 1 and 360.");
   const workflowPath = path.resolve(values.workflow);
@@ -547,7 +547,7 @@ async function main() {
   const action = positionals[0];
   if (values.help || !action) {
     console.log(
-      "Usage: pnpm run actions setup|run [options]\n\nrun --origin <origin> --repository <owner/name> --workflow <file>\n    --runner-path <official-runner-directory> --sha <commit> --ref <refs/heads/main>\n    [--label <label>] [--event push] [--event-file <json>] [--job <id>] [--secret-file <yaml>]\n    [--state-dir <directory>] [--timeout-minutes 60]\n\nGITEDGE_TOKEN supplies the scoped access token. Execution uses the current host.\nThe official runner is copied into an isolated directory; existing services are untouched."
+      "Usage: pnpm run actions setup|run [options]\n\nrun --origin <origin> --repository <owner/name> --workflow <file>\n    --runner-path <official-runner-directory> --sha <commit> --ref <refs/heads/main>\n    [--label <label>] [--event push] [--event-file <json>] [--job <id>] [--secret-file <yaml>]\n    [--state-dir <directory>] [--timeout-minutes 360]\n\nGITEDGE_TOKEN supplies the scoped access token. Execution uses the current host.\nThe official runner is copied into an isolated directory; existing services are untouched."
     );
     return;
   }

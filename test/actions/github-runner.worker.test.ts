@@ -340,7 +340,16 @@ describe("single-registration GitHub runner bridge", () => {
       owner
     );
     const large = (await data<{ token: string }>(largeRegistration)).token;
-    const labels = ["self-hosted", "macOS", "ARM64", "ci", "need-mem-4g"];
+    const labels = [
+      "self-hosted",
+      "macOS",
+      "ARM64",
+      "ci",
+      "RAM-4G",
+      "DISK-10G",
+      "GPU-AMD",
+      "VRAM-8G",
+    ];
     const capacity = (memFreeMb: number) => ({
       os: "linux",
       arch: "x64",
@@ -350,6 +359,7 @@ describe("single-registration GitHub runner bridge", () => {
       memFreeMb,
       diskFreeMb: 20_000,
       tools: ["node"],
+      gpus: [{ vendor: "amd", vramMb: 8192 }],
       slots: 1,
       busy: 0,
     });
@@ -494,7 +504,7 @@ describe("single-registration GitHub runner bridge", () => {
       ).bind(gitedgeId, repositoryA, "a".repeat(40), owner.id, createdAt),
       env.DB.prepare(
         `INSERT INTO actions_runner_runs (run_id,workflow_source,labels_json,permission,timeout_minutes,event_json,status)
-         VALUES (?,'workflow','["self-hosted","macOS","ARM64","ci"]','read',360,'{}','queued')`
+         VALUES (?,'workflow','["self-hosted","macOS","ARM64","ci","RAM-1G","DISK-2G"]','read',360,'{}','queued')`
       ).bind(gitedgeId),
     ]);
     expect((await queueGithubRunner(demand(connectionId, 902), machineEnv)).status).toBe(202);

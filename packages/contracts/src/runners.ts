@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { NamespaceSlugSchema } from "./account";
 import { RepositorySlugSchema } from "./repository-controls";
+import { isResourceLabel } from "../runner-scheduling.mjs";
 
 export const RUNNER_TOKEN_PREFIX = "ge_runner_";
 export const ACTION_JOB_TOKEN_PREFIX = "ge_job_";
@@ -27,6 +28,18 @@ export const RunnerCapacitySchema = z
     memFreeMb: z.number().int().nonnegative().max(1_048_576),
     diskFreeMb: z.number().int().nonnegative().max(1_048_576_000),
     tools: z.array(z.string().trim().min(1).max(100)).max(128),
+    gpus: z
+      .array(
+        z
+          .object({
+            vendor: z.enum(["nvidia", "amd", "intel", "apple", "unknown"]),
+            vramMb: z.number().int().positive().max(1_048_576).nullable(),
+          })
+          .strict()
+      )
+      .max(16)
+      .nullable()
+      .optional(),
     slots: z.literal(1),
     busy: z.union([z.literal(0), z.literal(1)]),
   })
@@ -48,6 +61,8 @@ export interface JobClaim {
   memMb: number;
   cpus: number;
   diskMb: number;
+  gpuVendor: "nvidia" | "amd" | "intel" | "apple" | null;
+  vramMb: number;
   tools: string[];
   minutes: number;
   valid: boolean;
@@ -90,7 +105,7 @@ export function isRunnerSystemLabel(label: string): boolean {
     ["linux", "macos", "windows", "x64", "arm", "arm64", "amd64", "x86_64", "aarch64"].includes(
       normalized
     ) ||
-    normalized.startsWith("need-")
+    isResourceLabel(normalized)
   );
 }
 export const RunnerCustomLabelsSchema = z
@@ -109,7 +124,7 @@ export const RegisterRunnerInputSchema = z
   .object({
     name: z.string().trim().min(1).max(80),
     scope: RunnerScopeSchema,
-    labels: RunnerLabelsSchema,
+    labels: RunnerLabelsSchema.refine((labels) => labels.every((label) => !isResourceLabel(label))),
   })
   .strict();
 export type RegisterRunnerInput = z.infer<typeof RegisterRunnerInputSchema>;

@@ -168,6 +168,8 @@ describe("general-purpose native signing execution", () => {
     expect((await update(trusted(owner), ["self-hosted", "ip-datacenter"])).status).toBe(400);
     expect((await update(trusted(owner), ["Windows", "ip-datacenter"])).status).toBe(400);
     expect((await update(trusted(owner), ["need-mem-2g"])).status).toBe(400);
+    expect((await update(trusted(owner), ["RAM-2G"])).status).toBe(400);
+    expect((await update(trusted(owner), ["GPU-NVIDIA"])).status).toBe(400);
     expect((await update(trusted(owner), ["duplicate", "DUPLICATE"])).status).toBe(400);
     const cleared = await update(trusted(owner), []);
     expect(cleared.status).toBe(200);
