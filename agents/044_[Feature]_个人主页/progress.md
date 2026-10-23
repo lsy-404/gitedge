@@ -1,8 +1,5 @@
 # Progress
 
-- Created the isolated task branch from the requested base; primary dirty checkout was untouched.
-- Added profile avatar, joined timestamp, tabs, repository filters, real counts, profile README and localized copy.
-- Added canonical `PublicProfile` contract plus 100-row bounded public stars and 30-row bounded authored activity on Forge. Internal user id is stripped from the response.
-- Added owner-only edit affordance, existing menu profile route confirmed, replaced tab roles with ordinary pressed-state buttons, and used shared field components and icon set.
-- Added regression coverage for millisecond timestamps, statistics independence from filtering, README lookup stability, owner change reset, public activity/stars and private/system visibility.
-- Final validation passed: migration checker, Forge and web typechecks, Forge tests (26), UI tests (7), production build, Prettier and `git diff --check`.
+- Final implementation validation passed: migration checker, Forge and web typechecks, Forge tests (26), UI tests (7), production build, Prettier and `git diff --check`.
+- Added `profileActivity_` to the i18n dynamic-key allowlist, deriving values from `ProfileActivitySchema` to keep locale validation tied to the public contract.
+- Focused locale suite: 6/7 passed; all dynamic profile activity keys are defined. The remaining failure is the existing missing `auditAction_actions_runner_labels_updated` message in both locales, unrelated to profile work.
