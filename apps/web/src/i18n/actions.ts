@@ -4,6 +4,7 @@ export const actionsMessages = {
     auditAction_actions_runner_demand_requeued: "重新排队了 GitHub runner 请求",
     auditAction_actions_runner_labels_updated: "更新了 runner 标签",
     auditAction_actions_runner_revoked: "撤销了本机 runner",
+    auditAction_actions_signing_publish_dispatched: "触发了签名发布工作流",
     actionsTitle: "Actions",
     actionsIntro: "在选定提交上运行仓库工作流。",
     actionsCronSchedule: "UTC Cron：{schedules}（使用默认分支；重复的排队运行会合并）。",
@@ -76,6 +77,7 @@ export const actionsMessages = {
     auditAction_actions_runner_demand_requeued: "Requeued a GitHub runner demand",
     auditAction_actions_runner_labels_updated: "Updated runner labels",
     auditAction_actions_runner_revoked: "Revoked a local runner",
+    auditAction_actions_signing_publish_dispatched: "Dispatched a signing publish workflow",
     actionsTitle: "Actions",
     actionsIntro: "Run a supported repository workflow at a selected commit.",
     actionsCronSchedule:

@@ -6,6 +6,7 @@ export const AuditActions = [
   "actions.runner_demand_requeued",
   "actions.runner_labels_updated",
   "actions.runner_revoked",
+  "actions.signing_publish_dispatched",
   "repository.visibility_changed",
   "repository.renamed",
   "repository.archived",

@@ -12,7 +12,7 @@ macOS profiles need the required Apple signing and notarization tools. iOS profi
 
 Keep signing profiles in `.gitedge/signing/<name>.yml` within Runner. A profile pins a workflow path and commit from the same private repository, a platform, timeout and product/source policy. Approval reads that exact workflow from GitEdge and stores an immutable snapshot. Editing YAML does not authorize a new revision; approve it again explicitly.
 
-Source policy identifies permitted GitHub repository IDs, workflow path, artifact name, actor IDs, events and branch/tag names. GitHub is used to validate the source build and download its archive. Signing execution does not dispatch a GitHub workflow.
+Source policy identifies permitted GitHub repository IDs, workflow path, artifact name, actor IDs, events and branch/tag names. GitHub is used to validate the source build and download its archive.
 
 Without `releaseTagPattern`, a source build must come from its repository's default branch. A release profile additionally checks its approved tag pattern, the exact `v<version>` tag and default-branch ancestry. Release submissions require GitHub Actions OIDC proof for that source run. Grant the source job `id-token: write`; the CLI obtains a fresh identity with the Gateway origin as its audience. A caller integrating the client directly supplies `sourceIdentity`, or sets `GITEDGE_SOURCE_IDENTITY` for the CLI. Identity tokens are never part of the stored request.
 
@@ -58,6 +58,30 @@ node scripts/signing/request.mjs wait \
 ```
 
 The client prints the request as JSON. Download validates the declared size and whole-archive SHA-256 before publishing the output file. The returned ZIP contains the platform output and its verification report. Verify each report's file digest when importing individual files into a release.
+
+## Publish after signing
+
+A `policy.sourceRepositories[]` entry may declare a `publish` block. When a request for that source repository reaches `succeeded` (intermediate macOS stages do not count), GitEdge dispatches one GitHub `workflow_dispatch` event on it:
+
+```yaml
+policy:
+  sourceRepositories:
+    - id: "123456789"
+      fullName: example-org/example-app
+      # workflowPath, artifactName, actorIds, events, refs ...
+      publish:
+        workflow: publish-shell.yml # file name under .github/workflows of that repository
+        ref: main # branch or tag to dispatch on
+        inputs: # optional: GitHub input name -> template
+          build_run_id: sourceRunId
+          commit: sourceCommitOid
+```
+
+Input values are never free text. Each is one of the fixed templates `sourceRunId`, `sourceCommitOid`, `version` or `requestId`, resolved from the submission. `publish` is part of `policy`, so adding or changing it changes the policy digest and revision: the owner must approve the profile again before it takes effect. A source repository without `publish` triggers nothing.
+
+The dispatch uses the GitHub sync connection of the signing owner whose GitHub repository ID and `owner/name` equal the entry's `id` and `fullName`. Its token needs Actions read and write permission on that repository. Without an enabled connection, or with a missing permission, the dispatch fails and the signing result is unaffected.
+
+The Actions Worker records an outbox row per request (`actions_signing_publish_dispatches`: `pending`, `dispatched` or `failed`) when signing succeeds and attempts it immediately in the background. Retryable failures (network, 5xx, 429) are retried by the minute cron up to 6 attempts with a delay that starts at one minute and doubles. Permanent failures (no matching connection, 403/404 for missing permission, 422 for an unknown workflow, ref or input) set `failed` at once; `last_error` holds the error code.
 
 ## HTTP endpoints
 
