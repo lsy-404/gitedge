@@ -12,3 +12,4 @@
 - Replaced the unsupported mode with manual handling and fail-closed rejection of redirects/non-2xx, preserving the current destination allowlist. Committed as `47278fd4b3ce4f15596af54d4c2e1afc3a9ff093`.
 - Added Worker-runtime regression coverage for the unsupported mode, successful manual download, and rejected/unfollowed 302. `test:signing` passed 5/5; focused unit tests passed 20/20; Actions typecheck, Prettier, and diff checks passed.
 - Remaining: root review/deploy, then verify a new first-attempt iOS signing canary end to end.
+- Final acceptance: source workflow39872901121 succeeded on run_attempt1 (live metadata reconfirmed); fresh requestbe556601-687a-4cd0-852a-8582c5371be1 completed nativecf7881cd-af69-41ba-8c4c-28048345cc2a with signed IPA retrieval and independent verification. Root recorded production acceptance before retirement.
