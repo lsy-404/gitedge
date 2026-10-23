@@ -12,6 +12,7 @@
 - Parse only exact operation message templates and emit only allowlisted phase/code tokens.
 - Preserve the existing first-line generic outer code. Append one fixed diagnostic line for recognized native causes.
 - For unrecognized Error causes, emit only a built-in Error class label without its message. Unrecognized cause text remains absent.
-- Emit only the fixed Windows operation phase; nested PowerShell output is intentionally omitted.
+- Emit Windows nested diagnostics only when their exact scope and mode are recognized and their detail matches a fixed literal or bounded numeric format. Unknown bracket content is discarded while preserving the fixed phase.
+- Include the three fixed macOS signature verification phases `signature_chain`, `signature_team`, and `signature_timestamp`.
 - Extend the trusted appended SDK step's job timeout to the approved run timeout because the setup workflow's original short timeout also bounds the signing step. Keep this within the existing profile budget and enforce the broker's supported 1..360 minute bound.
 - Do not alter signing verification, credential handling, or coordinator APIs.

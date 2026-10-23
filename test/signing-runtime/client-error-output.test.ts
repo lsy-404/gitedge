@@ -14,6 +14,15 @@ describe("safe signing client error output", () => {
     expect(output).toBe("SIGNING_FAILED\ndiagnostic: macos:archive_validation\n");
   });
 
+  it.each(["signature_chain", "signature_team", "signature_timestamp"])(
+    "preserves the fixed macOS verification phase %s",
+    (phase) => {
+      expect(signingFailure(`macOS signing operation failed: ${phase}`)).toBe(
+        `SIGNING_FAILED\ndiagnostic: macos:${phase}\n`
+      );
+    }
+  );
+
   it("preserves fixed DMG and Windows diagnostics", () => {
     expect(signingFailure("disk image operation failed: stapling_exit_17")).toBe(
       "SIGNING_FAILED\ndiagnostic: dmg:stapling_exit_17\n"
@@ -23,12 +32,34 @@ describe("safe signing client error output", () => {
     ).toBe("SIGNING_FAILED\ndiagnostic: windows:packaging\n");
     expect(
       signingFailure("Windows signing operation failed: codesign [app:Sign:ps_timestamp_missing]")
-    ).toBe("SIGNING_FAILED\ndiagnostic: windows:codesign\n");
+    ).toBe("SIGNING_FAILED\ndiagnostic: windows:codesign:ps_timestamp_missing\n");
+    expect(
+      signingFailure("Windows signing operation failed: authorization [app:Sign:aadsts_7000215]")
+    ).toBe("SIGNING_FAILED\ndiagnostic: windows:authorization:aadsts_7000215\n");
+    expect(
+      signingFailure("Windows signing operation failed: authorization [app:Sign:ps_module_missing]")
+    ).toBe("SIGNING_FAILED\ndiagnostic: windows:authorization:ps_module_missing\n");
     expect(
       signingFailure(
         "Windows signing operation failed: unknown_code [https://private.example/token]"
       )
     ).toBe("SIGNING_FAILED\ncause: Error\n");
+    expect(
+      signingFailure("Windows signing operation failed: authorization [app:Sign:secret=https]")
+    ).toBe("SIGNING_FAILED\ndiagnostic: windows:authorization\n");
+    expect(
+      signingFailure(
+        "Windows signing operation failed: authorization [https://private.example/token]"
+      )
+    ).toBe("SIGNING_FAILED\ndiagnostic: windows:authorization\n");
+    expect(
+      signingFailure(
+        "Windows signing operation failed: authorization [app:Unknown:ps_module_missing]"
+      )
+    ).toBe("SIGNING_FAILED\ndiagnostic: windows:authorization\n");
+    expect(signingFailure("Windows signing operation failed: authorization []")).toBe(
+      "SIGNING_FAILED\ndiagnostic: windows:authorization\n"
+    );
   });
 
   it("reports only a built-in Error class when a phase or code is unknown", () => {

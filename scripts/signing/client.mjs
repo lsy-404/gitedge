@@ -49,6 +49,9 @@ const MACOS_FAILURE_PHASES = new Set([
   "codesign_resources",
   "codesign_unsigned_child",
   "codesign_timestamp",
+  "signature_chain",
+  "signature_team",
+  "signature_timestamp",
   "codesign_options",
   "codesign_failed",
   "signature_verification",
@@ -86,6 +89,44 @@ const WINDOWS_FAILURE_PHASES = new Set([
   "codesign",
   "packaging",
   "signature_verification",
+]);
+const WINDOWS_SIGNING_SCOPES = new Set(["app", "nsis", "squirrel"]);
+const WINDOWS_SIGNING_MODES = new Set(["Inspect", "Sign", "SignFolder", "Verify"]);
+const WINDOWS_SIGNING_DIAGNOSTICS = new Set([
+  "ps_product_version_missing",
+  "ps_authenticode_invalid",
+  "ps_signer_missing",
+  "ps_subject_unexpected",
+  "ps_timestamp_missing",
+  "ps_path_outside_root",
+  "ps_inspection_outside_app",
+  "ps_directory_outside_app",
+  "ps_directory_missing",
+  "ps_file_missing",
+  "ps_file_type_unsupported",
+  "ps_module_missing",
+  "ps_command_missing",
+  "ps_no_files_to_sign",
+  "ps_dotnet8_missing",
+  "nsis_configuration",
+  "nsis_dependency_missing",
+  "nsis_access_denied",
+  "nsis_builder",
+  "nsis_output_verify",
+  "nsis_output_copy",
+  "nsis_app_verify",
+  "squirrel_vendor_prepare",
+  "squirrel_vendor_sign",
+  "squirrel_temp_validate",
+  "squirrel_setup_verify",
+  "squirrel_output_copy",
+  "nsis_tool_makensis_failed",
+  "nsis_tool_makensis_status_0x00000000",
+  "nsis_tool_execution",
+  "process_unavailable",
+  "output_limit",
+  "response_invalid",
+  "powershell_failed",
 ]);
 const SAFE_OUTPUTS = new Set([
   "signed.tar.gz",
@@ -782,12 +823,36 @@ function safeSigningDiagnostic(message) {
       return `dmg:${dmg[1]}`;
   }
 
-  const windows = /^Windows signing operation failed: ([a-z_]+)(?: \[([A-Za-z0-9_.:-]+)\])?$/.exec(
+  const windows = /^Windows signing operation failed: ([a-z_]+)(?: \[([^\]\r\n]{0,160})\])?$/.exec(
     message
   );
   if (windows && WINDOWS_FAILURE_PHASES.has(windows[1])) {
-    return `windows:${windows[1]}`;
+    const detail = safeWindowsDiagnostic(windows[2]);
+    return `windows:${windows[1]}${detail ? `:${detail}` : ""}`;
   }
+  return undefined;
+}
+
+function safeWindowsDiagnostic(value) {
+  if (typeof value !== "string") return undefined;
+  const parts = value.split(":");
+  if (parts.length !== 3) return undefined;
+  const [scope, mode, diagnostic] = parts;
+  if (!WINDOWS_SIGNING_SCOPES.has(scope) || !WINDOWS_SIGNING_MODES.has(mode)) return undefined;
+  if (WINDOWS_SIGNING_DIAGNOSTICS.has(diagnostic)) return diagnostic;
+  if (/^aadsts_\d{5,9}$/.test(diagnostic)) return diagnostic;
+  if (/^hresult_0x[0-9a-f]{8}$/.test(diagnostic)) return diagnostic;
+  if (/^http_status_[45]\d{2}$/.test(diagnostic)) return diagnostic;
+  if (
+    /^(?:signtool|signcli|powershell)_exit_(?:0|[1-9]\d?|1\d\d|2[0-4]\d|25[0-5])$/.test(diagnostic)
+  )
+    return diagnostic;
+  if (
+    /^nsis_tool_(?:makensis|7z|rcedit|signtool)_(?:exit_(?:[1-9]\d?|1\d\d|2[0-4]\d|25[0-5])|status_0x[0-9a-f]{8})$/.test(
+      diagnostic
+    )
+  )
+    return diagnostic;
   return undefined;
 }
 

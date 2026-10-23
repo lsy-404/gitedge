@@ -6,3 +6,4 @@
 - Added allowlisted phase output for recognized native signing failures; unrecognized errors expose only a built-in Error class. Tests cover secret-like text, URLs, paths, unknown codes, and stacks.
 - Made the appended trusted SDK step inherit the approved signing run's bounded timeout, so setup workflow limits do not truncate the signed operation.
 - Focused Vitest suite passed 15 tests; Prettier and Node syntax checks passed.
+- Review follow-up added the existing macOS signature-chain/team/timestamp phases and narrowly filtered Windows `scope:mode:diagnostic` output. Current focused suite passes 18 tests, including AADSTS and module-missing positives and unknown, URL, secret-like, and empty-detail negatives.
