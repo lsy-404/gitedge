@@ -42,3 +42,4 @@
 | 040 | [BugFix] Signing context error propagation | Preserve allowlisted context errors through the native signing SDK | runSigning wraps context-reader errors and hides the fixed cause needed for safe diagnostics | ✅ 已完成 |
 | 041 | [Feature] Native runner custom labels | Manage GitHub-compatible custom runner labels and match requested labels using existing scheduler semantics | Users need explicit server, device and network-category routing tags without inferred reputation or new workflow syntax | 🔄 进行中 |
 | 042 | [BugFix] Windows PowerShell child environment | Remove inherited PSModulePath from Windows PowerShell ACL helper child processes | PowerShell environment pollution prevents built-in ACL commands from loading in signer subprocesses | ✅ 已完成 |
+| 043 | [Ops] Legacy signing resource removal | Verify dependencies and delete the authorized legacy repositories, Worker and dedicated storage | User requests removal after successful signing migration | 🔄 进行中 |
