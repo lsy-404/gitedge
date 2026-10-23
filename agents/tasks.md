@@ -52,3 +52,4 @@
 | 050 | [BugFix] GitHub demand reconciliation | Requeue an original queued job after another job consumes its temporary runner | Prevent stranded GitHub demands without replaying unknown outcomes | 🔄 进行中 |
 | 051 | [Feature] Semantic runner resources | Match measured RAM, disk and GPU requirements and default builds to six hours | Reject runners with insufficient performance using standard runs-on syntax | 🔄 进行中 |
 | 052 | [Feature] Runner status and removal | Top status summary, remove offline runners, diagnose Tokyo ARM | User reported the runner UI update missing and the ARM node offline | ✅ 已完成 |
+| 053 | [Ops] [Windows broker short-path deployment](053.md) | Redeploy both Windows brokers and verify short paths, ACLs and long-path settings | Execute the merged Windows path repair on the real host | ✅ 已完成 |
