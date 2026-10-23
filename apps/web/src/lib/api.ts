@@ -693,6 +693,11 @@ export const api = {
   usage: () => request<Usage>("/api/forge/usage"),
   runnerOverview: (signal?: AbortSignal) =>
     request<RunnerOverview>("/api/actions/runners/overview", { signal }),
+  updateRunnerLabels: (runnerId: string, labels: string[]) =>
+    request<{ labels: string[] }>(`/api/actions/runners/${encodeURIComponent(runnerId)}/labels`, {
+      method: "PUT",
+      body: JSON.stringify({ labels }),
+    }),
   signingProfiles: (repositoryId: string, signal?: AbortSignal) =>
     request<{ profiles: SigningProfileMetadata[] }>(
       `/api/actions/signing/profiles?repositoryId=${encodeURIComponent(repositoryId)}`,

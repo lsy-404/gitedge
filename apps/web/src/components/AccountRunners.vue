@@ -7,6 +7,7 @@ import type {
   RunnerOverview,
   RunnerOverviewRunner,
 } from "../../../../packages/contracts/src/runners";
+import { isRunnerSystemLabel } from "../../../../packages/contracts/src/runners";
 import { api, errorMessage } from "../lib/api";
 import NoticeBar from "./NoticeBar.vue";
 import StatusBadge from "./StatusBadge.vue";
@@ -21,6 +22,9 @@ const histories = ref(new Map<string, RunnerHistoryItem[]>());
 const nextBefore = ref(new Map<string, string>());
 const historyLoading = ref(new Set<string>());
 const historyErrors = ref(new Set<string>());
+const labelDrafts = ref(new Map<string, string>());
+const savingLabels = ref(new Set<string>());
+const labelErrors = ref(new Set<string>());
 const historyControllers = new Map<string, AbortController>();
 let overviewController: AbortController | null = null;
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -84,11 +88,52 @@ async function refresh(): Promise<void> {
     const nextOverview = await api.runnerOverview(controller.signal);
     if (controller.signal.aborted || disposed) return;
     overview.value = nextOverview;
+    const drafts = new Map(labelDrafts.value);
+    for (const runner of nextOverview.runners) {
+      if (!drafts.has(runner.id))
+        drafts.set(
+          runner.id,
+          runner.labels.filter((label) => !isRunnerSystemLabel(label)).join(", ")
+        );
+    }
+    labelDrafts.value = drafts;
   } catch (cause) {
     if (!controller.signal.aborted && !disposed) loadError.value = errorMessage(cause, t);
   } finally {
     if (overviewController === controller) overviewController = null;
     if (!disposed && !controller.signal.aborted) loading.value = false;
+  }
+}
+
+function setLabelDraft(runnerId: string, value: string): void {
+  labelDrafts.value = new Map(labelDrafts.value).set(runnerId, value);
+}
+
+async function saveRunnerLabels(runner: RunnerOverviewRunner): Promise<void> {
+  if (savingLabels.value.has(runner.id)) return;
+  const labels = (labelDrafts.value.get(runner.id) ?? "")
+    .split(",")
+    .map((label) => label.trim())
+    .filter(Boolean);
+  savingLabels.value = new Set(savingLabels.value).add(runner.id);
+  labelErrors.value = new Set([...labelErrors.value].filter((id) => id !== runner.id));
+  try {
+    const result = await api.updateRunnerLabels(runner.id, labels);
+    if (!overview.value) return;
+    overview.value = {
+      ...overview.value,
+      runners: overview.value.runners.map((item) =>
+        item.id === runner.id ? { ...item, labels: result.labels } : item
+      ),
+    };
+    setLabelDraft(
+      runner.id,
+      result.labels.filter((label) => !isRunnerSystemLabel(label)).join(", ")
+    );
+  } catch {
+    labelErrors.value = new Set(labelErrors.value).add(runner.id);
+  } finally {
+    savingLabels.value = new Set([...savingLabels.value].filter((id) => id !== runner.id));
   }
 }
 
@@ -219,6 +264,28 @@ onUnmounted(() => {
           <div class="runner-labels">
             <StatusBadge v-for="label in runner.labels" :key="label">{{ label }}</StatusBadge>
           </div>
+          <form
+            v-if="runner.state !== 'revoked'"
+            class="runner-label-editor"
+            @submit.prevent="saveRunnerLabels(runner)"
+          >
+            <label :for="`runner-labels-${runner.id}`">{{ t("runnerCustomLabels") }}</label>
+            <div class="runner-label-editor-row">
+              <input
+                :id="`runner-labels-${runner.id}`"
+                :value="labelDrafts.get(runner.id) ?? ''"
+                :placeholder="t('runnerCustomLabelsHint')"
+                @input="setLabelDraft(runner.id, ($event.target as HTMLInputElement).value)"
+              />
+              <FluentButton type="submit" tone="subtle" :busy="savingLabels.has(runner.id)">
+                {{ t("runnerCustomLabelsSave") }}
+              </FluentButton>
+            </div>
+            <p class="row-meta">{{ t("runnerCustomLabelsHelp") }}</p>
+            <p v-if="labelErrors.has(runner.id)" class="row-meta" role="alert">
+              {{ t("runnerCustomLabelsError") }}
+            </p>
+          </form>
           <div v-if="runner.capacity" class="runner-metrics">
             <div>
               <span
@@ -467,6 +534,19 @@ onUnmounted(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
+}
+.runner-label-editor {
+  display: grid;
+  gap: 0.35rem;
+  max-width: 36rem;
+}
+.runner-label-editor-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.runner-label-editor-row input {
+  flex: 1 1 16rem;
 }
 .runner-metrics {
   display: grid;

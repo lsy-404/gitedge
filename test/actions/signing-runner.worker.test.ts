@@ -127,6 +127,57 @@ beforeAll(async () => {
 });
 
 describe("general-purpose native signing execution", () => {
+  it("lets a scope owner replace custom routing labels without changing system labels", async () => {
+    const scopedRunnerId = crypto.randomUUID();
+    await env.DB.prepare(
+      `INSERT INTO actions_runners (id,name,namespace_id,repository_id,created_by,labels_json,token_hash,created_at)
+       VALUES (?,'tagged-node',?,?,?,'["self-hosted","Windows","x64","old-tag"]',?,?)`
+    )
+      .bind(
+        scopedRunnerId,
+        namespaceId,
+        repositoryId,
+        owner.id,
+        await sha256Hex(`ge_runner_${"b".repeat(64)}`),
+        Date.now()
+      )
+      .run();
+    const update = (user: TrustedUser, labels: string[]) =>
+      runnerManagement(
+        request(`/runners/${scopedRunnerId}/labels`, "PUT", { labels }),
+        actionEnv,
+        user
+      );
+
+    const response = await update(trusted(owner), ["server-tokyo", "ip-residential"]);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      data: { labels: ["self-hosted", "Windows", "x64", "server-tokyo", "ip-residential"] },
+    });
+    const stored = await env.DB.prepare("SELECT labels_json FROM actions_runners WHERE id=?")
+      .bind(scopedRunnerId)
+      .first<{ labels_json: string }>();
+    expect(JSON.parse(stored!.labels_json)).toEqual([
+      "self-hosted",
+      "Windows",
+      "x64",
+      "server-tokyo",
+      "ip-residential",
+    ]);
+
+    expect((await update(trusted(owner), ["self-hosted", "ip-datacenter"])).status).toBe(400);
+    expect((await update(trusted(owner), ["Windows", "ip-datacenter"])).status).toBe(400);
+    expect((await update(trusted(owner), ["need-mem-2g"])).status).toBe(400);
+    expect((await update(trusted(owner), ["duplicate", "DUPLICATE"])).status).toBe(400);
+    const cleared = await update(trusted(owner), []);
+    expect(cleared.status).toBe(200);
+    expect(await cleared.json()).toMatchObject({
+      data: { labels: ["self-hosted", "Windows", "x64"] },
+    });
+    const outsider = await createPerson("runner-label-outsider");
+    expect((await update(trusted(outsider), ["ip-mobile"])).status).toBe(404);
+  });
+
   it("reuses the same queued run after an enqueue response is retried", async () => {
     const input = {
       requestId: crypto.randomUUID(),

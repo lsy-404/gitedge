@@ -113,6 +113,18 @@ describe("runner scheduling contracts", () => {
   it("compares ordinary labels without case sensitivity", () => {
     expect(matchesLabels(["Self-Hosted", "linux"], ["self-hosted", "Linux", "ci"])).toBe(true);
     expect(matchesLabels(["arm64"], ["linux", "x64"])).toBe(false);
+    expect(
+      matchesLabels(
+        ["self-hosted", "server-tokyo", "device-gpu", "ip-residential"],
+        ["self-hosted", "Linux", "x64", "server-tokyo", "device-gpu", "ip-residential"]
+      )
+    ).toBe(true);
+    expect(
+      matchesLabels(
+        ["self-hosted", "server-tokyo", "device-gpu", "ip-residential"],
+        ["self-hosted", "Linux", "x64", "server-tokyo", "device-gpu"]
+      )
+    ).toBe(false);
   });
 
   it("defers a usable job to a materially better peer only until the aging threshold", () => {

@@ -115,6 +115,28 @@ describe("AccountRunners", () => {
     expect(mounted.root.textContent).not.toContain("credential");
   });
 
+  it("saves explicit custom routing labels without exposing system labels for editing", async () => {
+    vi.spyOn(api, "runnerOverview").mockResolvedValue(overview());
+    vi.spyOn(api, "accountRunner").mockResolvedValue({ repository: null });
+    const updateLabels = vi
+      .spyOn(api, "updateRunnerLabels")
+      .mockResolvedValue({ labels: ["linux", "x64", "server-tokyo", "ip-mobile"] });
+    const mounted = await mountAt("/_verify/runner-labels", "/_verify/runner-labels", () =>
+      h(AccountRunners)
+    );
+    await settle();
+    const input = mounted.root.querySelector<HTMLInputElement>(
+      'input[id="runner-labels-runner-1"]'
+    );
+    expect(input).not.toBeNull();
+    expect(input?.value).toBe("");
+    fill(input!, "server-tokyo, ip-mobile");
+    findButton(mounted.root, "Save labels").click();
+    await settle();
+    expect(updateLabels).toHaveBeenCalledWith("runner-1", ["server-tokyo", "ip-mobile"]);
+    expect(mounted.root.textContent).toContain("server-tokyo");
+  });
+
   it("renders the empty state when there are no runners or waiting jobs", async () => {
     vi.spyOn(api, "runnerOverview").mockResolvedValue(
       overview({ runners: [], github: [], queue: [] })

@@ -79,6 +79,28 @@ export const RunnerLabelsSchema = z
   .min(1)
   .max(40)
   .refine((labels) => new Set(labels.map((label) => label.toLowerCase())).size === labels.length);
+export function isRunnerSystemLabel(label: string): boolean {
+  const normalized = label.toLowerCase();
+  return (
+    normalized === "self-hosted" ||
+    ["linux", "macos", "windows", "x64", "arm", "arm64", "amd64", "x86_64", "aarch64"].includes(
+      normalized
+    ) ||
+    normalized.startsWith("need-")
+  );
+}
+export const RunnerCustomLabelsSchema = z
+  .array(
+    z
+      .string()
+      .trim()
+      .min(1)
+      .max(100)
+      .regex(/^[A-Za-z0-9_. -]+$/)
+  )
+  .max(40)
+  .refine((labels) => new Set(labels.map((label) => label.toLowerCase())).size === labels.length)
+  .refine((labels) => labels.every((label) => !isRunnerSystemLabel(label)));
 export const RegisterRunnerInputSchema = z
   .object({
     name: z.string().trim().min(1).max(80),
