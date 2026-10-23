@@ -40,3 +40,4 @@
 | 038 | [BugFix] Windows signing context ACL | Make the context ACL checker parse in Windows PowerShell 5.1 and retain safe context error codes | A production Windows signer rejected its context before SDK startup | 🔄 进行中 |
 | 039 | [Ops] Windows native signing failure probe | Read fixed allowlisted diagnostics for one terminal Windows native run | Identify the exact failure phase without exposing raw host logs | 🔄 进行中 |
 | 040 | [BugFix] Signing context error propagation | Preserve allowlisted context errors through the native signing SDK | runSigning wraps context-reader errors and hides the fixed cause needed for safe diagnostics | ✅ 已完成 |
+| 042 | [BugFix] Windows PowerShell child environment | Remove inherited PSModulePath from Windows PowerShell ACL helper child processes | PowerShell environment pollution prevents built-in ACL commands from loading in signer subprocesses | ✅ 已完成 |

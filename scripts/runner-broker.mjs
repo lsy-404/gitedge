@@ -16,6 +16,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { windowsPowerShellEnvironment } from "./signing/windows-process.mjs";
 import { parseArgs } from "node:util";
 import { parseDocument } from "yaml";
 import { parseJobClaim, matchesLabels } from "../packages/contracts/runner-scheduling.mjs";
@@ -1087,7 +1088,7 @@ async function secureSigningPath(target, directory = false) {
       target,
       ...(directory ? ["-Directory"] : []),
     ],
-    { stdio: "inherit" }
+    { stdio: "inherit", env: windowsPowerShellEnvironment() }
   );
   await waitChild(child, new AbortController().signal);
 }

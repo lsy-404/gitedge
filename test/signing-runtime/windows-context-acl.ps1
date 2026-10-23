@@ -44,10 +44,30 @@ try {
   }
 
   $valid = Join-Path $directory 'valid.json'
-  Set-Content -LiteralPath $valid -Value '{}' -NoNewline
+  $context = @{
+    schemaVersion = 1
+    baseUrl = 'https://gitedge.example/api/actions'
+    ownerId = '11111111-1111-4111-8111-111111111111'
+    repositoryId = '22222222-2222-4222-8222-222222222222'
+    runnerId = '33333333-3333-4333-8333-333333333333'
+    runId = '44444444-4444-4444-8444-444444444444'
+    requestId = '55555555-5555-4555-8555-555555555555'
+    platform = 'windows'
+    workflowOid = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    profileRevision = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    generation = 1
+    nonce = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    leaseToken = ('c' * 64)
+    leaseExpiresAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + 60000
+    jobToken = ('ge_job_' + ('d' * 64))
+  }
+  Set-Content -LiteralPath $valid -Value ($context | ConvertTo-Json -Compress) -NoNewline
   Set-TestAcl -Path $valid -Protected $true -AddOtherSid $false
   if ((Get-CheckerExitCode $valid) -ne 0) { throw 'Current-user protected ACL was rejected.' }
 
+  $env:PSModulePath = 'C:\synthetic\invalid-module-path'
+  $env:GE_CHILD_MARKER = 'preserved'
+  $checkerScript = (Resolve-Path (Join-Path $PSScriptRoot '../../scripts/signing/check-context-acl.ps1')).Path
   $inherited = Join-Path $directory 'inherited.json'
   Set-Content -LiteralPath $inherited -Value '{}' -NoNewline
   Set-TestAcl -Path $inherited -Protected $false -AddOtherSid $false
@@ -57,6 +77,10 @@ try {
   Set-Content -LiteralPath $extraSid -Value '{}' -NoNewline
   Set-TestAcl -Path $extraSid -Protected $true -AddOtherSid $true
   if ((Get-CheckerExitCode $extraSid) -ne 6) { throw 'An ACL containing another SID was not rejected.' }
+
+  $nodeHarness = (Resolve-Path (Join-Path $PSScriptRoot 'windows-context-environment.mjs')).Path
+  & node $nodeHarness $valid $checkerScript
+  if ($LASTEXITCODE -ne 0) { throw 'Node-to-PowerShell child environment regression failed.' }
 
   Write-Output 'Windows PowerShell 5.1 parser and signing context ACL checks passed.'
 } finally {

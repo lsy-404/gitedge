@@ -4,6 +4,7 @@ import path from "node:path";
 import { z } from "zod";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { windowsPowerShellEnvironment } from "./windows-process.mjs";
 
 const execFileAsync = promisify(execFile);
 const MAX_CONTEXT_BYTES = 16 * 1024;
@@ -75,7 +76,7 @@ export async function readSigningContext(
           "-Path",
           path.resolve(contextFile),
         ],
-        { windowsHide: true }
+        { windowsHide: true, env: windowsPowerShellEnvironment() }
       );
     }
     let value;
