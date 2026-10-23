@@ -1,5 +1,6 @@
 import { branchRules, matchingBranchRules } from "../../../src/worker/common/branch-protection";
 import { githubRunnerOperation } from "./github-runners";
+import { signingPublishDispatch } from "./signing-publish";
 import { triggerPullActions } from "./pull-actions";
 import {
   consumeGithubSync,
@@ -2159,6 +2160,7 @@ const worker = {
     if (url.pathname === "/internal/actions-check")
       return actionsCheck(request, env, (id) => repositoryById(env, id));
     if (url.pathname === "/internal/github-runner") return githubRunnerOperation(request, env);
+    if (url.pathname === "/internal/github-dispatch") return signingPublishDispatch(request, env);
     if (url.pathname === "/internal/push-event")
       return handlePushEvent(env, request, (id) => repositoryById(env, id));
     const user = trustedUser(request);

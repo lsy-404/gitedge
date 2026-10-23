@@ -17,6 +17,39 @@ export const SigningStageSchema = z.enum([
 ]);
 export type SigningStage = z.infer<typeof SigningStageSchema>;
 
+export const SIGNING_PUBLISH_INPUT_TEMPLATES = [
+  "sourceRunId",
+  "sourceCommitOid",
+  "version",
+  "requestId",
+] as const;
+export const SigningPublishInputTemplateSchema = z.enum(SIGNING_PUBLISH_INPUT_TEMPLATES);
+export type SigningPublishInputTemplate = z.infer<typeof SigningPublishInputTemplateSchema>;
+
+export const SigningPublishSchema = z
+  .object({
+    workflow: z.string().regex(/^[A-Za-z0-9][\w.-]{0,98}\.ya?ml$/),
+    ref: z.string().min(1).max(256),
+    inputs: z
+      .record(z.string().regex(/^[A-Za-z_][\w-]{0,63}$/), SigningPublishInputTemplateSchema)
+      .refine((inputs) => Object.keys(inputs).length <= 10, { message: "too_many_inputs" })
+      .optional(),
+  })
+  .strict();
+export type SigningPublish = z.infer<typeof SigningPublishSchema>;
+
+export const SigningPublishDispatchInputSchema = z
+  .object({
+    ownerId: z.string().min(1),
+    githubRepositoryId: z.string().regex(/^[1-9]\d*$/),
+    fullName: z.string().regex(/^[\w.-]+\/[\w.-]+$/),
+    workflow: SigningPublishSchema.shape.workflow,
+    ref: SigningPublishSchema.shape.ref,
+    inputs: z.record(z.string(), z.string().max(256)),
+  })
+  .strict();
+export type SigningPublishDispatchInput = z.infer<typeof SigningPublishDispatchInputSchema>;
+
 const SigningSourceRepositorySchema = z
   .object({
     id: z.string().regex(/^[1-9]\d*$/),
@@ -31,6 +64,7 @@ const SigningSourceRepositorySchema = z
     actorIds: z.array(z.number().int().positive()).min(1).max(32),
     events: z.array(z.string().min(1).max(64)).min(1).max(8),
     refs: z.array(z.string().min(1).max(256)).min(1).max(32),
+    publish: SigningPublishSchema.optional(),
   })
   .strict()
   .superRefine((repository, context) => {

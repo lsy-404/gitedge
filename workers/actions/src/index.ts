@@ -63,6 +63,7 @@ import {
   handleSigningRoute,
   reconcileSigningRequests,
 } from "./signing";
+import { retryPublishDispatches } from "./signing/publish";
 import { enqueueNativeSigningRun } from "./signing-execution";
 import { kickRunnerDispatch } from "./runner-dispatch";
 
@@ -1835,6 +1836,14 @@ export default {
           {
             reason: cause instanceof Error ? cause.message : "unknown",
           }
+        );
+      })
+    );
+    context.waitUntil(
+      retryPublishDispatches(env).catch((cause: unknown) => {
+        createLogger(env.LOG_LEVEL, { service: "actions" }).error(
+          "actions:signing-publish-retry-failed",
+          { reason: cause instanceof Error ? cause.message : "unknown" }
         );
       })
     );

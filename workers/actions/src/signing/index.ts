@@ -10,11 +10,13 @@ import {
   SigningSubmissionSchema,
 } from "../../../../packages/contracts/src/signing";
 import { z } from "zod";
+import { waitUntil } from "cloudflare:workers";
 import type { TrustedUser } from "../../../../packages/contracts/src/index";
 import { dataResponse, errorResponse } from "../../../../src/worker/common/http";
 import { createLogger } from "../../../../src/worker/common/logger";
 import { SigningCoordinator, coordinator } from "./coordinator";
 import type { SigningEnv, SigningExecutionHooks } from "./types";
+import { attemptPublishDispatch, recordPublishDispatch } from "./publish";
 import {
   installSigningCredentials,
   listApprovedProfiles,
@@ -1275,7 +1277,7 @@ export async function handleSigningMachineRoute(
           "signing_output_invalid",
           "The output archive is missing or does not match its declared digest."
         );
-      const { profile, sourceDigest, sourceCommitOid, version } = await machineRpc(
+      const { profile, submission, sourceDigest, sourceCommitOid, version } = await machineRpc(
         env,
         context.ownerId,
         id,
@@ -1301,18 +1303,27 @@ export async function handleSigningMachineRoute(
           "signing_verification_failed",
           "The platform verification report was rejected."
         );
-      return dataResponse(
-        await machineRpc(
-          env,
-          context.ownerId,
-          id,
-          "complete",
-          context,
-          z.object({ state: SigningRequestSchema.shape.state }),
-          { digest: body.digest, size: body.size, verificationReport: body.verificationReport }
-        ),
-        202
+      const completed = await machineRpc(
+        env,
+        context.ownerId,
+        id,
+        "complete",
+        context,
+        z.object({ state: SigningRequestSchema.shape.state }),
+        { digest: body.digest, size: body.size, verificationReport: body.verificationReport }
       );
+      if (
+        completed.state === "succeeded" &&
+        (await recordPublishDispatch(env, profile, submission, context.ownerId, id))
+      )
+        waitUntil(
+          attemptPublishDispatch(env, id).catch((cause: unknown) => {
+            logger.error("signing-publish:attempt-failed", {
+              reason: cause instanceof Error ? cause.message : "unknown",
+            });
+          })
+        );
+      return dataResponse(completed, 202);
     }
     if (operation === "fail" && request.method === "POST") {
       const body = z
