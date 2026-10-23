@@ -1,0 +1,139 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
+const base = String.raw`D:\GitEdge\runner-broker\work\actions\runs`;
+const requestId = '0781e294-ff4c-4626-83c7-81f92ea46923';
+const nativeRunId = 'fb66abb1-767a-4bd8-8f95-6e7ef22d6313';
+const start = Date.parse('2026-10-23T01:38:54.920Z');
+const end = Date.parse('2026-10-23T01:41:16.542Z');
+const mtimeStart = start - 10 * 60_000;
+const mtimeEnd = end + 10 * 60_000;
+const maxRunDirs = 512;
+const maxCandidates = 4096;
+const maxFileBytes = 512 * 1024;
+const sdkCodes = new Set([
+  'API_REQUEST_FAILED', 'CREDENTIALS_ALREADY_REQUESTED', 'DOWNLOAD_DIGEST_MISMATCH',
+  'DOWNLOAD_FAILED', 'DOWNLOAD_LENGTH_INVALID', 'DOWNLOAD_RANGE_INVALID',
+  'DOWNLOAD_STATUS_INVALID', 'DOWNLOAD_TOO_LARGE', 'HEARTBEAT_FAILED',
+  'INVALID_COMMAND', 'INVALID_DOWNLOAD_METADATA', 'INVALID_INPUT', 'INVALID_MANIFEST',
+  'INSECURE_CONTEXT_FILE', 'INVALID_CONTEXT', 'INVALID_CONTEXT_FILE',
+  'INVALID_OPERATION', 'INVALID_OUTPUT', 'INVALID_RESPONSE', 'NATIVE_HOST_REQUIRED',
+  'PLATFORM_MISMATCH', 'SIGNING_FAILED', 'UPLOAD_FAILED',
+]);
+const phases = new Set([
+  'input_archive', 'archive_validation', 'static_verification', 'authorization',
+  'codesign', 'packaging', 'signature_verification',
+]);
+const diagnostics = new Set([
+  'ps_product_version_missing', 'ps_authenticode_invalid', 'ps_signer_missing',
+  'ps_subject_unexpected', 'ps_timestamp_missing', 'ps_path_outside_root',
+  'ps_inspection_outside_app', 'ps_directory_outside_app', 'ps_directory_missing',
+  'ps_file_missing', 'ps_file_type_unsupported', 'ps_module_missing',
+  'ps_command_missing', 'ps_no_files_to_sign', 'ps_dotnet8_missing',
+  'nsis_configuration', 'nsis_dependency_missing', 'nsis_access_denied',
+  'nsis_builder', 'nsis_output_verify', 'nsis_output_copy', 'nsis_app_verify',
+  'squirrel_vendor_prepare', 'squirrel_vendor_sign', 'squirrel_temp_validate',
+  'squirrel_setup_verify', 'squirrel_output_copy', 'nsis_tool_makensis_failed',
+]);
+const safeCodes = new Set();
+const safeDiagnostics = new Set();
+let firstFailureAt = null;
+const flags = {
+  sdkHeartbeatFailure: false,
+  brokerSigningHeartbeatError: false,
+  leaseExpiredText: false,
+  signingStepError: false,
+};
+let root;
+try {
+  const rootStat = await fs.lstat(base);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error('unavailable');
+  root = await fs.realpath(base);
+  if (path.resolve(base).toLowerCase() !== root.toLowerCase()) throw new Error('redirected');
+} catch {
+  console.log(JSON.stringify({ requestId, nativeRunId, root: 'windows-root-1', rootAvailable: false, candidateCount: 0, ambiguous: false, windowLineCount: 0, readErrorCount: 0, limitExceeded: false, firstFailureAt: null, sdkCodes: [], diagnostics: [], heartbeat: { sdkHeartbeatFailure: false, brokerSigningHeartbeatError: false, leaseExpiredText: false, signingStepError: false } }));
+  process.exit(0);
+}
+const inside = (candidate) => {
+  const relative = path.relative(root, candidate);
+  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+};
+const safeDir = async (candidate) => {
+  const stat = await fs.lstat(candidate);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
+  return inside(await fs.realpath(candidate));
+};
+const safeChildren = async (directory) => {
+  const entries = await fs.readdir(directory, { withFileTypes: true });
+  const result = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+    const candidate = path.join(directory, entry.name);
+    if (await safeDir(candidate)) result.push(candidate);
+  }
+  return result;
+};
+
+let runDirs = await safeChildren(root);
+runDirs = runDirs.filter((entry) => /^run-[A-Za-z0-9_-]+$/.test(path.basename(entry))).slice(0, maxRunDirs);
+const candidates = [];
+let candidateCount = 0;
+let windowLineCount = 0;
+let readErrorCount = 0;
+let limitExceeded = false;
+for (const runDir of runDirs) {
+  const logsDir = path.join(runDir, 'logs');
+  try { if (!(await safeDir(logsDir))) continue; } catch { continue; }
+  for (const jobRunDir of await safeChildren(logsDir)) {
+    for (const jobNameDir of await safeChildren(jobRunDir)) {
+      const entries = await fs.readdir(jobNameDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isFile() || entry.isSymbolicLink() || !/^[1-9][0-9]*-GitEdge-native-signing$/.test(entry.name)) continue;
+        const file = path.join(jobNameDir, entry.name);
+        try {
+          const stat = await fs.lstat(file);
+          if (!stat.isFile() || stat.isSymbolicLink() || !inside(await fs.realpath(file))) continue;
+          if (stat.mtimeMs < mtimeStart || stat.mtimeMs > mtimeEnd) continue;
+          candidateCount += 1;
+          if (candidateCount > maxCandidates) { limitExceeded = true; break; }
+          if (stat.size > maxFileBytes) { readErrorCount += 1; continue; }
+          candidates.push(file);
+        } catch { readErrorCount += 1; }
+      }
+    }
+    if (limitExceeded) break;
+  }
+  if (limitExceeded) break;
+}
+if (!limitExceeded && candidates.length === 1) {
+  for (const file of candidates) {
+    try {
+          const content = await fs.readFile(file, 'utf8');
+          for (const line of content.split(/\r?\n/)) {
+            const match = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{7}Z)\s+(.*)$/.exec(line);
+            if (!match) continue;
+            const time = Date.parse(match[1]);
+            if (!Number.isFinite(time) || time < start || time > end) continue;
+            windowLineCount += 1;
+            const message = match[2].replace(/\u001b\[[0-9;]*m/g, '').trim();
+            for (const code of sdkCodes) {
+              if (new RegExp(`(^|\\W)${code}(\\W|$)`).test(message)) {
+                safeCodes.add(code);
+                firstFailureAt ??= match[1];
+              }
+            }
+            const diagnostic = /diagnostic: windows:([a-z_]+)(?::([a-z0-9_]+))?/.exec(message);
+            if (diagnostic && phases.has(diagnostic[1])) {
+              const detail = diagnostic[2];
+              if (!detail || diagnostics.has(detail) || /^(aadsts_\d{5,9}|hresult_0x[0-9a-f]{8}|http_status_[45]\d{2}|(signtool|signcli|powershell)_exit_\d{1,3})$/.test(detail))
+                safeDiagnostics.add(`windows:${diagnostic[1]}${detail ? `:${detail}` : ''}`);
+            }
+            if (safeCodes.has('HEARTBEAT_FAILED')) flags.sdkHeartbeatFailure = true;
+            if (message === 'GitEdge returned an invalid signing lease heartbeat response.') flags.brokerSigningHeartbeatError = true;
+            if (message === 'Runner lease expired, execution timed out, or repository execution was disabled.' || message === 'Signing runner lease expired') flags.leaseExpiredText = true;
+            if (safeCodes.has('SIGNING_FAILED') || message.startsWith('diagnostic: windows:')) flags.signingStepError = true;
+          }
+    } catch { readErrorCount += 1; }
+  }
+}
+console.log(JSON.stringify({ requestId, nativeRunId, root: 'windows-root-1', rootAvailable: true, runDirectoryCount: runDirs.length, candidateCount, ambiguous: candidateCount > 1, windowLineCount, readErrorCount, limitExceeded, firstFailureAt, sdkCodes: [...safeCodes].sort(), diagnostics: [...safeDiagnostics].sort(), heartbeat: flags }));
