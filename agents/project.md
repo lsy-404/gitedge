@@ -2,7 +2,7 @@
 > 最后更新：2026-10-22
 
 ## 项目目标
-已接入东京 Linux runner、Mac 和 Windows 普通构建 runner。每账户私有 Runner 仓库、owner-only及不可变身份、任务服务页面和UTC cron已部署。原生签名的审批profile、来源授权、任务级secret和平台租约流程已部署；十一份生产profile、来源凭据及平台凭据已配置。iOS调用方完整签名、取回及IPA验证已通过，macOS和Windows真实签名验证继续进行。旧服务仅在新链路通过且旧任务排空后退役。技术栈及边界遵循 AGENTS.md / PRODUCT.md。
+已接入东京 Linux runner、Mac 和 Windows 普通构建 runner。每账户私有 Runner 仓库、owner-only及不可变身份、任务服务页面和UTC cron已部署。十一份生产签名profile与加密凭据已配置；iOS完整IPA验签、Windows生产签名与独立Authenticode/时间戳、macOS签名公证与独立分发检查均通过。旧入口、Cron、旧webhook已停用，IRIS-Build及两个旧签名执行仓库已归档，历史存储保留。五台broker支持账户管理的自定义标签，沿用GitHub runs-on数组AND匹配，动态标签排队到领取的真实验证通过。技术栈及边界遵循 AGENTS.md / PRODUCT.md。
 
 ## 执行依据
 设计提交 5697d93。用户明确要求按此执行，稿内 D1 正向变更与旧 broker 规则均为本次已授权要求。

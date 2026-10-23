@@ -10,3 +10,7 @@
 - [x] Apply the snapshot to native, GitHub, and ordinary GitEdge broker execution while validating actual host platform labels.
 - [x] Cover stale local labels, newly added server tags, unmatched tags, and concurrent label edits.
 - [x] Run affected worker/broker tests, typecheck, formatting, and diff checks.
+- [x] Idle-update all five active brokers to the authoritative-label client and verify actual processes and heartbeats.
+- [x] Publish the account labels editor after client acceptance.
+- [x] Dispatch a fixed Windows job with an absent temporary tag, confirm it remains unassigned, then add the tag to one runner and verify that same job succeeds there without restart.
+- [x] Remove the temporary tag and one-off workflow after acceptance.
