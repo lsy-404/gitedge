@@ -155,7 +155,7 @@ async function visibleRunners(
     `${runnerSelect}
     LEFT JOIN namespace_memberships m ON m.namespace_id=r.namespace_id AND m.user_id=?
     LEFT JOIN repository_collaborators c ON c.repository_id=r.repository_id AND c.user_id=?
-    WHERE ((p.system_kind='account_runner' AND n.created_by=?) OR (p.system_kind IS NULL AND (r.created_by=? OR m.role='owner' OR c.role='admin'))) AND (p.id IS NULL OR p.deleted_at IS NULL)
+    WHERE ((p.system_kind='account_runner' AND n.created_by=?) OR (p.system_kind IS NULL AND (r.created_by=? OR m.role='owner' OR c.role='admin'))) AND (p.id IS NULL OR p.deleted_at IS NULL) AND r.revoked_at IS NULL
     ${repositoryFilter}
     ORDER BY r.created_at DESC,r.id LIMIT ?`
   )
@@ -176,7 +176,6 @@ async function visibleRunners(
 }
 
 function displayState(row: RunnerDbRow, busy: boolean, now: number): RunnerOverviewRunner["state"] {
-  if (row.revoked_at !== null) return "revoked";
   if (row.held_until !== null && row.held_until > now) return "held";
   if (row.last_seen_at === null || row.last_seen_at < now - OFFLINE_MS) return "offline";
   return busy ? "busy" : "idle";

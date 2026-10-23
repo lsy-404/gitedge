@@ -683,6 +683,10 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ labels }),
     }),
+  removeRunner: (runnerId: string) =>
+    request<{ revoked: true }>(`/api/actions/runners/${encodeURIComponent(runnerId)}`, {
+      method: "DELETE",
+    }),
   signingProfiles: (repositoryId: string, signal?: AbortSignal) =>
     request<{ profiles: SigningProfileMetadata[] }>(
       `/api/actions/signing/profiles?repositoryId=${encodeURIComponent(repositoryId)}`,

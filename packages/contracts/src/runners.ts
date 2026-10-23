@@ -141,7 +141,7 @@ export interface RegisteredRunner {
 export type RunnerJobKind = "gitedge" | "github";
 export type RunnerJobConclusion = "success" | "failure" | "cancelled" | null;
 export interface RunnerOverviewRunner extends RegisteredRunner {
-  state: "idle" | "busy" | "held" | "offline" | "revoked";
+  state: "idle" | "busy" | "held" | "offline";
   capacity: RunnerCapacity | null;
   capacityReportedAt: number | null;
   budget: RunnerBudget | null;

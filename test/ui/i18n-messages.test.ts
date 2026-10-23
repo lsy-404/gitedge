@@ -44,7 +44,7 @@ const dynamicKeys: Record<string, readonly string[]> = {
   ],
   "deployWizard.state.": ["pending", "running", "done", "failed"],
   actionsConclusion_: ["success", "failure", "cancelled"],
-  runnerState_: ["idle", "busy", "held", "offline", "revoked"],
+  runnerState_: ["idle", "busy", "held", "offline"],
   runnerSigningPlatform_: ["windows", "macos", "ios"],
   profileActivity_: ProfileActivitySchema.shape.kind.options,
   runnerConclusion_: ["success", "failure", "cancelled", "running", "queued"],

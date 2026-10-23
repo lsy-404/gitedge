@@ -9,6 +9,7 @@ import type {
 } from "../../../../packages/contracts/src/runners";
 import { isRunnerSystemLabel } from "../../../../packages/contracts/src/runners";
 import { api, errorMessage } from "../lib/api";
+import ConfirmButton from "./ConfirmButton.vue";
 import NoticeBar from "./NoticeBar.vue";
 import StatusBadge from "./StatusBadge.vue";
 import StatusState from "./StatusState.vue";
@@ -25,6 +26,8 @@ const historyErrors = ref(new Set<string>());
 const labelDrafts = ref(new Map<string, string>());
 const savingLabels = ref(new Set<string>());
 const labelErrors = ref(new Set<string>());
+const removingRunners = ref(new Set<string>());
+const removeErrors = ref(new Set<string>());
 const historyControllers = new Map<string, AbortController>();
 let overviewController: AbortController | null = null;
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -35,13 +38,25 @@ const queueAge = computed(() => {
   return oldest === undefined ? null : Math.max(0, Date.now() - oldest);
 });
 
+const runnerCounts = computed(() => {
+  const runners = overview.value?.runners ?? [];
+  const count = (...states: RunnerOverviewRunner["state"][]): number =>
+    runners.filter((runner) => states.includes(runner.state)).length;
+  return {
+    online: count("idle", "busy"),
+    busy: count("busy"),
+    held: count("held"),
+    offline: count("offline"),
+  };
+});
+
 function stateTone(
   state: RunnerOverviewRunner["state"]
 ): "neutral" | "success" | "danger" | "brand" | "warning" {
   if (state === "idle") return "success";
   if (state === "busy") return "brand";
   if (state === "held") return "warning";
-  if (state === "offline" || state === "revoked") return "danger";
+  if (state === "offline") return "danger";
   return "neutral";
 }
 
@@ -137,6 +152,24 @@ async function saveRunnerLabels(runner: RunnerOverviewRunner): Promise<void> {
   }
 }
 
+async function removeRunner(runner: RunnerOverviewRunner): Promise<void> {
+  if (removingRunners.value.has(runner.id)) return;
+  removingRunners.value = new Set(removingRunners.value).add(runner.id);
+  removeErrors.value = new Set([...removeErrors.value].filter((id) => id !== runner.id));
+  try {
+    await api.removeRunner(runner.id);
+    if (overview.value)
+      overview.value = {
+        ...overview.value,
+        runners: overview.value.runners.filter((item) => item.id !== runner.id),
+      };
+  } catch {
+    removeErrors.value = new Set(removeErrors.value).add(runner.id);
+  } finally {
+    removingRunners.value = new Set([...removingRunners.value].filter((id) => id !== runner.id));
+  }
+}
+
 async function loadHistory(runnerId: string, more = false): Promise<void> {
   if (disposed || historyLoading.value.has(runnerId)) return;
   const before = more ? nextBefore.value.get(runnerId) : undefined;
@@ -208,44 +241,30 @@ onUnmounted(() => {
       }}</FluentButton>
     </header>
     <NoticeBar v-if="loadError" intent="error">{{ loadError }}</NoticeBar>
+    <div v-if="overview" class="runner-summary" :aria-label="t('runnerDashboardTitle')">
+      <span
+        >{{ t("runnerOnline") }} <strong>{{ runnerCounts.online }}</strong></span
+      >
+      <span
+        >{{ t("runnerBusy") }} <strong>{{ runnerCounts.busy }}</strong></span
+      >
+      <span
+        >{{ t("runnerHeld") }} <strong>{{ runnerCounts.held }}</strong></span
+      >
+      <span
+        >{{ t("runnerOffline") }} <strong>{{ runnerCounts.offline }}</strong></span
+      >
+      <span
+        >{{ t("runnerQueue") }} <strong>{{ overview.queue.length }}</strong></span
+      >
+      <span v-if="queueAge !== null"
+        >{{ t("runnerOldestQueue") }} <strong>{{ Math.floor(queueAge / 60_000) }}m</strong></span
+      >
+    </div>
     <AccountRunnerServices />
     <div v-if="loading" class="box"><StatusState :loading="true" /></div>
     <template v-else-if="overview">
       <NoticeBar v-if="overview.truncated" intent="warning">{{ t("runnerTruncated") }}</NoticeBar>
-      <div class="runner-summary" :aria-label="t('runnerDashboardTitle')">
-        <span
-          >{{ t("runnerOnline") }}
-          <strong>{{
-            overview.runners.filter((runner) => runner.state === "idle" || runner.state === "busy")
-              .length
-          }}</strong></span
-        >
-        <span
-          >{{ t("runnerBusy") }}
-          <strong>{{
-            overview.runners.filter((runner) => runner.state === "busy").length
-          }}</strong></span
-        >
-        <span
-          >{{ t("runnerHeld") }}
-          <strong>{{
-            overview.runners.filter((runner) => runner.state === "held").length
-          }}</strong></span
-        >
-        <span
-          >{{ t("runnerOffline") }}
-          <strong>{{
-            overview.runners.filter((runner) => runner.state === "offline").length
-          }}</strong></span
-        >
-        <span
-          >{{ t("runnerQueue") }} <strong>{{ overview.queue.length }}</strong></span
-        >
-        <span v-if="queueAge !== null"
-          >{{ t("runnerOldestQueue") }} <strong>{{ Math.floor(queueAge / 60_000) }}m</strong></span
-        >
-      </div>
-
       <section class="box" :aria-label="t('runnerDashboardTitle')">
         <p v-if="overview.runners.length === 0" class="empty-state">{{ t("runnerEmpty") }}</p>
         <article v-for="runner in overview.runners" :key="runner.id" class="runner-card">
@@ -261,14 +280,21 @@ onUnmounted(() => {
               }}<template v-if="runner.scope.repository">/{{ runner.scope.repository }}</template>
             </div>
           </header>
+          <div v-if="runner.state === 'offline'" class="runner-remove">
+            <ConfirmButton
+              :label="t('runnerRemove')"
+              :prompt="t('runnerRemovePrompt')"
+              :busy="removingRunners.has(runner.id)"
+              @confirm="removeRunner(runner)"
+            />
+            <p v-if="removeErrors.has(runner.id)" class="row-meta" role="alert">
+              {{ t("runnerRemoveError") }}
+            </p>
+          </div>
           <div class="runner-labels">
             <StatusBadge v-for="label in runner.labels" :key="label">{{ label }}</StatusBadge>
           </div>
-          <form
-            v-if="runner.state !== 'revoked'"
-            class="runner-label-editor"
-            @submit.prevent="saveRunnerLabels(runner)"
-          >
+          <form class="runner-label-editor" @submit.prevent="saveRunnerLabels(runner)">
             <label :for="`runner-labels-${runner.id}`">{{ t("runnerCustomLabels") }}</label>
             <div class="runner-label-editor-row">
               <input
@@ -527,6 +553,10 @@ onUnmounted(() => {
 .runner-summary span {
   display: flex;
   gap: 0.4rem;
+}
+.runner-remove {
+  display: grid;
+  gap: 0.35rem;
 }
 .runner-card {
   display: grid;
