@@ -6,13 +6,17 @@ import { api } from "../lib/api";
 import MarkdownContent from "../components/MarkdownContent.vue";
 import NoticeBar from "../components/NoticeBar.vue";
 import StatusState from "../components/StatusState.vue";
+import AppIcon from "../components/AppIcon.vue";
+import TextField from "../components/TextField.vue";
+import SelectField from "../components/SelectField.vue";
+import { sessionState } from "../lib/session";
 
 const props = defineProps<{ owner: string }>();
-const { t } = useI18n();
+const { t, d } = useI18n();
 const profile = ref<PublicProfile | null>(null);
 const loading = ref(true);
 const error = ref("");
-const activeTab = ref<"overview" | "repositories">("overview");
+const activeTab = ref<"overview" | "repositories" | "stars">("overview");
 const query = ref("");
 const sort = ref<"updated" | "name" | "stars">("updated");
 let loadVersion = 0;
@@ -20,20 +24,26 @@ let loadVersion = 0;
 const publicRepositories = computed(() =>
   [...(profile.value?.repositories ?? [])]
     .filter((repository) => repository.visibility === "public")
-    .filter((repository) => {
-      const search = query.value.trim().toLocaleLowerCase();
-      return (
-        !search ||
-        `${repository.name} ${repository.description} ${repository.topics.join(" ")}`
-          .toLocaleLowerCase()
-          .includes(search)
-      );
-    })
     .sort((a, b) => {
       if (sort.value === "name") return a.name.localeCompare(b.name);
       if (sort.value === "stars") return b.starCount - a.starCount || a.name.localeCompare(b.name);
       return b.updatedAt - a.updatedAt || a.name.localeCompare(b.name);
     })
+);
+const filteredRepositories = computed(() => {
+  const search = query.value.trim().toLocaleLowerCase();
+  return publicRepositories.value.filter(
+    (repository) =>
+      !search ||
+      `${repository.name} ${repository.description} ${repository.topics.join(" ")}`
+        .toLocaleLowerCase()
+        .includes(search)
+  );
+});
+const featuredRepositories = computed(() =>
+  [...publicRepositories.value]
+    .sort((a, b) => b.starCount - a.starCount || b.updatedAt - a.updatedAt)
+    .slice(0, 6)
 );
 const totalStars = computed(() =>
   publicRepositories.value.reduce((total, repository) => total + repository.starCount, 0)
@@ -53,11 +63,7 @@ const avatarUrl = computed(() => {
 });
 const joinedDate = computed(() => {
   const joinedAt = profile.value?.joinedAt;
-  return joinedAt
-    ? new Intl.DateTimeFormat(undefined, { year: "numeric", month: "long" }).format(
-        new Date(joinedAt * 1000)
-      )
-    : "";
+  return joinedAt ? new Date(joinedAt) : null;
 });
 const readmeRepository = computed(() =>
   profile.value?.readme
@@ -104,7 +110,22 @@ async function load(): Promise<void> {
   }
 }
 
-watch(() => props.owner, load, { immediate: true });
+const isOwner = computed(
+  () =>
+    sessionState.user?.identifier.toLocaleLowerCase() === props.owner.toLocaleLowerCase() &&
+    sessionState.view !== "guest"
+);
+
+watch(
+  () => props.owner,
+  () => {
+    activeTab.value = "overview";
+    query.value = "";
+    sort.value = "updated";
+    void load();
+  },
+  { immediate: true }
+);
 </script>
 
 <template>
@@ -124,29 +145,34 @@ watch(() => props.owner, load, { immediate: true });
           <h1>{{ profile.displayName || profile.owner }}</h1>
           <p class="muted">@{{ profile.owner }}</p>
           <p v-if="joinedDate" class="muted joined-date">
-            {{ t("profileJoined", { date: joinedDate }) }}
+            {{ t("profileJoined", { date: d(joinedDate, "short") }) }}
           </p>
         </div>
+        <RouterLink v-if="isOwner" class="btn profile-edit" to="/settings/account">
+          <AppIcon name="gear" />{{ t("profileEdit") }}
+        </RouterLink>
       </header>
 
-      <nav class="profile-tabs" :aria-label="t('profileNavigation')" role="tablist">
+      <div class="profile-tabs" role="group" :aria-label="t('profileNavigation')">
         <button
           type="button"
-          role="tab"
-          :aria-selected="activeTab === 'overview'"
+          :aria-pressed="activeTab === 'overview'"
           @click="activeTab = 'overview'"
         >
           {{ t("profileOverview") }}
         </button>
         <button
           type="button"
-          role="tab"
-          :aria-selected="activeTab === 'repositories'"
+          :aria-pressed="activeTab === 'repositories'"
           @click="activeTab = 'repositories'"
         >
           {{ t("profileRepositories") }} <span>{{ publicRepositories.length }}</span>
         </button>
-      </nav>
+        <button type="button" :aria-pressed="activeTab === 'stars'" @click="activeTab = 'stars'">
+          <AppIcon name="star" />{{ t("profileStarsTab") }}
+          <span>{{ profile.starredRepositories.length }}</span>
+        </button>
+      </div>
 
       <div class="profile-columns">
         <aside class="profile-sidebar">
@@ -171,11 +197,11 @@ watch(() => props.owner, load, { immediate: true });
             </div>
             <div>
               <strong>{{ totalStars }}</strong
-              ><span>{{ t("profileStars") }}</span>
+              ><span><AppIcon class="stat-icon" name="star" /> {{ t("profileStars") }}</span>
             </div>
             <div>
               <strong>{{ totalForks }}</strong
-              ><span>{{ t("profileForks") }}</span>
+              ><span><AppIcon class="stat-icon" name="fork" /> {{ t("profileForks") }}</span>
             </div>
           </section>
           <section v-if="activeTab === 'overview' && profile.readme" class="profile-panel">
@@ -191,9 +217,9 @@ watch(() => props.owner, load, { immediate: true });
           </section>
 
           <section v-if="activeTab === 'overview'" class="profile-panel">
-            <h2>{{ t("profilePinnedRepositories") }}</h2>
-            <ul v-if="publicRepositories.length" class="profile-repositories">
-              <li v-for="repository in publicRepositories.slice(0, 6)" :key="repository.id">
+            <h2>{{ t("profilePopularRepositories") }}</h2>
+            <ul v-if="featuredRepositories.length" class="profile-repositories">
+              <li v-for="repository in featuredRepositories" :key="repository.id">
                 <RouterLink
                   :to="`/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.slug)}`"
                 >
@@ -204,38 +230,35 @@ watch(() => props.owner, load, { immediate: true });
                   <span v-for="topic in repository.topics.slice(0, 4)" :key="topic" class="topic">{{
                     topic
                   }}</span
-                  ><span v-if="repository.starCount">★ {{ repository.starCount }}</span
-                  ><span v-if="repository.forkCount">⑂ {{ repository.forkCount }}</span>
+                  ><span v-if="repository.starCount"
+                    ><AppIcon name="star" :size="14" /> {{ repository.starCount }}</span
+                  ><span v-if="repository.forkCount"
+                    ><AppIcon name="fork" :size="14" /> {{ repository.forkCount }}</span
+                  >
                 </div>
               </li>
             </ul>
             <p v-else class="muted">{{ t("profileNoRepositories") }}</p>
           </section>
-          <section v-else class="profile-panel">
+          <section v-else-if="activeTab === 'repositories'" class="profile-panel">
             <div class="profile-panel-heading">
               <h2>{{ t("profileRepositories") }}</h2>
               <span class="muted">{{
-                t("profileRepositoryCount", { count: publicRepositories.length })
+                t("profileRepositoryCount", { count: filteredRepositories.length })
               }}</span>
             </div>
             <div class="repository-controls">
-              <label class="search-field"
-                ><span class="visually-hidden">{{ t("profileSearchRepositories") }}</span
-                ><input
-                  v-model="query"
-                  type="search"
-                  :placeholder="t('profileSearchRepositories')" /></label
-              ><label
-                >{{ t("profileSort")
-                }}<select v-model="sort">
-                  <option value="updated">{{ t("profileSortUpdated") }}</option>
-                  <option value="name">{{ t("profileSortName") }}</option>
-                  <option value="stars">{{ t("profileSortStars") }}</option>
-                </select></label
-              >
+              <TextField v-model="query" class="search-field" type="search">
+                <AppIcon name="search" />{{ t("profileSearchRepositories") }}
+              </TextField>
+              <SelectField v-model="sort" :label="t('profileSort')">
+                <option value="updated">{{ t("profileSortUpdated") }}</option>
+                <option value="name">{{ t("profileSortName") }}</option>
+                <option value="stars">{{ t("profileSortStars") }}</option>
+              </SelectField>
             </div>
-            <ul v-if="publicRepositories.length" class="profile-repositories">
-              <li v-for="repository in publicRepositories" :key="repository.id">
+            <ul v-if="filteredRepositories.length" class="profile-repositories">
+              <li v-for="repository in filteredRepositories" :key="repository.id">
                 <RouterLink
                   :to="`/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.slug)}`"
                   >{{ repository.owner }}/{{ repository.name }}</RouterLink
@@ -245,14 +268,78 @@ watch(() => props.owner, load, { immediate: true });
                   <span v-for="topic in repository.topics.slice(0, 4)" :key="topic" class="topic">{{
                     topic
                   }}</span
-                  ><span v-if="repository.starCount">★ {{ repository.starCount }}</span
-                  ><span v-if="repository.forkCount">⑂ {{ repository.forkCount }}</span>
+                  ><span v-if="repository.starCount"
+                    ><AppIcon name="star" :size="14" /> {{ repository.starCount }}</span
+                  ><span v-if="repository.forkCount"
+                    ><AppIcon name="fork" :size="14" /> {{ repository.forkCount }}</span
+                  >
                 </div>
               </li>
             </ul>
             <p v-else class="muted">
               {{ query ? t("profileNoSearchResults") : t("profileNoRepositories") }}
             </p>
+          </section>
+          <section v-else class="profile-panel">
+            <div class="profile-panel-heading">
+              <h2>{{ t("profileStarsTab") }}</h2>
+              <span class="muted">{{
+                t("profileRepositoryCount", { count: profile.starredRepositories.length })
+              }}</span>
+            </div>
+            <NoticeBar v-if="profile.starredTruncated" intent="warning">{{
+              t("profileStarsTruncated")
+            }}</NoticeBar>
+            <ul v-if="profile.starredRepositories.length" class="profile-repositories">
+              <li v-for="repository in profile.starredRepositories" :key="repository.id">
+                <RouterLink
+                  :to="`/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}`"
+                  >{{ repository.owner }}/{{ repository.name }}</RouterLink
+                >
+                <p v-if="repository.description" class="muted">{{ repository.description }}</p>
+                <div class="repository-meta">
+                  <span v-for="topic in repository.topics.slice(0, 4)" :key="topic" class="topic">{{
+                    topic
+                  }}</span
+                  ><span><AppIcon name="star" :size="14" /> {{ repository.starCount }}</span>
+                </div>
+              </li>
+            </ul>
+            <p v-else class="muted">{{ t("profileNoStars") }}</p>
+          </section>
+          <section v-if="activeTab === 'overview'" class="profile-panel">
+            <h2>{{ t("profileActivity") }}</h2>
+            <ol v-if="profile.activity.length" class="profile-activity">
+              <li
+                v-for="(item, index) in profile.activity"
+                :key="`${item.kind}-${item.repository}-${item.number}-${item.createdAt}-${index}`"
+              >
+                <AppIcon
+                  :name="
+                    item.kind === 'issue'
+                      ? 'issue'
+                      : item.kind === 'pull_request'
+                        ? 'pr'
+                        : 'discussion'
+                  "
+                />
+                <div>
+                  <p>
+                    {{
+                      t(`profileActivity_${item.kind}`, {
+                        repository: `${item.owner}/${item.repository}`,
+                      })
+                    }}
+                  </p>
+                  <RouterLink
+                    :to="`/${encodeURIComponent(item.owner)}/${encodeURIComponent(item.repository)}/${item.targetKind === 'issue' ? 'issues' : item.targetKind === 'pull_request' ? 'pulls' : 'discussions'}/${item.number}`"
+                    >{{ item.title }}</RouterLink
+                  >
+                  <span class="muted">{{ d(item.createdAt, "long") }}</span>
+                </div>
+              </li>
+            </ol>
+            <p v-else class="muted">{{ t("profileNoActivity") }}</p>
           </section>
         </div>
       </div>
@@ -316,7 +403,7 @@ watch(() => props.owner, load, { immediate: true });
   color: var(--fg-secondary);
   cursor: pointer;
 }
-.profile-tabs button[aria-selected="true"] {
+.profile-tabs button[aria-pressed="true"] {
   border-bottom-color: var(--accent-strong);
   color: var(--fg-default);
   font-weight: var(--font-weight-semibold);
@@ -387,7 +474,7 @@ watch(() => props.owner, load, { immediate: true });
   align-items: end;
   padding: var(--space-4) 0;
 }
-.repository-controls label:not(.search-field) {
+.repository-controls .select-field {
   display: grid;
   gap: var(--space-1);
   color: var(--fg-secondary);
@@ -396,11 +483,11 @@ watch(() => props.owner, load, { immediate: true });
 .repository-controls select {
   min-width: 150px;
 }
-.search-field {
+.repository-controls .search-field {
   flex: 1;
   max-width: 460px;
 }
-.search-field input {
+.repository-controls .search-field input {
   width: 100%;
 }
 .profile-panel {
@@ -448,6 +535,40 @@ watch(() => props.owner, load, { immediate: true });
 .profile-repositories p {
   margin: var(--space-1) 0 0;
   font-size: var(--font-size-meta);
+}
+.profile-activity {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.profile-activity li {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border-muted);
+}
+.profile-activity li:last-child {
+  border-bottom: 0;
+}
+.profile-activity li > .icon {
+  flex: 0 0 auto;
+  margin-top: var(--space-1);
+  color: var(--fg-muted);
+}
+.profile-activity li > div {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.profile-activity p {
+  margin: 0;
+  color: var(--fg-secondary);
+}
+.profile-activity .muted {
+  font-size: var(--font-size-meta);
+}
+.profile-edit {
+  margin-left: auto;
 }
 @media (max-width: 700px) {
   .public-profile {

@@ -932,6 +932,43 @@ INSERT INTO repositories (id,namespace_id,created_by,slug,do_name,visibility,des
   });
 
   it("serves public profiles without exposing internal storage fields", async () => {
+    await env.DB.prepare(
+      "INSERT INTO repository_stars (repository_id,user_id,created_at) VALUES ('r1','u1',10)"
+    ).run();
+    await env.DB.prepare(
+      "INSERT INTO forge_comments (id,repository_id,target_kind,target_id,actor_json,author_id,body,created_at,updated_at) VALUES ('profile-comment','r1','issue','legacy-issue','{\"kind\":\"user\"}','u1','Public comment',2,2)"
+    ).run();
+    await env.DB.prepare(
+      "INSERT INTO repositories (id,namespace_id,created_by,slug,do_name,visibility,description,created_at,updated_at,artifact_name) VALUES ('r-private-profile','n1','u1','secret','repo:secret','private','',1,1,'private-profile')"
+    ).run();
+    await env.DB.prepare(
+      "INSERT INTO forge_issues (id,repository_id,number,author_id,title,body,state,actor_json,created_at,updated_at) VALUES ('private-profile-issue','r-private-profile',1,'u1','Secret issue','','open','{\"kind\":\"user\"}',3,3)"
+    ).run();
+    await env.DB.prepare(
+      "INSERT INTO repositories (id,namespace_id,created_by,slug,do_name,visibility,description,created_at,updated_at,artifact_name,system_kind) VALUES ('r-system-profile','n1','u1','runner','repo:runner','private','',1,1,'system-profile','account_runner')"
+    ).run();
+    await env.DB.prepare(
+      "INSERT INTO repository_stars (repository_id,user_id,created_at) VALUES ('r-private-profile','u1',11),('r-system-profile','u1',12)"
+    ).run();
+    await env.DB.prepare(
+      "INSERT INTO forge_issues (id,repository_id,number,author_id,title,body,state,actor_json,created_at,updated_at) VALUES ('system-profile-issue','r-system-profile',1,'u1','System issue','','open','{\"kind\":\"user\"}',4,4)"
+    ).run();
+    const activityAt = Date.now();
+    await env.DB.prepare(
+      "INSERT INTO forge_issues (id,repository_id,number,author_id,title,body,state,actor_json,created_at,updated_at) VALUES ('profile-activity-issue','r1',8080,'u1','Public profile issue','','open','{\"kind\":\"user\"}',?,?)"
+    )
+      .bind(activityAt, activityAt)
+      .run();
+    await env.DB.prepare(
+      "INSERT INTO forge_pull_requests (id,repository_id,number,author_id,actor_json,title,body,base_ref,head_ref,state,created_at,updated_at) VALUES ('profile-activity-pr','r1',8081,'u1','{\"kind\":\"user\"}','Public profile pull request','','main','topic','open',?,?)"
+    )
+      .bind(activityAt, activityAt)
+      .run();
+    await env.DB.prepare(
+      "INSERT INTO forge_comments (id,repository_id,target_kind,target_id,actor_json,author_id,body,created_at,updated_at) VALUES ('profile-activity-comment','r1','issue','profile-activity-issue','{\"kind\":\"user\"}','u1','Public comment',?,?)"
+    )
+      .bind(activityAt, activityAt)
+      .run();
     const response = await forge.fetch(new Request("https://forge.test/profiles/alice"), forgeEnv);
     expect(response.status).toBe(200);
     const profile = (await response.json()) as {
@@ -940,12 +977,23 @@ INSERT INTO repositories (id,namespace_id,created_by,slug,do_name,visibility,des
         joinedAt: number | null;
         avatarUrl: string | null;
         repositories: Array<Record<string, unknown>>;
+        starredRepositories: Array<Record<string, unknown>>;
+        activity: Array<{ title: string; kind: string }>;
       };
     };
     expect(profile.data.owner).toBe("alice");
     expect(profile.data.joinedAt).toEqual(expect.any(Number));
     expect(profile.data.avatarUrl).toBeNull();
+    expect(profile.data.joinedAt).toBe(1);
+    expect(profile.data).not.toHaveProperty("userId");
     expect(profile.data.repositories.length).toBeGreaterThan(0);
+    expect(profile.data.starredRepositories.map((item) => item.id)).toEqual(["r1"]);
+    expect(profile.data.activity.map((item) => item.title)).toEqual(
+      expect.arrayContaining(["Public profile issue", "Public profile pull request"])
+    );
+    expect(profile.data.activity.some((item) => item.kind === "comment")).toBe(true);
+    expect(profile.data.activity.some((item) => item.title === "Secret issue")).toBe(false);
+    expect(profile.data.activity.some((item) => item.title === "System issue")).toBe(false);
     for (const repository of profile.data.repositories) {
       expect(repository).not.toHaveProperty("artifactName");
       expect(repository).not.toHaveProperty("remote");

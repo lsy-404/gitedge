@@ -1,5 +1,6 @@
 import type { MergeCandidate } from "../../../../packages/contracts/src/merge-candidates";
 import type { MergeRequirements } from "../../../../packages/contracts/src/merge-requirements";
+import type { PublicProfile } from "../../../../packages/contracts/src/profiles";
 import type {
   AccountProfile,
   AccountPreferences,
@@ -385,18 +386,7 @@ function organizationPath(slug: string): string {
   return `/api/forge/organizations/${encodeURIComponent(slug)}`;
 }
 
-export interface PublicProfile {
-  owner: string;
-  displayName: string;
-  bio: string;
-  location: string;
-  website: string;
-  avatarUrl: string | null;
-  joinedAt: number | null;
-  readme: { content: string; repositoryId: string; path: string } | null;
-  repositories: Repository[];
-  truncated: boolean;
-}
+export type { PublicProfile };
 
 export function ssoAuthorizationUrl(value: string): URL | null {
   try {

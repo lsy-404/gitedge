@@ -265,3 +265,4 @@ export const PutWikiPageInputSchema = z.object({
 
 export * from "./sso";
 export * from "./signing";
+export * from "./profiles";

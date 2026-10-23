@@ -125,8 +125,8 @@ describe("public user profiles", () => {
       bio: "A curious developer",
       location: "Toronto",
       website: "javascript:alert(1)",
-      avatarUrl: null,
-      joinedAt: 1_700_000_000,
+      avatarUrl: "https://avatars.example.test/octocat.png",
+      joinedAt: 1_700_000_000_000,
       truncated: true,
       readme: {
         content: "# About\n\n<script>alert('unsafe')</script>",
@@ -134,7 +134,14 @@ describe("public user profiles", () => {
         path: "README.md",
       },
       repositories: [
-        { ...repository, owner: "octocat", name: "sample", slug: "sample" },
+        {
+          ...repository,
+          owner: "octocat",
+          name: "sample",
+          slug: "sample",
+          starCount: 2,
+          forkCount: 1,
+        },
         {
           ...repository,
           id: "another-repo",
@@ -142,6 +149,7 @@ describe("public user profiles", () => {
           name: "another",
           slug: "another",
           starCount: 4,
+          forkCount: 2,
         },
         {
           ...repository,
@@ -150,16 +158,49 @@ describe("public user profiles", () => {
           name: "secret",
           slug: "secret",
           visibility: "private",
+          starCount: 99,
+          forkCount: 99,
+        },
+      ],
+      starredRepositories: [],
+      starredTruncated: false,
+      activity: [
+        {
+          kind: "issue",
+          targetKind: "issue",
+          number: 6,
+          title: "Contributed issue",
+          owner: "octocat",
+          repository: "sample",
+          createdAt: 1_700_000_000_000,
         },
       ],
     };
-    vi.spyOn(api, "publicProfile").mockResolvedValue(profile);
+    const owner = ref("octocat");
+    vi.spyOn(api, "publicProfile").mockImplementation(async (requestedOwner) => ({
+      ...profile,
+      owner: requestedOwner,
+      displayName: requestedOwner === "octocat" ? profile.displayName : requestedOwner,
+    }));
     const mounted = await mountAt("/_verify/profile", "/_verify/profile", () =>
-      h(UserProfileView, { owner: "octocat" })
+      h(UserProfileView, { owner: owner.value })
     );
 
     expect(mounted.root.querySelector("h1")?.textContent).toBe("Octocat");
     expect(mounted.root.textContent).toContain("A curious developer");
+    expect(mounted.root.textContent).toContain("2023");
+    expect(mounted.root.textContent).not.toContain("55840");
+    expect(
+      mounted.root.querySelector(".profile-avatar[src='https://avatars.example.test/octocat.png']")
+    ).not.toBeNull();
+    expect(mounted.root.textContent).toContain("Opened an issue in octocat/sample");
+    expect(mounted.root.querySelector(".profile-activity a")?.getAttribute("href")).toBe(
+      "/octocat/sample/issues/6"
+    );
+    expect(mounted.root.querySelector(".profile-stats")?.textContent).toContain("6");
+    expect(mounted.root.querySelector(".profile-stats")?.textContent).toContain("3");
+    expect(mounted.root.querySelector(".profile-stats")?.textContent).not.toContain("105");
+    expect(mounted.root.querySelector(".profile-stats")?.textContent).not.toContain("102");
     expect(mounted.root.textContent).toContain(
       "There are more public repositories than the display limit"
     );
@@ -170,8 +211,14 @@ describe("public user profiles", () => {
     expect(mounted.root.querySelector(".profile-panel-heading a")?.getAttribute("href")).toBe(
       "/octocat/sample/blob/README.md?ref=main"
     );
+    const starsTab = [
+      ...mounted.root.querySelectorAll<HTMLButtonElement>(".profile-tabs button"),
+    ].find((button) => button.textContent?.includes("Stars"));
+    starsTab?.click();
+    await settle();
+    expect(mounted.root.textContent).toContain("No public repositories starred yet.");
     const repositoriesTab = [
-      ...mounted.root.querySelectorAll<HTMLButtonElement>("[role=tab]"),
+      ...mounted.root.querySelectorAll<HTMLButtonElement>(".profile-tabs button"),
     ].find((button) => button.textContent?.includes("Public repositories"));
     expect(repositoriesTab).toBeDefined();
     repositoriesTab?.click();
@@ -187,6 +234,25 @@ describe("public user profiles", () => {
     expect(mounted.root.querySelectorAll(".profile-repositories li")).toHaveLength(1);
     expect(mounted.root.textContent).toContain("octocat/sample");
     expect(mounted.root.textContent).not.toContain("octocat/another");
+    expect(mounted.root.querySelector(".profile-stats")?.textContent).toContain("6");
+    mounted.root.querySelector<HTMLButtonElement>(".profile-tabs button")?.click();
+    await settle();
+    expect(mounted.root.querySelector(".profile-panel-heading a")?.getAttribute("href")).toBe(
+      "/octocat/sample/blob/README.md?ref=main"
+    );
+    owner.value = "changed-user";
+    await settle();
+    expect(mounted.root.textContent).toContain("@changed-user");
+    expect(mounted.root.querySelector(".profile-tabs button")?.getAttribute("aria-pressed")).toBe(
+      "true"
+    );
+    expect(mounted.root.querySelector("input[type=search]")).toBeNull();
+    const repositoriesTabAfterOwnerChange = [
+      ...mounted.root.querySelectorAll<HTMLButtonElement>(".profile-tabs button"),
+    ].find((button) => button.textContent?.includes("Public repositories"));
+    repositoriesTabAfterOwnerChange?.click();
+    await settle();
+    expect(mounted.root.querySelector<HTMLInputElement>("input[type=search]")?.value).toBe("");
     mounted.unmount();
   });
 });
