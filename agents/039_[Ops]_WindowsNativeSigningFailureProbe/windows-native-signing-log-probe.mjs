@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-const base = String.raw`D:\GitEdge\runner-broker\work\actions\runs`;
+const base = String.raw`D:\GitEdge\runner-broker-2\work\actions\runs`;
 const requestId = '0781e294-ff4c-4626-83c7-81f92ea46923';
 const nativeRunId = 'fb66abb1-767a-4bd8-8f95-6e7ef22d6313';
 const start = Date.parse('2026-10-23T01:38:54.920Z');
@@ -51,7 +51,7 @@ try {
   root = await fs.realpath(base);
   if (path.resolve(base).toLowerCase() !== root.toLowerCase()) throw new Error('redirected');
 } catch {
-  console.log(JSON.stringify({ requestId, nativeRunId, root: 'windows-root-1', rootAvailable: false, candidateCount: 0, ambiguous: false, windowLineCount: 0, readErrorCount: 0, limitExceeded: false, firstFailureAt: null, sdkCodes: [], diagnostics: [], heartbeat: { sdkHeartbeatFailure: false, brokerSigningHeartbeatError: false, leaseExpiredText: false, signingStepError: false } }));
+  console.log(JSON.stringify({ requestId, nativeRunId, expectedRunner: 'windows-broker-2', root: 'windows-root-2', rootAvailable: false, candidateCount: 0, ambiguous: false, windowLineCount: 0, readErrorCount: 0, limitExceeded: false, firstFailureAt: null, sdkCodes: [], diagnostics: [], heartbeat: { sdkHeartbeatFailure: false, brokerSigningHeartbeatError: false, leaseExpiredText: false, signingStepError: false } }));
   process.exit(0);
 }
 const inside = (candidate) => {
@@ -136,4 +136,4 @@ if (!limitExceeded && candidates.length === 1) {
     } catch { readErrorCount += 1; }
   }
 }
-console.log(JSON.stringify({ requestId, nativeRunId, root: 'windows-root-1', rootAvailable: true, runDirectoryCount: runDirs.length, candidateCount, ambiguous: candidateCount > 1, windowLineCount, readErrorCount, limitExceeded, firstFailureAt, sdkCodes: [...safeCodes].sort(), diagnostics: [...safeDiagnostics].sort(), heartbeat: flags }));
+console.log(JSON.stringify({ requestId, nativeRunId, expectedRunner: 'windows-broker-2', root: 'windows-root-2', rootAvailable: true, runDirectoryCount: runDirs.length, candidateCount, ambiguous: candidateCount > 1, windowLineCount, readErrorCount, limitExceeded, firstFailureAt, sdkCodes: [...safeCodes].sort(), diagnostics: [...safeDiagnostics].sort(), heartbeat: flags }));
