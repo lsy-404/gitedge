@@ -53,3 +53,4 @@
 | 051 | [Feature] Semantic runner resources | Match measured RAM, disk and GPU requirements and default builds to six hours | Reject runners with insufficient performance using standard runs-on syntax | 🔄 进行中 |
 | 052 | [Feature] Runner status and removal | Top status summary, remove offline runners, diagnose Tokyo ARM | User reported the runner UI update missing and the ARM node offline | ✅ 已完成 |
 | 053 | [Ops] [Windows broker short-path deployment](053.md) | Redeploy both Windows brokers and verify short paths, ACLs and long-path settings | Execute the merged Windows path repair on the real host | ✅ 已完成 |
+| 054 | [Ops] [CPU preference broker rollout](054.md) | Update the broker fleet, complete pending host registration and verify CPU preference and Shell publication | Enable the merged scheduling preference safely across all active clients | 🔄 进行中 |
