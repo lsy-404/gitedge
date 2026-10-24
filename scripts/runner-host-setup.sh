@@ -109,19 +109,23 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=/var/lib/gitedge-idle
-ExecStart=/usr/bin/python3 /usr/local/libexec/gitedge-idle-load --resume-after 45 --run-for 0 --state-dir /var/lib/gitedge-idle --max-disk-mib 512 --task-user gitedge-idle --${idle_exec}
+ExecStart=/usr/bin/python3 /usr/local/libexec/gitedge-idle-load --resume-after 45 --run-for 0 --state-dir /var/lib/gitedge-idle --max-disk-mib 512 --task-user gitedge-idle --cpu-target-percent 25 --cpu-quota-cap-percent 50 --${idle_exec}
 User=root
 Group=root
-Nice=19
+Nice=0
 CPUWeight=1
 CPUQuota=50%
+CPUQuotaPeriodSec=20ms
 IOWeight=1
+IOSchedulingClass=idle
 MemoryHigh=$idle_memory_high
 MemoryMax=$idle_memory_max
 MemorySwapMax=0
 TimeoutStopSec=10s
 KillMode=control-group
 UMask=0077
+RuntimeDirectory=gitedge-idle
+RuntimeDirectoryMode=0700
 Restart=no
 LogRateLimitIntervalSec=30s
 LogRateLimitBurst=20
@@ -131,7 +135,7 @@ ProtectSystem=strict
 ProtectHome=true
 InaccessiblePaths=-/etc/server-toolkit -/var/lib/openlist
 ReadOnlyPaths=-/opt/gitedge/work/actions
-ReadWritePaths=/var/lib/gitedge-idle
+ReadWritePaths=/var/lib/gitedge-idle /run/gitedge-idle
 UNIT
   cat >/etc/systemd/system/oci-idle-load.timer <<'UNIT'
 [Unit]
