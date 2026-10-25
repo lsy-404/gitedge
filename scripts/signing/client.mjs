@@ -713,8 +713,21 @@ export async function runSigning({
     const pulse = async () => {
       if (heartbeatBusy) return;
       heartbeatBusy = true;
-      heartbeatPromise = client
-        .heartbeat()
+      heartbeatPromise = (async () => {
+        for (;;) {
+          try {
+            return await client.heartbeat();
+          } catch (error) {
+            const remaining = client.getLeaseExpiresAt() - Date.now();
+            const retryable =
+              error instanceof ClientError &&
+              (transientStatus(error.status) ||
+                (!error.status && error.code === "API_REQUEST_FAILED"));
+            if (!retryable || abortController.signal.aborted || remaining <= 1000) throw error;
+            await sleep(Math.min(5000, remaining - 1000));
+          }
+        }
+      })()
         .catch((error) => {
           if (!heartbeatError) {
             heartbeatError = error;
