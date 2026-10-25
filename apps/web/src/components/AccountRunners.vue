@@ -313,7 +313,7 @@ onUnmounted(() => {
           </div>
           <div class="runner-metrics">
             <div>
-              <span>{{ t("runnerHostHealth") }}</span>
+              <span>{{ t("runnerHostHealth") }} · {{ runner.deviceHealth.deviceId ?? "—" }}</span>
               <StatusBadge :tone="deviceHealthTone(runner.deviceHealth.status)">
                 {{ t(`runnerHealth_${runner.deviceHealth.status}`) }}
               </StatusBadge>

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { RunnerDeviceHealth } from "../../../packages/contracts/src/runners";
-import { createLogger } from "../../../src/worker/common/logger";
+import { createLogger, type Logger } from "../../../src/worker/common/logger";
 
 const HealthStatusSchema = z.enum([
   "online",
@@ -10,6 +10,11 @@ const HealthStatusSchema = z.enum([
   "planned",
   "disabled",
 ]);
+const DeviceIdSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9_#-]*$/);
 
 const HealthCheckSchema = z
   .object({
@@ -62,7 +67,7 @@ const MonitoredServiceSchema = z
 
 const DeviceSchema = z
   .object({
-    id: z.uuid(),
+    id: DeviceIdSchema,
     label: z.string().max(256),
     kind: z.enum(["cloud", "physical"]),
     region: z.string().max(256),
@@ -82,7 +87,7 @@ const DeviceSchema = z
   })
   .strict();
 
-const HealthSnapshotSchema = z
+export const HealthSnapshotSchema = z
   .object({
     schema: z.literal(1),
     source: z.literal("devices"),
@@ -101,7 +106,7 @@ const HealthSnapshotSchema = z
   })
   .strict();
 
-const DeviceMappingSchema = z.record(z.uuid(), z.uuid());
+const DeviceMappingSchema = z.record(z.uuid(), DeviceIdSchema);
 
 export interface DeviceHealthEnv {
   DEVICES_HEALTH: Fetcher;
@@ -115,7 +120,7 @@ export interface DeviceHealthSnapshot {
   byRunner: Map<string, RunnerDeviceHealth>;
 }
 
-function runnerDeviceMapping(raw: string | undefined, logger: ReturnType<typeof createLogger>) {
+function runnerDeviceMapping(raw: string | undefined, logger: Logger) {
   if (!raw) return {};
   try {
     const parsed = DeviceMappingSchema.safeParse(JSON.parse(raw));
@@ -146,6 +151,7 @@ export async function readRunnerDeviceHealth(
     for (const runnerId of runnerIds) {
       const device = devices.get(mapping[runnerId]);
       byRunner.set(runnerId, {
+        deviceId: mapping[runnerId] ?? null,
         status: device?.status ?? "unknown",
         lastSeen: device?.lastSeen ?? null,
         cpuPercent: device?.metrics?.cpuPercent ?? null,
@@ -160,6 +166,7 @@ export async function readRunnerDeviceHealth(
     });
     for (const runnerId of runnerIds)
       byRunner.set(runnerId, {
+        deviceId: mapping[runnerId] ?? null,
         status: "unknown",
         lastSeen: null,
         cpuPercent: null,

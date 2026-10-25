@@ -139,6 +139,7 @@ export interface RegisteredRunner {
 export type RunnerJobKind = "gitedge" | "github";
 export type RunnerJobConclusion = "success" | "failure" | "cancelled" | null;
 export interface RunnerDeviceHealth {
+  deviceId: string | null;
   status: "online" | "degraded" | "offline" | "pending" | "planned" | "disabled" | "unknown";
   lastSeen: number | null;
   cpuPercent: number | null;
