@@ -69,6 +69,21 @@ function deviceHealthTone(
   return "neutral";
 }
 
+function healthPercent(value: number | null): string {
+  return value === null ? "—" : `${Math.round(value * 10) / 10}%`;
+}
+
+function healthTime(value: number): string {
+  return d(new Date(value), {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
 function loadPath(points: RunnerOverviewRunner["samples"]): string {
   const finite = points
     .map((point) => point.load1)
@@ -279,7 +294,7 @@ onUnmounted(() => {
       <p class="row-meta">
         {{ t("runnerHealthSource") }} ·
         {{ t(`runnerHealthSource_${overview.healthSource.availability}`) }} ·
-        {{ d(new Date(overview.healthSource.checkedAt), "short") }}
+        {{ healthTime(overview.healthSource.checkedAt) }}
       </p>
       <section class="box" :aria-label="t('runnerDashboardTitle')">
         <p v-if="overview.runners.length === 0" class="empty-state">{{ t("runnerEmpty") }}</p>
@@ -319,25 +334,28 @@ onUnmounted(() => {
               </StatusBadge>
             </div>
             <div>
-              <span>{{ t("runnerHostCpu") }} · {{ runner.deviceHealth.cpuPercent ?? "—" }}%</span>
+              <span
+                >{{ t("runnerHostCpu") }} ·
+                {{ healthPercent(runner.deviceHealth.cpuPercent) }}</span
+              >
             </div>
             <div>
               <span
-                >{{ t("runnerHostMemory") }} · {{ runner.deviceHealth.memoryPercent ?? "—" }}%</span
+                >{{ t("runnerHostMemory") }} ·
+                {{ healthPercent(runner.deviceHealth.memoryPercent) }}</span
               >
             </div>
             <div v-for="disk in runner.deviceHealth.disks" :key="disk.path">
               <span
-                >{{ t("runnerHostDisk") }} · {{ disk.path }} · {{ disk.usedPercent }}% /
+                >{{ t("runnerHostDisk") }} · {{ disk.path }} ·
+                {{ healthPercent(disk.usedPercent) }} /
                 {{ Math.round(disk.totalBytes / 1_073_741_824) }} GB</span
               >
             </div>
             <span class="row-meta"
               >{{ t("runnerHostLastSeen") }} ·
               {{
-                runner.deviceHealth.lastSeen
-                  ? d(new Date(runner.deviceHealth.lastSeen), "short")
-                  : "—"
+                runner.deviceHealth.lastSeen ? healthTime(runner.deviceHealth.lastSeen) : "—"
               }}</span
             >
           </div>
