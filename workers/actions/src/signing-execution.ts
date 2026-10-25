@@ -117,7 +117,7 @@ export async function handleSigningMachineCallback(
     }>();
   const completedReplay =
     row?.status === "completed" &&
-    ((match[2] === "complete" && row.conclusion === "success") ||
+    (((match[2] === "complete" || match[2] === "heartbeat") && row.conclusion === "success") ||
       (match[2] === "fail" && (row.conclusion === "failure" || row.conclusion === "cancelled")));
   if (
     !row ||
@@ -155,6 +155,8 @@ export async function handleSigningMachineCallback(
     );
 
   let leaseExpiresAt = row.lease_expires_at;
+  if (match[2] === "heartbeat" && completedReplay)
+    return Response.json({ data: { completed: true, leaseExpiresAt } });
   if (match[2] === "heartbeat") {
     const refreshed = await env.DB.prepare(
       `UPDATE actions_runner_runs SET lease_expires_at=MIN(started_at+timeout_minutes*60000,?)
@@ -164,13 +166,23 @@ export async function handleSigningMachineCallback(
     )
       .bind(now + RUNNER_LEASE_MS, runId, runnerId, leaseHash, now, now)
       .first<{ lease_expires_at: number }>();
-    if (!refreshed)
+    if (!refreshed) {
+      const completed = await env.DB.prepare(
+        "SELECT lease_expires_at FROM actions_runner_runs WHERE run_id=? AND runner_id=? AND lease_hash=? AND status='completed' AND conclusion='success'"
+      )
+        .bind(runId, runnerId, leaseHash)
+        .first<{ lease_expires_at: number }>();
+      if (completed)
+        return Response.json({
+          data: { completed: true, leaseExpiresAt: completed.lease_expires_at },
+        });
       return new Response(
         JSON.stringify({
           error: { code: "conflict", message: "Signing lease is no longer active." },
         }),
         { status: 409, headers: { "Content-Type": "application/json" } }
       );
+    }
     leaseExpiresAt = refreshed.lease_expires_at;
   }
   const context = {
@@ -198,6 +210,7 @@ export async function enqueueNativeSigningRun(
   input: SigningQueueInput
 ): Promise<{ runId: string }> {
   if (
+    (input.runId !== undefined && !/^[0-9a-f-]{36}$/i.test(input.runId)) ||
     !["sign", "finalize", "dmg_sign", "dmg_finalize", "windows_sign", "ios_sign"].includes(
       input.stage
     ) ||
@@ -300,6 +313,7 @@ export async function enqueueNativeSigningRun(
     if (!existing) return null;
     if (
       existing.repository_id !== repository.id ||
+      (input.runId !== undefined && existing.run_id !== input.runId) ||
       existing.profile_revision !== input.profileRevision ||
       existing.workflow_oid !== input.workflowOid ||
       existing.platform !== input.platform ||
@@ -315,7 +329,7 @@ export async function enqueueNativeSigningRun(
   const existing = await findExistingRun();
   if (existing) return existing;
 
-  const runId = crypto.randomUUID();
+  const runId = input.runId ?? crypto.randomUUID();
 
   const event = JSON.stringify({
     action: "native-signing",

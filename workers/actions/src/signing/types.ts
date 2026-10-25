@@ -2,6 +2,7 @@ import type {
   SigningMachineContext,
   SigningPlatform,
   SigningProfile,
+  SigningReconcileDispatch,
   SigningRequest,
   SigningStage,
   SigningSubmission,
@@ -21,6 +22,7 @@ export interface SigningEnv {
 export type ApprovedSigningProfile = SigningProfile;
 
 export interface SigningQueueInput {
+  readonly runId?: string;
   readonly requestId: string;
   readonly ownerId: string;
   readonly repositoryId: string;
@@ -35,6 +37,24 @@ export interface SigningQueueInput {
   readonly timeoutMinutes: number;
   readonly sourceDigest: string;
   readonly profileRevision: string;
+}
+
+export interface SigningRetryDetails {
+  readonly request: SigningRequest;
+  readonly dispatch: SigningReconcileDispatch;
+}
+
+export type SigningRetryResult =
+  | {
+      status: "ready";
+      snapshot: SigningRetrySnapshot;
+      upload: { key: string; uploadId: string } | null;
+    }
+  | { status: "not_found" | "expired" | "conflict" };
+
+export interface SigningRetrySnapshot {
+  readonly request: SigningRequest;
+  readonly dispatchJson: string;
 }
 
 export interface SigningExecutionHooks {

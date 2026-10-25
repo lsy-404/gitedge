@@ -59,6 +59,18 @@ node scripts/signing/request.mjs wait \
 
 The client prints the request as JSON. Download validates the declared size and whole-archive SHA-256 before publishing the output file. The returned ZIP contains the platform output and its verification report. Verify each report's file digest when importing individual files into a release.
 
+A failed stage can be retried from its run in the Actions UI or with the same request and failed run IDs:
+
+```sh
+node scripts/signing/request.mjs retry \
+  --origin https://forge.example.com \
+  --repository RUNNER_REPOSITORY_UUID \
+  --request SIGNING_REQUEST_UUID \
+  --run FAILED_RUN_UUID
+```
+
+Retry preserves the admitted source, request ID, previous successful stages and other platforms. It creates a fresh run and lease for only the failed stage after rechecking the original profile, source, retained input and notarization when applicable. Repeat the same command after an interrupted request to recover its reserved run. Expired requests, cancelled stages and revoked profiles cannot be retried. The release workflow can keep its original request IDs and publish after all required outputs are ready.
+
 ## Publish after signing
 
 A `policy.sourceRepositories[]` entry may declare a `publish` block. When a request for that source repository reaches `succeeded` (intermediate macOS stages do not count), GitEdge dispatches one GitHub `workflow_dispatch` event on it:
@@ -99,16 +111,17 @@ Delivery is at least once. A dispatch GitHub accepted can still be recorded as f
 
 All paths below are under `/api/actions` on the Gateway. Pass the private Runner's `repositoryId` query parameter.
 
-| Method | Path                                  | Purpose                                                   |
-| ------ | ------------------------------------- | --------------------------------------------------------- |
-| GET    | `/signing/profiles`                   | Read approved profile metadata                            |
-| POST   | `/signing/profiles`                   | Approve `{ "name": "profile-name" }` from Runner          |
-| GET    | `/signing/profiles/:name/credentials` | Read credential configuration metadata                    |
-| POST   | `/signing/profiles/:name/credentials` | Install `{ "platform": "macos", "credentials": { ... } }` |
-| DELETE | `/signing/profiles/:name/credentials` | Remove credentials for `{ "platform": "macos" }`          |
-| POST   | `/signing/requests`                   | Submit source proof with `Idempotency-Key`                |
-| GET    | `/signing/requests/:id`               | Read request state                                        |
-| GET    | `/signing/requests/:id/download`      | Download verified final output                            |
+| Method | Path                                  | Purpose                                                     |
+| ------ | ------------------------------------- | ----------------------------------------------------------- |
+| GET    | `/signing/profiles`                   | Read approved profile metadata                              |
+| POST   | `/signing/profiles`                   | Approve `{ "name": "profile-name" }` from Runner            |
+| GET    | `/signing/profiles/:name/credentials` | Read credential configuration metadata                      |
+| POST   | `/signing/profiles/:name/credentials` | Install `{ "platform": "macos", "credentials": { ... } }`   |
+| DELETE | `/signing/profiles/:name/credentials` | Remove credentials for `{ "platform": "macos" }`            |
+| POST   | `/signing/requests`                   | Submit source proof with `Idempotency-Key`                  |
+| GET    | `/signing/requests/:id`               | Read request state                                          |
+| POST   | `/signing/requests/:id/retry`         | Retry the failed stage with `{ "runId": "FAILED_RUN_UUID" } |
+| GET    | `/signing/requests/:id/download`      | Download verified final output                              |
 
 Runner callbacks require the registered runner credential and matching native run lease. Signing profile approval and the task/lease authorization govern signing and credential access. Account-runner capacity, cancellation, history and repository admission limits apply to signing stages.
 

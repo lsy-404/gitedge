@@ -55,3 +55,4 @@
 | 053 | [Ops] [Windows broker short-path deployment](053.md) | Redeploy both Windows brokers and verify short paths, ACLs and long-path settings | Execute the merged Windows path repair on the real host | ✅ 已完成 |
 | 054 | [Ops] [CPU preference broker rollout](054.md) | Update the broker fleet, complete pending host registration and verify CPU preference and Shell publication | Enable the merged scheduling preference safely across all active clients | ✅ 已完成 |
 | 055 | [Feature] [动态科研 CPU 预算](055.md) | 依据非科研 CPU 用量动态补足目标，降低科研优先级并在 Toronto 灰度复测 | 满足 CPU 活跃度要求，同时让出业务资源 | ✅ 已完成 |
+| 056 | [BugFix] [单平台签名恢复](056.md) | 保留成功产物，恢复失败签名阶段并跟进 Shell 发布 | 单平台失败不应要求全量重建与重签 | 🔄 进行中 |

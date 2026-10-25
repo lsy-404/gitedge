@@ -10,6 +10,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   SIGNING_MAX_ARCHIVE_BYTES,
   SigningRequestSchema,
+  SigningRetryInputSchema,
   SigningSubmissionSchema,
 } from "../../packages/contracts/src/signing.ts";
 import { readJsonLimited } from "../../src/worker/common/readText.ts";
@@ -130,6 +131,15 @@ export function signingRequestClient({
         await json(endpoint(`/${requestId(id)}`), { headers: headers() })
       );
     },
+    async retry(id, runId) {
+      return SigningRequestSchema.parse(
+        await json(endpoint(`/${requestId(id)}/retry`), {
+          method: "POST",
+          headers: { ...headers(), "Content-Type": "application/json" },
+          body: JSON.stringify(SigningRetryInputSchema.parse({ runId })),
+        })
+      );
+    },
     async download(request, output) {
       const state = SigningRequestSchema.parse(request);
       if (
@@ -194,6 +204,7 @@ export async function main(args = process.argv.slice(2)) {
       repository: { type: "string" },
       input: { type: "string" },
       request: { type: "string" },
+      run: { type: "string" },
       output: { type: "string" },
       "idempotency-key": { type: "string" },
       "timeout-minutes": { type: "string", default: "60" },
@@ -213,6 +224,8 @@ export async function main(args = process.argv.slice(2)) {
     const input = await readFile(values.input);
     if (input.length > 65_536) throw new Error("Signing input exceeds its limit.");
     state = await client.submit(JSON.parse(input.toString("utf8")), values["idempotency-key"]);
+  } else if (command === "retry") {
+    state = await client.retry(values.request, values.run);
   } else if (["status", "download", "wait"].includes(command)) {
     state = await client.status(values.request);
     if (command === "wait") {
@@ -230,7 +243,7 @@ export async function main(args = process.argv.slice(2)) {
     if ((command === "download" || command === "wait") && values.output)
       await client.download(state, values.output);
     else if (command === "download") throw new Error("An output path is required.");
-  } else throw new Error("Use submit, status, wait or download.");
+  } else throw new Error("Use submit, status, retry, wait or download.");
   process.stdout.write(`${JSON.stringify(state)}\n`);
 }
 

@@ -827,6 +827,7 @@ async function runClaimedSigning(profile, claim, signal) {
       });
       const heartbeat = async () => {
         let lastHeartbeat = Date.now();
+        let leaseExpiresAt = claim.leaseExpiresAt;
         while (!runSignal.aborted && childRunning(child)) {
           await sleep(1_000, runSignal);
           if (!childRunning(child)) return;
@@ -835,25 +836,61 @@ async function runClaimedSigning(profile, claim, signal) {
             return;
           } catch {}
           if (Date.now() - lastHeartbeat < 30_000) continue;
-          const result = await apiRequest(
-            profile.origin,
-            secret.trim(),
-            `/api/actions/runner/signing/requests/${encodeURIComponent(run.requestId)}/heartbeat`,
-            {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "X-Runner-Run-Id": run.id,
-                "X-Runner-Lease-Token": claim.leaseToken,
-              },
-              signal: runSignal,
+          let result;
+          for (let attempt = 0; ; attempt++) {
+            const remaining = leaseExpiresAt - Date.now() - 1_000;
+            if (remaining <= 0) throw new Error("Signing lease expired before renewal.");
+            try {
+              result = await apiRequest(
+                profile.origin,
+                secret.trim(),
+                `/api/actions/runner/signing/requests/${encodeURIComponent(run.requestId)}/heartbeat`,
+                {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    "X-Runner-Run-Id": run.id,
+                    "X-Runner-Lease-Token": claim.leaseToken,
+                  },
+                  signal: runSignal,
+                },
+                Math.min(20_000, remaining)
+              );
+              break;
+            } catch (error) {
+              try {
+                await access(receiptFile);
+                return;
+              } catch {}
+              const status = error.cause?.status;
+              const transient =
+                error.name === "TimeoutError" ||
+                error.name === "TypeError" ||
+                error.cause?.name === "TypeError" ||
+                status === 429 ||
+                (status >= 500 && status <= 599);
+              if (!childRunning(child)) return;
+              if (!transient || runSignal.aborted) throw error;
+              console.error(
+                "Signing heartbeat transport failed; retrying within the current lease."
+              );
+              await sleep(
+                Math.min(
+                  10_000,
+                  2_000 * 2 ** Math.min(attempt, 3),
+                  Math.max(0, leaseExpiresAt - Date.now() - 1_000)
+                ),
+                runSignal
+              );
             }
-          );
+          }
+          if (result?.data?.completed === true) return;
           if (
             !Number.isFinite(result?.data?.leaseExpiresAt) ||
             result.data.leaseExpiresAt <= Date.now()
           )
             throw new Error("GitEdge returned an invalid signing lease heartbeat response.");
+          leaseExpiresAt = result.data.leaseExpiresAt;
           lastHeartbeat = Date.now();
         }
       };

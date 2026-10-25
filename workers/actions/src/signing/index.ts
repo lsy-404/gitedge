@@ -6,6 +6,7 @@ import {
   SigningProfileSchema,
   SigningReconcileDispatchSchema,
   SigningRequestSchema,
+  SigningRetryInputSchema,
   SigningStageSchema,
   SigningSubmissionSchema,
 } from "../../../../packages/contracts/src/signing";
@@ -14,7 +15,7 @@ import { waitUntil } from "cloudflare:workers";
 import type { TrustedUser } from "../../../../packages/contracts/src/index";
 import { dataResponse, errorResponse } from "../../../../src/worker/common/http";
 import { createLogger } from "../../../../src/worker/common/logger";
-import { SigningCoordinator, coordinator } from "./coordinator";
+import { SigningCoordinator, coordinator, previousStage } from "./coordinator";
 import type { SigningEnv, SigningExecutionHooks } from "./types";
 import { attemptPublishDispatch, recordPublishDispatch } from "./publish";
 import {
@@ -429,6 +430,132 @@ async function verifiedObject(
   return `sha256:${actual}` === digest;
 }
 
+async function retrySigningRequest(
+  request: Request,
+  env: SigningEnv,
+  user: TrustedUser,
+  id: string,
+  hooks: SigningExecutionHooks
+): Promise<Response> {
+  const repositoryId = new URL(request.url).searchParams.get("repositoryId") ?? "";
+  const repository = await ownedRunnerRepository(env, user.id, repositoryId);
+  if (!repository || !runnerAccess(user, repository.id, true))
+    return errorResponse(404, "not_found", "Signing request was not found.");
+  const { runId } = SigningRetryInputSchema.parse(await readJsonLimited(request, 4096));
+  const failed = await env.DB.prepare(
+    `SELECT s.generation,j.status,j.conclusion FROM actions_signing_runs s
+     JOIN actions_runner_runs j ON j.run_id=s.run_id
+     WHERE s.run_id=? AND s.request_id=? AND s.owner_id=? AND s.repository_id=?`
+  )
+    .bind(runId, id, user.id, repository.id)
+    .first<{ generation: number; status: string; conclusion: string | null }>();
+  if (!failed) return errorResponse(404, "not_found", "Signing run was not found.");
+  if (failed.status !== "completed" || failed.conclusion !== "failure")
+    return errorResponse(
+      409,
+      "signing_retry_conflict",
+      "Only a failed signing stage can be retried."
+    );
+  const stub = coordinator(env, user.id);
+  const snapshot = await stub.retrySnapshot(id, user.id, repository.id);
+  if (!snapshot) return errorResponse(404, "not_found", "Signing request was not found.");
+  const details = {
+    request: snapshot.request,
+    dispatch: SigningReconcileDispatchSchema.parse(JSON.parse(snapshot.dispatchJson)),
+  };
+  if (details.request.expiresAt <= Date.now())
+    return errorResponse(410, "signing_request_expired", "The signing request has expired.");
+  if (details.dispatch.generation > failed.generation && details.request.runId) {
+    const existing = await env.DB.prepare("SELECT 1 FROM actions_runner_runs WHERE run_id=?")
+      .bind(details.request.runId)
+      .first();
+    if (existing && details.request.state !== "failed") return dataResponse(details.request);
+  }
+  const profile = await hooks.loadApprovedProfile(user, repository.id, details.request.profile);
+  if (!profile?.enabled || profile.revision !== details.request.profileRevision)
+    return errorResponse(
+      409,
+      "signing_profile_changed",
+      "The original signing profile is no longer approved."
+    );
+  if (
+    !(await hooks.verifySourceCurrent(user.id, repository.id, profile, details.dispatch.submission))
+  )
+    return errorResponse(
+      409,
+      "signing_source_changed",
+      "The approved source run is no longer valid."
+    );
+  const input = await env.SIGNING_ARTIFACTS.head(
+    signingObjectKey(user.id, repository.id, id, previousStage(details.dispatch.stage) ?? "source")
+  );
+  if (!input || input.size !== details.dispatch.inputSize)
+    return errorResponse(
+      410,
+      "signing_object_unavailable",
+      "The validated signing input is no longer available."
+    );
+  if (
+    ["finalize", "dmg_finalize"].includes(details.dispatch.stage) &&
+    (await hooks.verifyNotarization(
+      user.id,
+      repository.id,
+      profile,
+      details.dispatch.previousVerification
+    )) !== "Accepted"
+  )
+    return errorResponse(
+      409,
+      "signing_notarization_unavailable",
+      "The notarization has not been accepted."
+    );
+  const result = await stub.retryStage(id, user.id, repository.id, runId, failed.generation);
+  if (result.status !== "ready" || !result.snapshot.request.runId)
+    return errorResponse(
+      409,
+      "signing_retry_conflict",
+      "The signing request changed before retry."
+    );
+  const reservedRunId = result.snapshot.request.runId;
+  const prepared = {
+    request: result.snapshot.request,
+    dispatch: SigningReconcileDispatchSchema.parse(JSON.parse(result.snapshot.dispatchJson)),
+  };
+  const logger = createLogger(env.LOG_LEVEL, { service: "actions-signing", requestId: id });
+  if (result.upload && result.upload.uploadId !== "pending") {
+    try {
+      await env.SIGNING_ARTIFACTS.resumeMultipartUpload(
+        result.upload.key,
+        result.upload.uploadId
+      ).abort();
+    } catch (error) {
+      logger.warn("signing:retry-upload-abort-failed", {
+        errorType: error instanceof Error ? error.name : "unknown",
+      });
+    }
+  }
+  const dispatch = prepared.dispatch;
+  await hooks.enqueue({
+    runId: reservedRunId,
+    requestId: id,
+    ownerId: user.id,
+    repositoryId: repository.id,
+    workflowOid: dispatch.profile.workflowOid,
+    workflowPath: dispatch.profile.workflowPath,
+    workflowSource: dispatch.profile.workflowSource,
+    stage: dispatch.stage,
+    inputDigest: dispatch.inputDigest,
+    platform: dispatch.profile.platform,
+    generation: dispatch.generation,
+    nonce: dispatch.nonce,
+    timeoutMinutes: dispatch.profile.timeoutMinutes,
+    sourceDigest: dispatch.submission.sourceDigest,
+    profileRevision: dispatch.profile.revision,
+  });
+  logger.info("signing:stage-retried", { runId: prepared.request.runId, stage: dispatch.stage });
+  return dataResponse(prepared.request, 202);
+}
+
 export async function handleSigningRoute(
   request: Request,
   env: SigningEnv,
@@ -728,6 +855,8 @@ export async function handleSigningRoute(
         created.created ? 202 : 200
       );
     }
+    if (request.method === "POST" && path.length === 4 && path[3] === "retry")
+      return await retrySigningRequest(request, env, user, z.uuid().parse(path[2]), executionHooks);
     if (request.method === "GET" && path.length === 3) {
       const repoParam = url.searchParams.get("repositoryId");
       if (!repoParam) return errorResponse(400, "bad_request", "repositoryId is required.");
@@ -778,6 +907,18 @@ export async function handleSigningRoute(
     return errorResponse(405, "method_not_allowed", "Signing operation is not supported.");
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
+    if (
+      [
+        "signing_retry_conflict",
+        "signing_request_expired",
+        "signing_stage_output_unavailable",
+      ].includes(message)
+    )
+      return errorResponse(
+        409,
+        message,
+        "The failed signing stage is no longer available for retry."
+      );
     if (message === "signing_idempotency_conflict")
       return errorResponse(
         409,
@@ -1206,7 +1347,7 @@ export async function handleSigningMachineRoute(
       );
       if (plan.verified)
         return dataResponse({ digest: plan.digest, size: plan.size, verified: true });
-      let object = await env.SIGNING_ARTIFACTS.get(plan.key);
+      let object = plan.verified ? await env.SIGNING_ARTIFACTS.get(plan.key) : null;
       if (!object) {
         try {
           await env.SIGNING_ARTIFACTS.resumeMultipartUpload(plan.key, plan.uploadId).complete(

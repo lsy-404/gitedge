@@ -5,6 +5,7 @@ import {
   SigningMachineContextSchema,
   SigningRequestSchema,
   SigningProfileSchema,
+  SigningReconcileDispatchSchema,
   SigningSubmissionSchema,
   type SigningMachineContext,
 } from "../../../../packages/contracts/src/signing";
@@ -19,6 +20,9 @@ import type {
   SigningExecutionHooks,
   SigningQueueInput,
   SigningStoredRequest,
+  SigningRetryDetails,
+  SigningRetryResult,
+  SigningRetrySnapshot,
 } from "./types";
 
 interface StoredRow {
@@ -789,6 +793,88 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
     return { digest, size, verified: true as const };
   }
 
+  private retryDetails(
+    id: string,
+    ownerId: string,
+    repositoryId: string
+  ): SigningRetryDetails | null {
+    const row = this.expire(id);
+    if (!row || row.owner_id !== ownerId || row.repository_id !== repositoryId) return null;
+    const previous = previousStage(row.current_stage);
+    const output = previous
+      ? this.ctx.storage.sql
+          .exec<{ digest: string; size: number }>(
+            "SELECT digest,size FROM signing_stage_outputs WHERE request_id=? AND stage=?",
+            id,
+            previous
+          )
+          .toArray()[0]
+      : { digest: row.source_digest, size: row.source_size };
+    if (!output) return null;
+    return {
+      request: this.public(row),
+      dispatch: SigningReconcileDispatchSchema.parse({
+        ...this.dispatch(row),
+        stage: row.current_stage,
+        inputDigest: output.digest,
+        inputSize: output.size,
+        previousVerification: this.previousVerification(row),
+      }),
+    };
+  }
+
+  retrySnapshot(id: string, ownerId: string, repositoryId: string): SigningRetrySnapshot | null {
+    const details = this.retryDetails(id, ownerId, repositoryId);
+    return details
+      ? { request: details.request, dispatchJson: JSON.stringify(details.dispatch) }
+      : null;
+  }
+
+  retryStage(
+    id: string,
+    ownerId: string,
+    repositoryId: string,
+    failedRunId: string,
+    failedGeneration: number
+  ): SigningRetryResult {
+    const row = this.row(id);
+    if (!row || row.owner_id !== ownerId || row.repository_id !== repositoryId)
+      return { status: "not_found" };
+    if (row.expires_at <= Date.now()) return { status: "expired" };
+    const snapshot = this.retrySnapshot(id, ownerId, repositoryId);
+    if (!snapshot) return { status: "conflict" };
+    if (
+      row.generation === failedGeneration + 1 &&
+      row.run_id &&
+      ["queued", "running", "succeeded", "awaiting_source"].includes(row.state)
+    )
+      return { status: "ready", snapshot, upload: null };
+    if (row.state !== "failed" || row.run_id !== failedRunId || row.generation !== failedGeneration)
+      return { status: "conflict" };
+    const upload = this.expiredUpload(id, ownerId, repositoryId);
+    const nonce = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
+      .replaceAll("+", "-")
+      .replaceAll("/", "_")
+      .replaceAll("=", "");
+    this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.sql.exec(
+        "UPDATE signing_requests SET state='queued',run_id=?,generation=generation+1,nonce=?,output_digest=NULL,output_size=NULL,authorized_at=0,verification_json=NULL,completed_at=NULL WHERE id=?",
+        crypto.randomUUID(),
+        nonce,
+        id
+      );
+      this.ctx.storage.sql.exec("DELETE FROM signing_upload_parts WHERE request_id=?", id);
+      this.ctx.storage.sql.exec("DELETE FROM signing_uploads WHERE request_id=?", id);
+      this.ctx.storage.sql.exec(
+        "DELETE FROM signing_stage_outputs WHERE request_id=? AND stage=?",
+        id,
+        row.current_stage
+      );
+    });
+    const current = this.retrySnapshot(id, ownerId, repositoryId);
+    return current ? { status: "ready", snapshot: current, upload } : { status: "conflict" };
+  }
+
   bindRun(id: string, ownerId: string, repositoryId: string, runId: string): boolean {
     const row = this.row(id);
     if (!row || row.owner_id !== ownerId || row.repository_id !== repositoryId) return false;
@@ -1101,7 +1187,7 @@ function containsCredentialMaterial(value: unknown): boolean {
   );
 }
 
-function previousStage(stage: string): string | null {
+export function previousStage(stage: string): string | null {
   if (stage === "finalize") return "sign";
   if (stage === "dmg_sign") return "finalize";
   if (stage === "dmg_finalize") return "dmg_sign";

@@ -260,6 +260,8 @@ export const SigningRequestSchema = z
   .strict();
 export type SigningRequest = z.infer<typeof SigningRequestSchema>;
 
+export const SigningRetryInputSchema = z.object({ runId: z.uuid() }).strict();
+
 export const SigningCreateResponseSchema = z.object({ request: SigningRequestSchema }).strict();
 export type SigningCreateResponse = z.infer<typeof SigningCreateResponseSchema>;
 

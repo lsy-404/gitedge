@@ -784,6 +784,9 @@ export async function runSigning({
     const verification = await validateOutput(outputDir, manifest);
     const bundle = await bundleBuilder(outputDir, verification, work, manifest.max_artifact_bytes);
     await client.uploadOutput(bundle);
+    clearInterval(timer);
+    timer = undefined;
+    if (heartbeatBusy && heartbeatPromise) await heartbeatPromise;
     if (heartbeatError) throw new ClientError("HEARTBEAT_FAILED");
     await client.complete(bundle, verification);
     return { requestId: context.requestId, outputDigest: bundle.digest, outputSize: bundle.size };

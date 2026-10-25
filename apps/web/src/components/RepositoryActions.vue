@@ -31,6 +31,7 @@ const loading = ref(false);
 const workflowLoading = ref(false);
 const saving = ref(false);
 const cancelling = ref(false);
+const retrying = ref(false);
 const error = ref("");
 const runError = ref("");
 let pollOwnsError = false;
@@ -271,6 +272,21 @@ async function openRun(runId: string): Promise<void> {
       error.value = t("actionsLoadError");
       pollOwnsError = false;
     }
+  }
+}
+
+async function retrySigningRun(): Promise<void> {
+  if (!selectedRun.value || retrying.value) return;
+  retrying.value = true;
+  runError.value = "";
+  try {
+    const request = await api.retrySigningRun(selectedRun.value.id);
+    await refreshRuns();
+    if (request.runId) await openRun(request.runId);
+  } catch (cause) {
+    runError.value = errorMessage(cause, t, {}, "actionsRetrySigningError");
+  } finally {
+    retrying.value = false;
   }
 }
 
@@ -538,6 +554,19 @@ onUnmounted(() => clearInterval(pollingTimer));
             <h3>{{ selectedRun.workflowName }}</h3>
             <code>{{ selectedRun.commitOid }}</code>
           </div>
+          <FluentButton
+            v-if="
+              canWrite &&
+              !archived &&
+              selectedRun.workflowName === 'native-signing' &&
+              selectedRun.status === 'completed' &&
+              selectedRun.conclusion === 'failure'
+            "
+            tone="secondary"
+            :disabled="retrying"
+            @click="retrySigningRun"
+            >{{ retrying ? t("actionsRetryingSigning") : t("actionsRetrySigning") }}</FluentButton
+          >
           <ConfirmButton
             v-if="canWrite && selectedRunActive"
             tone="secondary"

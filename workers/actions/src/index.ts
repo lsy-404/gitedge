@@ -1802,6 +1802,36 @@ export default {
       if (user?.job)
         return errorResponse(403, "forbidden", "Job credentials cannot control Actions.");
       const parts = url.pathname.split("/").filter(Boolean);
+      if (
+        request.method === "POST" &&
+        parts.length === 3 &&
+        parts[0] === "runs" &&
+        parts[2] === "retry"
+      ) {
+        if (!user || user.agentSession)
+          return errorResponse(404, "not_found", "Signing run was not found.");
+        const signing = await env.DB.prepare(
+          "SELECT request_id,repository_id FROM actions_signing_runs WHERE run_id=? AND owner_id=?"
+        )
+          .bind(parts[1], user.id)
+          .first<{ request_id: string; repository_id: string }>();
+        if (!signing) return errorResponse(404, "not_found", "Signing run was not found.");
+        const retryUrl = new URL(
+          `/signing/requests/${encodeURIComponent(signing.request_id)}/retry`,
+          request.url
+        );
+        retryUrl.searchParams.set("repositoryId", signing.repository_id);
+        return handleSigningRoute(
+          new Request(retryUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ runId: parts[1] }),
+          }),
+          env,
+          user,
+          signingExecutionHooks(env)
+        );
+      }
       if (parts.length === 2 && parts[0] === "repositories") {
         return await handleRepositoryRoute(request, env, user, parts[1] ?? "", []);
       }

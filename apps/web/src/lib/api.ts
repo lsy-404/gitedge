@@ -1,6 +1,7 @@
 import type { MergeCandidate } from "../../../../packages/contracts/src/merge-candidates";
 import type { MergeRequirements } from "../../../../packages/contracts/src/merge-requirements";
 import type { PublicProfile } from "../../../../packages/contracts/src/profiles";
+import type { SigningRequest } from "../../../../packages/contracts/src/signing";
 import type {
   AccountProfile,
   AccountPreferences,
@@ -1870,6 +1871,10 @@ export const api = {
     }),
   cancelActionRun: (runId: string) =>
     request<ActionRun>(`/api/actions/runs/${encodeURIComponent(runId)}/cancel`, {
+      method: "POST",
+    }),
+  retrySigningRun: (runId: string) =>
+    request<SigningRequest>(`/api/actions/runs/${encodeURIComponent(runId)}/retry`, {
       method: "POST",
     }),
   agents: () => request<Agent[]>("/api/auth/agents"),
