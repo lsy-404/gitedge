@@ -111,17 +111,22 @@ Delivery is at least once. A dispatch GitHub accepted can still be recorded as f
 
 All paths below are under `/api/actions` on the Gateway. Pass the private Runner's `repositoryId` query parameter.
 
-| Method | Path                                  | Purpose                                                     |
-| ------ | ------------------------------------- | ----------------------------------------------------------- |
-| GET    | `/signing/profiles`                   | Read approved profile metadata                              |
-| POST   | `/signing/profiles`                   | Approve `{ "name": "profile-name" }` from Runner            |
-| GET    | `/signing/profiles/:name/credentials` | Read credential configuration metadata                      |
-| POST   | `/signing/profiles/:name/credentials` | Install `{ "platform": "macos", "credentials": { ... } }`   |
-| DELETE | `/signing/profiles/:name/credentials` | Remove credentials for `{ "platform": "macos" }`            |
-| POST   | `/signing/requests`                   | Submit source proof with `Idempotency-Key`                  |
-| GET    | `/signing/requests/:id`               | Read request state                                          |
-| POST   | `/signing/requests/:id/retry`         | Retry the failed stage with `{ "runId": "FAILED_RUN_UUID" } |
-| GET    | `/signing/requests/:id/download`      | Download verified final output                              |
+| Method | Path                                     | Purpose                                                                                                                |
+| ------ | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/signing/profiles`                      | Read approved profile metadata                                                                                         |
+| POST   | `/signing/profiles`                      | Approve `{ "name": "profile-name" }` from Runner                                                                       |
+| GET    | `/signing/profiles/:name/credentials`    | Read credential configuration metadata                                                                                 |
+| POST   | `/signing/profiles/:name/credentials`    | Install `{ "platform": "macos", "credentials": { ... } }`                                                              |
+| DELETE | `/signing/profiles/:name/credentials`    | Remove credentials for `{ "platform": "macos" }`                                                                       |
+| POST   | `/signing/requests`                      | Submit source proof with `Idempotency-Key`                                                                             |
+| GET    | `/signing/requests/:id`                  | Read request state                                                                                                     |
+| POST   | `/signing/requests/:id/retry`            | Retry only the failed stage with `{ "runId": "FAILED_RUN_UUID" }` or `{ "runId": null }`                               |
+| POST   | `/signing/requests/:id/recover-platform` | Owner recovery of `{ "profile": "target-profile", "sourceArtifactId": "GITHUB_ARTIFACT_ID" }` from an admitted request |
+| GET    | `/signing/requests/:id/download`         | Download verified final output                                                                                         |
+
+The account Runner signing settings expose both recovery operations. A null run ID retries a failed stage that never received an execution run. Successful stages and platforms remain unchanged.
+
+Platform recovery binds the new artifact to the admitted request's original repository, first build attempt, source commit, workflow, actor, ref and version. The artifact must remain available and match the approved target profile; GitHub metadata and the downloaded archive digest are checked again. A sibling job failure does not invalidate an already admitted artifact. Cancelled runs, expired artifacts and revoked or changed profiles remain ineligible.
 
 Runner callbacks require the registered runner credential and matching native run lease. Signing profile approval and the task/lease authorization govern signing and credential access. Account-runner capacity, cancellation, history and repository admission limits apply to signing stages.
 

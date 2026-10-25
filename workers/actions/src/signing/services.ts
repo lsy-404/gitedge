@@ -5,6 +5,7 @@ import {
   SigningProfileMetadataSchema,
   SigningCredentialStatusSchema,
   SigningSourceCredentialSchema,
+  SigningSubmissionSchema,
   SigningCredentialPlatformSchema,
   type SigningMachineContext,
   type SigningPlatform,
@@ -243,7 +244,8 @@ async function verifySource(
   input: SigningSubmission,
   profile: SigningProfile,
   runIdentity: string | null = null,
-  audience = ""
+  audience = "",
+  retainedSource = false
 ): Promise<{ body: ReadableStream<Uint8Array> } | null> {
   const sourceStep = async <T>(code: string, operation: () => Promise<T>): Promise<T> => {
     try {
@@ -282,7 +284,9 @@ async function verifySource(
     run.data.head_sha !== input.sourceCommitOid ||
     !(
       run.data.status === "in_progress" ||
-      (run.data.status === "completed" && run.data.conclusion === "success")
+      (run.data.status === "completed" &&
+        (run.data.conclusion === "success" ||
+          (retainedSource && run.data.conclusion === "failure")))
     ) ||
     run.data.path.split("@")[0] !== repo.workflowPath ||
     !repo.actorIds.includes(run.data.actor.id)
@@ -334,6 +338,7 @@ async function verifySource(
       return null;
     if (
       run.data.status === "in_progress" &&
+      !retainedSource &&
       (!runIdentity ||
         runIdentity.length > 16_384 ||
         !(await verifyGitHubRunIdentity(
@@ -433,10 +438,26 @@ async function verifySourceCurrent(
     run.data.head_sha !== input.sourceCommitOid ||
     !(
       run.data.status === "in_progress" ||
-      (run.data.status === "completed" && run.data.conclusion === "success")
+      (run.data.status === "completed" &&
+        ["success", "failure"].includes(run.data.conclusion ?? ""))
     ) ||
     run.data.path.split("@")[0] !== repo.workflowPath ||
     !repo.actorIds.includes(run.data.actor.id)
+  )
+    return false;
+  const artifact = githubArtifactSchema.safeParse(
+    await githubJson(
+      token,
+      `/repos/${repo.fullName}/actions/artifacts/${encodeURIComponent(input.sourceArtifactId)}`
+    )
+  );
+  if (
+    !artifact.success ||
+    artifact.data.expired ||
+    artifact.data.name !== repo.artifactName ||
+    String(artifact.data.workflow_run.id) !== input.sourceRunId ||
+    artifact.data.workflow_run.head_sha !== input.sourceCommitOid ||
+    artifact.data.size_in_bytes !== input.sourceSize
   )
     return false;
   const repositoryInfo = z
@@ -468,6 +489,59 @@ async function verifySourceCurrent(
     repo.events.includes(run.data.event) &&
     repo.refs.includes(run.data.head_branch)
   );
+}
+
+export async function recoverSigningSource(
+  env: SigningEnv,
+  ownerId: string,
+  repositoryId: string,
+  profile: SigningProfile,
+  anchor: SigningSubmission,
+  artifactId: string
+): Promise<{ submission: SigningSubmission; body: ReadableStream<Uint8Array> } | null> {
+  const token = await storedSourceCredential(env, ownerId, repositoryId, profile.revision);
+  const repo = profile.policy.sourceRepositories.find(
+    (item) => item.id === anchor.sourceRepositoryId
+  );
+  if (!token || !repo || repo.releaseTagPattern) return null;
+  const run = githubRunSchema
+    .extend({ run_attempt: z.literal(1) })
+    .safeParse(
+      await githubJson(
+        token,
+        `/repos/${repo.fullName}/actions/runs/${encodeURIComponent(anchor.sourceRunId)}`
+      )
+    );
+  if (!run.success) return null;
+  const metadata = githubArtifactSchema
+    .extend({ digest: z.string().regex(/^sha256:[a-f0-9]{64}$/) })
+    .safeParse(
+      await githubJson(
+        token,
+        `/repos/${repo.fullName}/actions/artifacts/${encodeURIComponent(artifactId)}`
+      )
+    );
+  if (!metadata.success) return null;
+  const submission = SigningSubmissionSchema.parse({
+    ...anchor,
+    profile: profile.name,
+    platform: profile.platform,
+    sourceArtifactId: artifactId,
+    sourceDigest: metadata.data.digest,
+    sourceSize: metadata.data.size_in_bytes,
+  });
+  if (submission.sourceSize > profile.policy.project.max_artifact_bytes) return null;
+  const source = await verifySource(
+    env,
+    ownerId,
+    repositoryId,
+    submission,
+    profile,
+    null,
+    "",
+    true
+  );
+  return source ? { submission, body: source.body } : null;
 }
 
 async function storedSourceCredential(

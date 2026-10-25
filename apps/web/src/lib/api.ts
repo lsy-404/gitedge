@@ -1,3 +1,4 @@
+import type { SigningRecoverPlatformInput } from "../../../../packages/contracts/src/signing";
 import type { MergeCandidate } from "../../../../packages/contracts/src/merge-candidates";
 import type { MergeRequirements } from "../../../../packages/contracts/src/merge-requirements";
 import type { PublicProfile } from "../../../../packages/contracts/src/profiles";
@@ -688,6 +689,26 @@ export const api = {
     request<{ revoked: true }>(`/api/actions/runners/${encodeURIComponent(runnerId)}`, {
       method: "DELETE",
     }),
+  signingRequestStatus: (repositoryId: string, id: string) =>
+    request<SigningRequest>(
+      `/api/actions/signing/requests/${encodeURIComponent(id)}?repositoryId=${encodeURIComponent(repositoryId)}`
+    ),
+  retrySigningRequest: (repositoryId: string, id: string, runId: string | null) =>
+    request<SigningRequest>(
+      `/api/actions/signing/requests/${encodeURIComponent(id)}/retry?repositoryId=${encodeURIComponent(repositoryId)}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ runId }),
+      }
+    ),
+  recoverSigningPlatform: (repositoryId: string, id: string, input: SigningRecoverPlatformInput) =>
+    request<SigningRequest>(
+      `/api/actions/signing/requests/${encodeURIComponent(id)}/recover-platform?repositoryId=${encodeURIComponent(repositoryId)}`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      }
+    ),
   signingProfiles: (repositoryId: string, signal?: AbortSignal) =>
     request<{ profiles: SigningProfileMetadata[] }>(
       `/api/actions/signing/profiles?repositoryId=${encodeURIComponent(repositoryId)}`,

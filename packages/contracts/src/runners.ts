@@ -6,6 +6,7 @@ import { isResourceLabel } from "../runner-scheduling.mjs";
 export const RUNNER_TOKEN_PREFIX = "ge_runner_";
 export const ACTION_JOB_TOKEN_PREFIX = "ge_job_";
 export const RUNNER_LEASE_MS = 120_000;
+export const GITHUB_RUNNER_LEASE_MS = 5 * 60_000;
 export const RUNNER_LOG_BYTES = 16_384;
 export const RUNNER_CAPACITY_STALE_MS = 45_000;
 export const RUNNER_OFFLINE_MS = 60_000;

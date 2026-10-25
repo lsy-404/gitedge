@@ -260,7 +260,16 @@ export const SigningRequestSchema = z
   .strict();
 export type SigningRequest = z.infer<typeof SigningRequestSchema>;
 
-export const SigningRetryInputSchema = z.object({ runId: z.uuid() }).strict();
+export const SigningRetryInputSchema = z.object({ runId: z.uuid().nullable() }).strict();
+
+export const SigningRecoverPlatformInputSchema = z
+  .object({
+    profile: SigningSubmissionSchema.shape.profile,
+    sourceArtifactId: z.string().regex(/^[1-9]\d*$/),
+  })
+  .strict();
+
+export type SigningRecoverPlatformInput = z.infer<typeof SigningRecoverPlatformInputSchema>;
 
 export const SigningCreateResponseSchema = z.object({ request: SigningRequestSchema }).strict();
 export type SigningCreateResponse = z.infer<typeof SigningCreateResponseSchema>;

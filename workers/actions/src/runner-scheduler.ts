@@ -3,6 +3,7 @@ import {
   RunnerCapacitySchema,
   RUNNER_CLAIM_CANDIDATE_LIMIT,
   RUNNER_LEASE_MS,
+  GITHUB_RUNNER_LEASE_MS,
   RUNNER_FAILURE_HOLD_BASE_MS,
   RUNNER_FAILURE_HOLD_MAX_MS,
   RUNNER_FAILURE_HOLD_THRESHOLD,
@@ -340,7 +341,7 @@ export async function claimRunnerCandidate(
       .bind(
         runner.id,
         leaseHash,
-        now + RUNNER_LEASE_MS,
+        now + GITHUB_RUNNER_LEASE_MS,
         now,
         candidate.id,
         runner.id,

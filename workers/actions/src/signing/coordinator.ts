@@ -830,11 +830,25 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
       : null;
   }
 
+  findSource(repositoryId: string, ownerId: string, revision: string, submissionJson: string) {
+    const row = this.ctx.storage.sql
+      .exec<{ id: string; idempotency_key: string }>(
+        "SELECT id,idempotency_key FROM signing_requests WHERE repository_id=? AND owner_id=? AND json_extract(profile_json,'$.revision')=? AND submission_json=? LIMIT 1",
+        repositoryId,
+        ownerId,
+        revision,
+        JSON.stringify(SigningSubmissionSchema.parse(JSON.parse(submissionJson)))
+      )
+      .toArray()[0];
+    const request = row ? this.get(row.id, ownerId, repositoryId) : null;
+    return row && request ? { request, idempotencyKey: row.idempotency_key } : null;
+  }
+
   retryStage(
     id: string,
     ownerId: string,
     repositoryId: string,
-    failedRunId: string,
+    failedRunId: string | null,
     failedGeneration: number
   ): SigningRetryResult {
     const row = this.row(id);

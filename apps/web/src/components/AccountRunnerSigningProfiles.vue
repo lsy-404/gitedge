@@ -19,6 +19,7 @@ import {
 import { useReauthRetry } from "../lib/reauth";
 import { FluentButton } from "@platform-kit/fluent/vue";
 import NoticeBar from "./NoticeBar.vue";
+import SigningRecovery from "./SigningRecovery.vue";
 import ReauthPrompt from "./ReauthPrompt.vue";
 
 const props = defineProps<{ repositoryId: string }>();
@@ -401,6 +402,7 @@ onMounted(() => void refresh());
     <p v-if="!loading && !profiles.length" class="row-meta">
       {{ t("runnerSigningProfilesEmpty") }}
     </p>
+    <SigningRecovery :repository-id="repositoryId" :profiles="profiles" />
   </section>
 </template>
 

@@ -522,7 +522,7 @@ async function runClaimedGitHub(profile, claim, signal) {
       );
       if (child && child.exitCode !== null) return;
       let response;
-      for (let attempt = 0; attempt < 4; attempt++) {
+      for (let attempt = 0; ; attempt++) {
         const remaining = leaseExpiresAt - Date.now() - 1_000;
         if (remaining <= 0) throw new Error("GitHub runner lease expired before renewal.");
         try {
@@ -536,7 +536,7 @@ async function runClaimedGitHub(profile, claim, signal) {
               body: JSON.stringify({ runId, leaseToken }),
               signal: AbortSignal.any([heartbeatSignal, AbortSignal.timeout(remaining)]),
             },
-            Math.min(45_000, remaining)
+            Math.min(15_000, remaining)
           );
           break;
         } catch (error) {
@@ -548,14 +548,18 @@ async function runClaimedGitHub(profile, claim, signal) {
             status === 429 ||
             (status >= 500 && status <= 599);
           const delay = Math.min(10_000, 2_000 * 2 ** attempt);
-          if (
-            !transient ||
-            attempt === 3 ||
-            heartbeatSignal.aborted ||
-            leaseExpiresAt - Date.now() <= delay + 1_000
-          )
+          if (!transient || heartbeatSignal.aborted || leaseExpiresAt - Date.now() <= delay + 1_000)
             throw error;
-          console.error("GitHub heartbeat transport failed; retrying within the current lease.");
+          console.error(
+            JSON.stringify({
+              event: "github-heartbeat-transport-retry",
+              time: new Date().toISOString(),
+              runId,
+              attempt: attempt + 1,
+              leaseRemainingMs: leaseExpiresAt - Date.now(),
+              errorType: error.name,
+            })
+          );
           await sleep(delay, heartbeatSignal);
         }
       }

@@ -3,7 +3,7 @@ import {
   GitHubRunnerDemandSchema,
   RunnerLeaseInputSchema,
   RunnerCompleteInputSchema,
-  RUNNER_LEASE_MS,
+  GITHUB_RUNNER_LEASE_MS,
   sha256Hex,
   type GitHubRunnerJobRecord,
   type JobClaim,
@@ -163,7 +163,7 @@ export async function claimGithubRunner(
         githubRunnerId: result.githubRunnerId,
         timeoutMinutes: claim.minutes,
       },
-      leaseExpiresAt: now + RUNNER_LEASE_MS,
+      leaseExpiresAt: now + GITHUB_RUNNER_LEASE_MS,
     };
   } catch (cause) {
     await finish(env, job.id, "failure", true);
@@ -226,7 +226,7 @@ export async function githubRunnerLease(
     `UPDATE actions_github_runner_jobs SET lease_expires_at=MIN(started_at+21600000,MAX(lease_expires_at,?)),assigned=MAX(assigned,?)
      WHERE id=? AND status='running' AND lease_hash=? AND lease_expires_at>? RETURNING lease_expires_at`
   )
-    .bind(renewedAt + RUNNER_LEASE_MS, Number(status.assigned), job.id, hash, renewedAt)
+    .bind(renewedAt + GITHUB_RUNNER_LEASE_MS, Number(status.assigned), job.id, hash, renewedAt)
     .first<{ lease_expires_at: number }>();
   return dataResponse({
     cancelled: renewed === null,

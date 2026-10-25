@@ -136,7 +136,7 @@ export function signingRequestClient({
         await json(endpoint(`/${requestId(id)}/retry`), {
           method: "POST",
           headers: { ...headers(), "Content-Type": "application/json" },
-          body: JSON.stringify(SigningRetryInputSchema.parse({ runId })),
+          body: JSON.stringify(SigningRetryInputSchema.parse({ runId: runId ?? null })),
         })
       );
     },
