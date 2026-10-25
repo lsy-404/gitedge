@@ -138,6 +138,13 @@ export interface RegisteredRunner {
 }
 export type RunnerJobKind = "gitedge" | "github";
 export type RunnerJobConclusion = "success" | "failure" | "cancelled" | null;
+export interface RunnerDeviceHealth {
+  status: "online" | "degraded" | "offline" | "pending" | "planned" | "disabled" | "unknown";
+  lastSeen: number | null;
+  cpuPercent: number | null;
+  memoryPercent: number | null;
+  disks: Array<{ path: string; totalBytes: number; usedPercent: number }>;
+}
 export interface RunnerOverviewRunner extends RegisteredRunner {
   state: "idle" | "busy" | "held" | "offline";
   capacity: RunnerCapacity | null;
@@ -164,6 +171,7 @@ export interface RunnerOverviewRunner extends RegisteredRunner {
     memFreeMb: number | null;
     busy: boolean;
   }>;
+  deviceHealth: RunnerDeviceHealth;
 }
 export interface RunnerOverviewGithubConnection {
   connectionId: string;
@@ -190,6 +198,7 @@ export interface RunnerOverviewQueueItem {
 }
 export interface RunnerOverview {
   generatedAt: number;
+  healthSource: { availability: "available" | "unavailable"; checkedAt: number };
   runners: RunnerOverviewRunner[];
   github: RunnerOverviewGithubConnection[];
   queue: RunnerOverviewQueueItem[];

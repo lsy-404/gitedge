@@ -60,6 +60,15 @@ function stateTone(
   return "neutral";
 }
 
+function deviceHealthTone(
+  status: RunnerOverviewRunner["deviceHealth"]["status"]
+): "neutral" | "success" | "danger" | "brand" | "warning" {
+  if (status === "online") return "success";
+  if (status === "degraded" || status === "pending") return "warning";
+  if (status === "offline") return "danger";
+  return "neutral";
+}
+
 function loadPath(points: RunnerOverviewRunner["samples"]): string {
   const finite = points
     .map((point) => point.load1)
@@ -267,6 +276,11 @@ onUnmounted(() => {
     <div v-if="loading" class="box"><StatusState :loading="true" /></div>
     <template v-else-if="overview">
       <NoticeBar v-if="overview.truncated" intent="warning">{{ t("runnerTruncated") }}</NoticeBar>
+      <p class="row-meta">
+        {{ t("runnerHealthSource") }} ·
+        {{ t(`runnerHealthSource_${overview.healthSource.availability}`) }} ·
+        {{ d(new Date(overview.healthSource.checkedAt), "short") }}
+      </p>
       <section class="box" :aria-label="t('runnerDashboardTitle')">
         <p v-if="overview.runners.length === 0" class="empty-state">{{ t("runnerEmpty") }}</p>
         <article v-for="runner in overview.runners" :key="runner.id" class="runner-card">
@@ -297,6 +311,36 @@ onUnmounted(() => {
           <div class="runner-labels">
             <StatusBadge v-for="label in runner.labels" :key="label">{{ label }}</StatusBadge>
           </div>
+          <div class="runner-metrics">
+            <div>
+              <span>{{ t("runnerHostHealth") }}</span>
+              <StatusBadge :tone="deviceHealthTone(runner.deviceHealth.status)">
+                {{ t(`runnerHealth_${runner.deviceHealth.status}`) }}
+              </StatusBadge>
+            </div>
+            <div>
+              <span>{{ t("runnerHostCpu") }} · {{ runner.deviceHealth.cpuPercent ?? "—" }}%</span>
+            </div>
+            <div>
+              <span
+                >{{ t("runnerHostMemory") }} · {{ runner.deviceHealth.memoryPercent ?? "—" }}%</span
+              >
+            </div>
+            <div v-for="disk in runner.deviceHealth.disks" :key="disk.path">
+              <span
+                >{{ t("runnerHostDisk") }} · {{ disk.path }} · {{ disk.usedPercent }}% /
+                {{ Math.round(disk.totalBytes / 1_073_741_824) }} GB</span
+              >
+            </div>
+            <span class="row-meta"
+              >{{ t("runnerHostLastSeen") }} ·
+              {{
+                runner.deviceHealth.lastSeen
+                  ? d(new Date(runner.deviceHealth.lastSeen), "short")
+                  : "—"
+              }}</span
+            >
+          </div>
           <form class="runner-label-editor" @submit.prevent="saveRunnerLabels(runner)">
             <label :for="`runner-labels-${runner.id}`">{{ t("runnerCustomLabels") }}</label>
             <div class="runner-label-editor-row">
@@ -316,6 +360,7 @@ onUnmounted(() => {
             </p>
           </form>
           <div v-if="runner.capacity" class="runner-metrics">
+            <strong>{{ t("runnerSchedulingCapacity") }}</strong>
             <div>
               <span
                 >{{ t("runnerCpuLoad") }} ·

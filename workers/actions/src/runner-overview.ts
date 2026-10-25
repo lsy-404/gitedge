@@ -23,8 +23,9 @@ import {
   parseJobClaim,
 } from "../../../packages/contracts/runner-scheduling.mjs";
 import { errorResponse } from "../../../src/worker/common/http";
+import { readRunnerDeviceHealth, type DeviceHealthEnv } from "./device-health";
 
-interface RunnerOverviewEnv {
+interface RunnerOverviewEnv extends DeviceHealthEnv {
   DB: D1Database;
 }
 
@@ -296,6 +297,10 @@ export async function handleRunnerOverview(
   const now = Date.now();
   const visible = await visibleRunners(env, user);
   const runnerRows = visible.rows;
+  const deviceHealth = await readRunnerDeviceHealth(
+    env,
+    runnerRows.map((row) => row.id)
+  );
   const ids = runnerRows.map((row) => row.id);
   const names = new Map(runnerRows.map((row) => [row.id, parseRunner(row)]));
   const stats = new Map<string, StatsDbRow>();
@@ -484,6 +489,10 @@ export async function handleRunnerOverview(
     truncated ||= permittedConnections.length > MAX_CONNECTIONS;
     const result: RunnerOverview = {
       generatedAt: now,
+      healthSource: {
+        availability: deviceHealth.availability,
+        checkedAt: deviceHealth.checkedAt,
+      },
       runners: runnerRows.map((row) => {
         const current = running.get(row.id) ?? null;
         const stat = stats.get(row.id);
@@ -513,6 +522,7 @@ export async function handleRunnerOverview(
             busyMinutes: Math.round((stat?.busy_ms ?? 0) / 60_000),
           },
           samples: samples.get(row.id) ?? [],
+          deviceHealth: deviceHealth.byRunner.get(row.id)!,
         };
       }),
       github,
@@ -582,6 +592,10 @@ export async function handleRunnerOverview(
   const queued = await queueRows(env, user);
   const result: RunnerOverview = {
     generatedAt: now,
+    healthSource: {
+      availability: deviceHealth.availability,
+      checkedAt: deviceHealth.checkedAt,
+    },
     runners: [],
     github,
     queue: queued.rows.map((job) => {

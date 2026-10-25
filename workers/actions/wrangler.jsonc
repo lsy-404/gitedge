@@ -89,6 +89,11 @@
     {
       "binding": "FORGE",
       "service": "gitedge-forge"
+    },
+    {
+      "binding": "DEVICES_HEALTH",
+      "service": "devices-health",
+      "entrypoint": "HealthReader"
     }
   ],
   "triggers": {

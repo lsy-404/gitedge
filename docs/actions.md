@@ -91,6 +91,8 @@ Manage custom routing labels in Account settings → Runners. Add comma-separate
 
 GitEdge repository administrators must enable Actions and the **Use registered local runners** repository setting (`actionsRunnerEnabled`). Apply migration `0045_runner_broker.sql` and deploy the updated services, including the Actions → Auth binding, before registering a broker. Registration does not enable repository execution automatically. `.gitedge/workflows/` keeps its container precedence; opted-in `.github/workflows/` files use the persistent runner queue.
 
+Account settings → Runners reads live host health through the Actions Worker’s private `DEVICES_HEALTH` service binding to the `HealthReader` entrypoint (`GET https://devices.internal/api/health`). Set the Actions operator variable `RUNNER_DEVICE_IDS` to a JSON object mapping registered runner UUIDs to device UUIDs, for example `{"<runner-uuid>":"<device-uuid>"}`. The mapping is explicit; runner names and labels are never used to identify a device. A missing mapping, unknown device, or unavailable health source displays unknown host health. The endpoint is only read by the authenticated runner overview and does not expose the device inventory publicly.
+
 Registered runners discover only workflow definitions, then clone the selected commit through Git. The container snapshot limit does not restrict other repository assets for runner execution.
 
 GitEdge runner workflows currently support:
