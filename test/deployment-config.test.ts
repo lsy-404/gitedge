@@ -33,6 +33,7 @@ const WorkerConfigSchema = z.object({
   assets: z.object({ html_handling: z.string() }).optional(),
 });
 const COMPATIBILITY_DATE = "2026-10-01";
+const externalServices = new Set(["devices-health"]);
 type WorkerConfig = z.infer<typeof WorkerConfigSchema>;
 const services = ["gateway", "auth", "forge", "git", "deploy", "limits", "actions", "mcp"];
 
@@ -91,7 +92,10 @@ describe("deployment isolation", () => {
 
     for (const { directory, config } of configs.values()) {
       for (const entry of config.services ?? []) {
-        expect(configs.has(entry.service), `${directory} binds ${entry.service}`).toBe(true);
+        expect(
+          configs.has(entry.service) || externalServices.has(entry.service),
+          `${directory} binds ${entry.service}`
+        ).toBe(true);
       }
       for (const binding of config.durable_objects?.bindings ?? []) {
         const owner = configs.get(binding.script_name ?? config.name);

@@ -20,6 +20,7 @@ import {
 function overview(overrides: Partial<RunnerOverview> = {}): RunnerOverview {
   return {
     generatedAt: Date.now(),
+    healthSource: { availability: "available", checkedAt: Date.now() },
     runners: [
       {
         id: "runner-1",
@@ -51,6 +52,14 @@ function overview(overrides: Partial<RunnerOverview> = {}): RunnerOverview {
         current: null,
         stats24h: { success: 2, failure: 1, cancelled: 0, busyMinutes: 120 },
         samples: [{ minute: 1, load1: 0.2, memFreeMb: 600, busy: false }],
+        deviceHealth: {
+          deviceId: "tokyo-amd64-01",
+          status: "online",
+          lastSeen: Date.now(),
+          cpuPercent: 12.5,
+          memoryPercent: 38.4,
+          disks: [],
+        },
       },
     ],
     github: [

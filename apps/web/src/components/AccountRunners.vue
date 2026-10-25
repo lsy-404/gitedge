@@ -69,6 +69,31 @@ function deviceHealthTone(
   return "neutral";
 }
 
+function deviceHealthLabel(status: RunnerOverviewRunner["deviceHealth"]["status"]): string {
+  switch (status) {
+    case "online":
+      return t("runnerHealth_online");
+    case "degraded":
+      return t("runnerHealth_degraded");
+    case "offline":
+      return t("runnerHealth_offline");
+    case "pending":
+      return t("runnerHealth_pending");
+    case "planned":
+      return t("runnerHealth_planned");
+    case "disabled":
+      return t("runnerHealth_disabled");
+    case "unknown":
+      return t("runnerHealth_unknown");
+  }
+}
+
+function healthSourceLabel(availability: RunnerOverview["healthSource"]["availability"]): string {
+  return availability === "available"
+    ? t("runnerHealthSource_available")
+    : t("runnerHealthSource_unavailable");
+}
+
 function healthPercent(value: number | null): string {
   return value === null ? "—" : `${Math.round(value * 10) / 10}%`;
 }
@@ -293,7 +318,7 @@ onUnmounted(() => {
       <NoticeBar v-if="overview.truncated" intent="warning">{{ t("runnerTruncated") }}</NoticeBar>
       <p class="row-meta">
         {{ t("runnerHealthSource") }} ·
-        {{ t(`runnerHealthSource_${overview.healthSource.availability}`) }} ·
+        {{ healthSourceLabel(overview.healthSource.availability) }} ·
         {{ healthTime(overview.healthSource.checkedAt) }}
       </p>
       <section class="box" :aria-label="t('runnerDashboardTitle')">
@@ -330,7 +355,7 @@ onUnmounted(() => {
             <div>
               <span>{{ t("runnerHostHealth") }} · {{ runner.deviceHealth.deviceId ?? "—" }}</span>
               <StatusBadge :tone="deviceHealthTone(runner.deviceHealth.status)">
-                {{ t(`runnerHealth_${runner.deviceHealth.status}`) }}
+                {{ deviceHealthLabel(runner.deviceHealth.status) }}
               </StatusBadge>
             </div>
             <div>
