@@ -89,10 +89,9 @@ async function cleanup(
   }
   if (
     job.github_runner_id !== null &&
-    job.assigned === 1 &&
     job.started_at !== null &&
     job.completed_at !== null &&
-    job.conclusion !== "cancelled" &&
+    (job.conclusion !== "cancelled" || job.assigned === 0) &&
     (await allowed(env, connection, job.runner_id))
   ) {
     let remote;
