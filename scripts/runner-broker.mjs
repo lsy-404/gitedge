@@ -201,11 +201,12 @@ async function withStateLock(state, action, operation) {
   }
 }
 
-async function writePrivate(file, content) {
+async function writePrivate(file, content, { secure = false } = {}) {
   const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
   try {
     await writeFile(temporary, content, { flag: "wx", mode: 0o600 });
     await chmod(temporary, 0o600);
+    if (secure) await secureSigningPath(temporary);
     await rename(temporary, file);
   } catch (error) {
     await rm(temporary, { force: true });
@@ -787,8 +788,7 @@ async function runClaimedSigning(profile, claim, signal) {
         throw new Error("Signing workflow has invalid host requirements.");
       validateLocalJobClaim(requiredLabels, capacity, run.timeoutMinutes);
       await secureSigningPath(runDirectory, true);
-      await writePrivate(contextFile, JSON.stringify(context));
-      await secureSigningPath(contextFile);
+      await writePrivate(contextFile, JSON.stringify(context), { secure: true });
       const source = createSigningWorkflow(budgetedWorkflowSource, {
         platform: run.platform,
         clientPath: path.join(root, "scripts", "signing", "client.mjs"),
@@ -895,6 +895,8 @@ async function runClaimedSigning(profile, claim, signal) {
           )
             throw new Error("GitEdge returned an invalid signing lease heartbeat response.");
           leaseExpiresAt = result.data.leaseExpiresAt;
+          context.leaseExpiresAt = leaseExpiresAt;
+          await writePrivate(contextFile, JSON.stringify(context), { secure: true });
           lastHeartbeat = Date.now();
         }
       };
