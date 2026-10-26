@@ -94,6 +94,10 @@ if ((${#idle_task[@]})); then
   fi
   install -d -m 755 /usr/local/libexec
   install -m 755 "$script_dir/runner-idle-load.py" /usr/local/libexec/gitedge-idle-load
+  install -d -m 755 /run/gitedge-idle-status
+  cat >/etc/tmpfiles.d/gitedge-idle-status.conf <<'CONF'
+d /run/gitedge-idle-status 0755 root root -
+CONF
   memory_kib=$(awk '/MemTotal:/ { print $2 }' /proc/meminfo)
   idle_memory_high=128M
   idle_memory_max=192M
@@ -135,7 +139,7 @@ ProtectSystem=strict
 ProtectHome=true
 InaccessiblePaths=-/etc/server-toolkit -/var/lib/openlist
 ReadOnlyPaths=-/opt/gitedge/work/actions
-ReadWritePaths=/var/lib/gitedge-idle /run/gitedge-idle
+ReadWritePaths=/var/lib/gitedge-idle /run/gitedge-idle /run/gitedge-idle-status
 UNIT
   cat >/etc/systemd/system/oci-idle-load.timer <<'UNIT'
 [Unit]

@@ -33,8 +33,8 @@ class CpuBudget:
         self.unit = self.cgroup.name
         if not self.unit.endswith(".service"):
             raise ValueError("CPU budgeting must run inside its own systemd service")
-        self.status_file = Path("/run/gitedge-idle/cpu-budget.json")
-        self.status_file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.status_file = Path("/run/gitedge-idle-status/cpu-budget.json")
+        self.status_file.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
         self.previous = self.snapshot()
         self.budget_percent = 0.0
         self.quota_percent = None
@@ -87,6 +87,7 @@ class CpuBudget:
                       "observed_at_unix": time.time()}
             temporary = self.status_file.with_suffix(".tmp")
             temporary.write_text(json.dumps(status) + "\n")
+            temporary.chmod(0o644)
             temporary.replace(self.status_file)
             print(json.dumps(status), flush=True)
             self.last_report = now
@@ -135,7 +136,7 @@ def resource_pressure(proc_root, include_cpu=True):
             values[key] = int(value.strip().split()[0])
         total = values["MemTotal"]
         available = values["MemAvailable"]
-        return available < 524288 or available / total < 0.20
+        return available / total < 0.20
     except (OSError, ValueError, KeyError, IndexError, ZeroDivisionError):
         return False
 

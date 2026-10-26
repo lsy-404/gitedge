@@ -293,7 +293,7 @@ test("short claim-lock flaps preserve the idle recovery grace", async (t) => {
   assert.match(await readFile(log, "utf8"), /term\n/);
 });
 
-test("task yields below 512 MiB while allowing 513 MiB and then resumes", async (t) => {
+test("task yields below twenty percent available memory and then resumes", async (t) => {
   if (process.platform !== "linux") return t.skip("Requires Linux process groups and /proc.");
 
   const directory = await mkdtemp(path.join(os.tmpdir(), "gitedge-idle-memory-boundary-"));
@@ -304,7 +304,7 @@ test("task yields below 512 MiB while allowing 513 MiB and then resumes", async 
   await writeFile(path.join(procRoot, "loadavg"), "0 0 0 1/1 1\n");
   await writeFile(
     path.join(procRoot, "meminfo"),
-    "MemTotal: 2097152 kB\nMemAvailable: 525312 kB\n"
+    "MemTotal: 1048576 kB\nMemAvailable: 209716 kB\n"
   );
   await writeFile(path.join(pressure, "cpu"), "some avg10=0 avg60=0 avg300=0 total=0\n");
   await writeFile(
@@ -347,23 +347,23 @@ test("task yields below 512 MiB while allowing 513 MiB and then resumes", async 
     (await readFile(log, "utf8").catch(() => "")).trim().split("\n").filter(Boolean);
   await waitFor(
     async () => (await lines()).filter((line) => line === "start").length === 1,
-    "task start at 513 MiB"
+    "task start above twenty percent"
   );
   await writeFile(
     path.join(procRoot, "meminfo"),
-    "MemTotal: 2097152 kB\nMemAvailable: 523264 kB\n"
+    "MemTotal: 1048576 kB\nMemAvailable: 209715 kB\n"
   );
   await waitFor(
     async () => (await lines()).filter((line) => line === "term").length === 1,
-    "preemption at 511 MiB"
+    "preemption below twenty percent"
   );
   await writeFile(
     path.join(procRoot, "meminfo"),
-    "MemTotal: 2097152 kB\nMemAvailable: 525312 kB\n"
+    "MemTotal: 1048576 kB\nMemAvailable: 209716 kB\n"
   );
   await waitFor(
     async () => (await lines()).filter((line) => line === "start").length === 2,
-    "resume at 513 MiB"
+    "resume above twenty percent"
   );
   child.kill("SIGTERM");
   await new Promise((resolve, reject) => {
