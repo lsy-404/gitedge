@@ -40,7 +40,7 @@ const DeviceMetricsSchema = z
             totalBytes: z.number().int().nonnegative(),
             usedPercent: z.number().finite().min(0).max(100),
           })
-          .strict()
+          .strip()
       )
       .max(64),
     network: z
@@ -51,7 +51,7 @@ const DeviceMetricsSchema = z
       .strict()
       .nullable(),
   })
-  .strict();
+  .strip();
 
 const MonitoredServiceSchema = z
   .object({
@@ -85,7 +85,7 @@ const DeviceSchema = z
     checks: z.array(HealthCheckSchema).max(64),
     services: z.array(MonitoredServiceSchema).max(64),
   })
-  .strict();
+  .strip();
 
 export const HealthSnapshotSchema = z
   .object({
