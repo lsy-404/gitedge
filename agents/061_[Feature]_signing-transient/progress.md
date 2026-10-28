@@ -4,3 +4,5 @@ Production: origin/main remained at a3d4a36. Remote D1 read-only admission check
 Production lifecycle: after confirmation that historical final installers were preserved separately, read-only D1 showed no queued/running signing runs. Set the sole existing signing/ rule in gitedge-signing-artifacts from the committed lifecycle file; readback reported 0.125 days for both deletion and multipart abort. Cloudflare may delay lifecycle deletion, so the rule remains fallback. Expanded an existing Worker integration case to force expiration and execute the Durable Object alarm: source object removed, multipart upload aborted and request failed; all four signing integration cases passed.
 Updated the existing generic runner signing integration fixture for the source-release RPC; targeted Worker suite passed 6/6.
 The signing Worker test passed 4/4 with a multipart source above 8 MiB. Began bounded sanitized Actions and Gateway live tail sessions for a future source upload.
+
+Required CI web locale check identified9 orphan messages in each language after recovery UI removal. Removed only these unused keys; existing i18n-messages7/7pass.

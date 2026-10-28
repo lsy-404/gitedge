@@ -114,16 +114,6 @@ export const runnerMessages = {
     runnerSigningPlatform_macos: "macOS",
     runnerSigningPlatform_ios: "iOS",
     runnerSigningProfilesTitle: "签名配置",
-    signingRecoveryTitle: "恢复签名",
-    signingRecoveryHelp:
-      "重试请求的失败阶段，或使用已验证请求的同一构建产物提交缺失平台。已成功的阶段和平台会保留。",
-    signingRecoveryOperation: "恢复方式",
-    signingRecoveryRetry: "重试失败阶段",
-    signingRecoveryPlatform: "提交缺失平台",
-    signingRecoveryRequest: "签名请求 ID",
-    signingRecoveryArtifact: "原构建的 GitHub 产物 ID",
-    signingRecoverySubmit: "恢复",
-    signingRecoveryResult: "请求 {id}：{state} · {stage}",
 
     runnerSigningProfilesDescription:
       "批准 Runner 仓库中的签名工作流，并管理加密保存的平台凭据。签名任务使用已登记的通用 runner。",
@@ -269,16 +259,6 @@ export const runnerMessages = {
     runnerSigningPlatform_macos: "macOS",
     runnerSigningPlatform_ios: "iOS",
     runnerSigningProfilesTitle: "Signing profiles",
-    signingRecoveryTitle: "Recover signing",
-    signingRecoveryHelp:
-      "Retry a failed stage, or submit a missing platform from the same build as an admitted request. Successful stages and platforms are retained.",
-    signingRecoveryOperation: "Recovery action",
-    signingRecoveryRetry: "Retry failed stage",
-    signingRecoveryPlatform: "Submit missing platform",
-    signingRecoveryRequest: "Signing request ID",
-    signingRecoveryArtifact: "GitHub artifact ID from the original build",
-    signingRecoverySubmit: "Recover",
-    signingRecoveryResult: "Request {id}: {state} · {stage}",
 
     runnerSigningProfilesDescription:
       "Approve signing workflows from the Runner repository and manage encrypted platform credentials. Signing jobs use registered generic runners.",
