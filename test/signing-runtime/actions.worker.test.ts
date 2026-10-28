@@ -379,7 +379,10 @@ describe("Actions signing Worker integration", () => {
     "creates, executes, uploads, verifies, and reconciles %s (%s) with a newer server lease snapshot",
     async (platform, stage, outputFormat) => {
       const runner = await createRunner(platform);
-      const sourceBytes = new TextEncoder().encode(`validated source archive ${platform}`);
+      const sourceBytes =
+        platform === "windows"
+          ? new Uint8Array(8 * 1024 * 1024 + 17).fill(91)
+          : new TextEncoder().encode(`validated source archive ${platform}`);
       const sourceDigest = digest(sourceBytes);
       const selectedProfile = profile(platform, stage, outputFormat);
       await signingEnv.DB.prepare(
@@ -433,6 +436,8 @@ describe("Actions signing Worker integration", () => {
         data: { request: { id: string; runId: string } };
       };
       const requestId = created.data.request.id;
+      const partSize = 8 * 1024 * 1024;
+      const firstPart = sourceBytes.slice(0, partSize);
       const invalidPart = await handleSigningRoute(
         new Request(
           `https://actions.test/signing/requests/${requestId}/source/parts/1?repositoryId=${repositoryId}`,
@@ -440,11 +445,11 @@ describe("Actions signing Worker integration", () => {
             method: "PUT",
             headers: {
               "Content-Type": "application/octet-stream",
-              "Content-Length": String(sourceBytes.byteLength),
-              "Content-Range": `bytes 0-${sourceBytes.byteLength - 1}/${sourceBytes.byteLength}`,
+              "Content-Length": String(firstPart.byteLength),
+              "Content-Range": `bytes 0-${firstPart.byteLength - 1}/${sourceBytes.byteLength}`,
               "X-Part-Digest": `sha256:${"0".repeat(64)}`,
             },
-            body: sourceBytes,
+            body: firstPart,
           }
         ),
         signingEnv,
@@ -452,25 +457,32 @@ describe("Actions signing Worker integration", () => {
         hooks
       );
       expect(invalidPart.status).toBe(422);
-      const part = await handleSigningRoute(
-        new Request(
-          `https://actions.test/signing/requests/${requestId}/source/parts/1?repositoryId=${repositoryId}`,
-          {
-            method: "PUT",
-            headers: {
-              "Content-Type": "application/octet-stream",
-              "Content-Length": String(sourceBytes.byteLength),
-              "Content-Range": `bytes 0-${sourceBytes.byteLength - 1}/${sourceBytes.byteLength}`,
-              "X-Part-Digest": sourceDigest,
-            },
-            body: sourceBytes,
-          }
-        ),
-        signingEnv,
-        trusted(owner),
-        hooks
-      );
-      expect(part.status, await part.clone().text()).toBe(200);
+      for (
+        let start = 0, partNumber = 1;
+        start < sourceBytes.byteLength;
+        start += partSize, partNumber++
+      ) {
+        const bytes = sourceBytes.slice(start, start + partSize);
+        const part = await handleSigningRoute(
+          new Request(
+            `https://actions.test/signing/requests/${requestId}/source/parts/${partNumber}?repositoryId=${repositoryId}`,
+            {
+              method: "PUT",
+              headers: {
+                "Content-Type": "application/octet-stream",
+                "Content-Length": String(bytes.byteLength),
+                "Content-Range": `bytes ${start}-${start + bytes.byteLength - 1}/${sourceBytes.byteLength}`,
+                "X-Part-Digest": digest(bytes),
+              },
+              body: bytes,
+            }
+          ),
+          signingEnv,
+          trusted(owner),
+          hooks
+        );
+        expect(part.status, await part.clone().text()).toBe(200);
+      }
       const complete = await handleSigningRoute(
         new Request(
           `https://actions.test/signing/requests/${requestId}/source/complete?repositoryId=${repositoryId}`,
