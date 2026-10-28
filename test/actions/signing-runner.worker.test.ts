@@ -663,6 +663,7 @@ describe("general-purpose native signing execution", () => {
     const outputBytes = new TextEncoder().encode("verified signing archive");
     const outputDigest = `sha256:${await sha256Hex(new TextDecoder().decode(outputBytes))}`;
     const outputKey = `signing/${owner.id}/${repositoryId}/${requestId}/output.zip`;
+    const releasedSources: string[] = [];
     const machineEnv = {
       ...actionEnv,
       AUTH: {
@@ -677,6 +678,9 @@ describe("general-purpose native signing execution", () => {
       },
       SIGNING_COORDINATORS: {
         getByName: () => ({
+          releaseSource: async (id: string) => {
+            releasedSources.push(id);
+          },
           fetch: async (rpc: Request) => {
             const operation = new URL(rpc.url).pathname.split("/").at(-1);
             const body = (await rpc.json()) as {
@@ -939,6 +943,7 @@ describe("general-purpose native signing execution", () => {
       );
     expect((await failRequest()).status).toBe(200);
     expect((await failRequest()).status).toBe(200);
+    expect(releasedSources).toEqual([failedRequestId, failedRequestId]);
     const failedPersisted = await env.DB.prepare(
       "SELECT status,conclusion FROM actions_runner_runs WHERE run_id=?"
     )
