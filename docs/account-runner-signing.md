@@ -12,9 +12,9 @@ macOS profiles need the required Apple signing and notarization tools. iOS profi
 
 Keep signing profiles in `.gitedge/signing/<name>.yml` within Runner. A profile pins a workflow path and commit from the same private repository, a platform, timeout and product/source policy. Approval reads that exact workflow from GitEdge and stores an immutable snapshot. Editing YAML does not authorize a new revision; approve it again explicitly.
 
-Source policy identifies permitted GitHub repository IDs, workflow path, artifact name, actor IDs, events and branch/tag names. GitHub is used to validate the source build and download its archive.
+Source policy identifies permitted GitHub repository IDs, workflow path, actor IDs, events and branch/tag names. GitHub is used to validate the source build; the workflow uploads its source archive directly to GitEdge.
 
-Without `releaseTagPattern`, a source build must come from its repository's default branch. A release profile additionally checks its approved tag pattern, the exact `v<version>` tag and default-branch ancestry. Release submissions require GitHub Actions OIDC proof for that source run. Grant the source job `id-token: write`; the CLI obtains a fresh identity with the Gateway origin as its audience. A caller integrating the client directly supplies `sourceIdentity`, or sets `GITEDGE_SOURCE_IDENTITY` for the CLI. Identity tokens are never part of the stored request.
+Without `releaseTagPattern`, a source build must come from its repository's default branch. A release profile additionally checks its approved tag pattern, the exact `v<version>` tag and default-branch ancestry. All submissions require GitHub Actions OIDC proof for that source run. Grant the source job `id-token: write`; the CLI obtains a fresh identity with the Gateway origin as its audience. A caller integrating the client directly supplies `sourceIdentity`, or sets `GITEDGE_SOURCE_IDENTITY` for the CLI. Identity tokens are never part of the stored request.
 
 Use the signing profile panel to approve a profile and install platform credential JSON. GitHub source-read credentials use purpose `github-source` and JSON `{ "token": "..." }`. Windows platform credentials must be exactly `{ "tenant_id": "...", "client_id": "...", "client_secret": "..." }`; the broker does not use a preconfigured managed or workload identity. The service encrypts credentials at rest and grants them per authorized task. Credential writes and removal require recent human authentication. The panel exposes configuration metadata, never stored secret values.
 
@@ -30,7 +30,6 @@ The request file contains source proof and a profile name:
   "platform": "macos",
   "sourceRepositoryId": "123456",
   "sourceRunId": "234567",
-  "sourceArtifactId": "345678",
   "sourceCommitOid": "0123456789abcdef0123456789abcdef01234567",
   "sourceDigest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "sourceSize": 123456,
@@ -38,7 +37,7 @@ The request file contains source proof and a profile name:
 }
 ```
 
-The digest and size describe the complete GitHub Actions artifact ZIP downloaded by the service, including its metadata and template files. They do not describe an inner TAR, IPA or DMG. Use actual run/artifact metadata and a repeatable idempotency key for the same submission.
+The digest and size describe the complete source ZIP uploaded by the workflow. Use a repeatable idempotency key for the same submission.
 
 Set `GITEDGE_SIGNING_TOKEN` through the workflow's secret store, then run:
 
@@ -47,6 +46,7 @@ node scripts/signing/request.mjs submit \
   --origin https://forge.example.com \
   --repository RUNNER_REPOSITORY_UUID \
   --input signing-request.json \
+  --source source.zip \
   --idempotency-key build-artifact-request-001
 
 node scripts/signing/request.mjs wait \
@@ -111,23 +111,21 @@ Delivery is at least once. A dispatch GitHub accepted can still be recorded as f
 
 All paths below are under `/api/actions` on the Gateway. Pass the private Runner's `repositoryId` query parameter.
 
-| Method | Path                                     | Purpose                                                                                                                |
-| ------ | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| GET    | `/signing/profiles`                      | Read approved profile metadata                                                                                         |
-| POST   | `/signing/profiles`                      | Approve `{ "name": "profile-name" }` from Runner                                                                       |
-| GET    | `/signing/profiles/:name/credentials`    | Read credential configuration metadata                                                                                 |
-| POST   | `/signing/profiles/:name/credentials`    | Install `{ "platform": "macos", "credentials": { ... } }`                                                              |
-| DELETE | `/signing/profiles/:name/credentials`    | Remove credentials for `{ "platform": "macos" }`                                                                       |
-| POST   | `/signing/requests`                      | Submit source proof with `Idempotency-Key`                                                                             |
-| GET    | `/signing/requests/:id`                  | Read request state                                                                                                     |
-| POST   | `/signing/requests/:id/retry`            | Retry only the failed stage with `{ "runId": "FAILED_RUN_UUID" }` or `{ "runId": null }`                               |
-| POST   | `/signing/requests/:id/recover-platform` | Owner recovery of `{ "profile": "target-profile", "sourceArtifactId": "GITHUB_ARTIFACT_ID" }` from an admitted request |
-| GET    | `/signing/requests/:id/download`         | Download verified final output                                                                                         |
-
-The account Runner signing settings expose both recovery operations. A null run ID retries a failed stage that never received an execution run. Successful stages and platforms remain unchanged.
-
-Platform recovery binds the new artifact to the admitted request's original repository, first build attempt, source commit, workflow, actor, ref and version. The artifact must remain available and match the approved target profile; GitHub metadata and the downloaded archive digest are checked again. A sibling job failure does not invalidate an already admitted artifact. Cancelled runs, expired artifacts and revoked or changed profiles remain ineligible.
+| Method | Path                                       | Purpose                                                                                  |
+| ------ | ------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| GET    | `/signing/profiles`                        | Read approved profile metadata                                                           |
+| POST   | `/signing/profiles`                        | Approve `{ "name": "profile-name" }` from Runner                                         |
+| GET    | `/signing/profiles/:name/credentials`      | Read credential configuration metadata                                                   |
+| POST   | `/signing/profiles/:name/credentials`      | Install `{ "platform": "macos", "credentials": { ... } }`                                |
+| DELETE | `/signing/profiles/:name/credentials`      | Remove credentials for `{ "platform": "macos" }`                                         |
+| POST   | `/signing/requests`                        | Submit source proof with `Idempotency-Key`                                               |
+| GET    | `/signing/requests/:id`                    | Read request state                                                                       |
+| POST   | `/signing/requests/:id/retry`              | Retry only the failed stage with `{ "runId": "FAILED_RUN_UUID" }` or `{ "runId": null }` |
+| PUT    | `/signing/requests/:id/source/parts/:part` | Upload an authenticated 8 MiB source part                                                |
+| POST   | `/signing/requests/:id/source/complete`    | Verify the uploaded source and queue signing                                             |
+| GET    | `/signing/requests?sourceRunId=...`        | Find requests for an authorized source run                                               |
+| GET    | `/signing/requests/:id/download`           | Download verified final output                                                           |
 
 Runner callbacks require the registered runner credential and matching native run lease. Signing profile approval and the task/lease authorization govern signing and credential access. Account-runner capacity, cancellation, history and repository admission limits apply to signing stages.
 
-Signing requests have a six-day deadline. The dedicated signing artifact bucket retains source and output objects for seven days and aborts unfinished multipart uploads after one day. Request metadata remains in history; expired downloads return 410. Import verified outputs into release storage before their retention period ends.
+Signing requests have a six-day deadline. Source archives and unfinished uploads expire after three hours and are removed when the complete signing request finishes. Signed output archives also expire after three hours, or can be released immediately after publication with the output delete endpoint. Request metadata remains in history; expired downloads return 410. Import verified outputs into release storage before their retention period ends.

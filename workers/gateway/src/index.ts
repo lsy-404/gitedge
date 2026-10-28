@@ -742,9 +742,15 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
     if (session instanceof Response) return session;
     const jobSigningRequest =
       prefix === "/api/actions" &&
-      ((request.method === "POST" && url.pathname === "/api/actions/signing/requests") ||
-        (request.method === "GET" &&
-          /^\/api\/actions\/signing\/requests\/[0-9a-f-]{36}(?:\/download)?$/.test(url.pathname)));
+      (((request.method === "POST" || request.method === "GET") &&
+        url.pathname === "/api/actions/signing/requests") ||
+        ((request.method === "GET" ||
+          request.method === "PUT" ||
+          request.method === "POST" ||
+          request.method === "DELETE") &&
+          /^\/api\/actions\/signing\/requests\/[0-9a-f-]{36}(?:\/download|\/source\/parts\/\d+|\/source\/complete|\/output)?$/.test(
+            url.pathname
+          )));
     if (
       session.authenticated &&
       session.job &&

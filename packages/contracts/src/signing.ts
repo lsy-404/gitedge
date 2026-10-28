@@ -214,7 +214,6 @@ export const SigningSubmissionSchema = z
     sourceRepositoryId: z.string().min(1),
     sourceCommitOid: z.string().regex(/^[0-9a-f]{40}$/),
     sourceRunId: z.string().min(1).max(128),
-    sourceArtifactId: z.string().min(1).max(128),
     sourceDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
     sourceSize: z.number().int().positive().max(SIGNING_MAX_ARCHIVE_BYTES),
     version: z
@@ -261,15 +260,6 @@ export const SigningRequestSchema = z
 export type SigningRequest = z.infer<typeof SigningRequestSchema>;
 
 export const SigningRetryInputSchema = z.object({ runId: z.uuid().nullable() }).strict();
-
-export const SigningRecoverPlatformInputSchema = z
-  .object({
-    profile: SigningSubmissionSchema.shape.profile,
-    sourceArtifactId: z.string().regex(/^[1-9]\d*$/),
-  })
-  .strict();
-
-export type SigningRecoverPlatformInput = z.infer<typeof SigningRecoverPlatformInputSchema>;
 
 export const SigningCreateResponseSchema = z.object({ request: SigningRequestSchema }).strict();
 export type SigningCreateResponse = z.infer<typeof SigningCreateResponseSchema>;

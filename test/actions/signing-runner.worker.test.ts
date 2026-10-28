@@ -693,7 +693,6 @@ describe("general-purpose native signing execution", () => {
                     sourceRepositoryId: "1",
                     sourceCommitOid: "e".repeat(40),
                     sourceRunId: "123",
-                    sourceArtifactId: "release",
                     sourceDigest: digest,
                     sourceSize: 1,
                     version: "1.2.3",

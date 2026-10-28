@@ -5,7 +5,6 @@ import {
   SigningProfileMetadataSchema,
   SigningCredentialStatusSchema,
   SigningSourceCredentialSchema,
-  SigningSubmissionSchema,
   SigningCredentialPlatformSchema,
   type SigningMachineContext,
   type SigningPlatform,
@@ -108,43 +107,6 @@ const githubRunSchema = z
   })
   .passthrough();
 
-const githubArtifactSchema = z
-  .object({
-    name: z.string(),
-    expired: z.boolean(),
-    size_in_bytes: z.number().int().positive(),
-    workflow_run: z
-      .object({ id: z.number().int().positive(), head_sha: z.string().regex(/^[a-f0-9]{40}$/) })
-      .passthrough(),
-  })
-  .passthrough();
-
-function isAllowedArtifactDownloadUrl(target: URL): boolean {
-  return (
-    target.protocol === "https:" &&
-    !target.port &&
-    !target.username &&
-    !target.password &&
-    (/^productionresultssa[0-9]+\.blob\.core\.windows\.net$/.test(target.hostname) ||
-      target.hostname === "pipelines.actions.githubusercontent.com" ||
-      target.hostname === "results-receiver.actions.githubusercontent.com")
-  );
-}
-
-export async function fetchArtifactDownload(
-  target: URL
-): Promise<ReadableStream<Uint8Array> | null> {
-  const response = await fetch(target, {
-    redirect: "manual",
-    signal: AbortSignal.timeout(60_000),
-  });
-  if (!response.ok || !response.body) {
-    await response.body?.cancel();
-    return null;
-  }
-  return response.body;
-}
-
 const githubRunIdentitySchema = z.object({
   repository_id: z.string(),
   run_id: z.string(),
@@ -244,9 +206,8 @@ async function verifySource(
   input: SigningSubmission,
   profile: SigningProfile,
   runIdentity: string | null = null,
-  audience = "",
-  retainedSource = false
-): Promise<{ body: ReadableStream<Uint8Array> } | null> {
+  audience = ""
+): Promise<boolean> {
   const sourceStep = async <T>(code: string, operation: () => Promise<T>): Promise<T> => {
     try {
       return await operation();
@@ -255,7 +216,7 @@ async function verifySource(
     }
   };
   const token = await storedSourceCredential(env, ownerId, repositoryId, profile.revision);
-  if (!token) return null;
+  if (!token) return false;
   const repo = profile.policy.sourceRepositories.find(
     (item) => item.id === input.sourceRepositoryId
   );
@@ -267,9 +228,8 @@ async function verifySource(
     !Array.isArray(repo.events) ||
     !Array.isArray(repo.refs)
   )
-    return null;
-  if (!/^[1-9]\d*$/.test(input.sourceRunId) || !/^[1-9]\d*$/.test(input.sourceArtifactId))
-    return null;
+    return false;
+  if (!/^[1-9]\d*$/.test(input.sourceRunId)) return false;
   const run = githubRunSchema.safeParse(
     await sourceStep("signing_source_run_metadata_failed", () =>
       githubJson(
@@ -282,16 +242,11 @@ async function verifySource(
     !run.success ||
     String(run.data.repository.id) !== repo.id ||
     run.data.head_sha !== input.sourceCommitOid ||
-    !(
-      run.data.status === "in_progress" ||
-      (run.data.status === "completed" &&
-        (run.data.conclusion === "success" ||
-          (retainedSource && run.data.conclusion === "failure")))
-    ) ||
+    run.data.status !== "in_progress" ||
     run.data.path.split("@")[0] !== repo.workflowPath ||
     !repo.actorIds.includes(run.data.actor.id)
   )
-    return null;
+    return false;
   const repositoryInfo = z
     .object({ default_branch: z.string().min(1).max(256) })
     .passthrough()
@@ -300,7 +255,7 @@ async function verifySource(
         githubJson(token, `/repos/${repo.fullName}`)
       )
     );
-  if (!repositoryInfo.success) return null;
+  if (!repositoryInfo.success) return false;
   const defaultBranch = repositoryInfo.data.default_branch;
   if (repo.releaseTagPattern) {
     const tag = `v${input.version}`;
@@ -322,96 +277,36 @@ async function verifySource(
         "push"
       ))
     )
-      return null;
+      return false;
     const tagCommit = await githubTagCommit(token, repo.fullName, tag);
     if (
       tagCommit !== run.data.head_sha ||
       !(await githubCommitOnDefaultBranch(token, repo.fullName, defaultBranch, run.data.head_sha))
     )
-      return null;
+      return false;
   } else {
     if (
       run.data.head_branch !== defaultBranch ||
       !repo.events.includes(run.data.event) ||
       !repo.refs.includes(run.data.head_branch)
     )
-      return null;
+      return false;
     if (
-      run.data.status === "in_progress" &&
-      !retainedSource &&
-      (!runIdentity ||
-        runIdentity.length > 16_384 ||
-        !(await verifyGitHubRunIdentity(
-          runIdentity,
-          audience,
-          repo,
-          input,
-          run.data.actor.id,
-          `refs/heads/${defaultBranch}`,
-          run.data.event
-        )))
+      !runIdentity ||
+      runIdentity.length > 16_384 ||
+      !(await verifyGitHubRunIdentity(
+        runIdentity,
+        audience,
+        repo,
+        input,
+        run.data.actor.id,
+        `refs/heads/${defaultBranch}`,
+        run.data.event
+      ))
     )
-      return null;
+      return false;
   }
-  const artifact = githubArtifactSchema.safeParse(
-    await sourceStep("signing_source_artifact_metadata_failed", () =>
-      githubJson(
-        token,
-        `/repos/${repo.fullName}/actions/artifacts/${encodeURIComponent(input.sourceArtifactId)}`
-      )
-    )
-  );
-  if (
-    !artifact.success ||
-    artifact.data.name !== repo.artifactName ||
-    artifact.data.expired !== false ||
-    String(artifact.data.workflow_run.id) !== input.sourceRunId ||
-    artifact.data.size_in_bytes !== input.sourceSize ||
-    artifact.data.workflow_run.head_sha !== input.sourceCommitOid
-  )
-    return null;
-  const url = `https://api.github.com/repos/${repo.fullName}/actions/artifacts/${encodeURIComponent(input.sourceArtifactId)}/zip`;
-  const response = await sourceStep("signing_source_artifact_redirect_failed", () =>
-    fetch(url, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/vnd.github+json",
-        "User-Agent": "gitedge-actions-signing",
-      },
-      redirect: "manual",
-      signal: AbortSignal.timeout(30_000),
-    })
-  );
-  if (response.status !== 302) {
-    await sourceStep("signing_source_artifact_redirect_cancel_failed", async () => {
-      await response.body?.cancel();
-    });
-    return null;
-  }
-  const location = response.headers.get("Location");
-  if (!location) {
-    await sourceStep("signing_source_artifact_redirect_cancel_failed", async () => {
-      await response.body?.cancel();
-    });
-    return null;
-  }
-  const target = await sourceStep(
-    "signing_source_artifact_redirect_invalid",
-    async () => new URL(location)
-  );
-  if (!isAllowedArtifactDownloadUrl(target)) {
-    await sourceStep("signing_source_artifact_redirect_cancel_failed", async () => {
-      await response.body?.cancel();
-    });
-    return null;
-  }
-  await sourceStep("signing_source_artifact_redirect_cancel_failed", async () => {
-    await response.body?.cancel();
-  });
-  const body = await sourceStep("signing_source_artifact_download_failed", () =>
-    fetchArtifactDownload(target)
-  );
-  return body ? { body } : null;
+  return true;
 }
 
 async function verifySourceCurrent(
@@ -445,21 +340,6 @@ async function verifySourceCurrent(
     !repo.actorIds.includes(run.data.actor.id)
   )
     return false;
-  const artifact = githubArtifactSchema.safeParse(
-    await githubJson(
-      token,
-      `/repos/${repo.fullName}/actions/artifacts/${encodeURIComponent(input.sourceArtifactId)}`
-    )
-  );
-  if (
-    !artifact.success ||
-    artifact.data.expired ||
-    artifact.data.name !== repo.artifactName ||
-    String(artifact.data.workflow_run.id) !== input.sourceRunId ||
-    artifact.data.workflow_run.head_sha !== input.sourceCommitOid ||
-    artifact.data.size_in_bytes !== input.sourceSize
-  )
-    return false;
   const repositoryInfo = z
     .object({ default_branch: z.string().min(1).max(256) })
     .passthrough()
@@ -489,59 +369,6 @@ async function verifySourceCurrent(
     repo.events.includes(run.data.event) &&
     repo.refs.includes(run.data.head_branch)
   );
-}
-
-export async function recoverSigningSource(
-  env: SigningEnv,
-  ownerId: string,
-  repositoryId: string,
-  profile: SigningProfile,
-  anchor: SigningSubmission,
-  artifactId: string
-): Promise<{ submission: SigningSubmission; body: ReadableStream<Uint8Array> } | null> {
-  const token = await storedSourceCredential(env, ownerId, repositoryId, profile.revision);
-  const repo = profile.policy.sourceRepositories.find(
-    (item) => item.id === anchor.sourceRepositoryId
-  );
-  if (!token || !repo || repo.releaseTagPattern) return null;
-  const run = githubRunSchema
-    .extend({ run_attempt: z.literal(1) })
-    .safeParse(
-      await githubJson(
-        token,
-        `/repos/${repo.fullName}/actions/runs/${encodeURIComponent(anchor.sourceRunId)}`
-      )
-    );
-  if (!run.success) return null;
-  const metadata = githubArtifactSchema
-    .extend({ digest: z.string().regex(/^sha256:[a-f0-9]{64}$/) })
-    .safeParse(
-      await githubJson(
-        token,
-        `/repos/${repo.fullName}/actions/artifacts/${encodeURIComponent(artifactId)}`
-      )
-    );
-  if (!metadata.success) return null;
-  const submission = SigningSubmissionSchema.parse({
-    ...anchor,
-    profile: profile.name,
-    platform: profile.platform,
-    sourceArtifactId: artifactId,
-    sourceDigest: metadata.data.digest,
-    sourceSize: metadata.data.size_in_bytes,
-  });
-  if (submission.sourceSize > profile.policy.project.max_artifact_bytes) return null;
-  const source = await verifySource(
-    env,
-    ownerId,
-    repositoryId,
-    submission,
-    profile,
-    null,
-    "",
-    true
-  );
-  return source ? { submission, body: source.body } : null;
 }
 
 async function storedSourceCredential(

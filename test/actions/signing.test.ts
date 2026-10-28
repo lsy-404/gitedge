@@ -23,7 +23,6 @@ const submission = {
   sourceRepositoryId: "1234",
   sourceCommitOid: "a".repeat(40),
   sourceRunId: "1234",
-  sourceArtifactId: "9",
   sourceDigest: "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
   sourceSize: 3,
   version: "1.2.3",
@@ -138,6 +137,14 @@ function environment() {
   let bound: unknown;
   let storedSource: Uint8Array | null = null;
   const stub = {
+    sourceUpload: vi.fn(async () => ({
+      uploadId: "pending",
+      key: "source",
+      partSize: 8388608,
+      partCount: 1,
+      receivedParts: [],
+    })),
+    bindSourceUpload: vi.fn(async () => ({ uploadId: "upload" })),
     fetch: vi.fn(async (request: Request) => {
       if (new URL(request.url).pathname === "/create") {
         created = true;
@@ -186,6 +193,7 @@ function environment() {
     },
     SIGNING_COORDINATORS: { getByName: () => stub },
     SIGNING_ARTIFACTS: {
+      createMultipartUpload: async () => ({ uploadId: "upload", abort: async () => {} }),
       head: async () => (storedSource ? { size: storedSource.byteLength } : null),
       put: async (_key: string, body: ReadableStream<Uint8Array>) => {
         const chunks: Uint8Array[] = [];
@@ -218,7 +226,7 @@ function environment() {
     hooks(approved: boolean): SigningExecutionHooks {
       return {
         loadApprovedProfile: vi.fn(async () => (approved ? profile : null)),
-        verifySource: vi.fn(async () => ({ body: new Response("abc").body! })),
+        verifySource: vi.fn(async () => true),
         verifySourceCurrent: vi.fn(async () => true),
         verifyNotarization: vi.fn(async () => "Accepted" as const),
         enqueue: vi.fn(async (input) => {
@@ -278,7 +286,7 @@ describe("native signing admission", () => {
     log.mockRestore();
   });
 
-  it("creates and binds an immutable approved profile to the native run when admission succeeds", async () => {
+  it("creates an approved source upload before queueing the native run", async () => {
     const test = environment();
     const hooks = test.hooks(true);
     const response = await handleSigningRoute(request(), test.env, owner, hooks);
@@ -289,25 +297,13 @@ describe("native signing admission", () => {
         request: {
           ownerId: "owner-1",
           repositoryId: "runner-repo",
-          state: "queued",
-          runId: "22222222-2222-4222-8222-222222222222",
+          state: "accepted",
+          runId: null,
         },
       },
     });
-    expect(hooks.enqueue).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ownerId: "owner-1",
-        repositoryId: "runner-repo",
-        workflowOid: "d".repeat(40),
-        profileRevision: "c".repeat(40),
-        sourceDigest: submission.sourceDigest,
-      })
-    );
-    expect(test.state().bound).toMatchObject({
-      ownerId: "owner-1",
-      repositoryId: "runner-repo",
-      runId: "22222222-2222-4222-8222-222222222222",
-    });
+    expect(hooks.enqueue).not.toHaveBeenCalled();
+    expect(test.stub.sourceUpload).toHaveBeenCalled();
   });
 
   it("allows a queue job or repository-scoped write token to submit only for its bound Runner repository", async () => {
@@ -502,7 +498,7 @@ describe("native signing admission", () => {
     expect(
       [...sourceCredentials.values()].every((row) => !row.ciphertext.includes("source-token"))
     ).toBe(true);
-    const sourceSubmission = { ...submission, sourceRunId: "123", sourceArtifactId: "456" };
+    const sourceSubmission = { ...submission, sourceRunId: "123" };
 
     const authorizations: string[] = [];
     const githubFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -547,21 +543,21 @@ describe("native signing admission", () => {
         approvedProfile,
         sourceSubmission
       );
-      await first?.body.cancel();
+      expect(first).toBe(false);
       const second = await hooks.verifySource(
         { ...owner, id: "owner-2" },
         "runner-two",
         approvedProfile,
         sourceSubmission
       );
-      await second?.body.cancel();
+      expect(second).toBe(false);
       const crossAccount = await hooks.verifySource(
         tokenUser,
         "runner-two",
         approvedProfile,
         sourceSubmission
       );
-      expect(crossAccount).toBeNull();
+      expect(crossAccount).toBe(false);
       githubFetch.mockRejectedValueOnce(new TypeError("private network detail"));
       await expect(
         hooks.verifySource(tokenUser, "runner-one", approvedProfile, sourceSubmission)
@@ -699,8 +695,7 @@ describe("native signing admission", () => {
         validIdentity,
         "https://actions.test"
       );
-      expect(source).not.toBeNull();
-      await source?.body.cancel();
+      expect(source).toBe(true);
       const retriedIdentity = await mintIdentity("2");
       await expect(
         hooks.verifySource(
@@ -711,7 +706,7 @@ describe("native signing admission", () => {
           retriedIdentity,
           "https://actions.test"
         )
-      ).resolves.toBeNull();
+      ).resolves.toBe(false);
     } finally {
       vi.unstubAllGlobals();
     }

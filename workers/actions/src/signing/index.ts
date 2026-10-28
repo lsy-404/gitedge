@@ -7,7 +7,6 @@ import {
   SigningReconcileDispatchSchema,
   SigningRequestSchema,
   SigningRetryInputSchema,
-  SigningRecoverPlatformInputSchema,
   type SigningProfile,
   type SigningSubmission,
   SigningStageSchema,
@@ -15,7 +14,7 @@ import {
 } from "../../../../packages/contracts/src/signing";
 import { z } from "zod";
 import { waitUntil } from "cloudflare:workers";
-import { sha256Hex, type TrustedUser } from "../../../../packages/contracts/src/index";
+import { type TrustedUser } from "../../../../packages/contracts/src/index";
 import { dataResponse, errorResponse } from "../../../../src/worker/common/http";
 import { createLogger } from "../../../../src/worker/common/logger";
 import { SigningCoordinator, coordinator, previousStage } from "./coordinator";
@@ -27,7 +26,6 @@ import {
   removeSigningCredentials,
   saveApprovedProfile,
   signingCredentialStatus,
-  recoverSigningSource,
 } from "./services";
 import {
   accessTokenAllows,
@@ -156,6 +154,7 @@ export async function reconcileSigningRequests(
             "UPDATE actions_signing_runs SET reconcile_state='failed' WHERE request_id=? AND owner_id=? AND run_id=?"
           ).bind(candidate.requestId, candidate.ownerId, candidate.runId),
         ]);
+        await stub.releaseSource(candidate.requestId);
         failed++;
         continue;
       }
@@ -281,6 +280,7 @@ export async function reconcileSigningRequests(
             "UPDATE actions_signing_runs SET reconcile_state='failed' WHERE request_id=? AND owner_id=? AND run_id=?"
           ).bind(candidate.requestId, candidate.ownerId, candidate.runId),
         ]);
+        await stub.releaseSource(candidate.requestId);
         failed++;
         continue;
       }
@@ -315,6 +315,7 @@ export async function reconcileSigningRequests(
             )
               .bind(candidate.requestId, candidate.ownerId, candidate.requestId, candidate.ownerId)
               .run();
+            await stub.releaseSource(candidate.requestId);
           }
           skipped++;
           continue;
@@ -441,10 +442,8 @@ async function acceptSigningSource(
   profile: SigningProfile,
   submission: SigningSubmission,
   idempotencyKey: string,
-  source: { body: ReadableStream<Uint8Array> },
-  hooks: SigningExecutionHooks
+  _hooks: SigningExecutionHooks
 ): Promise<Response> {
-  const logger = createLogger(env.LOG_LEVEL, { service: "actions-signing-admission" });
   const generation = 1;
   const nonce = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
     .replaceAll("+", "-")
@@ -471,60 +470,88 @@ async function acceptSigningSource(
     ),
     createdResponseSchema
   );
-  if (!created.created && created.request.state !== "accepted") {
-    await source.body.cancel();
+  if (!created.created && created.request.state !== "accepted")
     return dataResponse({ request: created.request }, 200);
-  }
-  const accepted = created.dispatch;
   if (
     created.request.profileRevision !== profile.revision ||
-    accepted.profile.revision !== profile.revision
-  ) {
-    await source.body.cancel();
+    created.dispatch.profile.revision !== profile.revision
+  )
     return errorResponse(
       409,
       "conflict",
       "The approved profile changed after this request was accepted."
     );
-  }
-  const sourceKey = signingObjectKey(user.id, repositoryId, created.request.id, "source");
-
-  try {
-    const existing = await env.SIGNING_ARTIFACTS.head(sourceKey);
-    if (!existing) {
-      const { readable, writable } = new FixedLengthStream(submission.sourceSize);
-      const storage = env.SIGNING_ARTIFACTS.put(sourceKey, readable, {
-        customMetadata: {
-          ownerId: user.id,
-          repositoryId,
-          requestId: created.request.id,
-          sha256: submission.sourceDigest,
-          size: String(submission.sourceSize),
-        },
-      });
-      await Promise.all([storage, source.body.pipeTo(writable)]);
-    } else await source.body.cancel();
-    if (!(await verifiedObject(env, sourceKey, submission.sourceDigest, submission.sourceSize))) {
-      await env.SIGNING_ARTIFACTS.delete(sourceKey);
-      return errorResponse(
-        422,
-        "signing_source_digest_mismatch",
-        "The source artifact did not match its validated digest and size."
+  const transfer = await stub.sourceUpload(created.request.id, user.id, repositoryId);
+  if (transfer.uploadId === "pending") {
+    const upload = await env.SIGNING_ARTIFACTS.createMultipartUpload(transfer.key);
+    try {
+      const bound = await stub.bindSourceUpload(
+        created.request.id,
+        user.id,
+        repositoryId,
+        upload.uploadId
       );
+      if (bound.uploadId !== upload.uploadId) await upload.abort();
+    } catch (error) {
+      await upload.abort();
+      throw error;
     }
-  } catch {
-    logger.error("signing:admission-failed", {
-      phase: "source_storage",
-      code: "signing_source_storage_unavailable",
-      errorType: "Error",
-    });
+  }
+  return dataResponse(
+    {
+      request: created.request,
+      source: {
+        partSize: transfer.partSize,
+        partCount: transfer.partCount,
+        receivedParts: transfer.receivedParts,
+      },
+    },
+    created.created ? 202 : 200
+  );
+}
+
+async function queueSigningSource(
+  env: SigningEnv,
+  user: TrustedUser,
+  repositoryId: string,
+  id: string,
+  hooks: SigningExecutionHooks
+): Promise<Response> {
+  const stub = coordinator(env, user.id);
+  const plan = await stub.sourceCompletion(id, user.id, repositoryId);
+  const accepted = plan.dispatch;
+  const current = await hooks.loadApprovedProfile(user, repositoryId, accepted.profile.name);
+  if (
+    !current ||
+    !current.enabled ||
+    current.revision !== accepted.profile.revision ||
+    !(await hooks.verifySourceCurrent(user.id, repositoryId, current, accepted.submission))
+  )
     return errorResponse(
-      503,
-      "signing_source_storage_unavailable",
-      "The source artifact could not be stored and verified."
+      409,
+      "signing_source_changed",
+      "The approved profile or source run is no longer valid."
+    );
+  const created = { request: plan.request, created: true };
+  if (plan.uploadId !== "complete") {
+    try {
+      await env.SIGNING_ARTIFACTS.resumeMultipartUpload(plan.key, plan.uploadId).complete(
+        plan.parts
+      );
+    } catch {
+      if (!(await env.SIGNING_ARTIFACTS.head(plan.key)))
+        throw new Error("signing_source_completion_unavailable");
+    }
+  }
+  if (!(await verifiedObject(env, plan.key, plan.request.sourceDigest, plan.request.sourceSize))) {
+    await stub.releaseSource(id);
+    return errorResponse(
+      422,
+      "signing_source_digest_mismatch",
+      "The source archive did not match its digest and size."
     );
   }
-
+  await stub.markSourceComplete(id, user.id, repositoryId);
   const queued = await hooks.enqueue({
     requestId: created.request.id,
     ownerId: user.id,
@@ -707,87 +734,6 @@ async function retrySigningRequest(
   return dataResponse(prepared.request, 202);
 }
 
-async function recoverSigningPlatform(
-  request: Request,
-  env: SigningEnv,
-  user: TrustedUser,
-  id: string,
-  hooks: SigningExecutionHooks
-): Promise<Response> {
-  if (user.job) return errorResponse(403, "forbidden", "An account owner session is required.");
-  const repositoryId = new URL(request.url).searchParams.get("repositoryId") ?? "";
-  const repository = await ownedRunnerRepository(env, user.id, repositoryId);
-  if (!repository || !runnerAccess(user, repository.id, true))
-    return errorResponse(404, "not_found", "Signing request was not found.");
-  const input = SigningRecoverPlatformInputSchema.parse(await readJsonLimited(request, 4096));
-  const stub = coordinator(env, user.id);
-  const snapshot = await stub.retrySnapshot(id, user.id, repository.id);
-  if (!snapshot || snapshot.request.expiresAt <= Date.now())
-    return errorResponse(
-      410,
-      "signing_request_expired",
-      "The admitted source is no longer available."
-    );
-  const anchor = SigningReconcileDispatchSchema.parse(JSON.parse(snapshot.dispatchJson));
-  const approved = await hooks.loadApprovedProfile(user, repository.id, snapshot.request.profile);
-  if (
-    !approved ||
-    approved.revision !== snapshot.request.profileRevision ||
-    !(await hooks.verifySourceCurrent(user.id, repository.id, approved, anchor.submission))
-  )
-    return errorResponse(409, "signing_source_changed", "The admitted source is no longer valid.");
-  const profile = await hooks.loadApprovedProfile(user, repository.id, input.profile);
-  if (!profile?.enabled)
-    return errorResponse(409, "signing_profile_changed", "The target profile is not approved.");
-  const source = await recoverSigningSource(
-    env,
-    user.id,
-    repository.id,
-    profile,
-    anchor.submission,
-    input.sourceArtifactId
-  );
-  if (!source)
-    return errorResponse(
-      422,
-      "signing_source_not_allowed",
-      "The retained artifact is not authorized by the approved profile."
-    );
-  const existing = await stub.findSource(
-    repository.id,
-    user.id,
-    profile.revision,
-    JSON.stringify(source.submission)
-  );
-  if (existing && existing.request.state !== "accepted") {
-    await source.body.cancel();
-    return dataResponse(existing.request);
-  }
-  const idempotencyKey =
-    existing?.idempotencyKey ??
-    `recover-platform.${await sha256Hex(JSON.stringify(source.submission))}`;
-  const accepted = await acceptSigningSource(
-    env,
-    user,
-    repository.id,
-    profile,
-    source.submission,
-    idempotencyKey,
-    source,
-    hooks
-  );
-  if (!accepted.ok) return accepted;
-  const { data } = await bodyResponse(
-    accepted,
-    z.object({ data: createdResponseSchema.pick({ request: true }) }).strict()
-  );
-  createLogger(env.LOG_LEVEL, { service: "actions-signing" }).info("signing:platform-recovered", {
-    requestId: data.request.id,
-    sourceRequestId: id,
-  });
-  return dataResponse(data.request, accepted.status);
-}
-
 export async function handleSigningRoute(
   request: Request,
   env: SigningEnv,
@@ -910,6 +856,21 @@ export async function handleSigningRoute(
     }
     if (path[1] !== "requests")
       return errorResponse(404, "not_found", "Signing endpoint was not found.");
+    if (request.method === "GET" && path.length === 2) {
+      const repositoryId = url.searchParams.get("repositoryId") ?? user.job?.repositoryId ?? "";
+      const sourceRunId = url.searchParams.get("sourceRunId") ?? "";
+      if (!/^[1-9]\d*$/.test(sourceRunId))
+        return errorResponse(400, "bad_request", "sourceRunId is required.");
+      const repository = await ownedRunnerRepository(env, user.id, repositoryId);
+      if (!repository || !runnerAccess(user, repository.id, false))
+        return errorResponse(404, "not_found", "Signing requests were not found.");
+      const requests = await coordinator(env, user.id).listSourceRun(
+        user.id,
+        repository.id,
+        sourceRunId
+      );
+      return dataResponse({ requests: requests.slice(0, 100), truncated: requests.length > 100 });
+    }
     if (request.method === "POST" && path.length === 2) {
       phase = "runner";
       const repositoryId = url.searchParams.get("repositoryId") ?? user.job?.repositoryId;
@@ -977,18 +938,78 @@ export async function handleSigningRoute(
         profile,
         submission,
         idempotencyKey,
-        source,
         executionHooks
       );
     }
-    if (request.method === "POST" && path.length === 4 && path[3] === "recover-platform")
-      return await recoverSigningPlatform(
-        request,
-        env,
-        user,
-        z.uuid().parse(path[2]),
-        executionHooks
-      );
+    if (path[2] && path[3] === "source") {
+      const id = z.uuid().parse(path[2]);
+      const repositoryId = url.searchParams.get("repositoryId") ?? user.job?.repositoryId ?? "";
+      const repository = await ownedRunnerRepository(env, user.id, repositoryId);
+      if (!repository || !runnerAccess(user, repository.id, true))
+        return errorResponse(404, "not_found", "Signing request was not found.");
+      if (request.method === "POST" && path.length === 5 && path[4] === "complete")
+        return await queueSigningSource(env, user, repository.id, id, executionHooks);
+      if (request.method === "PUT" && path.length === 6 && path[4] === "parts") {
+        const plan = await coordinator(env, user.id).sourceUpload(id, user.id, repository.id);
+        const part = Number(path[5]);
+        const expected =
+          part < plan.partCount
+            ? plan.partSize
+            : plan.request.sourceSize - (plan.partCount - 1) * plan.partSize;
+        const start = (part - 1) * plan.partSize;
+        if (
+          !Number.isInteger(part) ||
+          part < 1 ||
+          part > plan.partCount ||
+          plan.uploadId === "pending" ||
+          plan.uploadId === "complete" ||
+          !request.body ||
+          request.headers.get("Content-Type") !== "application/octet-stream" ||
+          request.headers.get("Content-Length") !== String(expected) ||
+          request.headers.get("Content-Range") !==
+            `bytes ${start}-${start + expected - 1}/${plan.request.sourceSize}` ||
+          !/^sha256:[a-f0-9]{64}$/.test(request.headers.get("X-Part-Digest") ?? "")
+        )
+          return errorResponse(400, "bad_request", "Invalid source part.");
+        const bytes = new Uint8Array(expected);
+        const reader = request.body.getReader();
+        let offset = 0;
+        while (true) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          if (offset + chunk.value.byteLength > expected) {
+            await reader.cancel();
+            return errorResponse(400, "bad_request", "Invalid source part length.");
+          }
+          bytes.set(chunk.value, offset);
+          offset += chunk.value.byteLength;
+        }
+        if (offset !== expected)
+          return errorResponse(400, "bad_request", "Invalid source part length.");
+        const hash = await crypto.subtle.digest("SHA-256", bytes);
+        const actual = `sha256:${Array.from(new Uint8Array(hash), (value) => value.toString(16).padStart(2, "0")).join("")}`;
+        if (actual !== request.headers.get("X-Part-Digest"))
+          return errorResponse(
+            422,
+            "signing_part_digest_mismatch",
+            "Source part digest did not match."
+          );
+        const uploaded = await env.SIGNING_ARTIFACTS.resumeMultipartUpload(
+          plan.key,
+          plan.uploadId
+        ).uploadPart(part, bytes);
+        return dataResponse(
+          await coordinator(env, user.id).recordSourcePart(
+            id,
+            user.id,
+            repository.id,
+            part,
+            uploaded.etag,
+            expected
+          )
+        );
+      }
+    }
     if (request.method === "POST" && path.length === 4 && path[3] === "retry")
       return await retrySigningRequest(request, env, user, z.uuid().parse(path[2]), executionHooks);
     if (request.method === "GET" && path.length === 3) {
@@ -1008,6 +1029,21 @@ export async function handleSigningRoute(
       return response.ok && value.request
         ? dataResponse(value.request)
         : errorResponse(404, "not_found", "Signing request was not found.");
+    }
+    if (request.method === "DELETE" && path.length === 4 && path[3] === "output") {
+      const repositoryId = url.searchParams.get("repositoryId") ?? user.job?.repositoryId ?? "";
+      const repository = await ownedRunnerRepository(env, user.id, repositoryId);
+      if (!repository || !runnerAccess(user, repository.id, true))
+        return errorResponse(404, "not_found", "Signing request was not found.");
+      const state = await coordinator(env, user.id).get(
+        z.uuid().parse(path[2]),
+        user.id,
+        repository.id
+      );
+      if (!state || state.state !== "succeeded")
+        return errorResponse(404, "not_found", "Signing output was not found.");
+      await coordinator(env, user.id).releaseResult(state.id, user.id, repository.id);
+      return dataResponse({ deleted: true });
     }
     if (request.method === "GET" && path.length === 4 && path[3] === "download") {
       const repoParam = url.searchParams.get("repositoryId");
@@ -1032,6 +1068,10 @@ export async function handleSigningRoute(
         !state.outputSize
       )
         return errorResponse(404, "not_found", "Signing output was not found.");
+      if (!state.completedAt || state.completedAt + 3 * 60 * 60 * 1000 <= Date.now()) {
+        await coordinator(env, user.id).releaseResult(state.id, user.id, repository.id);
+        return errorResponse(410, "gone", "Signing output is no longer available.");
+      }
       const key = signingObjectKey(user.id, repository.id, state.id, state.stage);
       const object = await env.SIGNING_ARTIFACTS.get(key);
       if (!object || object.size !== state.outputSize)
@@ -1084,10 +1124,6 @@ export async function handleSigningRoute(
       "signing_initial_stage_not_admitted",
       "signing_source_run_metadata_failed",
       "signing_source_repository_metadata_failed",
-      "signing_source_artifact_metadata_failed",
-      "signing_source_artifact_redirect_failed",
-      "signing_source_artifact_redirect_invalid",
-      "signing_source_artifact_download_failed",
     ]).has(message)
       ? message
       : "unclassified";
@@ -1587,6 +1623,8 @@ export async function handleSigningMachineRoute(
         z.object({ state: SigningRequestSchema.shape.state }),
         { digest: body.digest, size: body.size, verificationReport: body.verificationReport }
       );
+      if (completed.state === "succeeded")
+        await coordinator(env, context.ownerId).releaseSource(id);
       if (
         completed.state === "succeeded" &&
         (await recordPublishDispatch(env, profile, submission, context.ownerId, id))
@@ -1610,17 +1648,17 @@ export async function handleSigningMachineRoute(
         })
         .strict()
         .parse(await readJsonLimited(request, 4096));
-      return dataResponse(
-        await machineRpc(
-          env,
-          context.ownerId,
-          id,
-          "fail",
-          context,
-          z.object({ state: z.literal("failed") }),
-          body
-        )
+      const result = await machineRpc(
+        env,
+        context.ownerId,
+        id,
+        "fail",
+        context,
+        z.object({ state: z.literal("failed") }),
+        body
       );
+      await coordinator(env, context.ownerId).releaseSource(id);
+      return dataResponse(result);
     }
     return errorResponse(405, "method_not_allowed", "Signing operation is not supported.");
   } catch (error) {

@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { TrustedUser } from "../../packages/contracts/src/index";
 import type {
   SigningMachineContext,
@@ -17,7 +17,6 @@ import {
 } from "../../workers/actions/src/signing";
 import type { SigningEnv, SigningExecutionHooks } from "../../workers/actions/src/signing/types";
 import { enqueueNativeSigningRun } from "../../workers/actions/src/signing-execution";
-import { fetchArtifactDownload } from "../../workers/actions/src/signing/services";
 import { createPerson, migrate, type Person } from "../support/stack";
 import { runSigning } from "../../scripts/signing/client.mjs";
 
@@ -238,7 +237,7 @@ async function executeStage(input: {
   };
   const hooks: SigningExecutionHooks = {
     loadApprovedProfile: async () => input.profile,
-    verifySource: async () => null,
+    verifySource: async () => false,
     verifySourceCurrent: async () => true,
     enqueue: async () => ({ runId: input.runId }),
     authorizeCredentials: async (context) => ({
@@ -370,53 +369,6 @@ describe("Actions signing Worker integration", () => {
       .run();
   });
 
-  it("uses Worker-supported manual artifact downloads and rejects further redirects", async () => {
-    expect(
-      () =>
-        new Request("https://productionresultssa1.blob.core.windows.net/archive", {
-          redirect: "error",
-        })
-    ).toThrow(TypeError);
-
-    const archiveFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const request = new Request(input, init);
-      expect(request.redirect).toBe("manual");
-      return new Response("archive bytes");
-    });
-    vi.stubGlobal("fetch", archiveFetch);
-    try {
-      const archive = await fetchArtifactDownload(
-        new URL("https://productionresultssa1.blob.core.windows.net/archive")
-      );
-      await expect(new Response(archive).text()).resolves.toBe("archive bytes");
-    } finally {
-      vi.unstubAllGlobals();
-    }
-
-    let redirectBodyCancelled = false;
-    const redirectFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      new Request(input, init);
-      return new Response(
-        new ReadableStream({
-          cancel() {
-            redirectBodyCancelled = true;
-          },
-        }),
-        { status: 302, headers: { Location: "https://example.invalid/redirect" } }
-      );
-    });
-    vi.stubGlobal("fetch", redirectFetch);
-    try {
-      await expect(
-        fetchArtifactDownload(new URL("https://productionresultssa1.blob.core.windows.net/archive"))
-      ).resolves.toBeNull();
-      expect(redirectFetch).toHaveBeenCalledTimes(1);
-      expect(redirectBodyCancelled).toBe(true);
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
   it.each([
     ["windows", "windows_sign", "zip"],
     ["ios", "ios_sign", "zip"],
@@ -446,7 +398,7 @@ describe("Actions signing Worker integration", () => {
       const hooks: SigningExecutionHooks = {
         loadApprovedProfile: async (_user, _repository, name) =>
           name === selectedProfile.name ? selectedProfile : null,
-        verifySource: async () => ({ body: new Blob([sourceBytes]).stream() }),
+        verifySource: async () => true,
         verifySourceCurrent: async () => true,
         enqueue: (input) => enqueueNativeSigningRun(signingEnv, input),
         verifyNotarization: async () => "Accepted",
@@ -465,8 +417,7 @@ describe("Actions signing Worker integration", () => {
             platform,
             sourceRepositoryId: "12345",
             sourceCommitOid: commitOid,
-            sourceRunId: `source-run-${platform}`,
-            sourceArtifactId: `source-artifact-${platform}`,
+            sourceRunId: "12345",
             sourceDigest,
             sourceSize: sourceBytes.byteLength,
             version: "1.2.3",
@@ -480,6 +431,76 @@ describe("Actions signing Worker integration", () => {
       const created = (await response.json()) as {
         data: { request: { id: string; runId: string } };
       };
+      const requestId = created.data.request.id;
+      const invalidPart = await handleSigningRoute(
+        new Request(
+          `https://actions.test/signing/requests/${requestId}/source/parts/1?repositoryId=${repositoryId}`,
+          {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/octet-stream",
+              "Content-Length": String(sourceBytes.byteLength),
+              "Content-Range": `bytes 0-${sourceBytes.byteLength - 1}/${sourceBytes.byteLength}`,
+              "X-Part-Digest": `sha256:${"0".repeat(64)}`,
+            },
+            body: sourceBytes,
+          }
+        ),
+        signingEnv,
+        trusted(owner),
+        hooks
+      );
+      expect(invalidPart.status).toBe(422);
+      const part = await handleSigningRoute(
+        new Request(
+          `https://actions.test/signing/requests/${requestId}/source/parts/1?repositoryId=${repositoryId}`,
+          {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/octet-stream",
+              "Content-Length": String(sourceBytes.byteLength),
+              "Content-Range": `bytes 0-${sourceBytes.byteLength - 1}/${sourceBytes.byteLength}`,
+              "X-Part-Digest": sourceDigest,
+            },
+            body: sourceBytes,
+          }
+        ),
+        signingEnv,
+        trusted(owner),
+        hooks
+      );
+      expect(part.status, await part.clone().text()).toBe(200);
+      const complete = await handleSigningRoute(
+        new Request(
+          `https://actions.test/signing/requests/${requestId}/source/complete?repositoryId=${repositoryId}`,
+          { method: "POST" }
+        ),
+        signingEnv,
+        trusted(owner),
+        hooks
+      );
+      expect(complete.status, await complete.clone().text()).toBe(202);
+      created.data.request = (
+        (await complete.json()) as { data: { request: { id: string; runId: string } } }
+      ).data.request;
+      const listing = await handleSigningRoute(
+        new Request(
+          `https://actions.test/signing/requests?repositoryId=${repositoryId}&sourceRunId=12345`
+        ),
+        signingEnv,
+        trusted(owner),
+        hooks
+      );
+      expect(await listing.json()).toMatchObject({
+        data: {
+          requests: expect.arrayContaining([
+            expect.objectContaining({
+              request: expect.objectContaining({ id: requestId }),
+              submission: expect.objectContaining({ sourceRunId: "12345" }),
+            }),
+          ]),
+        },
+      });
       const signingRow = await signingEnv.DB.prepare(
         "SELECT generation,nonce FROM actions_signing_runs WHERE run_id=?"
       )
@@ -500,8 +521,10 @@ describe("Actions signing Worker integration", () => {
       const sourceObject = await signingEnv.SIGNING_ARTIFACTS.get(
         `signing/${owner.id}/${repositoryId}/${created.data.request.id}/source.zip`
       );
-      expect(sourceObject?.size).toBe(sourceBytes.byteLength);
-      expect(digest(new Uint8Array(await sourceObject!.arrayBuffer()))).toBe(sourceDigest);
+      if (platform === "macos") {
+        expect(sourceObject?.size).toBe(sourceBytes.byteLength);
+        expect(digest(new Uint8Array(await sourceObject!.arrayBuffer()))).toBe(sourceDigest);
+      } else expect(sourceObject).toBeNull();
       const stageObject = await signingEnv.SIGNING_ARTIFACTS.get(
         `signing/${owner.id}/${repositoryId}/${created.data.request.id}/${stage}.zip`
       );
@@ -563,8 +586,29 @@ describe("Actions signing Worker integration", () => {
         const finalObject = await signingEnv.SIGNING_ARTIFACTS.get(
           `signing/${owner.id}/${repositoryId}/${created.data.request.id}/finalize.zip`
         );
-        expect(finalObject?.size).toBeGreaterThan(0);
+        if (outputFormat === "dmg") expect(finalObject).toBeNull();
+        else expect(finalObject?.size).toBeGreaterThan(0);
+        expect(
+          await signingEnv.SIGNING_ARTIFACTS.head(
+            `signing/${owner.id}/${repositoryId}/${created.data.request.id}/source.zip`
+          )
+        ).toBeNull();
       }
+      const finalStage =
+        platform === "macos" ? (outputFormat === "dmg" ? "dmg_finalize" : "finalize") : stage;
+      const outputKey = `signing/${owner.id}/${repositoryId}/${requestId}/${finalStage}.zip`;
+      expect(await signingEnv.SIGNING_ARTIFACTS.head(outputKey)).not.toBeNull();
+      const deletion = await handleSigningRoute(
+        new Request(
+          `https://actions.test/signing/requests/${requestId}/output?repositoryId=${repositoryId}`,
+          { method: "DELETE" }
+        ),
+        signingEnv,
+        trusted(owner),
+        hooks
+      );
+      expect(deletion.status).toBe(200);
+      expect(await signingEnv.SIGNING_ARTIFACTS.head(outputKey)).toBeNull();
     }
   );
 });

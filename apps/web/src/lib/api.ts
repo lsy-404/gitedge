@@ -1,4 +1,3 @@
-import type { SigningRecoverPlatformInput } from "../../../../packages/contracts/src/signing";
 import type { MergeCandidate } from "../../../../packages/contracts/src/merge-candidates";
 import type { MergeRequirements } from "../../../../packages/contracts/src/merge-requirements";
 import type { PublicProfile } from "../../../../packages/contracts/src/profiles";
@@ -699,14 +698,6 @@ export const api = {
       {
         method: "POST",
         body: JSON.stringify({ runId }),
-      }
-    ),
-  recoverSigningPlatform: (repositoryId: string, id: string, input: SigningRecoverPlatformInput) =>
-    request<SigningRequest>(
-      `/api/actions/signing/requests/${encodeURIComponent(id)}/recover-platform?repositoryId=${encodeURIComponent(repositoryId)}`,
-      {
-        method: "POST",
-        body: JSON.stringify(input),
       }
     ),
   signingProfiles: (repositoryId: string, signal?: AbortSignal) =>

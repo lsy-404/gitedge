@@ -76,7 +76,7 @@ export interface SigningExecutionHooks {
     input: SigningSubmission,
     runIdentity?: string | null,
     audience?: string
-  ): Promise<{ body: ReadableStream<Uint8Array> } | null>;
+  ): Promise<boolean>;
   enqueue(input: SigningQueueInput): Promise<{ runId: string }>;
   verifyNotarization(
     ownerId: string,

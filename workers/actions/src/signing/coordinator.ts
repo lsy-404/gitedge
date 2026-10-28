@@ -93,6 +93,14 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
         size INTEGER NOT NULL,
         PRIMARY KEY(request_id,part)
       );
+      CREATE TABLE IF NOT EXISTS signing_results (request_id TEXT PRIMARY KEY, expires_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS signing_source_uploads (
+        request_id TEXT PRIMARY KEY, upload_id TEXT NOT NULL, expires_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS signing_source_parts (
+        request_id TEXT NOT NULL, part INTEGER NOT NULL, etag TEXT NOT NULL,
+        size INTEGER NOT NULL, PRIMARY KEY(request_id, part)
+      );
       CREATE TABLE IF NOT EXISTS signing_stage_outputs (
         request_id TEXT NOT NULL REFERENCES signing_requests(id) ON DELETE CASCADE,
         stage TEXT NOT NULL,
@@ -118,7 +126,19 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
         "SELECT MIN(expires_at) AS expires_at FROM signing_requests WHERE state NOT IN ('succeeded','failed','cancelled')"
       )
       .toArray()[0]?.expires_at;
-    if (next) await this.ctx.storage.setAlarm(Math.max(Date.now() + 1000, next));
+    const sourceNext = this.ctx.storage.sql
+      .exec<{ expires_at: number }>(
+        "SELECT MIN(expires_at) AS expires_at FROM signing_source_uploads"
+      )
+      .toArray()[0]?.expires_at;
+    const resultNext = this.ctx.storage.sql
+      .exec<{ expires_at: number }>("SELECT MIN(expires_at) AS expires_at FROM signing_results")
+      .toArray()[0]?.expires_at;
+    const earliest = [next, sourceNext, resultNext].filter((value): value is number =>
+      Boolean(value)
+    );
+    if (earliest.length)
+      await this.ctx.storage.setAlarm(Math.max(Date.now() + 1000, Math.min(...earliest)));
   }
 
   private expire(id: string) {
@@ -153,7 +173,202 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
         row.id
       );
     }
+    const sources = this.ctx.storage.sql
+      .exec<{ request_id: string }>(
+        "SELECT request_id FROM signing_source_uploads WHERE expires_at<=?",
+        Date.now()
+      )
+      .toArray();
+    for (const source of sources) {
+      this.ctx.storage.sql.exec(
+        "UPDATE signing_requests SET state='failed',completed_at=? WHERE id=? AND state NOT IN ('succeeded','failed','cancelled')",
+        Date.now(),
+        source.request_id
+      );
+      const row = this.row(source.request_id);
+      if (row?.run_id) {
+        await this.env.DB.prepare(
+          "UPDATE actions_runner_runs SET status='completed',conclusion='failure',completed_at=?,lease_expires_at=? WHERE run_id=? AND status IN ('queued','running')"
+        )
+          .bind(Date.now(), Date.now(), row.run_id)
+          .run();
+      }
+      await this.releaseSource(source.request_id);
+    }
+    const results = this.ctx.storage.sql
+      .exec<{ request_id: string }>(
+        "SELECT request_id FROM signing_results WHERE expires_at<=?",
+        Date.now()
+      )
+      .toArray();
+    for (const result of results) {
+      const row = this.row(result.request_id);
+      if (row) await this.releaseResult(row.id, row.owner_id, row.repository_id);
+    }
     await this.scheduleExpiry();
+  }
+
+  async releaseResult(id: string, ownerId: string, repositoryId: string) {
+    const row = this.row(id);
+    if (
+      !row ||
+      row.owner_id !== ownerId ||
+      row.repository_id !== repositoryId ||
+      row.state !== "succeeded"
+    )
+      throw new Error("signing_result_invalid");
+    await this.env.SIGNING_ARTIFACTS.delete(
+      `signing/${ownerId}/${repositoryId}/${id}/${row.current_stage}.zip`
+    );
+    this.ctx.storage.sql.exec("DELETE FROM signing_results WHERE request_id=?", id);
+  }
+
+  async releaseSource(id: string) {
+    const row = this.row(id);
+    const upload = this.ctx.storage.sql
+      .exec<{ upload_id: string }>(
+        "SELECT upload_id FROM signing_source_uploads WHERE request_id=?",
+        id
+      )
+      .toArray()[0];
+    if (!row || !upload) return;
+    const key = `signing/${row.owner_id}/${row.repository_id}/${id}/source.zip`;
+    if (row.state === "succeeded" && row.completed_at) {
+      this.ctx.storage.sql.exec(
+        "INSERT OR IGNORE INTO signing_results VALUES (?,?)",
+        id,
+        row.completed_at + 3 * 60 * 60 * 1000
+      );
+      this.ctx.waitUntil(this.scheduleExpiry());
+    }
+    if (upload.upload_id !== "pending" && upload.upload_id !== "complete") {
+      try {
+        await this.env.SIGNING_ARTIFACTS.resumeMultipartUpload(key, upload.upload_id).abort();
+      } catch {
+        /* upload may already be complete */
+      }
+    }
+    const stageKeys = ["sign", "finalize", "dmg_sign", "dmg_finalize", "windows_sign", "ios_sign"]
+      .filter((stage) => row.state !== "succeeded" || stage !== row.current_stage)
+      .map((stage) => `signing/${row.owner_id}/${row.repository_id}/${id}/${stage}.zip`);
+    await this.env.SIGNING_ARTIFACTS.delete([key, ...stageKeys]);
+    this.ctx.storage.sql.exec("DELETE FROM signing_source_parts WHERE request_id=?", id);
+    this.ctx.storage.sql.exec("DELETE FROM signing_source_uploads WHERE request_id=?", id);
+  }
+
+  sourceUpload(id: string, ownerId: string, repositoryId: string) {
+    const row = this.row(id);
+    if (
+      !row ||
+      row.owner_id !== ownerId ||
+      row.repository_id !== repositoryId ||
+      row.state !== "accepted"
+    )
+      throw new Error("signing_source_invalid");
+    this.ctx.storage.sql.exec(
+      "INSERT OR IGNORE INTO signing_source_uploads VALUES (?,'pending',?)",
+      id,
+      Date.now() + 3 * 60 * 60 * 1000
+    );
+    this.ctx.waitUntil(this.scheduleExpiry());
+    const upload = this.ctx.storage.sql
+      .exec<{ upload_id: string; expires_at: number }>(
+        "SELECT upload_id,expires_at FROM signing_source_uploads WHERE request_id=?",
+        id
+      )
+      .toArray()[0];
+    if (!upload || upload.expires_at <= Date.now()) throw new Error("signing_source_expired");
+    const partSize = 8 * 1024 * 1024;
+    return {
+      request: this.public(row),
+      dispatch: this.dispatch(row),
+      key: `signing/${ownerId}/${repositoryId}/${id}/source.zip`,
+      uploadId: upload.upload_id,
+      partSize,
+      partCount: Math.ceil(row.source_size / partSize),
+      receivedParts: this.ctx.storage.sql
+        .exec<{ part: number }>(
+          "SELECT part FROM signing_source_parts WHERE request_id=? ORDER BY part",
+          id
+        )
+        .toArray()
+        .map((part) => part.part),
+    };
+  }
+
+  bindSourceUpload(id: string, ownerId: string, repositoryId: string, uploadId: string) {
+    this.sourceUpload(id, ownerId, repositoryId);
+    this.ctx.storage.sql.exec(
+      "UPDATE signing_source_uploads SET upload_id=? WHERE request_id=? AND upload_id='pending'",
+      uploadId,
+      id
+    );
+    return this.sourceUpload(id, ownerId, repositoryId);
+  }
+
+  recordSourcePart(
+    id: string,
+    ownerId: string,
+    repositoryId: string,
+    part: number,
+    etag: string,
+    size: number
+  ) {
+    const plan = this.sourceUpload(id, ownerId, repositoryId);
+    const expected =
+      part < plan.partCount
+        ? plan.partSize
+        : plan.request.sourceSize - (plan.partCount - 1) * plan.partSize;
+    if (
+      !Number.isInteger(part) ||
+      part < 1 ||
+      part > plan.partCount ||
+      size !== expected ||
+      plan.uploadId === "pending" ||
+      plan.uploadId === "complete"
+    )
+      throw new Error("signing_part_invalid");
+    this.ctx.storage.sql.exec(
+      "INSERT INTO signing_source_parts VALUES (?,?,?,?) ON CONFLICT(request_id,part) DO UPDATE SET etag=excluded.etag,size=excluded.size",
+      id,
+      part,
+      etag,
+      size
+    );
+    return { part };
+  }
+
+  sourceCompletion(id: string, ownerId: string, repositoryId: string) {
+    const plan = this.sourceUpload(id, ownerId, repositoryId);
+    const parts = this.ctx.storage.sql
+      .exec<{ part: number; etag: string; size: number }>(
+        "SELECT part,etag,size FROM signing_source_parts WHERE request_id=? ORDER BY part",
+        id
+      )
+      .toArray();
+    if (
+      plan.uploadId !== "complete" &&
+      (plan.uploadId === "pending" ||
+        parts.length !== plan.partCount ||
+        parts.some(
+          (p, index) =>
+            p.part !== index + 1 ||
+            p.size !==
+              (p.part < plan.partCount
+                ? plan.partSize
+                : plan.request.sourceSize - (plan.partCount - 1) * plan.partSize)
+        ))
+    )
+      throw new Error("signing_parts_incomplete");
+    return { ...plan, parts: parts.map((p) => ({ partNumber: p.part, etag: p.etag })) };
+  }
+
+  markSourceComplete(id: string, ownerId: string, repositoryId: string) {
+    this.sourceUpload(id, ownerId, repositoryId);
+    this.ctx.storage.sql.exec(
+      "UPDATE signing_source_uploads SET upload_id='complete' WHERE request_id=?",
+      id
+    );
   }
 
   expiredUpload(id: string, ownerId: string, repositoryId: string) {
@@ -177,6 +392,21 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
           uploadId: upload.upload_id,
         }
       : null;
+  }
+
+  listSourceRun(ownerId: string, repositoryId: string, sourceRunId: string) {
+    return this.ctx.storage.sql
+      .exec<StoredRow>(
+        "SELECT * FROM signing_requests WHERE owner_id=? AND repository_id=? AND json_extract(submission_json,'$.sourceRunId')=? ORDER BY created_at DESC LIMIT 101",
+        ownerId,
+        repositoryId,
+        sourceRunId
+      )
+      .toArray()
+      .map((row) => ({
+        request: this.public(row),
+        submission: SigningSubmissionSchema.parse(JSON.parse(row.submission_json)),
+      }));
   }
 
   private row(id: string): StoredRow | null {

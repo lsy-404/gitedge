@@ -48,7 +48,6 @@ describe("signing submission client", () => {
       sourceRepositoryId: "123",
       sourceCommitOid: "a".repeat(40),
       sourceRunId: "456",
-      sourceArtifactId: "789",
       sourceDigest: request.sourceDigest,
       sourceSize: 12,
       version: "1.0.0",

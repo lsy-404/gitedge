@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { readFile, rename, rm, stat } from "node:fs/promises";
+import { open, readFile, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -104,7 +104,7 @@ export function signingRequestClient({
     return id;
   }
   return {
-    async submit(raw, idempotencyKey) {
+    async submit(raw, idempotencyKey, sourcePath) {
       const input = SigningSubmissionSchema.parse(raw);
       if (!/^[A-Za-z0-9_.-]{16,128}$/.test(idempotencyKey))
         throw new Error("Invalid idempotency key.");
@@ -124,7 +124,44 @@ export function signingRequestClient({
         },
         body: JSON.stringify(input),
       });
-      return SigningRequestSchema.parse(result.request);
+      const state = SigningRequestSchema.parse(result.request);
+      if (state.state !== "accepted") return state;
+      const file = await open(sourcePath, "r");
+      try {
+        const info = await file.stat();
+        if (!info.isFile() || info.size !== input.sourceSize)
+          throw new Error("Source archive size does not match.");
+        const partSize = result.source.partSize;
+        const partCount = Math.ceil(input.sourceSize / partSize);
+        if (partSize !== 8 * 1024 * 1024 || result.source.partCount !== partCount)
+          throw new Error("Invalid source upload parameters.");
+        for (let part = 1; part <= partCount; part++) {
+          if (result.source.receivedParts.includes(part)) continue;
+          const start = (part - 1) * partSize;
+          const size = Math.min(partSize, input.sourceSize - start);
+          const bytes = Buffer.alloc(size);
+          const read = await file.read(bytes, 0, size, start);
+          if (read.bytesRead !== size) throw new Error("Source archive changed during upload.");
+          await json(endpoint(`/${requestId(state.id)}/source/parts/${part}`), {
+            method: "PUT",
+            headers: {
+              ...headers(),
+              "Content-Type": "application/octet-stream",
+              "Content-Length": String(size),
+              "Content-Range": `bytes ${start}-${start + size - 1}/${input.sourceSize}`,
+              "X-Part-Digest": `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+            },
+            body: bytes,
+          });
+        }
+      } finally {
+        await file.close();
+      }
+      const completed = await json(endpoint(`/${requestId(state.id)}/source/complete`), {
+        method: "POST",
+        headers: headers(),
+      });
+      return SigningRequestSchema.parse(completed.request);
     },
     async status(id) {
       return SigningRequestSchema.parse(
@@ -203,6 +240,7 @@ export async function main(args = process.argv.slice(2)) {
       origin: { type: "string" },
       repository: { type: "string" },
       input: { type: "string" },
+      source: { type: "string" },
       request: { type: "string" },
       run: { type: "string" },
       output: { type: "string" },
@@ -223,7 +261,11 @@ export async function main(args = process.argv.slice(2)) {
     if (!info.isFile() || info.size > 65_536) throw new Error("Signing input exceeds its limit.");
     const input = await readFile(values.input);
     if (input.length > 65_536) throw new Error("Signing input exceeds its limit.");
-    state = await client.submit(JSON.parse(input.toString("utf8")), values["idempotency-key"]);
+    state = await client.submit(
+      JSON.parse(input.toString("utf8")),
+      values["idempotency-key"],
+      values.source
+    );
   } else if (command === "retry") {
     state = await client.retry(values.request, values.run);
   } else if (["status", "download", "wait"].includes(command)) {

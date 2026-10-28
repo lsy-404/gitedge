@@ -62,3 +62,5 @@
 | 058 | [BugFix] [签名上下文续租](058.md) | 同步 SDK 上下文并部署，保留已有产物完成 IRIS 发布 | Windows 准备超过初始租约后拒绝启动 | ✅ 已完成 |
 | 059 | [BugFix] [小型主机科研预算恢复](059.md) | 按内存比例保留余量并提供只读预算状态 | 修复小型主机长期暂停补载 | ✅ 已完成 |
 | 060 | [BugFix] [设备健康读取契约修复](060.md) | 剥离未消费的设备报告新增字段 | 恢复新版devices的真实runner健康读取 | ✅ 已完成 |
+
+| 061 | [Feature] Signing transient source | Direct authenticated multipart upload and three-hour source retention | Remove GitHub artifact transport | ✅ 已完成 |
