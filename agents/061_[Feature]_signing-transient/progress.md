@@ -6,3 +6,4 @@ Updated the existing generic runner signing integration fixture for the source-r
 The signing Worker test passed 4/4 with a multipart source above 8 MiB. Began bounded sanitized Actions and Gateway live tail sessions for a future source upload.
 
 Required CI web locale check identified9 orphan messages in each language after recovery UI removal. Removed only these unused keys; existing i18n-messages7/7pass.
+Rebuilt web at c20a157 and deployed Gateway with preserved variables; version 3f77cd22-e6a1-4fa2-aca6-c74298abe41c read back at 100%. GitEdge CI run 40788328950 completed successfully. Production source upload for request c5bc5999-be84-45c7-bdc1-912230888eea sent 55 parts with HTTP 200 and source completion returned HTTP 202. The caller subsequently failed on an unrelated undefined local variable; its native sign stage completed successfully and finalize queued.
