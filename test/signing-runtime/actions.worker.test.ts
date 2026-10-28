@@ -1,4 +1,5 @@
 import { env } from "cloudflare:workers";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -609,6 +610,62 @@ describe("Actions signing Worker integration", () => {
       );
       expect(deletion.status).toBe(200);
       expect(await signingEnv.SIGNING_ARTIFACTS.head(outputKey)).toBeNull();
+      if (platform === "windows") {
+        const abandoned = await handleSigningRoute(
+          new Request(`https://actions.test/signing/requests?repositoryId=${repositoryId}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Idempotency-Key": "abandoned-source-0001",
+            },
+            body: JSON.stringify({
+              profile: selectedProfile.name,
+              platform,
+              sourceRepositoryId: "12345",
+              sourceCommitOid: commitOid,
+              sourceRunId: "12345",
+              sourceDigest,
+              sourceSize: sourceBytes.byteLength,
+              version: "1.2.3",
+            }),
+          }),
+          signingEnv,
+          trusted(owner),
+          hooks
+        );
+        expect(abandoned.status).toBe(202);
+        const abandonedId = ((await abandoned.json()) as { data: { request: { id: string } } }).data
+          .request.id;
+        const stub = signingEnv.SIGNING_COORDINATORS.getByName(owner.id);
+        const uploadId = await runInDurableObject(stub, (_instance, state) => {
+          const row = state.storage.sql
+            .exec<{ upload_id: string; expires_at: number; created_at: number }>(
+              "SELECT u.upload_id,u.expires_at,r.created_at FROM signing_source_uploads u JOIN signing_requests r ON r.id=u.request_id WHERE u.request_id=?",
+              abandonedId
+            )
+            .one();
+          expect(row.expires_at - row.created_at).toBeGreaterThanOrEqual(3 * 60 * 60 * 1000);
+          expect(row.expires_at - row.created_at).toBeLessThan(3 * 60 * 60 * 1000 + 10_000);
+          state.storage.sql.exec(
+            "UPDATE signing_source_uploads SET expires_at=? WHERE request_id=?",
+            Date.now() - 1,
+            abandonedId
+          );
+          return row.upload_id;
+        });
+        const key = `signing/${owner.id}/${repositoryId}/${abandonedId}/source.zip`;
+        await signingEnv.SIGNING_ARTIFACTS.put(key, sourceBytes);
+        expect(await runDurableObjectAlarm(stub)).toBe(true);
+        expect(await signingEnv.SIGNING_ARTIFACTS.head(key)).toBeNull();
+        await expect(
+          signingEnv.SIGNING_ARTIFACTS.resumeMultipartUpload(key, uploadId).uploadPart(
+            1,
+            sourceBytes
+          )
+        ).rejects.toThrow();
+        const failed = await stub.get(abandonedId, owner.id, repositoryId);
+        expect(failed?.state).toBe("failed");
+      }
     }
   );
 });
