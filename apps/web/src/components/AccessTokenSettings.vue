@@ -29,6 +29,26 @@ const { t, d } = useI18n();
 const route = useRoute();
 const MCP_SCOPES: readonly AccessTokenScope[] = ["repo:read", "issues:write", "pulls:write"];
 const mcpUrl = `${window.location.origin}${MCP_PATH}`;
+const gitCommands = [
+  ["oauthClientId", "gitedge-gcm"],
+  ["oauthAuthorizeEndpoint", "/git/authorize"],
+  ["oauthTokenEndpoint", "/api/auth/git-oauth/token"],
+  ["oauthScopes", "repo:read repo:write"],
+  ["oauthUseClientAuthHeader", "false"],
+]
+  .map(
+    ([key, value]) => `git config --global "credential.${window.location.origin}.${key}" "${value}"`
+  )
+  .join("\n");
+const gitCopied = ref(false);
+async function copyGitCommands(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(gitCommands);
+    gitCopied.value = true;
+  } catch (cause) {
+    actionError.value = errorMessage(cause, t);
+  }
+}
 const mcpCopied = ref(false);
 const mcpPreset = ref(false);
 const createdForMcp = ref(false);
@@ -249,6 +269,20 @@ onUnmounted(dispose);
       </div>
     </div>
 
+    <section class="box" aria-labelledby="git-browser-title">
+      <header class="box-header">
+        <h3 id="git-browser-title">{{ t("gitBrowserTitle") }}</h3>
+      </header>
+      <div class="box-form form-stack">
+        <p>{{ t("gitBrowserDescription") }}</p>
+        <pre class="git-commands"><code>{{ gitCommands }}</code></pre>
+        <div class="settings-actions">
+          <FluentButton type="button" tone="secondary" @click="copyGitCommands">{{
+            gitCopied ? t("settingsCopied") : t("gitBrowserCopy")
+          }}</FluentButton>
+        </div>
+      </div>
+    </section>
     <section class="box" aria-labelledby="pat-mcp-title">
       <header class="box-header">
         <h3 id="pat-mcp-title">{{ t("mcpTitle") }}</h3>
@@ -378,6 +412,10 @@ onUnmounted(dispose);
 </template>
 
 <style scoped>
+.git-commands {
+  overflow-x: auto;
+  white-space: pre;
+}
 .pat-mcp-url {
   display: grid;
   gap: var(--space-1);

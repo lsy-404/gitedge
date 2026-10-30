@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from "vue-router";
 const LandingView = () => import("./pages/LandingView.vue");
 const NotFoundView = () => import("./pages/NotFoundView.vue");
+const GitAuthorizeView = () => import("./pages/GitAuthorizeView.vue");
 const AuthView = () => import("./pages/AuthView.vue");
 const ForgotPasswordView = () => import("./pages/ForgotPasswordView.vue");
 const ResetPasswordView = () => import("./pages/ResetPasswordView.vue");
@@ -66,6 +67,7 @@ export const router = createRouter({
       component: InviteAcceptView,
       meta: { allowAnonymous: true, title: "inviteTitle" },
     },
+    { path: "/git/authorize", component: GitAuthorizeView, meta: { title: "gitAuthorizeTitle" } },
     { path: "/admin", component: AdminView, meta: { title: "adminTitle" } },
     { path: "/dashboard", component: DashboardView, meta: { title: "dashboard" } },
     { path: "/notifications", component: NotificationsView, meta: { title: "notifications" } },

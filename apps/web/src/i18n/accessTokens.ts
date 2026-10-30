@@ -1,5 +1,16 @@
 export const accessTokenMessages = {
   "zh-CN": {
+    gitAuthorizeTitle: "授权 Git 登录",
+    gitAuthorizeRequest: "{client} 请求访问你的仓库",
+    gitAuthorizeAccount: "当前账户：{account}",
+    gitAuthorizeRead: "读取你有权访问的仓库",
+    gitAuthorizeWrite: "写入和推送你有权访问的仓库",
+    gitAuthorizeAllow: "授权",
+    gitAuthorizeDeny: "拒绝",
+    gitBrowserTitle: "使用浏览器登录 Git",
+    gitBrowserDescription:
+      "安装 Git Credential Manager 2.6.1 或兼容通用 OAuth 的版本，在此电脑运行一次以下命令。Git 需要凭据时，在浏览器登录并授权；凭据保存在系统凭据存储中。可在下方令牌列表撤销授权。",
+    gitBrowserCopy: "复制配置命令",
     patTitle: "个人访问令牌",
     patSettings: "访问令牌",
     patDescription: "用于 Git 与 API 的访问令牌。克隆或推送时，用户名可任意填写，密码填写令牌。",
@@ -52,10 +63,21 @@ export const accessTokenMessages = {
     mcpTokenHint: "在 MCP 客户端配置中使用 Authorization: Bearer <此令牌> 连接上方的 MCP 地址。",
   },
   en: {
+    gitAuthorizeTitle: "Authorize Git sign-in",
+    gitAuthorizeRequest: "{client} wants access to your repositories",
+    gitAuthorizeAccount: "Signed in as {account}",
+    gitAuthorizeRead: "Read repositories you can access",
+    gitAuthorizeWrite: "Write and push to repositories you can access",
+    gitAuthorizeAllow: "Authorize",
+    gitAuthorizeDeny: "Deny",
+    gitBrowserTitle: "Sign in to Git with your browser",
+    gitBrowserDescription:
+      "Install Git Credential Manager 2.6.1 or a version supporting generic OAuth, then run these commands once on this computer. When Git needs credentials, sign in and authorize in your browser. Credentials are stored in your system credential store. Revoke access in the token list below.",
+    gitBrowserCopy: "Copy configuration commands",
     patTitle: "Personal access tokens",
     patSettings: "Access tokens",
     patDescription:
-      "Expiring tokens for Git and the API. When cloning or pushing, use any username and the token as the password.",
+      "Tokens for Git and the API. When cloning or pushing, use any username and the token as the password.",
     patCreate: "Create token",
     patName: "Token name",
     patScopes: "Scopes",

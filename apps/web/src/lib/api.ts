@@ -658,6 +658,13 @@ function actionsRepositoryPath(repositoryId: string, resource: string): string {
 }
 
 export const api = {
+  gitOAuthAuthorize: (query: string) =>
+    request<{ clientName: string; scopes: string[] }>(`/api/auth/git-oauth/authorize?${query}`),
+  gitOAuthDecision: (input: Record<string, string | boolean>) =>
+    request<{ redirectUrl: string }>("/api/auth/git-oauth/authorize", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
   browserAccounts: () => request<BrowserAccounts>("/api/auth/accounts"),
   switchBrowserAccount: (userId: string) =>
     request<{ switched: boolean }>("/api/auth/accounts/switch", {
