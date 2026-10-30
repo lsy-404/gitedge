@@ -224,6 +224,35 @@ describe("Account settings using Platform Kit", () => {
     expect(revoke).toHaveBeenCalledWith("pat-old");
     expect(list.mock.calls.length).toBeGreaterThan(1);
   });
+  it("can revoke an expired token but not an already revoked token", async () => {
+    const token = {
+      id: "expired",
+      name: "Expired login",
+      prefix: "gep_expired",
+      scopes: ["repo:read" as const],
+      repositories: null,
+      createdAt: 1,
+      expiresAt: 2,
+      lastUsedAt: null,
+      revokedAt: null,
+    };
+    vi.spyOn(api, "repositories").mockResolvedValue([]);
+    vi.spyOn(api, "accessTokens").mockResolvedValue([
+      token,
+      { ...token, id: "revoked", name: "Revoked login", revokedAt: 3 },
+    ]);
+    const revoke = vi.spyOn(api, "revokeAccessToken").mockResolvedValue({ revoked: true });
+    const mounted = await mountAt("/_verify/account/tokens", "/_verify/account/tokens", () =>
+      h(AccessTokenSettings)
+    );
+    const rows = Array.from(mounted.root.querySelectorAll(".settings-item"));
+    const expired = rows.find((row) => row.textContent?.includes("Expired login"));
+    const revoked = rows.find((row) => row.textContent?.includes("Revoked login"));
+    expect(expired?.textContent).toContain("Expired");
+    expect(revoked?.querySelector("button")).toBeNull();
+    await confirmClick(expired?.querySelector("button"));
+    expect(revoke).toHaveBeenCalledWith("expired");
+  });
   it("includes the existing account Runner once without creating it", async () => {
     const runnerRepository = {
       ...repository,

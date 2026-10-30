@@ -9,7 +9,7 @@ export const accessTokenMessages = {
     gitAuthorizeDeny: "拒绝",
     gitBrowserTitle: "使用浏览器登录 Git",
     gitBrowserDescription:
-      "安装 Git Credential Manager 2.6.1 或兼容通用 OAuth 的版本，在此电脑运行一次以下命令。Git 需要凭据时，在浏览器登录并授权；凭据保存在系统凭据存储中。可在下方令牌列表撤销授权。",
+      "安装 Git Credential Manager 2.6.1 或兼容通用 OAuth 的版本，在此电脑运行一次以下命令。Git 需要凭据时，在浏览器登录并授权；凭据保存在系统凭据存储中。短期访问令牌会自动续期；即使列表中显示已到期，也可撤销整个网页登录授权。",
     gitBrowserCopy: "复制配置命令",
     patTitle: "个人访问令牌",
     patSettings: "访问令牌",
@@ -72,7 +72,7 @@ export const accessTokenMessages = {
     gitAuthorizeDeny: "Deny",
     gitBrowserTitle: "Sign in to Git with your browser",
     gitBrowserDescription:
-      "Install Git Credential Manager 2.6.1 or a version supporting generic OAuth, then run these commands once on this computer. When Git needs credentials, sign in and authorize in your browser. Credentials are stored in your system credential store. Revoke access in the token list below.",
+      "Install Git Credential Manager 2.6.1 or a version supporting generic OAuth, then run these commands once on this computer. When Git needs credentials, sign in and authorize in your browser. Credentials are stored in your system credential store. Short-lived access tokens renew automatically; you can revoke the entire browser sign-in authorization even when its token is shown as expired.",
     gitBrowserCopy: "Copy configuration commands",
     patTitle: "Personal access tokens",
     patSettings: "Access tokens",

@@ -121,10 +121,6 @@ function statusTone(token: AccessToken): "neutral" | "success" | "danger" {
   return token.expiresAt !== null && token.expiresAt <= now.value ? "danger" : "success";
 }
 
-function isActive(token: AccessToken): boolean {
-  return token.revokedAt === null && (token.expiresAt === null || token.expiresAt > now.value);
-}
-
 function clearOneTime(): void {
   oneTime.value = null;
   copied.value = false;
@@ -397,7 +393,7 @@ onUnmounted(dispose);
           </div>
           <div class="settings-actions">
             <ConfirmButton
-              v-if="isActive(token)"
+              v-if="token.revokedAt === null"
               :label="t('patRevoke')"
               :prompt="t('patRevokePrompt')"
               :busy="revokingId === token.id"
