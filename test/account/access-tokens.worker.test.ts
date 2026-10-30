@@ -50,7 +50,7 @@ const CreatedSchema = z.object({
     repositories: z
       .array(z.object({ id: z.string(), owner: z.string(), slug: z.string() }))
       .nullable(),
-    expiresAt: z.number(),
+    expiresAt: z.number().nullable(),
   }),
 });
 const ListSchema = z.object({
@@ -187,8 +187,31 @@ describe("personal access token lifecycle", () => {
     ])
       expect((await account("/access-tokens", "POST", aliceCookie, body)).status).toBe(400);
     const created = await mint(aliceCookie, ["repo:read"]);
-    expect(created.expiresAt - Date.now()).toBeGreaterThan(29 * 86_400_000);
-    expect(created.expiresAt - Date.now()).toBeLessThanOrEqual(30 * 86_400_000);
+    expect((created.expiresAt ?? 0) - Date.now()).toBeGreaterThan(29 * 86_400_000);
+    expect((created.expiresAt ?? 0) - Date.now()).toBeLessThanOrEqual(30 * 86_400_000);
+  });
+
+  it("supports permanent tokens across listing, authentication and revocation", async () => {
+    const created = await mint(aliceCookie, ["repo:read"], {
+      expiresInDays: null,
+      repositoryIds: ["r1"],
+    });
+    expect(created.expiresAt).toBeNull();
+    const listed = await (await account("/access-tokens", "GET", aliceCookie)).json();
+    expect(listed).toMatchObject({
+      data: expect.arrayContaining([expect.objectContaining({ id: created.id, expiresAt: null })]),
+    });
+    expect((await sessionFor(created.token)).status).toBe(200);
+    expect((await gitSession(basic("x", created.token), "demo")).status).toBe(200);
+    expect((await gitSession(basic("x", created.token), "other")).status).not.toBe(200);
+    await env.DB.prepare("UPDATE users SET disabled_at = ? WHERE id = 'alice-id'")
+      .bind(Date.now())
+      .run();
+    expect((await sessionFor(created.token)).status).toBe(401);
+    await env.DB.prepare("UPDATE users SET disabled_at = NULL WHERE id = 'alice-id'").run();
+    expect((await account(`/access-tokens/${created.id}`, "DELETE", aliceCookie)).status).toBe(200);
+    expect((await sessionFor(created.token)).status).toBe(401);
+    expect((await gitSession(basic("x", created.token), "demo")).status).toBe(401);
   });
 
   it("rejects repositories the creator cannot access", async () => {
@@ -318,7 +341,7 @@ describe("personal access token lifecycle", () => {
     const rows = Array.from(
       { length: 100 },
       (_, index) =>
-        `('cap-${index}','bob-id','cap','cap-hash-${index}','gep_cap','["repo:read"]',NULL,${now + 86_400_000},NULL,NULL,${now})`
+        `('cap-${index}','bob-id','cap','cap-hash-${index}','gep_cap','["repo:read"]',NULL,${index === 0 ? 0 : now + 86_400_000},NULL,NULL,${now})`
     ).join(",");
     await runSqlScript(
       env.DB,

@@ -97,7 +97,7 @@ const graphMaxLimit = 250;
 const graphLimit = ref(graphPageSize);
 const loadingMore = ref(false);
 const moreError = ref("");
-const token = ref<{ token: string; expiresAt: number } | null>(null);
+const token = ref<{ token: string; expiresAt: number | null } | null>(null);
 const cloneUrl = computed(() =>
   gatewayCloneUrl(window.location.origin, props.repository.owner, props.repository.name)
 );
@@ -906,7 +906,13 @@ onUnmounted(() => {
     <div v-if="token" class="token-once box box-form" role="status">
       <div>
         <strong>{{ t("tokenShownOnce") }}</strong>
-        <p>{{ t("tokenExpiry", { date: d(token.expiresAt, "long") }) }}</p>
+        <p>
+          {{
+            t("tokenExpiry", {
+              date: token.expiresAt === null ? t("patNeverExpires") : d(token.expiresAt, "long"),
+            })
+          }}
+        </p>
       </div>
       <code>{{ token.token }}</code>
       <p>{{ t("patPasteHint") }}</p>

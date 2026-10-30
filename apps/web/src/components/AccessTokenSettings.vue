@@ -46,19 +46,20 @@ const actionError = ref("");
 const reauth = useReauthRetry();
 const creating = ref(false);
 const revokingId = ref("");
-const oneTime = ref<{ token: string; expiresAt: number } | null>(null);
+const oneTime = ref<{ token: string; expiresAt: number | null } | null>(null);
 const copied = ref(false);
 const now = ref(Date.now());
 let copiedTimer: number | undefined;
 let mcpCopiedTimer: number | undefined;
 let clockTimer: number | undefined;
 
-const expiryOptions = computed<readonly FluentSelectOption[]>(() =>
-  ACCESS_TOKEN_EXPIRY_PRESET_DAYS.map((days) => ({
+const expiryOptions = computed<readonly FluentSelectOption[]>(() => [
+  ...ACCESS_TOKEN_EXPIRY_PRESET_DAYS.map((days) => ({
     value: String(days),
     label: t("patDays", { days }),
-  }))
-);
+  })),
+  { value: "never", label: t("patNeverExpires") },
+]);
 const repositoryModeOptions = computed<readonly FluentSelectOption[]>(() => [
   { value: "all", label: t("patRepositoriesAll") },
   { value: "selected", label: t("patRepositoriesSelected") },
@@ -90,16 +91,18 @@ function toggleRepository(id: string, checked: boolean): void {
 
 function statusLabel(token: AccessToken): string {
   if (token.revokedAt !== null) return t("patRevoked");
-  return token.expiresAt <= now.value ? t("patExpired") : t("patActive");
+  return token.expiresAt !== null && token.expiresAt <= now.value
+    ? t("patExpired")
+    : t("patActive");
 }
 
 function statusTone(token: AccessToken): "neutral" | "success" | "danger" {
   if (token.revokedAt !== null) return "neutral";
-  return token.expiresAt <= now.value ? "danger" : "success";
+  return token.expiresAt !== null && token.expiresAt <= now.value ? "danger" : "success";
 }
 
 function isActive(token: AccessToken): boolean {
-  return token.revokedAt === null && token.expiresAt > now.value;
+  return token.revokedAt === null && (token.expiresAt === null || token.expiresAt > now.value);
 }
 
 function clearOneTime(): void {
@@ -160,7 +163,7 @@ async function createToken(): Promise<void> {
     const created = await api.createAccessToken({
       name: name.value.trim(),
       scopes: selectedScopes.value,
-      expiresInDays: Number(expiryDays.value),
+      expiresInDays: expiryDays.value === "never" ? null : Number(expiryDays.value),
       ...(repositoryMode.value === "selected" ? { repositoryIds: selectedRepositories.value } : {}),
     });
     oneTime.value = { token: created.token, expiresAt: created.expiresAt };
@@ -344,7 +347,12 @@ onUnmounted(dispose);
                 token.repositories.map((item) => `${item.owner}/${item.slug}`).join(", ") ||
                 t("patRepositoriesSelected")
               }}</span>
-              <span>{{ t("patExpires") }}: {{ d(token.expiresAt, "long") }}</span>
+              <span
+                >{{ t("patExpires") }}:
+                {{
+                  token.expiresAt === null ? t("patNeverExpires") : d(token.expiresAt, "long")
+                }}</span
+              >
               <span
                 >{{ t("patLastUsed") }}:
                 {{

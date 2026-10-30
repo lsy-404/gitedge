@@ -78,6 +78,9 @@ describe("access token scopes", () => {
   it("requires a bounded expiry and unique scopes", () => {
     const valid = { name: "ci", scopes: ["repo:read"], expiresInDays: 365 };
     expect(CreateAccessTokenInputSchema.safeParse(valid).success).toBe(true);
+    expect(CreateAccessTokenInputSchema.safeParse({ ...valid, expiresInDays: null }).success).toBe(
+      true
+    );
     expect(CreateAccessTokenInputSchema.safeParse({ ...valid, expiresInDays: 366 }).success).toBe(
       false
     );

@@ -37,7 +37,7 @@ export const CreateAccessTokenInputSchema = z
       .max(ACCESS_TOKEN_MAX_REPOSITORIES)
       .refine((ids) => new Set(ids).size === ids.length)
       .optional(),
-    expiresInDays: z.number().int().min(1).max(ACCESS_TOKEN_MAX_DAYS),
+    expiresInDays: z.number().int().min(1).max(ACCESS_TOKEN_MAX_DAYS).nullable(),
   })
   .strict();
 export type CreateAccessTokenInput = z.infer<typeof CreateAccessTokenInputSchema>;
@@ -54,7 +54,7 @@ export interface AccessToken {
   scopes: AccessTokenScope[];
   repositories: AccessTokenRepository[] | null;
   createdAt: number;
-  expiresAt: number;
+  expiresAt: number | null;
   lastUsedAt: number | null;
   revokedAt: number | null;
 }

@@ -64,3 +64,4 @@
 | 060 | [BugFix] [设备健康读取契约修复](060.md) | 剥离未消费的设备报告新增字段 | 恢复新版devices的真实runner健康读取 | ✅ 已完成 |
 
 | 061 | [Feature] Signing transient source | Direct authenticated multipart upload and three-hour source retention | Remove GitHub artifact transport | ✅ 已完成 |
+| 062 | [Feature] Permanent access tokens | Add revocable permanent access tokens | Support long-lived credentials | ✅ 已完成 |

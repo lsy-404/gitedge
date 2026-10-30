@@ -159,7 +159,7 @@ describe("Account settings using Platform Kit", () => {
       scopes: ["repo:write" as const],
       repositories: [{ id: "repo-1", owner: "workspace", slug: "app" }],
       createdAt: 1,
-      expiresAt: Date.now() + 86_400_000,
+      expiresAt: null,
       lastUsedAt: null,
       revokedAt: null,
     };
@@ -181,7 +181,29 @@ describe("Account settings using Platform Kit", () => {
     expect(mounted.root.textContent).toContain("gep_deadbeef");
     expect(mounted.root.textContent).toContain("workspace/app");
     expect(mounted.root.textContent).toContain("Never used");
+    expect(mounted.root.textContent).toContain("Never expires");
 
+    expect(mounted.root.querySelector<HTMLElement>('[role="combobox"]')?.textContent).toContain(
+      "30"
+    );
+    Object.defineProperty(HTMLElement.prototype, "showPopover", {
+      configurable: true,
+      value: () => {},
+    });
+    Object.defineProperty(HTMLElement.prototype, "hidePopover", {
+      configurable: true,
+      value: () => {},
+    });
+    mounted.root.querySelector<HTMLElement>('[role="combobox"]')?.click();
+    await settle();
+    const never = Array.from(document.querySelectorAll<HTMLElement>('[role="option"]')).find(
+      (item) => item.textContent?.trim() === "Never expires"
+    );
+    expect(never).toBeDefined();
+    never?.click();
+    await settle();
+    Reflect.deleteProperty(HTMLElement.prototype, "showPopover");
+    Reflect.deleteProperty(HTMLElement.prototype, "hidePopover");
     fill(control(mounted.root, "input"), "CI");
     await settle();
     submit(control(mounted.root, "form"));
@@ -189,7 +211,7 @@ describe("Account settings using Platform Kit", () => {
     expect(create).toHaveBeenCalledWith({
       name: "CI",
       scopes: ["repo:read"],
-      expiresInDays: 30,
+      expiresInDays: null,
     });
     expect(mounted.root.querySelector<HTMLInputElement>("input[readonly]")?.value).toBe(
       `gep_${"e".repeat(64)}`

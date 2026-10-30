@@ -87,7 +87,7 @@ const SECTIONS: readonly Section[] = [
   {
     key: "accessTokens",
     select:
-      "id, name, prefix, scopes_json AS scopes, expires_at AS expiresAt, last_used_at AS lastUsedAt, revoked_at AS revokedAt, created_at AS createdAt",
+      "id, name, prefix, scopes_json AS scopes, NULLIF(expires_at, 0) AS expiresAt, last_used_at AS lastUsedAt, revoked_at AS revokedAt, created_at AS createdAt",
     from: "auth_access_tokens",
     owner: "user_id",
     created: "created_at",

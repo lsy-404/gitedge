@@ -77,7 +77,7 @@ export async function authenticateAccessToken(
   if (!isAccessToken(token)) return null;
   const now = Date.now();
   const row = await env.DB.prepare(
-    "SELECT t.id, t.last_used_at AS lastUsedAt, t.scopes_json AS scopesJson, t.repository_ids_json AS repositoryIdsJson, u.id AS userId, u.identifier, u.group_key AS groupKey FROM auth_access_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ? AND t.revoked_at IS NULL AND t.expires_at > ? AND u.disabled_at IS NULL"
+    "SELECT t.id, t.last_used_at AS lastUsedAt, t.scopes_json AS scopesJson, t.repository_ids_json AS repositoryIdsJson, u.id AS userId, u.identifier, u.group_key AS groupKey FROM auth_access_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ? AND t.revoked_at IS NULL AND (t.expires_at = 0 OR t.expires_at > ?) AND u.disabled_at IS NULL"
   )
     .bind(await sha256Hex(token), now)
     .first<AuthenticatedAccessTokenRow>();
@@ -115,7 +115,7 @@ function tokenResponse(
     scopes: parseScopes(row.scopesJson),
     repositories: row.repositoryIdsJson === null ? null : (repositories.get(row.id) ?? []),
     createdAt: row.createdAt,
-    expiresAt: row.expiresAt,
+    expiresAt: row.expiresAt === 0 ? null : row.expiresAt,
     lastUsedAt: row.lastUsedAt,
     revokedAt: row.revokedAt,
   };
@@ -170,11 +170,11 @@ async function createToken(
   const now = Date.now();
   const token = ACCESS_TOKEN_PREFIX + randomHex(32);
   const id = crypto.randomUUID();
-  const expiresAt = now + input.expiresInDays * 86_400_000;
+  const expiresAt = input.expiresInDays === null ? null : now + input.expiresInDays * 86_400_000;
   const prefix = token.slice(0, DISPLAY_PREFIX_LENGTH);
   // The count guard lives in the INSERT so concurrent requests cannot exceed the active limit.
   const inserted = await env.DB.prepare(
-    "INSERT INTO auth_access_tokens (id, user_id, name, token_hash, prefix, scopes_json, repository_ids_json, expires_at, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM auth_access_tokens WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?) < ?"
+    "INSERT INTO auth_access_tokens (id, user_id, name, token_hash, prefix, scopes_json, repository_ids_json, expires_at, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM auth_access_tokens WHERE user_id = ? AND revoked_at IS NULL AND (expires_at = 0 OR expires_at > ?)) < ?"
   )
     .bind(
       id,
@@ -184,7 +184,7 @@ async function createToken(
       prefix,
       JSON.stringify(input.scopes),
       repositoryIdsJson,
-      expiresAt,
+      expiresAt ?? 0,
       now,
       user.id,
       now,
