@@ -341,12 +341,17 @@ describe("personal access token lifecycle", () => {
     const rows = Array.from(
       { length: 100 },
       (_, index) =>
-        `('cap-${index}','bob-id','cap','cap-hash-${index}','gep_cap','["repo:read"]',NULL,${index === 0 ? 0 : now + 86_400_000},NULL,NULL,${now})`
+        `('cap-${index}','bob-id','cap','cap-hash-${index}','gep_cap','["repo:read"]',NULL,${index === 0 ? now - 1 : now + 86_400_000},NULL,NULL,${now})`
     ).join(",");
     await runSqlScript(
       env.DB,
       `INSERT INTO auth_access_tokens (id,user_id,name,token_hash,prefix,scopes_json,repository_ids_json,expires_at,last_used_at,revoked_at,created_at) VALUES ${rows};`
     );
+    await env.DB.prepare(
+      "INSERT INTO auth_git_oauth_refresh (token_hash,access_id,expires_at,consumed_at) VALUES (?,?,?,?)"
+    )
+      .bind("cap-refresh", "cap-0", now + 86_400_000, now)
+      .run();
     const refused = await account("/access-tokens", "POST", bobCookie, {
       name: "x",
       scopes: ["repo:read"],

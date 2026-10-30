@@ -25,7 +25,11 @@ const client: OAuth2Server.Client = {
   redirectUris: ["http://127.0.0.1/"],
 };
 const scopes = z.array(z.enum(["repo:read", "repo:write"])).min(1);
-const OAuthUser = z.object({ id: z.string(), accessId: z.string().optional() });
+const OAuthUser = z.object({
+  id: z.string(),
+  accessId: z.string().optional(),
+  refreshHash: z.string().optional(),
+});
 interface Env {
   DB: D1Database;
   LOG_LEVEL?: string;
@@ -128,7 +132,7 @@ function model(env: Env): OAuth2Server.AuthorizationCodeModel & OAuth2Server.Ref
     },
     async getRefreshToken(value) {
       const row = await env.DB.prepare(
-        "SELECT t.user_id AS userId,t.id AS accessId,t.scopes_json AS scopesJson,r.expires_at AS expiresAt FROM auth_git_oauth_refresh r JOIN auth_access_tokens t ON t.id=r.access_id JOIN users u ON u.id=t.user_id WHERE r.token_hash=? AND r.expires_at>? AND t.revoked_at IS NULL AND u.disabled_at IS NULL"
+        "SELECT t.user_id AS userId,t.id AS accessId,t.scopes_json AS scopesJson,r.expires_at AS expiresAt FROM auth_git_oauth_refresh r JOIN auth_access_tokens t ON t.id=r.access_id JOIN users u ON u.id=t.user_id WHERE r.token_hash=? AND r.expires_at>? AND r.consumed_at IS NULL AND t.revoked_at IS NULL AND u.disabled_at IS NULL"
       )
         .bind(await sha256Hex(value), Date.now())
         .first<RefreshRow>();
@@ -138,14 +142,14 @@ function model(env: Env): OAuth2Server.AuthorizationCodeModel & OAuth2Server.Ref
         refreshTokenExpiresAt: new Date(row.expiresAt),
         scope: scopes.parse(JSON.parse(row.scopesJson)),
         client,
-        user: { id: row.userId, accessId: row.accessId },
+        user: { id: row.userId, accessId: row.accessId, refreshHash: await sha256Hex(value) },
       };
     },
     async revokeToken(token) {
       const result = await env.DB.prepare(
-        "DELETE FROM auth_git_oauth_refresh WHERE token_hash=? AND expires_at>?"
+        "UPDATE auth_git_oauth_refresh SET consumed_at=? WHERE token_hash=? AND expires_at>? AND consumed_at IS NULL"
       )
-        .bind(await sha256Hex(token.refreshToken), Date.now())
+        .bind(Date.now(), await sha256Hex(token.refreshToken), Date.now())
         .run();
       return result.meta.changes === 1;
     },
@@ -192,11 +196,19 @@ function model(env: Env): OAuth2Server.AuthorizationCodeModel & OAuth2Server.Ref
           .run();
         if (result.meta.changes !== 1) return false;
       }
-      const inserted = await env.DB.prepare(
+      const insertRefresh = env.DB.prepare(
         "INSERT INTO auth_git_oauth_refresh (token_hash,access_id,expires_at) SELECT ?,?,? WHERE EXISTS (SELECT 1 FROM auth_access_tokens t JOIN users u ON u.id=t.user_id WHERE t.id=? AND t.revoked_at IS NULL AND u.disabled_at IS NULL)"
-      )
-        .bind(refreshHash, id, token.refreshTokenExpiresAt.getTime(), id)
-        .run();
+      ).bind(refreshHash, id, token.refreshTokenExpiresAt.getTime(), id);
+      const inserted = u.refreshHash
+        ? (
+            await env.DB.batch([
+              insertRefresh,
+              env.DB.prepare(
+                "DELETE FROM auth_git_oauth_refresh WHERE token_hash=? AND consumed_at IS NOT NULL AND changes()=1"
+              ).bind(u.refreshHash),
+            ])
+          )[0]
+        : await insertRefresh.run();
       if (inserted.meta.changes !== 1) return false;
       createLogger(env.LOG_LEVEL, { service: "auth" }).info(
         u.accessId ? "auth:git-oauth-refreshed" : "auth:git-oauth-issued",

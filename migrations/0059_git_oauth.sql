@@ -9,7 +9,8 @@ CREATE TABLE auth_git_oauth_codes (
 CREATE TABLE auth_git_oauth_refresh (
   token_hash TEXT PRIMARY KEY NOT NULL,
   access_id TEXT NOT NULL REFERENCES auth_access_tokens(id) ON DELETE CASCADE,
-  expires_at INTEGER NOT NULL
+  expires_at INTEGER NOT NULL,
+  consumed_at INTEGER
 );
 CREATE INDEX idx_git_oauth_codes_expiry ON auth_git_oauth_codes(expires_at);
 CREATE INDEX idx_git_oauth_refresh_expiry ON auth_git_oauth_refresh(expires_at);

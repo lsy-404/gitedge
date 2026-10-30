@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
+import { sha256Hex } from "../../packages/contracts/src/index";
 import { gitOAuthAuthorize, gitOAuthToken } from "../../workers/auth/src/git-oauth";
 import { authenticateAccessToken } from "../../workers/auth/src/access-tokens";
 import { runSqlScript } from "../support/database";
@@ -44,8 +45,8 @@ function token(body: Record<string, string>) {
     env
   );
 }
-async function code() {
-  const response = await authorization("POST", { ...params, approve: true });
+async function code(scope = params.scope) {
+  const response = await authorization("POST", { ...params, scope, approve: true });
   expect(response.status).toBe(200);
   const json = (await response.json()) as { data: { redirectUrl: string } };
   return new URL(json.data.redirectUrl).searchParams.get("code")!;
@@ -139,5 +140,59 @@ describe("Git OAuth replay protection", () => {
       400
     );
     expect((await token({ ...form, code: nextCode })).status).toBe(400);
+  });
+});
+
+describe("Git OAuth authorization boundaries", () => {
+  async function issue(scope = "repo:read") {
+    const authCode = await code(scope);
+    const response = await token({
+      grant_type: "authorization_code",
+      code: authCode,
+      redirect_uri: params.redirect_uri,
+      code_verifier: verifier,
+    });
+    expect(response.status).toBe(200);
+    return (await response.json()) as { access_token: string; refresh_token: string };
+  }
+  it("allows only one concurrent refresh", async () => {
+    const issued = await issue();
+    const form = { grant_type: "refresh_token", refresh_token: issued.refresh_token };
+    const responses = await Promise.all([token(form), token(form)]);
+    expect(responses.map((r) => r.status).sort()).toEqual([200, 400]);
+  });
+  it("rejects scope expansion without consuming refresh", async () => {
+    const issued = await issue();
+    const form = { grant_type: "refresh_token", refresh_token: issued.refresh_token };
+    const denied = await token({ ...form, scope: "repo:read repo:write" });
+    expect(denied.status).toBe(400);
+    expect(await denied.json()).toMatchObject({ error: "invalid_scope" });
+    expect((await token(form)).status).toBe(200);
+  });
+  it("rejects expired authorization codes", async () => {
+    const authCode = await code();
+    await env.DB.prepare("UPDATE auth_git_oauth_codes SET expires_at=? WHERE code_hash=?")
+      .bind(Date.now() - 1, await sha256Hex(authCode))
+      .run();
+    expect(
+      (
+        await token({
+          grant_type: "authorization_code",
+          code: authCode,
+          redirect_uri: params.redirect_uri,
+          code_verifier: verifier,
+        })
+      ).status
+    ).toBe(400);
+  });
+  it("rejects refresh while the user is disabled", async () => {
+    const issued = await issue();
+    await env.DB.prepare("UPDATE users SET disabled_at=? WHERE id=?")
+      .bind(Date.now(), user.id)
+      .run();
+    expect(
+      (await token({ grant_type: "refresh_token", refresh_token: issued.refresh_token })).status
+    ).toBe(400);
+    await env.DB.prepare("UPDATE users SET disabled_at=NULL WHERE id=?").bind(user.id).run();
   });
 });
