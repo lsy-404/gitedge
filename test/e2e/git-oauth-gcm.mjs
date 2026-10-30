@@ -96,6 +96,7 @@ const server = createServer(async (request, response) => {
       });
       response.writeHead(result.status, {
         "Content-Type": result.headers.get("content-type") ?? "application/json",
+        "Cache-Control": result.headers.get("cache-control") ?? "no-store",
       });
       response.end(Buffer.from(await result.arrayBuffer()));
       return;
@@ -153,7 +154,7 @@ try {
     ...process.env,
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_CONFIG_GLOBAL: path.join(scratch, "empty-config"),
-    GCM_ALLOW_HTTP: "true",
+    GCM_ALLOW_UNSAFE_REMOTES: "true",
     GIT_TERMINAL_PROMPT: "0",
     GIT_CONFIG_COUNT: String(Object.keys(options).length),
   };
