@@ -43,6 +43,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
+    "@node-oauth/oauth2-server": "^5.3.1",
     "@node-saml/node-saml": "^5.1.0",
     "@simplewebauthn/server": "^14.0.3",
     "@xmldom/xmldom": "^0.8.15",

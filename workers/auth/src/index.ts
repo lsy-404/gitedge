@@ -1,3 +1,4 @@
+import { expireGitOAuth, gitOAuthAuthorize, gitOAuthToken } from "./git-oauth";
 import {
   browserAccountLogout,
   handleBrowserAccounts,
@@ -625,6 +626,7 @@ export default {
     const logger = createLogger(env.LOG_LEVEL, { service: "auth" });
     const path = new URL(request.url).pathname;
     if (request.method === "GET" && path === "/internal/health") return dataResponse({ ok: true });
+    if (path === "/git-oauth/token") return gitOAuthToken(request, env);
     if (path === "/internal/actions-job-token") return issueActionJobToken(request, env);
     const deferred: Promise<void>[] = [];
     let humanSession: Promise<ServiceResult<SessionData>> | undefined;
@@ -907,6 +909,11 @@ export default {
       }
       return errorResponse(405, "method_not_allowed", "Method is not allowed.");
     }
+    if (path === "/git-oauth/authorize") {
+      const active = await getHumanSession();
+      if (!active.ok) return errorResponse(active.status, active.error.code, active.error.message);
+      return gitOAuthAuthorize(request, env, active.data);
+    }
     if (path === "/access-tokens" || path.startsWith("/access-tokens/")) {
       const active = await getHumanSession();
       if (!active.ok) return errorResponse(active.status, active.error.code, active.error.message);
@@ -928,6 +935,7 @@ export default {
       : errorResponse(405, "method_not_allowed", "Method is not allowed.");
   },
   async scheduled(_controller: ScheduledController, env: AuthEnv): Promise<void> {
+    await expireGitOAuth(env);
     await expireAccessBans(env);
     await drainAgentEventOutbox(env);
   },

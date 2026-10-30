@@ -174,7 +174,7 @@ async function createToken(
   const prefix = token.slice(0, DISPLAY_PREFIX_LENGTH);
   // The count guard lives in the INSERT so concurrent requests cannot exceed the active limit.
   const inserted = await env.DB.prepare(
-    "INSERT INTO auth_access_tokens (id, user_id, name, token_hash, prefix, scopes_json, repository_ids_json, expires_at, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM auth_access_tokens WHERE user_id = ? AND revoked_at IS NULL AND (expires_at = 0 OR expires_at > ?)) < ?"
+    "INSERT INTO auth_access_tokens (id, user_id, name, token_hash, prefix, scopes_json, repository_ids_json, expires_at, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM auth_access_tokens WHERE user_id = ? AND revoked_at IS NULL AND (expires_at = 0 OR expires_at > ? OR EXISTS (SELECT 1 FROM auth_git_oauth_refresh r WHERE r.access_id = auth_access_tokens.id AND r.expires_at > ?))) < ?"
   )
     .bind(
       id,
@@ -187,6 +187,7 @@ async function createToken(
       expiresAt ?? 0,
       now,
       user.id,
+      now,
       now,
       MAX_ACTIVE_TOKENS
     )
