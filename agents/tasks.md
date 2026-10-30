@@ -65,5 +65,5 @@
 
 | 061 | [Feature] Signing transient source | Direct authenticated multipart upload and three-hour source retention | Remove GitHub artifact transport | ✅ 已完成 |
 | 062 | [Feature] Permanent access tokens | Add revocable permanent access tokens | Support long-lived credentials | ✅ 已完成 |
-
 | 065 | [Feature] Git browser authorization | Browser consent and Git configuration | Enable browser-based Git sign-in | ✅ 已完成 |
+| 066 | [Test] GCM browser flow | Exercise real GCM against local OAuth | Verify client interoperability | 🔄 进行中 |
