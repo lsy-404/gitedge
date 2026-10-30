@@ -17,12 +17,10 @@ afterEach(async () => {
 });
 describe("Git browser authorization", () => {
   it("displays validated client, account and scopes and submits a decision", async () => {
-    const get = vi
-      .spyOn(api, "gitOAuthAuthorize")
-      .mockResolvedValue({
-        clientName: "Git Credential Manager",
-        scopes: ["repo:read", "repo:write"],
-      });
+    const get = vi.spyOn(api, "gitOAuthAuthorize").mockResolvedValue({
+      clientName: "Git Credential Manager",
+      scopes: ["repo:read", "repo:write"],
+    });
     const post = vi.spyOn(api, "gitOAuthDecision").mockRejectedValue(new Error("failed"));
     const path = "/_verify/git-oauth?client_id=gitedge-gcm&state=abc";
     const mounted = await mountAt("/_verify/git-oauth", path, () => h(GitAuthorizeView));

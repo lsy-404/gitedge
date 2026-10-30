@@ -1,0 +1,16 @@
+# Progress
+- Read project rules and agent-mode workflow; read-only inspection of current authentication contracts and UI.
+- Inspected git status/worktree list and fetched origin/main; original checkout remains untouched.
+- Created isolated permanent-pat and pat-delivery worktrees from main.
+- Delegated browser-authentication investigation and permanent-token implementation separately.
+- Queried GitHub main protection and verified protected=false.
+- Reviewed and cherry-picked the permanent-token implementation as 054d936.
+- User explicitly confirmed browser login should be implemented in the same task; created backend and UI worktrees and delegated these components separately.
+- Integrated the OAuth UI, backend, expired-token revocation, refresh-quota repair and native-client test harness; resolved only shared task-index conflicts while preserving all entries.
+- Installed frozen root and web dependencies in the delivery worktree.
+- Ran 24 related Workers tests and four contract tests successfully; ran Auth/Gateway/Web type checks and frontend production build successfully.
+- Ran UI tests: nine passed, one pre-existing Windows sign-out failure; baseline reproduction was performed in a separate worktree.
+- Ran actual GCM 2.6.1 against the loopback Auth worker host; browser authorization and refresh passed without exposing credentials.
+- Ran touched-file Prettier checks; normalized the OAuth UI test formatting. Explicit SQL input is unsupported by Prettier; schema consistency check passed.
+- Full stack dry run stopped at the unchanged Docker-dependent Actions worker; separate Auth/Gateway dry runs succeeded.
+- Stopped the test host process tree and rechecked remote main SHA/protection before delivery.
