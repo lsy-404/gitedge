@@ -106,6 +106,7 @@ const runsSelect = `SELECT a.*, j.*, n.slug AS owner, p.slug AS repository, p.na
   JOIN actions_runner_runs j ON j.run_id = a.id JOIN repositories p ON p.id = a.repository_id
   JOIN namespaces n ON n.id = p.namespace_id`;
 const tokenPattern = /^Bearer (ge_runner_[0-9a-f]{64})$/i;
+const executionTokenPattern = /^Bearer ge_exec_([0-9a-f-]{36})_([0-9a-f]{64})$/i;
 
 function labels(json: string): string[] {
   return z.array(z.string()).parse(JSON.parse(json));
@@ -156,6 +157,8 @@ export async function authenticateRunner(
   request: Request,
   env: RunnerEnv
 ): Promise<RunnerRow | null> {
+  const execution = executionTokenPattern.exec(request.headers.get("Authorization") ?? "");
+  if (execution) return authenticateExecutionLease(request, env, execution[1], execution[2]);
   const token = tokenPattern.exec(request.headers.get("Authorization") ?? "")?.[1];
   if (!token) return null;
   const row = await env.DB.prepare(
@@ -164,6 +167,69 @@ export async function authenticateRunner(
     AND (r.repository_id IS NULL OR (p.deleted_at IS NULL AND p.namespace_id = r.namespace_id))`
   )
     .bind(await sha256Hex(token))
+    .first<RunnerRow>();
+  return row && (await ownsScope(env, row.created_by, row.namespace_id, row.repository_id))
+    ? row
+    : null;
+}
+
+async function authenticateExecutionLease(
+  request: Request,
+  env: RunnerEnv,
+  runId: string,
+  leaseToken: string
+): Promise<RunnerRow | null> {
+  if (request.method !== "POST" || !z.string().uuid().safeParse(runId).success) return null;
+  const pathname = new URL(request.url).pathname;
+  const github = /^\/runner\/github\/(heartbeat|complete)$/.test(pathname);
+  const native = /^\/runner\/(heartbeat|complete)$/.test(pathname);
+  const signing = /^\/runner\/signing\/requests\/([0-9a-f-]{36})\/(heartbeat|fail)$/i.exec(
+    pathname
+  );
+  if (!github && !native && !signing) return null;
+  if (signing) {
+    if (request.headers.get("X-Runner-Run-Id") !== runId) return null;
+  } else {
+    const input = RunnerLeaseInputSchema.strip().safeParse(
+      await readJsonLimited(new Response(request.clone().body), RUNNER_LOG_BYTES * 6 + 4096)
+    );
+    if (!input.success || input.data.runId !== runId || input.data.leaseToken !== leaseToken)
+      return null;
+  }
+  const now = Date.now();
+  const leaseHash = await sha256Hex(leaseToken);
+  const active = github
+    ? await env.DB.prepare(
+        `SELECT runner_id FROM actions_github_runner_jobs WHERE id=? AND lease_hash=?
+         AND status='running' AND lease_expires_at>? AND started_at+21600000>?`
+      )
+        .bind(runId, leaseHash, now, now)
+        .first<{ runner_id: string }>()
+    : await env.DB.prepare(
+        `SELECT j.runner_id FROM actions_runner_runs j
+         WHERE j.run_id=? AND j.lease_hash=? AND j.status='running'
+         AND j.lease_expires_at>? AND j.started_at+j.timeout_minutes*60000>?
+         AND ((? IS NULL AND NOT EXISTS(SELECT 1 FROM actions_signing_runs s WHERE s.run_id=j.run_id))
+           OR (? IS NOT NULL AND EXISTS(SELECT 1 FROM actions_signing_runs s
+             WHERE s.run_id=j.run_id AND s.request_id=?)))`
+      )
+        .bind(
+          runId,
+          leaseHash,
+          now,
+          now,
+          signing?.[1] ?? null,
+          signing?.[1] ?? null,
+          signing?.[1] ?? null
+        )
+        .first<{ runner_id: string }>();
+  if (!active) return null;
+  const row = await env.DB.prepare(
+    `${runnersSelect} JOIN users u ON u.id=r.created_by
+     WHERE r.id=? AND r.revoked_at IS NULL AND u.disabled_at IS NULL
+     AND (r.repository_id IS NULL OR (p.deleted_at IS NULL AND p.namespace_id=r.namespace_id))`
+  )
+    .bind(active.runner_id)
     .first<RunnerRow>();
   return row && (await ownsScope(env, row.created_by, row.namespace_id, row.repository_id))
     ? row
