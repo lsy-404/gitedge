@@ -35,6 +35,8 @@ import {
   createDispatchSession,
   runDispatchSocket,
 } from "./runner-broker-socket.mjs";
+import { superviseBroker } from "./runner-broker-supervisor.mjs";
+import { createSlotPool } from "./runner-slot-pool.mjs";
 import { createRunDirectory } from "./runner-run-root.mjs";
 import { pruneRunArtifacts, runArtifactRoots } from "./runner-retention.mjs";
 import {
@@ -296,6 +298,7 @@ async function addGitEdge(state, values) {
   validateLabels(labels);
   validateProfileHostLabels(labels);
   const budget = parseRunnerBudget(values);
+  const slots = values.slots === undefined ? 1 : parseSlots(values.slots);
   const runnerLabels = mergeLabels([...hostLabels()], labels);
   const adminToken = process.env.GITEDGE_TOKEN;
   if (!adminToken) throw new Error("Set GITEDGE_TOKEN to an admin-scoped GitEdge access token.");
@@ -348,6 +351,7 @@ async function addGitEdge(state, values) {
           repository,
           labels: runnerLabels,
           ...(budget ? { budget } : {}),
+          ...(slots > 1 ? { slots } : {}),
           runnerPath,
           runnerId: runner.id,
           createdAt: new Date().toISOString(),
@@ -369,6 +373,17 @@ async function addGitEdge(state, values) {
     await rm(staging, { recursive: true, force: true });
     throw error;
   }
+}
+
+async function setSlots(state, id, value) {
+  const slots = parseSlots(value);
+  await loadProfile(state, id);
+  const file = path.join(state, "profiles", id, "profile.json");
+  const profile = JSON.parse(await readFile(file, "utf8"));
+  if (slots > 1) profile.slots = slots;
+  else delete profile.slots;
+  await writePrivate(file, JSON.stringify(profile, null, 2) + "\n");
+  console.log(`Profile ${id} now uses up to ${slots} execution ${slots === 1 ? "slot" : "slots"}.`);
 }
 
 async function listProfiles(state) {
@@ -411,26 +426,73 @@ function eligible(labels, profile) {
 
 const actionsState = path.join(root, "work", "actions");
 
-async function acquireActionsSlot() {
-  const state = actionsState;
-  await mkdir(state, { recursive: true, mode: 0o700 });
-  const lockPath = path.join(state, "active.lock");
-  const lock = await open(lockPath, "wx", 0o600).catch((error) => {
-    if (error.code === "EEXIST") return undefined;
-    throw error;
-  });
-  if (!lock) return undefined;
+const actionsLockName = (index) => (index === 0 ? "active.lock" : `active-${index}.lock`);
+
+function processAlive(pid) {
   try {
-    await lock.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
+    process.kill(pid, 0);
+    return true;
   } catch (error) {
-    await lock.close();
-    await rm(lockPath, { force: true });
-    throw error;
+    return error.code !== "ESRCH";
   }
-  return async () => {
-    await lock.close();
-    await rm(lockPath, { force: true });
-  };
+}
+
+async function lockOwner(lockPath) {
+  try {
+    const { pid } = JSON.parse(await readFile(lockPath, "utf8"));
+    return Number.isInteger(pid) ? pid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Drops a slot lock whose owning process no longer exists.
+async function removeStaleLock(lockPath) {
+  const pid = await lockOwner(lockPath);
+  if (pid === undefined || pid === process.pid || processAlive(pid)) return false;
+  await rm(lockPath, { force: true });
+  return true;
+}
+
+// Called by the supervisor after a worker dies, so its slot locks never outlive it.
+async function removeLocksOfProcess(pid) {
+  const names = await readdir(actionsState).catch(() => []);
+  await Promise.all(
+    names
+      .filter((name) => /^active(?:-\d+)?\.lock$/.test(name))
+      .map(async (name) => {
+        const lockPath = path.join(actionsState, name);
+        if ((await lockOwner(lockPath)) === pid) await rm(lockPath, { force: true });
+      })
+  );
+}
+
+async function acquireActionsSlot(index) {
+  await mkdir(actionsState, { recursive: true, mode: 0o700 });
+  const lockPath = path.join(actionsState, actionsLockName(index));
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const lock = await open(lockPath, "wx", 0o600).catch((error) => {
+      if (error.code === "EEXIST") return undefined;
+      throw error;
+    });
+    if (lock) {
+      try {
+        await lock.writeFile(
+          JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })
+        );
+      } catch (error) {
+        await lock.close();
+        await rm(lockPath, { force: true });
+        throw error;
+      }
+      return async () => {
+        await lock.close();
+        await rm(lockPath, { force: true });
+      };
+    }
+    if (!(await removeStaleLock(lockPath))) return undefined;
+  }
+  return undefined;
 }
 
 async function runClaimedGitHub(profile, claim, signal) {
@@ -1259,52 +1321,6 @@ async function runGitEdge(profile, run, leaseToken, signal) {
     console.error(`GitEdge run ${run.id} ended with ${conclusion}.`);
 }
 
-function createExecutionSlot() {
-  const listeners = new Set();
-  let held = false;
-  const notify = () => listeners.forEach((listener) => listener());
-  return {
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    async tryAcquire() {
-      if (held) return undefined;
-      held = true;
-      let release;
-      try {
-        release = await acquireActionsSlot();
-      } catch (error) {
-        held = false;
-        throw error;
-      }
-      if (!release) {
-        held = false;
-        return undefined;
-      }
-      notify();
-      let released = false;
-      return async () => {
-        if (released) return;
-        released = true;
-        try {
-          await release();
-        } finally {
-          held = false;
-          notify();
-        }
-      };
-    },
-    async busy() {
-      if (held) return true;
-      return access(path.join(actionsState, "active.lock")).then(
-        () => true,
-        () => false
-      );
-    },
-  };
-}
-
 async function runAssignedClaim(profile, claim, signal) {
   if (claim.run.kind === "github") {
     console.log(`GitEdge profile ${profile.id}: running GitHub job ${claim.run.jobId}.`);
@@ -1329,10 +1345,25 @@ function assertGitEdgeProfile(profile) {
 
 const supersededExitStatus = 78;
 
-async function serve(state, exitStatusOnSupersede) {
+const maxSlots = 16;
+
+function parseSlots(value) {
+  const slots = Number(value);
+  if (!/^\d+$/.test(String(value)) || slots < 1 || slots > maxSlots)
+    throw new Error(`--slots must be an integer between 1 and ${maxSlots}.`);
+  return slots;
+}
+
+async function serve(state, exitStatusOnSupersede, { slots, supervised }) {
   const controller = new AbortController();
-  for (const signal of ["SIGINT", "SIGTERM"])
-    process.once(signal, () => controller.abort(new Error("Stopped.")));
+  const stop = () => controller.abort(new Error("Stopped."));
+  for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, stop);
+  if (supervised) {
+    process.on("message", (message) => {
+      if (message?.type === "stop") stop();
+    });
+    process.once("disconnect", stop);
+  }
   const entries = await readdir(path.join(state, "profiles"), { withFileTypes: true });
   const profiles = await Promise.all(
     entries
@@ -1345,16 +1376,35 @@ async function serve(state, exitStatusOnSupersede) {
     validateProfileHostLabels(profile.labels);
   }
   await mkdir(actionsState, { recursive: true, mode: 0o700 });
-  const slot = createExecutionSlot();
+  const poolSize = slots ?? Math.max(...profiles.map((profile) => profile.slots ?? 1));
+  const slot = createSlotPool({ size: poolSize, acquireLock: acquireActionsSlot });
+  let reservedMemMb = 0; // memory claimed by jobs running on this broker
+  const localCapacity = (profile) =>
+    getRunnerCapacity({
+      workDirectories: [profile.directory, actionsState],
+      busy: slot.busy(),
+      slots: slot.size,
+      reservedMemMb,
+    });
+  const runJob = async (profile, claim, signal) => {
+    const memMb = parseJobClaim(claim.run.labels ?? []).memMb;
+    reservedMemMb += memMb;
+    try {
+      await runAssignedClaim(profile, claim, signal);
+    } finally {
+      reservedMemMb -= memMb;
+    }
+  };
+  const liveness = { lastReportAt: 0, open: 0 };
   let superseded = false;
   const clients = profiles.map((profile) => {
     const label = `GitEdge profile ${profile.id}`;
     const session = createDispatchSession({
       label,
       slot,
-      getCapacity: () => getRunnerCapacity({ workDirectories: [profile.directory, actionsState] }),
+      getCapacity: () => localCapacity(profile),
       validateOffer: (labels, capacity) => validateLocalJobClaim(labels, capacity, 360),
-      runJob: (claim, signal) => runAssignedClaim(profile, claim, signal),
+      runJob: (claim, signal) => runJob(profile, claim, signal),
       signal: controller.signal,
     });
     const unsubscribe = slot.subscribe(() => session.onSlotChange());
@@ -1366,14 +1416,20 @@ async function serve(state, exitStatusOnSupersede) {
       signal: AbortSignal.any([controller.signal, reconnect.signal]),
       buildReport: async () => ({
         type: "report",
-        capacity: await getRunnerCapacity({
-          workDirectories: [profile.directory, actionsState],
-          busy: (await slot.busy()) ? 1 : 0,
-        }),
+        capacity: await localCapacity(profile),
         ...(profile.budget ? { budget: profile.budget } : {}),
       }),
-      onOpen: (control) => session.onOpen(control),
-      onClose: () => session.onClose(),
+      onOpen: (control) => {
+        liveness.open++;
+        session.onOpen(control);
+      },
+      onClose: () => {
+        liveness.open--;
+        session.onClose();
+      },
+      onReportSent: (at) => {
+        liveness.lastReportAt = Math.max(liveness.lastReportAt, at);
+      },
       onFrame: (frame) => session.onFrame(frame),
     })
       .catch((error) => {
@@ -1387,12 +1443,24 @@ async function serve(state, exitStatusOnSupersede) {
       .finally(unsubscribe);
     return { session, done };
   });
-  console.log(`Runner broker serving ${profiles.length} profiles with one execution slot.`);
+  console.log(
+    `Runner broker serving ${profiles.length} profiles with ${slot.size} execution ${slot.size === 1 ? "slot" : "slots"}.`
+  );
+  const heartbeat = supervised
+    ? setInterval(() => {
+        process.send({
+          type: "heartbeat",
+          lastReportAt: liveness.lastReportAt,
+          connected: liveness.open > 0,
+        });
+      }, 10_000)
+    : undefined;
+  if (supervised) process.send({ type: "heartbeat", lastReportAt: 0, connected: false });
   let lastRetentionAt = 0;
   const retention = setInterval(async () => {
     if (Date.now() - lastRetentionAt < 60 * 60 * 1000) return;
     try {
-      const release = await slot.tryAcquire();
+      const release = await slot.tryAcquire({ exclusive: true });
       if (!release) return;
       try {
         await pruneRunArtifacts(runArtifactRoots(state, profiles, actionsState));
@@ -1411,6 +1479,7 @@ async function serve(state, exitStatusOnSupersede) {
     await Promise.all(clients.map((client) => client.session.drain()));
   } finally {
     clearInterval(retention);
+    clearInterval(heartbeat);
   }
   if (superseded) process.exitCode = exitStatusOnSupersede;
 }
@@ -1464,6 +1533,8 @@ async function main() {
       cost: { type: "string" },
       "run-as-user": { type: "string" },
       "supersede-exit-status": { type: "string" },
+      slots: { type: "string" },
+      worker: { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -1471,7 +1542,7 @@ async function main() {
   const state = path.resolve(values["state-dir"] ?? stateDefault);
   if (!action || values.help) {
     console.log(
-      "Usage: pnpm run runner-broker -- init|register-gitedge|list|remove|serve|service [options]\n\nregister-gitedge --origin URL --owner OWNER [--repository REPO] --label LABEL --runner-path DIR [--max-job-minutes N] [--daily-minutes N] [--cost N]\nA generic GitEdge runner executes matched workflow, GitHub and native signing jobs. Native signing uses the SDK and receives protected secrets for each task.\nserve [--supersede-exit-status N]: keeps one outbound WebSocket per profile to GitEdge and runs the jobs it assigns, one at a time. Run one broker per registration; a profile whose credential another broker took over stops reconnecting, lets running jobs finish, and the broker exits with status 78 (or N).\nservice install|start|stop|status --install-dir DIR [--state-dir DIR] [--run-as-user USER]\nAll commands accept --state-dir DIR. Registration reads GITEDGE_TOKEN."
+      "Usage: pnpm run runner-broker -- init|register-gitedge|list|remove|set-slots|serve|service [options]\n\nregister-gitedge --origin URL --owner OWNER [--repository REPO] --label LABEL --runner-path DIR [--max-job-minutes N] [--daily-minutes N] [--cost N] [--slots N]\nA generic GitEdge runner executes matched workflow, GitHub and native signing jobs. Native signing uses the SDK and receives protected secrets for each task.\nset-slots PROFILE N: sets how many jobs the profile may run at once (1-16, default 1).\nserve [--slots N] [--supersede-exit-status N]: runs a supervised broker that keeps one outbound WebSocket per profile to GitEdge and runs the jobs it assigns, up to the largest profile slot count at once (GitEdge workflow and signing jobs run alone). The supervisor restarts the broker when it stops sending heartbeats or reports. Run one broker per registration; a profile whose credential another broker took over stops reconnecting, lets running jobs finish, and the broker exits with status 78 (or N).\nservice install|start|stop|status --install-dir DIR [--state-dir DIR] [--run-as-user USER]\nAll commands accept --state-dir DIR. Registration reads GITEDGE_TOKEN."
     );
     return;
   }
@@ -1487,12 +1558,37 @@ async function main() {
   if (action === "list") return listProfiles(state);
   if (action === "remove" && profileId)
     return withStateLock(state, `remove:${profileId}`, () => removeProfile(state, profileId));
+  if (action === "set-slots" && profileId && positionals.length === 3)
+    return withStateLock(state, `set-slots:${profileId}`, () =>
+      setSlots(state, profileId, positionals[2])
+    );
   if (action === "serve") {
+    const exitStatus = supersedeExitStatus(values["supersede-exit-status"]);
+    const slots = values.slots === undefined ? undefined : parseSlots(values.slots);
+    if (values.worker) {
+      try {
+        await serve(state, exitStatus, { slots, supervised: Boolean(process.send) });
+      } catch (error) {
+        if (error.message !== "Stopped.") throw error;
+      }
+      return;
+    }
     const release = await acquireStateLock(state, "serve");
     try {
-      await serve(state, supersedeExitStatus(values["supersede-exit-status"]));
-    } catch (error) {
-      if (error.message !== "Stopped.") throw error;
+      process.exitCode = await superviseBroker({
+        script: fileURLToPath(import.meta.url),
+        args: [
+          "serve",
+          "--worker",
+          "--state-dir",
+          state,
+          "--supersede-exit-status",
+          String(exitStatus),
+          ...(slots === undefined ? [] : ["--slots", String(slots)]),
+        ],
+        supersedeExitStatus: exitStatus,
+        onWorkerGone: removeLocksOfProcess,
+      });
     } finally {
       await release();
     }
@@ -1527,7 +1623,9 @@ async function main() {
     });
     return;
   }
-  throw new Error("Expected init, register-gitedge, list, remove <profile>, serve, or service.");
+  throw new Error(
+    "Expected init, register-gitedge, list, remove <profile>, set-slots <profile> <n>, serve, or service."
+  );
 }
 
 main().catch((error) => {

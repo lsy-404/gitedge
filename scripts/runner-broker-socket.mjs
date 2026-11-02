@@ -4,6 +4,8 @@ const maxOutboundBytes = 16 * 1024;
 const maxInboundBytes = 2 * 1024 * 1024;
 const reportIntervalMs = 30_000;
 const pingIntervalMs = 30_000;
+const reportDeadlineMs = 20_000;
+const reportStallMs = 90_000;
 const revokedRetryMs = 60_000;
 const stableConnectionMs = 60_000;
 const maxBackoffMs = 60_000;
@@ -89,6 +91,21 @@ const printable = (value) =>
     .replace(/[^\x20-\x7e]/g, "?")
     .slice(0, 200);
 
+const withDeadline = (promise, ms) =>
+  new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Report build timed out.")), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+
 const wait = (ms, signal) =>
   new Promise((resolve) => {
     if (signal.aborted) return resolve();
@@ -111,11 +128,13 @@ export async function runDispatchSocket({
   onOpen,
   onClose,
   onFrame,
+  onReportSent,
   log = console,
   createSocket = (url, options) => new WebSocket(url, options),
 }) {
   let socket;
   let reports = Promise.resolve();
+  let lastReportAt = 0; // of the current connection
   const send = (frame) => {
     const text = JSON.stringify(frame);
     if (Buffer.byteLength(text) > maxOutboundBytes) throw new Error("Outbound frame is too large.");
@@ -126,7 +145,12 @@ export async function runDispatchSocket({
   const sendReport = () => {
     reports = reports
       .then(async () => {
-        if (socket?.readyState === WebSocket.OPEN) send(await buildReport());
+        if (socket?.readyState !== WebSocket.OPEN) return;
+        const frame = await withDeadline(Promise.resolve().then(buildReport), reportDeadlineMs);
+        if (send(frame)) {
+          lastReportAt = Date.now();
+          onReportSent?.(lastReportAt);
+        }
       })
       .catch((error) => log.error(`${label}: could not send report: ${printable(error.message)}`));
     return reports;
@@ -170,11 +194,16 @@ export async function runDispatchSocket({
       ws.on("open", () => {
         opened = true;
         openedAt.value = Date.now();
+        lastReportAt = openedAt.value;
         onOpen(control);
         sendReport();
         timers = [
           setInterval(sendReport, reportIntervalMs),
           setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN && Date.now() - lastReportAt > reportStallMs) {
+              log.error(`${label}: no report was sent for 90 seconds; reconnecting.`);
+              return ws.terminate();
+            }
             if (!alive) return ws.terminate();
             alive = false;
             ws.ping();
@@ -241,7 +270,8 @@ export async function runDispatchSocket({
   }
 }
 
-// Offer handshake and job lifecycle for one profile; the slot and job runner are injected by the broker.
+// Offer handshake and job lifecycle for one profile; the slot pool and job runner are injected by
+// the broker. Many jobs may run at once, but at most one offer is in flight (offering/accepted).
 export function createDispatchSession({
   label,
   slot,
@@ -257,9 +287,10 @@ export function createDispatchSession({
   const jobs = new Set();
 
   const releaseOffer = async (offer) => {
-    await offer.release?.();
+    const release = offer.release;
     offer.release = undefined;
     if (current === offer) current = undefined;
+    await release?.();
   };
   const decline = (offerId, reason) => control?.send({ type: "decline", offerId, reason });
 
@@ -269,7 +300,7 @@ export function createDispatchSession({
     current = offer;
     handshaking = true;
     try {
-      offer.release = await slot.tryAcquire();
+      offer.release = await slot.tryAcquire({ exclusive: frame.kind === "gitedge" });
       if (!offer.release) {
         current = undefined;
         return decline(frame.offerId, "slot-busy");
@@ -297,6 +328,7 @@ export function createDispatchSession({
     if (!offer || offer.offerId !== frame.offerId || offer.phase !== "accepted")
       throw new ProtocolError("Assignment does not match an accepted offer.");
     offer.phase = "running";
+    current = undefined;
     const job = runJob(frame.claim, signal)
       .catch((error) => {
         if (!signal.aborted)
@@ -305,6 +337,7 @@ export function createDispatchSession({
       .finally(() => releaseOffer(offer));
     jobs.add(job);
     void job.finally(() => jobs.delete(job));
+    control?.sendReport();
   };
 
   return {
