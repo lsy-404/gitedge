@@ -331,7 +331,7 @@ def main():
                 status = task.wait()
                 print(f"Idle task exited with status {status}; no automatic retry is scheduled.", flush=True)
                 return status
-            lock_present = args.lock_file.exists()
+            lock_present = any(args.lock_file.parent.glob(f"{args.lock_file.stem}*{args.lock_file.suffix}"))
             if lock_present:
                 if lock_seen_since is None:
                     lock_seen_since = now

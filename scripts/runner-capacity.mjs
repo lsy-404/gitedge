@@ -1,15 +1,14 @@
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import os from "node:os";
 import { readFile, statfs } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { matchesCapacity, parseJobClaim } from "../packages/contracts/runner-scheduling.mjs";
+import { captureOutput, killProcessTree } from "./runner-process-tree.mjs";
 
 const megabyte = 1024 * 1024;
 const toolCacheMs = 10 * 60_000;
 const toolTimeoutMs = 3_000;
-const execFileAsync = promisify(execFile);
 
 export function parseRunnerBudget(values) {
   const budget = {};
@@ -70,7 +69,7 @@ function runProbe(command, args, timeoutMs, spawnChild = spawn) {
       resolve(available);
     };
     const timer = setTimeout(() => {
-      child?.kill();
+      killProcessTree(child);
       finish(false);
     }, timeoutMs);
     try {
@@ -108,7 +107,7 @@ export function createToolProbeCache({ now = Date.now, probe = runProbe } = {}) 
 
 const getTools = createToolProbeCache();
 
-export function createGpuProbeCache({ now = Date.now, execute = execFileAsync } = {}) {
+export function createGpuProbeCache({ now = Date.now, execute = captureOutput } = {}) {
   let expiresAt = 0;
   let cachedGpus = null;
   let pending;
@@ -120,7 +119,7 @@ export function createGpuProbeCache({ now = Date.now, execute = execFileAsync } 
         const { stdout } = await execute(
           process.execPath,
           [fileURLToPath(new URL("./runner-gpu-probe.mjs", import.meta.url))],
-          { encoding: "utf8", timeout: 8_000, maxBuffer: 16_384, windowsHide: true }
+          { timeout: 8_000, maxBuffer: 16_384, windowsHide: true }
         );
         cachedGpus = JSON.parse(stdout);
       } catch {
@@ -165,8 +164,7 @@ async function linuxAvailableMemoryMb(read = readFile) {
 }
 
 async function macosAvailableMemoryMb() {
-  const { stdout } = await execFileAsync("/usr/bin/vm_stat", [], {
-    encoding: "utf8",
+  const { stdout } = await captureOutput("/usr/bin/vm_stat", [], {
     timeout: toolTimeoutMs,
     maxBuffer: 16 * 1024,
     env: { ...process.env, LC_ALL: "C" },
@@ -192,7 +190,12 @@ async function freeDiskMb(directory, getStatfs = statfs) {
   return Number((BigInt(availableBlocks) * BigInt(info.bsize)) / BigInt(megabyte));
 }
 
-export async function getRunnerCapacity({ workDirectories, busy = 0 } = {}) {
+export async function getRunnerCapacity({
+  workDirectories,
+  busy = 0,
+  slots = 1,
+  reservedMemMb = 0,
+} = {}) {
   const directories = [...new Set(workDirectories ?? [])].map((directory) =>
     path.resolve(directory)
   );
@@ -205,12 +208,13 @@ export async function getRunnerCapacity({ workDirectories, busy = 0 } = {}) {
     getTools(),
     getGpus(),
   ]);
-  const memFreeMb =
+  const osFreeMb =
     platform === "linux"
       ? await linuxAvailableMemoryMb()
       : platform === "darwin"
         ? await macosAvailableMemoryMb()
         : Math.floor(os.freemem() / megabyte);
+  const memFreeMb = Math.max(0, osFreeMb - reservedMemMb);
   return {
     os: platform === "darwin" ? "macos" : platform === "win32" ? "windows" : platform,
     arch: os.arch(),
@@ -221,7 +225,7 @@ export async function getRunnerCapacity({ workDirectories, busy = 0 } = {}) {
     diskFreeMb,
     tools,
     gpus,
-    slots: 1,
+    slots,
     busy,
   };
 }
