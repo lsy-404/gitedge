@@ -334,7 +334,7 @@ export async function claimRunnerCandidate(
         lease_expires_at=?,started_at=?,cleanup_pending=1
        WHERE id=? AND status='queued'
          AND NOT EXISTS (SELECT 1 FROM actions_runner_runs busy WHERE busy.runner_id=? AND busy.status='running')
-         AND NOT EXISTS (SELECT 1 FROM actions_github_runner_jobs busy WHERE busy.runner_id=? AND busy.status='running')
+         AND (SELECT COUNT(*) FROM actions_github_runner_jobs busy WHERE busy.runner_id=? AND busy.status='running')<?
          AND ${runnerGuard}
        RETURNING id`
     )
@@ -346,6 +346,7 @@ export async function claimRunnerCandidate(
         candidate.id,
         runner.id,
         runner.id,
+        readRunnerCapacity(runner.capacity_json)?.slots ?? 1,
         ...runnerBindings
       )
       .first<{ id: string }>();

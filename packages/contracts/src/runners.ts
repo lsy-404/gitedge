@@ -9,6 +9,9 @@ export const RUNNER_LEASE_MS = 120_000;
 export const GITHUB_RUNNER_LEASE_MS = 5 * 60_000;
 export const RUNNER_LOG_BYTES = 16_384;
 export const RUNNER_CAPACITY_STALE_MS = 45_000;
+export const RUNNER_SOCKET_STALE_MS = 90_000;
+export const RUNNER_SOCKET_SWEEP_MS = 30_000;
+export const RUNNER_MAX_SLOTS = 16;
 export const RUNNER_OFFLINE_MS = 60_000;
 export const RUNNER_OFFER_TIMEOUT_MS = 15_000;
 export const RUNNER_DECLINE_HOLD_MS = 30_000;
@@ -45,11 +48,12 @@ export const RunnerCapacitySchema = z
       .max(16)
       .nullable()
       .optional(),
-    slots: z.literal(1),
-    busy: z.union([z.literal(0), z.literal(1)]),
+    slots: z.number().int().min(1).max(RUNNER_MAX_SLOTS),
+    busy: z.number().int().min(0).max(RUNNER_MAX_SLOTS),
   })
   .strict()
-  .refine((capacity) => capacity.memFreeMb <= capacity.memTotalMb);
+  .refine((capacity) => capacity.memFreeMb <= capacity.memTotalMb)
+  .refine((capacity) => capacity.busy <= capacity.slots);
 export type RunnerCapacity = z.infer<typeof RunnerCapacitySchema>;
 
 export const RunnerBudgetSchema = z

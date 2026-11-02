@@ -430,7 +430,7 @@ export async function handleRunnerOverview(
           minute: row.minute,
           load1: row.load1,
           memFreeMb: row.mem_free_mb,
-          busy: row.busy === 1,
+          busy: row.busy > 0,
         });
     }
     for (const points of samples.values()) points.reverse();

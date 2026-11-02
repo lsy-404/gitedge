@@ -10,6 +10,8 @@ import {
   RUNNER_DISPATCH_FRAME_WINDOW_MS,
   RUNNER_DISPATCH_MAX_RUNNERS,
   RUNNER_OFFER_TIMEOUT_MS,
+  RUNNER_SOCKET_STALE_MS,
+  RUNNER_SOCKET_SWEEP_MS,
   type RunnerBudget,
   type RunnerCapacity,
   type RunnerJobKind,
@@ -41,6 +43,7 @@ import {
 const CLOSE_UNAUTHORIZED = 4001;
 const CLOSE_PROTOCOL = 4002;
 const CLOSE_SUPERSEDED = 4003;
+const CLOSE_STALE = 4008;
 // Upper bound for an accepted offer to finish its guarded claim before it is reaped.
 const CLAIM_HOLD_MS = 60_000;
 // Broker decline reasons that mean its execution slot is occupied, not that the job is unsuitable.
@@ -101,6 +104,7 @@ interface IdleRunner {
   capacity: RunnerCapacity;
   budget: RunnerBudget | null;
   used: number;
+  running: number;
 }
 
 export interface RunnerDispatchBinding {
@@ -129,6 +133,12 @@ export async function notifyRunnerDispatch(
 // Reconciles lost notifications, expiry-freed runners and requeues; not a polling path for brokers.
 export async function kickRunnerDispatch(env: RunnerEnv): Promise<void> {
   if (!env.RUNNER_DISPATCH) return;
+  // A dispatcher restart can drop sockets without a close event, leaving `connected` set.
+  await env.DB.prepare(
+    "UPDATE actions_runners SET connected=0 WHERE connected=1 AND (last_seen_at IS NULL OR last_seen_at<?)"
+  )
+    .bind(Date.now() - RUNNER_SOCKET_STALE_MS)
+    .run();
   const namespaces = await env.DB.prepare(
     `SELECT namespace_id, MIN(created_at) AS oldest FROM (
       SELECT p.namespace_id, a.created_at FROM actions_runner_runs j JOIN actions_runs a ON a.id=j.run_id
@@ -197,6 +207,7 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
       frames: 0,
     } satisfies SocketState);
     this.logger.info("runner-dispatch:connected", { runnerId });
+    await this.scheduleAlarm();
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -340,7 +351,7 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
     if (!runner) return this.dispatch();
     if (this.committing.has(runner.id)) await touchRunnerPresence(this.env, runner.id, now);
     else await storeRunnerReport(this.env, runner, frame.capacity, frame.budget ?? null, now);
-    const busy = frame.capacity.busy === 1;
+    const busy = frame.capacity.busy >= frame.capacity.slots;
     this.updateState(ws, { ready: true, busy, reportedAt: now });
     if (!state.ready)
       this.send(ws, {
@@ -516,9 +527,36 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
 
   private async pass(): Promise<void> {
     const now = Date.now();
+    await this.sweepStale(now);
     this.expire(now);
     const idle = await this.idleRunners(now);
     if (idle.length) await this.offerJobs(idle, now);
+  }
+
+  // An open socket that stopped reporting means a wedged broker; closing it frees its offers and
+  // makes the broker reconnect, while `connected` stops claiming a runner that cannot take work.
+  private async sweepStale(now: number): Promise<void> {
+    const stale = new Set<string>();
+    for (const socket of this.openSockets()) {
+      const state = this.socketState(socket);
+      if (!state) continue;
+      const lastSign = state.ready ? state.reportedAt : state.windowStart;
+      if (lastSign >= now - RUNNER_SOCKET_STALE_MS) continue;
+      try {
+        socket.close(CLOSE_STALE, "stale");
+      } catch {
+        // The socket is already gone.
+      }
+      stale.add(state.runnerId);
+    }
+    for (const runnerId of stale) {
+      this.ctx.storage.sql.exec("DELETE FROM offers WHERE runner_id=?", runnerId);
+      if (this.openSockets(runnerId).length > 0) continue;
+      await this.env.DB.prepare("UPDATE actions_runners SET connected=0 WHERE id=?")
+        .bind(runnerId)
+        .run();
+      this.logger.warn("runner-dispatch:stale-closed", { runnerId });
+    }
   }
 
   private expire(now: number): void {
@@ -573,24 +611,28 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
       const capacity = readRunnerCapacity(row.capacity_json);
       if (
         !capacity ||
-        capacity.busy === 1 ||
+        capacity.busy >= capacity.slots ||
         (row.held_until !== null && row.held_until > now) ||
         row.capacity_reported_at === null ||
         row.capacity_reported_at < now - RUNNER_CAPACITY_STALE_MS
       )
         continue;
       const running = await this.env.DB.prepare(
-        `SELECT 1 AS busy FROM actions_runner_runs WHERE runner_id=? AND status='running'
-         UNION ALL SELECT 1 AS busy FROM actions_github_runner_jobs WHERE runner_id=? AND status='running' LIMIT 1`
+        `SELECT
+           (SELECT COUNT(*) FROM actions_runner_runs WHERE runner_id=? AND status='running') AS exclusive,
+           (SELECT COUNT(*) FROM actions_github_runner_jobs WHERE runner_id=? AND status='running') AS shared`
       )
         .bind(id, id)
-        .first();
-      if (running) continue;
+        .first<{ exclusive: number; shared: number }>();
+      const exclusive = running?.exclusive ?? 0;
+      const shared = running?.shared ?? 0;
+      if (exclusive > 0 || shared >= capacity.slots) continue;
       idle.push({
         row,
         capacity,
         budget: readRunnerBudget(row.budget_json),
         used: await runnerUsageMinutes24h(this.env, id, now),
+        running: shared,
       });
     }
     this.rotation = start + inspected;
@@ -632,6 +674,8 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
       let best: { runner: IdleRunner; labels: string[]; score: number } | null = null;
       for (const runner of idle) {
         if (taken.has(runner.row.id) || declined.has(`${key}:${runner.row.id}`)) continue;
+        // GitEdge workflow and signing runs need the whole host; only GitHub jobs share slots.
+        if (candidate.kind === "gitedge" && runner.running > 0) continue;
         const evaluated = evaluateRunnerCandidate(
           runner.row,
           runner.capacity,
@@ -686,7 +730,10 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
         `SELECT MIN(at) AS at FROM (SELECT expires_at AS at FROM offers UNION ALL SELECT until AS at FROM declines)`
       )
       .one().at;
-    if (next === null) await this.ctx.storage.deleteAlarm();
-    else await this.ctx.storage.setAlarm(Math.max(next, Date.now() + 1));
+    const now = Date.now();
+    const sweep = this.openSockets().length > 0 ? now + RUNNER_SOCKET_SWEEP_MS : null;
+    const at = next === null ? sweep : sweep === null ? next : Math.min(next, sweep);
+    if (at === null) await this.ctx.storage.deleteAlarm();
+    else await this.ctx.storage.setAlarm(Math.max(at, now + 1));
   }
 }
