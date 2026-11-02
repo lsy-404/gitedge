@@ -11,6 +11,7 @@ import AccountSecuritySettings from "../components/AccountSecuritySettings.vue";
 import BrowserSessions from "../components/BrowserSessions.vue";
 import AccountUsage from "../components/AccountUsage.vue";
 import AccountRunners from "../components/AccountRunners.vue";
+import AccountCodeSigning from "../components/AccountCodeSigning.vue";
 import AccountActivity from "../components/AccountActivity.vue";
 import AccountDataSettings from "../components/AccountDataSettings.vue";
 import NotificationPreferences from "../components/NotificationPreferences.vue";
@@ -27,6 +28,7 @@ const sections = [
   "sessions",
   "usage",
   "runners",
+  "code-signing",
   "activity",
   "data",
   "connections",
@@ -53,6 +55,7 @@ const section = computed(() =>
       <BrowserSessions v-else-if="section === 'sessions'" />
       <AccountUsage v-else-if="section === 'usage'" />
       <AccountRunners v-else-if="section === 'runners'" />
+      <AccountCodeSigning v-else-if="section === 'code-signing'" />
       <AccountActivity v-else-if="section === 'activity'" />
       <AccountDataSettings v-else-if="section === 'data'" />
       <AccountConnections v-else />

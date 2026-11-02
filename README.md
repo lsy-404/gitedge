@@ -67,6 +67,7 @@ The committed `workers/*/wrangler.jsonc` files carry no account-specific values,
 | `accountId`    | Your 32-character Cloudflare account ID, applied to every Worker.                                                                                      |
 | `databaseId`   | UUID of the `gitedge` D1 database, applied to every D1 binding.                                                                                        |
 | `domain`       | Hostname the Gateway serves as a Workers custom domain (the zone must be on your account). Example domains are rejected.                               |
+| `signingHost`  | Optional extra hostname the Gateway serves that redirects to the Code signing settings page, such as a retired signing service address.                |
 | `ssoProviders` | Array of OIDC or SAML provider definitions written to the Auth Worker's `SSO_PROVIDERS_JSON`; `[]` disables SSO. See [SSO configuration](docs/sso.md). |
 | `vars`         | Optional per-Worker variable overrides keyed by Worker name (`auth`, `gateway`, and so on). See [configuration](docs/configuration.md).                |
 

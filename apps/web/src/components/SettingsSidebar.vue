@@ -16,6 +16,7 @@ const items = [
   { key: "sessions", label: "settingsSessions", icon: "clock" },
   { key: "usage", label: "settingsUsage", icon: "activity" },
   { key: "runners", label: "runnerDashboardTitle", icon: "activity" },
+  { key: "code-signing", label: "settingsCodeSigning", icon: "shield" },
   { key: "activity", label: "settingsActivity", icon: "clock" },
   { key: "data", label: "settingsData", icon: "download" },
   { key: "connections", label: "settingsConnections", icon: "link" },

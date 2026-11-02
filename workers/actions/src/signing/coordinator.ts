@@ -409,6 +409,20 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
       }));
   }
 
+  listRecent(ownerId: string, limit: number) {
+    return this.ctx.storage.sql
+      .exec<StoredRow>(
+        "SELECT * FROM signing_requests WHERE owner_id=? ORDER BY created_at DESC LIMIT ?",
+        ownerId,
+        limit + 1
+      )
+      .toArray()
+      .map((row) => ({
+        request: this.public(row),
+        submission: SigningSubmissionSchema.parse(JSON.parse(row.submission_json)),
+      }));
+  }
+
   private row(id: string): StoredRow | null {
     return (
       this.ctx.storage.sql

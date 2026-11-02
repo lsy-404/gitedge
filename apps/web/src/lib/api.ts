@@ -1,7 +1,10 @@
 import type { MergeCandidate } from "../../../../packages/contracts/src/merge-candidates";
 import type { MergeRequirements } from "../../../../packages/contracts/src/merge-requirements";
 import type { PublicProfile } from "../../../../packages/contracts/src/profiles";
-import type { SigningRequest } from "../../../../packages/contracts/src/signing";
+import type {
+  SigningRequest,
+  SigningRequestEntry,
+} from "../../../../packages/contracts/src/signing";
 import type {
   AccountProfile,
   AccountPreferences,
@@ -695,6 +698,11 @@ export const api = {
     request<{ revoked: true }>(`/api/actions/runners/${encodeURIComponent(runnerId)}`, {
       method: "DELETE",
     }),
+  recentSigningRequests: (signal?: AbortSignal) =>
+    request<{ requests: SigningRequestEntry[]; truncated: boolean }>(
+      "/api/actions/signing/requests?recent=1",
+      { signal }
+    ),
   signingRequestStatus: (repositoryId: string, id: string) =>
     request<SigningRequest>(
       `/api/actions/signing/requests/${encodeURIComponent(id)}?repositoryId=${encodeURIComponent(repositoryId)}`

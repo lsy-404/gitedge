@@ -368,6 +368,8 @@ export async function reconcileSigningRequests(
   return { queued, skipped, failed };
 }
 
+const RECENT_SIGNING_LIMIT = 50;
+
 async function ownedRunnerRepository(env: SigningEnv, userId: string, repositoryId?: string) {
   const sql = `SELECT r.id,r.namespace_id,r.created_by,r.visibility,r.archived,r.deleted_at,
       r.actions_enabled,r.actions_runner_enabled,n.kind,n.created_by AS namespace_owner
@@ -856,6 +858,15 @@ export async function handleSigningRoute(
     }
     if (path[1] !== "requests")
       return errorResponse(404, "not_found", "Signing endpoint was not found.");
+    if (request.method === "GET" && path.length === 2 && url.searchParams.has("recent")) {
+      if (user.job || user.token)
+        return errorResponse(403, "forbidden", "An account owner session is required.");
+      const requests = await coordinator(env, user.id).listRecent(user.id, RECENT_SIGNING_LIMIT);
+      return dataResponse({
+        requests: requests.slice(0, RECENT_SIGNING_LIMIT),
+        truncated: requests.length > RECENT_SIGNING_LIMIT,
+      });
+    }
     if (request.method === "GET" && path.length === 2) {
       const repositoryId = url.searchParams.get("repositoryId") ?? user.job?.repositoryId ?? "";
       const sourceRunId = url.searchParams.get("sourceRunId") ?? "";

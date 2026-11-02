@@ -11,6 +11,10 @@ import {
 } from "../../packages/contracts/src/merge-requirements";
 import { PullAttentionReasonSchema } from "../../packages/contracts/src/forge";
 import { ProfileActivitySchema } from "../../packages/contracts/src/profiles";
+import {
+  SigningRequestStateSchema,
+  SigningStageSchema,
+} from "../../packages/contracts/src/signing";
 
 const locales = ["zh-CN", "en"] as const;
 
@@ -46,6 +50,8 @@ const dynamicKeys: Record<string, readonly string[]> = {
   actionsConclusion_: ["success", "failure", "cancelled"],
   runnerState_: ["idle", "busy", "held", "offline"],
   runnerSigningPlatform_: ["windows", "macos", "ios"],
+  codeSigningState_: SigningRequestStateSchema.options,
+  codeSigningStage_: SigningStageSchema.options,
   profileActivity_: ProfileActivitySchema.shape.kind.options,
   runnerConclusion_: ["success", "failure", "cancelled", "running", "queued"],
   runnerReason_: [
