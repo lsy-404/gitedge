@@ -55,8 +55,6 @@ export interface GatewayEnv {
   PRIVATE_REPOSITORY_RESPONSE?: string;
   SITES_HOST?: string;
   SITE_IP_RPM_LIMIT?: string;
-  SIGNING_HOST?: string;
-  PUBLIC_HOST?: string;
 }
 
 interface AuthenticatedSession extends TrustedUser {
@@ -632,13 +630,8 @@ async function handleSite(request: Request, env: GatewayEnv, match: SiteMatch): 
   return varied;
 }
 
-/** The retired signing center's address now opens signing status on the main host. */
-const SIGNING_MANAGEMENT_PATH = "/settings/account?section=code-signing";
-
 export async function handleGatewayRequest(request: Request, env: GatewayEnv): Promise<Response> {
   const url = new URL(request.url);
-  if (env.SIGNING_HOST && env.PUBLIC_HOST && url.hostname === env.SIGNING_HOST)
-    return Response.redirect(`https://${env.PUBLIC_HOST}${SIGNING_MANAGEMENT_PATH}`, 302);
   const suffixlessGit = /^\/([^/]+)\/([^/]+)\/(info\/refs|git-upload-pack|git-receive-pack)$/.exec(
     url.pathname
   );

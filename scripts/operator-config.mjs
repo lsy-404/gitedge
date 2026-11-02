@@ -29,7 +29,6 @@ const OperatorSchema = z
         (value) => !/(^|\.)example\.(com|org|net)$/.test(value),
         "must not be an example domain"
       ),
-    signingHost: z.string().regex(hostname, "must be a hostname").optional(),
     ssoProviders: z.array(z.record(z.string(), z.unknown())).default([]),
     settings: DeploymentSettingsSchema.prefault({}),
     vars: z.partialRecord(z.enum(services), varsSchema).default({}),
@@ -115,18 +114,9 @@ export function renderWorkerConfig(service, operator) {
   if (service === "gateway") {
     for (const route of config.routes ?? [])
       if (route.custom_domain) route.pattern = operator.domain;
-    if (operator.signingHost)
-      config.routes = [
-        ...(config.routes ?? []),
-        { pattern: operator.signingHost, custom_domain: true },
-      ];
   }
   const settings = DeploymentSettingsSchema.parse(operator.settings);
   const vars = { ...config.vars, ...operator.vars[service], ...settingsVars(service, settings) };
-  if (service === "gateway" && operator.signingHost) {
-    vars.SIGNING_HOST = operator.signingHost;
-    vars.PUBLIC_HOST = operator.domain;
-  }
   if (service === "auth") vars.SSO_PROVIDERS_JSON = JSON.stringify(operator.ssoProviders);
   if (Object.keys(vars).length > 0) config.vars = vars;
   return config;

@@ -11,7 +11,6 @@ Production values come from `gitedge.config.json` at the repository root (ignore
 | `accountId`    | `account_id` of every Worker, and `CLOUDFLARE_ACCOUNT_ID` for Wrangler calls.                                       |
 | `databaseId`   | `database_id` of every D1 binding.                                                                                  |
 | `domain`       | The Gateway's `custom_domain` route pattern.                                                                        |
-| `signingHost`  | An extra Gateway `custom_domain` route that redirects to the Code signing settings page (optional).                 |
 | `ssoProviders` | The Auth Worker's `SSO_PROVIDERS_JSON` (serialized). See [SSO](sso.md).                                             |
 | `settings`     | Registration, access policy and user-group quotas. See [deployment settings](configuration.md#deployment-settings). |
 | `vars`         | Optional `{ "<worker>": { "<NAME>": "<value>" } }` overrides merged over each Worker's committed `vars`.            |
