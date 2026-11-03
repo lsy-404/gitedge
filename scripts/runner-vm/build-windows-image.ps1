@@ -3,6 +3,7 @@ param(
   [Parameter(Mandatory = $true)][string]$IsoPath,
   [ValidateRange(1, 999)][int]$ImageIndex = 4,
   [Parameter(Mandatory = $true)][string]$VhdxPath,
+  [ValidateRange(34359738368, 2199023255552)][long]$DiskSizeBytes = 137438953472,
   [Parameter(Mandatory = $true)][string]$CredentialPath,
   [switch]$ApplyImage
 )
@@ -97,7 +98,7 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "Image index $ImageIndex was not found in the ISO image." }
   if (($imageInfo -join "`n") -notmatch 'Windows Server 2022') { throw "Image index $ImageIndex is not Windows Server 2022." }
 
-  $vhd = New-VHD -Path $VhdxPath -Dynamic -SizeBytes 128GB -ErrorAction Stop
+  $vhd = New-VHD -Path $VhdxPath -Dynamic -SizeBytes $DiskSizeBytes -ErrorAction Stop
   $diskCreated = $true
   $mountedVhd = $true
   $disk = $vhd | Mount-VHD -PassThru -ErrorAction Stop | Get-Disk
