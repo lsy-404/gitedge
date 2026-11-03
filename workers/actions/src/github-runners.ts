@@ -98,9 +98,9 @@ async function finish(
   infrastructureFailure = false
 ): Promise<void> {
   const changed = await env.DB.prepare(
-    "UPDATE actions_github_runner_jobs SET status='completed',conclusion=?,completed_at=? WHERE id=? AND status!='completed' RETURNING runner_id"
+    "UPDATE actions_github_runner_jobs SET status='completed',conclusion=?,completed_at=?,cleanup_pending=1 WHERE id=? AND status!='completed' RETURNING runner_id"
   )
-    .bind(conclusion, Date.now(), id)
+    .bind(conclusion === "success" ? null : conclusion, Date.now(), id)
     .first<{ runner_id: string | null }>();
   if (changed) {
     if (infrastructureFailure) await recordRunnerFailure(env, changed.runner_id, Date.now());
@@ -194,10 +194,7 @@ export async function githubRunnerLease(
   if (!job) return errorResponse(409, "conflict", "The runner does not own this job lease.");
   if (complete) {
     const parsed = RunnerCompleteInputSchema.parse(input.data);
-    if (job.status === "completed") {
-      if (job.conclusion !== parsed.conclusion)
-        return errorResponse(409, "conflict", "The job already completed.");
-    } else {
+    if (job.status !== "completed") {
       if ((job.lease_expires_at ?? 0) <= now || (job.started_at ?? 0) + 21_600_000 <= now) {
         await finish(env, job.id, "failure", true);
         return errorResponse(409, "conflict", "The job lease expired.");

@@ -243,13 +243,15 @@ function remoteApi(): void {
         )
           .bind(Number(job[1]))
           .first<{ labels_json: string; status: string }>();
+        const status =
+          remoteJobStates.get(Number(job[1])) ??
+          (queued?.status === "completed" ? "completed" : "queued");
         return Response.json({
           id: Number(job[1]),
           run_id: Number(job[1]) + 100,
           head_sha: "a".repeat(40),
-          status:
-            remoteJobStates.get(Number(job[1])) ??
-            (queued?.status === "completed" ? "completed" : "queued"),
+          status,
+          conclusion: status === "completed" ? "success" : null,
           labels: queued ? JSON.parse(queued.labels_json) : ["self-hosted", "macOS", "ARM64", "ci"],
         });
       }

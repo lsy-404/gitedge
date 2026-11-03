@@ -22,6 +22,19 @@ const JobSchema = z.object({
   run_id: z.number().int().positive(),
   head_sha: z.string(),
   status: z.enum(["queued", "in_progress", "completed", "waiting", "pending"]),
+  conclusion: z
+    .enum([
+      "success",
+      "failure",
+      "cancelled",
+      "neutral",
+      "skipped",
+      "timed_out",
+      "action_required",
+      "stale",
+      "startup_failure",
+    ])
+    .nullable(),
   labels: z.array(z.string()).max(40),
 });
 const JitSchema = z.object({
@@ -87,39 +100,40 @@ async function cleanup(
       if (!(cause instanceof GithubApiError && cause.status === 404)) throw cause;
     }
   }
+  let remote: z.infer<typeof JobSchema> | undefined;
+  try {
+    remote = JobSchema.parse(
+      await githubRequest(
+        credentials.token,
+        `${githubRepoPath(connection.owner, connection.name)}/actions/jobs/${job.github_job_id}`
+      )
+    );
+  } catch (cause) {
+    if (!(cause instanceof GithubApiError && cause.status === 404)) throw cause;
+  }
   if (
-    job.github_runner_id !== null &&
+    remote &&
+    (remote.id !== job.github_job_id ||
+      remote.run_id !== job.github_run_id ||
+      remote.head_sha !== job.head_oid)
+  )
+    throw new Error("github_runner_job_mismatch");
+  if (
+    remote?.status === "queued" &&
     job.started_at !== null &&
     job.completed_at !== null &&
     (job.conclusion !== "cancelled" || job.assigned === 0) &&
     (await allowed(env, connection, job.runner_id))
   ) {
-    let remote;
-    try {
-      remote = JobSchema.parse(
-        await githubRequest(
-          credentials.token,
-          `${githubRepoPath(connection.owner, connection.name)}/actions/jobs/${job.github_job_id}`
-        )
-      );
-    } catch (cause) {
-      if (!(cause instanceof GithubApiError && cause.status === 404)) throw cause;
-    }
-    if (
-      remote?.status === "queued" &&
-      remote.id === job.github_job_id &&
-      remote.run_id === job.github_run_id &&
-      remote.head_sha === job.head_oid
-    ) {
-      const owner = await env.DB.prepare(
-        "SELECT created_by,namespace_id FROM actions_runners WHERE id=?"
-      )
-        .bind(job.runner_id)
-        .first<{ created_by: string; namespace_id: string }>();
-      if (!owner) throw new Error("github_runner_owner_missing");
-      const changed = await env.DB.batch([
-        env.DB.prepare(
-          `UPDATE actions_github_runner_jobs SET status='queued',runner_id=NULL,github_runner_id=NULL,
+    const owner = await env.DB.prepare(
+      "SELECT created_by,namespace_id FROM actions_runners WHERE id=?"
+    )
+      .bind(job.runner_id)
+      .first<{ created_by: string; namespace_id: string }>();
+    if (!owner) throw new Error("github_runner_owner_missing");
+    const changed = await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE actions_github_runner_jobs SET status='queued',runner_id=NULL,github_runner_id=NULL,
          lease_hash=NULL,lease_expires_at=NULL,assigned=0,started_at=NULL,completed_at=NULL,
          conclusion=NULL,cleanup_pending=0
          WHERE id=? AND status='completed' AND cleanup_pending=1
@@ -127,41 +141,53 @@ async function cleanup(
          AND EXISTS (SELECT 1 FROM forge_github_connections c JOIN repositories p ON p.id=c.repository_id
            WHERE c.id=connection_id AND c.enabled=1 AND c.runner_enabled=1
            AND p.deleted_at IS NULL AND p.archived=0 AND p.actions_enabled=1)`
-        ).bind(job.id, job.github_runner_id, job.lease_hash),
-        auditStatement(
-          env.DB,
-          {
-            action: "actions.runner_demand_requeued",
-            actor: { kind: "system", id: job.runner_id, name: "GitEdge runner", ref: job.id },
-            target: { type: "runner", id: job.runner_id },
-            repositoryId: connection.repository_id,
-            namespaceId: owner.namespace_id,
-            subjectUserId: owner.created_by,
-            metadata: {
-              startedAt: job.started_at,
-              completedAt: job.completed_at,
-              githubJobId: job.github_job_id,
-              githubRunId: job.github_run_id,
-            },
+      ).bind(job.id, job.github_runner_id, job.lease_hash),
+      auditStatement(
+        env.DB,
+        {
+          action: "actions.runner_demand_requeued",
+          actor: { kind: "system", id: job.runner_id, name: "GitEdge runner", ref: job.id },
+          target: { type: "runner", id: job.runner_id },
+          repositoryId: connection.repository_id,
+          namespaceId: owner.namespace_id,
+          subjectUserId: owner.created_by,
+          metadata: {
+            startedAt: job.started_at,
+            completedAt: job.completed_at,
+            githubJobId: job.github_job_id,
+            githubRunId: job.github_run_id,
           },
-          job.completed_at,
-          true
-        ),
-      ]);
-      if (changed[0].meta.changes === 1) {
-        createLogger(env.LOG_LEVEL, { service: "github-runner" }).info(
-          "github-runner:demand-requeued",
-          { id: job.id, githubJobId: job.github_job_id }
-        );
-        return;
-      }
+        },
+        job.completed_at,
+        true
+      ),
+    ]);
+    if (changed[0].meta.changes === 1) {
+      createLogger(env.LOG_LEVEL, { service: "github-runner" }).info(
+        "github-runner:demand-requeued",
+        { id: job.id, githubJobId: job.github_job_id }
+      );
+      return;
     }
   }
+  let conclusion = job.conclusion;
+  if (remote && remote.status !== "queued") {
+    if (remote.status !== "completed" || remote.conclusion === null)
+      throw new Error("github_runner_job_pending");
+    conclusion =
+      remote.conclusion === "success" ||
+      remote.conclusion === "neutral" ||
+      remote.conclusion === "skipped"
+        ? "success"
+        : remote.conclusion === "cancelled"
+          ? "cancelled"
+          : "failure";
+  }
   await env.DB.prepare(
-    `UPDATE actions_github_runner_jobs SET cleanup_pending=0 WHERE id=? AND status='completed'
+    `UPDATE actions_github_runner_jobs SET cleanup_pending=0,conclusion=? WHERE id=? AND status='completed'
      AND github_runner_id IS ? AND lease_hash IS ?`
   )
-    .bind(job.id, job.github_runner_id, job.lease_hash)
+    .bind(conclusion, job.id, job.github_runner_id, job.lease_hash)
     .run();
 }
 
