@@ -12,7 +12,8 @@ export async function readTextLimited(
       if (done) break;
       total += value.byteLength;
       if (total > maxBytes) {
-        await reader.cancel();
+        // Canceling one tee branch can wait for the other branch to be consumed.
+        void reader.cancel().catch(() => {});
         return null;
       }
       chunks.push(value);
