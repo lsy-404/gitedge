@@ -338,7 +338,12 @@ export async function verifyVmImage(config, signal) {
       throw new Error(
         `VM image verification failed: ${Buffer.from(result.stderr).toString("utf8")}`
       );
-    const report = JSON.parse(Buffer.from(result.stdout).toString("utf8"));
+    let report;
+    try {
+      report = JSON.parse(Buffer.from(result.stdout).toString("utf8"));
+    } catch {
+      throw new Error(`VM image ${config.id} returned invalid verification output.`);
+    }
     if (
       report.platform !== config.guest.platform ||
       report.arch !== config.guest.arch ||

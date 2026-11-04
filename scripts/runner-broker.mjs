@@ -1920,4 +1920,5 @@ async function main() {
 main().catch((error) => {
   console.error(error instanceof Error ? error.message : "Runner broker failed.");
   process.exitCode = 1;
+  if (process.connected) process.disconnect();
 });

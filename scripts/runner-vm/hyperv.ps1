@@ -1003,10 +1003,25 @@ function Start-GuestJob([object]$Request) {
     $nodePath, $agentArguments, $inputPath, $stdoutPath, $stderrPath
   ) -ScriptBlock {
     param($Node, $Arguments, $InputFile, $StdoutFile, $StderrFile)
-    $started = Start-Process -FilePath $Node -ArgumentList $Arguments -WorkingDirectory ([System.IO.Path]::GetDirectoryName($InputFile)) `
-      -RedirectStandardInput $InputFile -RedirectStandardOutput $StdoutFile -RedirectStandardError $StderrFile `
-      -PassThru -NoNewWindow -ErrorAction Stop
+    $info = [System.Diagnostics.ProcessStartInfo]::new($Node, $Arguments)
+    $info.WorkingDirectory = [System.IO.Path]::GetDirectoryName($InputFile)
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardInput = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $encoding = [System.Text.UTF8Encoding]::new($false)
+    $info.StandardOutputEncoding = $encoding
+    $info.StandardErrorEncoding = $encoding
+    $started = [System.Diagnostics.Process]::Start($info)
     $global:GitEdgeHypervJobProcess = $started
+    $global:GitEdgeHypervJobStdout = $started.StandardOutput.ReadToEndAsync()
+    $global:GitEdgeHypervJobStderr = $started.StandardError.ReadToEndAsync()
+    $global:GitEdgeHypervJobStdoutPath = $StdoutFile
+    $global:GitEdgeHypervJobStderrPath = $StderrFile
+    $inputBytes = $encoding.GetBytes([System.IO.File]::ReadAllText($InputFile))
+    $started.StandardInput.BaseStream.Write($inputBytes, 0, $inputBytes.Length)
+    $started.StandardInput.Close()
     return [int]$started.Id
   } -ErrorAction Stop
   $script:job = @{
@@ -1033,8 +1048,14 @@ function Poll-GuestJob([string]$JobId) {
     if (-not $process.HasExited) { return @{ running = $true } }
     $process.WaitForExit()
     $exitCode = [int]$process.ExitCode
+    [System.IO.File]::WriteAllText($global:GitEdgeHypervJobStdoutPath,
+      $global:GitEdgeHypervJobStdout.GetAwaiter().GetResult(), [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText($global:GitEdgeHypervJobStderrPath,
+      $global:GitEdgeHypervJobStderr.GetAwaiter().GetResult(), [System.Text.UTF8Encoding]::new($false))
     $global:GitEdgeHypervJobProcess.Dispose()
     $global:GitEdgeHypervJobProcess = $null
+    $global:GitEdgeHypervJobStdout = $null
+    $global:GitEdgeHypervJobStderr = $null
     return @{ running = $false; code = $exitCode }
   } -ErrorAction Stop
   if ($state.running) { return @{ running = $true } }
