@@ -349,6 +349,11 @@ onUnmounted(() => {
             </p>
           </div>
           <div class="runner-labels">
+            <StatusBadge
+              v-if="runner.labels.some((label) => label.toLowerCase() === 'limited-connect')"
+            >
+              {{ t("runnerLimitedConnect") }}
+            </StatusBadge>
             <StatusBadge v-for="label in runner.labels" :key="label">{{ label }}</StatusBadge>
           </div>
           <div class="runner-metrics">

@@ -1,6 +1,6 @@
 # Runner 资源与调度
 
-GitEdge 与 GitHub 作业都通过标准 `runs-on` 标签数组声明主机要求。标签不区分大小写，数组中的要求全部满足后才能领取任务。
+GitEdge 与 GitHub 作业都通过标准 `runs-on` 标签数组声明主机要求。标签不区分大小写，普通标签和资源要求全部满足后才能领取任务；策略标签按下文处理。
 
 ```yaml
 jobs:
@@ -27,6 +27,7 @@ jobs:
 | `VRAM-8G`、`VRAM-512M`                            | 一张匹配 GPU 的独立显存不少于指定值                                       |
 | `need-tool-node`、`need-tool-docker`              | 检测到指定工具；Docker 要求守护进程可用                                   |
 | `need-time-45m`                                   | 本地执行截止时间，同时用于预算判断                                        |
+| `allow-limited-connect`                           | 允许在受限网络设备上运行；不是设备必须拥有的标签，普通联网设备仍可接单    |
 | `CPU-PREFER`                                      | 软偏好，不是硬要求：在满足全部硬要求的 runner 中优先选空闲逻辑 CPU 最多者 |
 
 `G` 与 `M` 分别表示 GiB 与 MiB，只接受正整数。内存/显存最多 1024 GiB、逻辑 CPU 最多 512、磁盘最多 1000 TiB。重复的资源要求取最大值；互相矛盾的 GPU 厂商或无法解析的资源标签不能匹配。`need-mem-2g`、`need-cpu-4` 和 `need-disk-50g` 也由同一解析器处理。
@@ -36,6 +37,18 @@ GPU 厂商和显存必须由同一张卡满足，不能累加多张小显存卡�
 未声明内存时按 512 MiB 申请；显式 `RAM-56M` 按 56 MiB 判断。未写 `timeout-minutes` 的本机任务默认 360 分钟，最大 360 分钟；显式较短的超时和 runner 所有者的预算继续生效。一个 GitEdge workflow 的总执行时间为各作业超时之和，上限 360 分钟。签名配置中已批准的显式超时不受默认值改变影响。
 
 `RAM-`、`CPU-`、`DISK-`、`GPU-`、`VRAM-` 与 `need-` 是资源前缀，不能作为自定义主机元数据登记。`server`、`device`、`ip-residential`、`ip-datacenter` 等普通标签由管理员按实际情况维护，不会增加主机资源，也不代表自动获得更低风控。
+
+## 受限网络与网络失败改派
+
+在 runner 的自定义标签中添加 `limited-connect` 表示该设备处于受限网络；没有此标签表示普通联网。标签可在账户设置的 Runners 面板编辑。默认只向普通联网设备分配作业；需要允许受限网络时，在作业中显式声明：
+
+```yaml
+runs-on: [self-hosted, linux, allow-limited-connect]
+```
+
+标签不区分大小写。`allow-limited-connect` 是策略标签，不要求设备拥有该标签，也不会排除普通联网设备。作用域、普通标签、平台和资源要求继续生效。GitEdge 原生 workflow 的所有作业都必须显式允许，整个 workflow 才能在受限设备运行。
+
+网络失败最多自动改派一次，改派时排除原 runner 和所有受限网络设备；没有匹配目标则继续排队，不放松固定设备标签。GitHub 的官方单作业 rerun 也会重跑其依赖作业，并保留环境审批和凭据边界。签名不由此机制自动重放。
 
 ## 容量与领取
 
