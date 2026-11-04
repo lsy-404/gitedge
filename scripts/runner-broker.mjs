@@ -15,11 +15,12 @@ import {
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
+import lockfile from "proper-lockfile";
 import { fileURLToPath } from "node:url";
 import { windowsPowerShellEnvironment } from "./signing/windows-process.mjs";
 import { parseArgs } from "node:util";
 import { parseDocument } from "yaml";
-import { parseJobClaim } from "../packages/contracts/runner-scheduling.mjs";
+import { eligibilityReasons, parseJobClaim } from "../packages/contracts/runner-scheduling.mjs";
 import {
   createGitEdgeExecutionArgs,
   runnerJobMatches,
@@ -37,6 +38,16 @@ import {
 } from "./runner-broker-socket.mjs";
 import { superviseBroker } from "./runner-broker-supervisor.mjs";
 import { createSlotPool } from "./runner-slot-pool.mjs";
+import {
+  loadVmPools,
+  recoverJobVms,
+  verifyVmImage,
+  createJobVm,
+  getVmCapacity,
+  guestEnvironment,
+  guestPaths,
+  vmSlot,
+} from "./runner-vm.mjs";
 import { createRunDirectory } from "./runner-run-root.mjs";
 import { pruneRunArtifacts, runArtifactRoots } from "./runner-retention.mjs";
 import {
@@ -149,13 +160,13 @@ function defaultProfileId(kind, endpoint, owner, repository) {
   return `${`${kind}-${owner}-${repository ?? "org"}`.slice(0, 54)}-${suffix}`;
 }
 
-function validateProfileHostLabels(labels) {
-  const actual = hostLabels();
+function validateProfileHostLabels(labels, guest) {
+  const actual = hostLabels(guest);
   for (const label of labels.map((value) => value.toLowerCase())) {
     if (["linux", "windows", "macos", "x64", "arm64"].includes(label) && !actual.has(label))
       throw new Error(`Profile label ${label} does not match this host.`);
     if (
-      (label === "ubuntu" && process.platform !== "linux") ||
+      (label === "ubuntu" && !actual.has("linux")) ||
       /^(?:ubuntu|windows|macos)-(?:latest|[0-9]+(?:\.[0-9]+)*)(?:-(?:arm|arm64|intel|large|xlarge))*$/.test(
         label
       )
@@ -172,26 +183,24 @@ async function ensureState(state) {
 
 async function acquireStateLock(state, action) {
   const lockPath = path.join(state, "active.lock");
-  const lock = await open(lockPath, "wx", 0o600).catch((error) => {
-    if (error.code === "EEXIST")
-      throw new Error(
-        `Runner broker state is busy; inspect ${lockPath} before removing a stale lock.`
-      );
-    throw error;
-  });
-  try {
-    await lock.writeFile(
-      JSON.stringify({ pid: process.pid, action, startedAt: new Date().toISOString() })
-    );
-  } catch (error) {
-    await lock.close();
-    await rm(lockPath, { force: true });
-    throw error;
-  }
-  return async () => {
-    await lock.close();
-    await rm(lockPath, { force: true });
-  };
+  return lockfile
+    .lock(state, {
+      lockfilePath: lockPath,
+      stale: 60_000,
+      update: 10_000,
+      retries: 0,
+      onCompromised() {
+        console.error("Broker state lock was lost; stopping execution.");
+        process.kill(process.pid, "SIGTERM");
+      },
+    })
+    .catch((error) => {
+      if (error.code === "ELOCKED")
+        throw new Error(
+          `Runner broker state is busy; ${action} cannot start while another process holds ${lockPath}.`
+        );
+      throw error;
+    });
 }
 
 async function withStateLock(state, action, operation) {
@@ -220,6 +229,8 @@ async function loadProfile(state, id) {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(id)) throw new Error("Invalid profile name.");
   const directory = path.join(state, "profiles", id);
   const profile = JSON.parse(await readFile(path.join(directory, "profile.json"), "utf8"));
+  if (profile.execution !== undefined && profile.execution !== "hyperv")
+    throw new Error("Unsupported profile execution mode.");
   let credential;
   try {
     credential = await readFile(path.join(directory, "credential"), "utf8");
@@ -289,6 +300,12 @@ async function addGitEdge(state, values) {
   const owner = values.owner;
   const repository = values.repository;
   const labels = parseList(values.label);
+  const id = validateProfileId(
+    values.name ?? defaultProfileId("gitedge", origin, owner, repository)
+  );
+  const pools = await loadVmPools(state);
+  const vm = pools?.configs.get(id);
+  if (pools && !vm) throw new Error("The profile name must match a configured VM pool.");
   if (!owner || labels.length === 0)
     throw new Error(
       "register-gitedge requires --owner, optional --repository, and at least one --label."
@@ -296,22 +313,22 @@ async function addGitEdge(state, values) {
   repositorySegment(owner, "--owner");
   if (repository) repositorySegment(repository, "--repository");
   validateLabels(labels);
-  validateProfileHostLabels(labels);
+  validateProfileHostLabels(labels, vm?.guest);
   const budget = parseRunnerBudget(values);
-  const slots = values.slots === undefined ? 1 : parseSlots(values.slots);
-  const runnerLabels = mergeLabels([...hostLabels()], labels);
+  const slots = vm?.slots ?? (values.slots === undefined ? 1 : parseSlots(values.slots));
+  if (vm && values.slots !== undefined && parseSlots(values.slots) !== slots)
+    throw new Error("VM slot counts must match vm.json.");
+  const runnerLabels = mergeLabels([...hostLabels(vm?.guest)], labels);
   const adminToken = process.env.GITEDGE_TOKEN;
   if (!adminToken) throw new Error("Set GITEDGE_TOKEN to an admin-scoped GitEdge access token.");
   if (/\s/.test(adminToken)) throw new Error("GITEDGE_TOKEN must not contain whitespace.");
-  const id = validateProfileId(
-    values.name ?? defaultProfileId("gitedge", origin, owner, repository)
-  );
-  const runnerPath = path.resolve(values["runner-path"] ?? "");
-  if (!values["runner-path"])
+  const runnerPath = vm?.guest.runnerPath ?? path.resolve(values["runner-path"] ?? "");
+  if (!vm && !values["runner-path"])
     throw new Error(
       "register-gitedge requires --runner-path to an installed official runner directory."
     );
-  await access(path.join(runnerPath, "bin", executable("Runner.Listener")), constants.X_OK);
+  if (!vm)
+    await access(path.join(runnerPath, "bin", executable("Runner.Listener")), constants.X_OK);
   const directory = path.join(state, "profiles", id);
   try {
     await access(directory);
@@ -346,6 +363,7 @@ async function addGitEdge(state, values) {
         {
           id,
           kind: "gitedge",
+          ...(vm ? { execution: "hyperv" } : {}),
           origin,
           owner,
           repository,
@@ -377,12 +395,17 @@ async function addGitEdge(state, values) {
 
 async function setSlots(state, id, value) {
   const slots = parseSlots(value);
-  await loadProfile(state, id);
+  const profile = await loadProfile(state, id);
+  const vm = (await loadVmPools(state))?.configs.get(id);
+  if (profile.execution === "hyperv" && !vm)
+    throw new Error("The VM profile requires a matching pool in vm.json.");
+  if (vm && vm.slots !== slots)
+    throw new Error("Configure VM addresses and slot counts together in vm.json.");
   const file = path.join(state, "profiles", id, "profile.json");
-  const profile = JSON.parse(await readFile(file, "utf8"));
-  if (slots > 1) profile.slots = slots;
-  else delete profile.slots;
-  await writePrivate(file, JSON.stringify(profile, null, 2) + "\n");
+  const saved = JSON.parse(await readFile(file, "utf8"));
+  if (slots > 1) saved.slots = slots;
+  else delete saved.slots;
+  await writePrivate(file, JSON.stringify(saved, null, 2) + "\n");
   console.log(`Profile ${id} now uses up to ${slots} execution ${slots === 1 ? "slot" : "slots"}.`);
 }
 
@@ -402,15 +425,15 @@ async function listProfiles(state) {
   }
 }
 
-function hostLabels() {
-  if (!["darwin", "win32", "linux"].includes(process.platform))
+function hostLabels(guest) {
+  const platform = guest ? { windows: "win32", linux: "linux" }[guest.platform] : process.platform;
+  const arch = guest?.arch ?? process.arch;
+  if (!["darwin", "win32", "linux"].includes(platform))
     throw new Error("The runner broker supports Linux, macOS, and Windows hosts.");
-  if (!["x64", "arm64"].includes(process.arch))
+  if (!["x64", "arm64"].includes(arch))
     throw new Error("The runner broker supports x64 and ARM64 hosts.");
-  const osLabel =
-    process.platform === "darwin" ? "macOS" : process.platform === "win32" ? "Windows" : "Linux";
-  const archLabel =
-    process.arch === "arm64" ? "ARM64" : process.arch === "x64" ? "X64" : process.arch;
+  const osLabel = platform === "darwin" ? "macOS" : platform === "win32" ? "Windows" : "Linux";
+  const archLabel = arch === "arm64" ? "ARM64" : "X64";
   return new Set([
     "self-hosted",
     osLabel,
@@ -1336,6 +1359,233 @@ async function runAssignedClaim(profile, claim, signal) {
   }
 }
 
+async function renewIsolatedLease(profile, claim, signal) {
+  const signing = claim.run.kind === "signing";
+  const endpoint = signing
+    ? `/api/actions/runner/signing/requests/${claim.run.requestId}/heartbeat`
+    : claim.run.kind === "github"
+      ? "/api/actions/runner/github/heartbeat"
+      : "/api/actions/runner/heartbeat";
+  const response = await apiRequest(profile.origin, profile.credential, endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(signing
+        ? { "X-Runner-Run-Id": claim.run.id, "X-Runner-Lease-Token": claim.leaseToken }
+        : {}),
+    },
+    ...(!signing
+      ? { body: JSON.stringify({ runId: claim.run.id, leaseToken: claim.leaseToken }) }
+      : {}),
+    signal,
+  });
+  const data = response?.data;
+  if (data?.cancelled || data?.cancelRequested || data?.completed)
+    throw new Error("GitEdge requested cancellation.");
+  if (!Number.isFinite(data?.leaseExpiresAt) || data.leaseExpiresAt <= Date.now())
+    throw new Error("Invalid VM startup lease renewal.");
+  return data.leaseExpiresAt;
+}
+
+async function runIsolatedClaim(profile, claim, signal) {
+  if (!/^[0-9a-f-]{36}$/i.test(claim.run.id) || !/^[0-9a-f]{64}$/i.test(claim.leaseToken))
+    throw new Error("Invalid isolated job lease identity.");
+  const stop = new AbortController();
+  const bootstrapStop = new AbortController();
+  const maximum = localExecutionMinutes(
+    parseJobClaim(claim.run.labels ?? profile.labels),
+    claim.run.timeoutMinutes
+  );
+  const executionSignal = AbortSignal.any([
+    signal,
+    stop.signal,
+    AbortSignal.timeout(maximum * 60_000),
+  ]);
+  const bootSignal = AbortSignal.any([executionSignal, bootstrapStop.signal]);
+  const kind = claim.run.kind;
+  const signing = kind === "signing";
+  let leaseExpiresAt = claim.leaseExpiresAt;
+  let bootstrapFailure;
+  const renew = (async () => {
+    while (!bootSignal.aborted) {
+      await sleep(15_000, bootSignal);
+      leaseExpiresAt = await renewIsolatedLease(profile, claim, bootSignal);
+    }
+  })().catch((error) => {
+    if (!bootstrapStop.signal.aborted && !executionSignal.aborted) {
+      bootstrapFailure = error;
+      stop.abort(error);
+    }
+  });
+  let vm;
+  try {
+    const capacity = await getVmCapacity(profile.vm, profile.vmSlot);
+    validateLocalJobClaim(claim.run.labels ?? profile.labels, capacity, claim.run.timeoutMinutes);
+    vm = await createJobVm(profile.vm, executionSignal, profile.vmSlot.claimAddress());
+    console.log(
+      `${new Date().toISOString()} VM ${vm.name} started for ${profile.id} run ${claim.run.id}.`
+    );
+    if (bootstrapFailure) throw bootstrapFailure;
+    const guestState = guestPaths(profile.vm).join(profile.vm.guest.root, "state");
+    const payload = Buffer.from(
+      JSON.stringify({
+        version: 1,
+        state: guestState,
+        profile: {
+          id: profile.id,
+          kind: "gitedge",
+          runnerId: profile.runnerId,
+          origin: profile.origin,
+          owner: profile.owner,
+          repository: profile.repository,
+          labels: profile.labels,
+          runnerPath: profile.vm.guest.runnerPath,
+          budget: profile.budget,
+        },
+        claim: { ...claim, leaseExpiresAt },
+      })
+    );
+    if (payload.length > 1_400_000)
+      throw new Error("The isolated job payload exceeds its transport limit.");
+    const task = await vm.start({
+      command:
+        profile.vm.guest.platform === "windows"
+          ? "C:\\Windows\\System32\\cmd.exe"
+          : profile.vm.guest.node,
+      args:
+        profile.vm.guest.platform === "windows"
+          ? ["/d", "/c", profile.vm.guest.entrypoint]
+          : [
+              guestPaths(profile.vm).join(
+                profile.vm.guest.runtimeRoot,
+                "scripts",
+                "runner-broker.mjs"
+              ),
+              "execute-vm-job",
+            ],
+      cwd: profile.vm.guest.root,
+      env: guestEnvironment(profile.vm, { GITEDGE_VM_JOB: "1", GITEDGE_VM_INSTANCE_ID: vm.name }),
+      input: payload,
+    });
+    payload.fill(0);
+    bootstrapStop.abort();
+    await renew;
+    const result = await task.done;
+    const redacted = (data) =>
+      Buffer.from(data)
+        .toString("utf8")
+        .replaceAll(claim.leaseToken, "[REDACTED]")
+        .replaceAll(claim.run.token ?? "\0", "[REDACTED]")
+        .replaceAll(claim.run.encodedJitConfig ?? "\0", "[REDACTED]");
+    process.stdout.write(redacted(result.stdout));
+    process.stderr.write(redacted(result.stderr));
+    if (result.code !== 0) throw new Error(`The isolated job exited with status ${result.code}.`);
+  } catch (error) {
+    const cancelled =
+      signal.aborted || bootstrapFailure?.message === "GitEdge requested cancellation.";
+    const completeEndpoint = signing
+      ? `/api/actions/runner/signing/requests/${claim.run.requestId}/fail`
+      : kind === "github"
+        ? "/api/actions/runner/github/complete"
+        : "/api/actions/runner/complete";
+    await apiRequest(profile.origin, profile.credential, completeEndpoint, {
+      method: "POST",
+      signal: AbortSignal.timeout(20_000),
+      headers: {
+        "Content-Type": "application/json",
+        ...(signing
+          ? {
+              "X-Runner-Run-Id": claim.run.id,
+              "X-Runner-Lease-Token": claim.leaseToken,
+            }
+          : {}),
+      },
+      body: JSON.stringify(
+        signing
+          ? { code: "execution_failed" }
+          : {
+              runId: claim.run.id,
+              leaseToken: claim.leaseToken,
+              conclusion: cancelled ? "cancelled" : "failure",
+              log: "The isolated execution did not complete.",
+            }
+      ),
+    }).catch(() => {});
+    throw error;
+  } finally {
+    bootstrapStop.abort();
+    await renew;
+    if (vm) {
+      await vm.dispose();
+      console.log(`${new Date().toISOString()} VM ${vm.name} reclaimed after run ${claim.run.id}.`);
+    }
+  }
+}
+
+async function executeVmJob() {
+  if (process.env.GITEDGE_VM_JOB !== "1")
+    throw new Error("VM job execution requires the guest entry point.");
+  const chunks = [];
+  let length = 0;
+  for await (const chunk of process.stdin) {
+    length += chunk.length;
+    if (length > 1_400_000) throw new Error("The guest job payload exceeds its limit.");
+    chunks.push(chunk);
+  }
+  let payload;
+  try {
+    payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    throw new Error("Invalid guest job payload.");
+  }
+  const { profile, claim, state } = payload;
+  if (
+    payload.version !== 1 ||
+    !profile ||
+    !claim?.run ||
+    !path.isAbsolute(state) ||
+    !/^[0-9a-f-]{36}$/i.test(claim.run.id) ||
+    !/^[0-9a-f]{64}$/i.test(claim.leaseToken) ||
+    !/^[A-Za-z0-9_.-]{1,100}$/.test(profile.id) ||
+    profile.id === "." ||
+    profile.id === ".."
+  )
+    throw new Error("Invalid guest job identity.");
+  originValue(profile.origin);
+  await ensureState(state);
+  await mkdir(actionsState, { recursive: true, mode: 0o700 });
+  profile.directory = path.join(state, "profiles", profile.id);
+  await mkdir(profile.directory, { recursive: true, mode: 0o700 });
+  profile.credential = `ge_exec_${claim.run.id}_${claim.leaseToken}`;
+  await writePrivate(path.join(profile.directory, "credential"), profile.credential);
+  const controller = new AbortController();
+  for (const signal of ["SIGINT", "SIGTERM"])
+    process.once(signal, () => controller.abort(new Error("Stopped.")));
+  const jobClaim = parseJobClaim(claim.run.labels ?? profile.labels, claim.run.timeoutMinutes);
+  const readyDeadline = Date.now() + 120_000;
+  let lastRenewedAt = 0;
+  while (true) {
+    if (Date.now() - lastRenewedAt >= 15_000) {
+      claim.leaseExpiresAt = await renewIsolatedLease(profile, claim, controller.signal);
+      lastRenewedAt = Date.now();
+    }
+    const capacity = await getRunnerCapacity({
+      workDirectories: [profile.directory, actionsState],
+    });
+    const reasons = eligibilityReasons(capacity, undefined, 0, jobClaim);
+    if (!reasons.length) break;
+    if (reasons.some((reason) => reason !== "mem" && reason !== "load"))
+      validateCapacityClaim(jobClaim, capacity);
+    if (Date.now() >= readyDeadline)
+      throw new Error(
+        `Guest startup resources are unavailable (${reasons.join(", ")}); memory ${capacity.memFreeMb} MB, load ${capacity.load1} / ${capacity.cpus}.`
+      );
+    await sleep(5_000, controller.signal);
+  }
+  claim.leaseExpiresAt = await renewIsolatedLease(profile, claim, controller.signal);
+  await runAssignedClaim(profile, claim, controller.signal);
+}
+
 function assertGitEdgeProfile(profile) {
   if (profile.kind !== "gitedge")
     throw new Error(
@@ -1371,22 +1621,50 @@ async function serve(state, exitStatusOnSupersede, { slots, supervised }) {
       .map((entry) => loadProfile(state, entry.name))
   );
   if (!profiles.length) throw new Error("Register at least one profile before serving.");
-  for (const profile of profiles) {
-    assertGitEdgeProfile(profile);
-    validateProfileHostLabels(profile.labels);
+  const bootstrapHeartbeat = supervised
+    ? setInterval(
+        () => process.send({ type: "heartbeat", lastReportAt: 0, connected: false }),
+        10_000
+      )
+    : undefined;
+  let vmPools;
+  try {
+    vmPools = await loadVmPools(state, profiles);
+    if (vmPools) {
+      if (slots !== undefined) throw new Error("Configure VM slot counts in vm.json.");
+      await recoverJobVms(vmPools);
+    }
+    for (const profile of profiles) {
+      assertGitEdgeProfile(profile);
+      profile.vm = vmPools?.configs.get(profile.id);
+      validateProfileHostLabels(profile.labels, profile.vm?.guest);
+      if (profile.vm) await verifyVmImage(profile.vm, controller.signal);
+    }
+  } catch (error) {
+    clearInterval(bootstrapHeartbeat);
+    throw error;
   }
+  clearInterval(bootstrapHeartbeat);
   await mkdir(actionsState, { recursive: true, mode: 0o700 });
-  const poolSize = slots ?? Math.max(...profiles.map((profile) => profile.slots ?? 1));
+  const poolSize = vmPools
+    ? [...vmPools.configs.values()].reduce((sum, config) => sum + config.slots, 0)
+    : (slots ?? Math.max(...profiles.map((profile) => profile.slots ?? 1)));
   const slot = createSlotPool({ size: poolSize, acquireLock: acquireActionsSlot });
+  const ledger = { memory: 0, cpus: 0 };
+  for (const profile of profiles)
+    if (profile.vm) profile.vmSlot = vmSlot(vmPools, profile.vm, slot, ledger);
   let reservedMemMb = 0; // memory claimed by jobs running on this broker
   const localCapacity = (profile) =>
-    getRunnerCapacity({
-      workDirectories: [profile.directory, actionsState],
-      busy: slot.busy(),
-      slots: slot.size,
-      reservedMemMb,
-    });
+    profile.vm
+      ? getVmCapacity(profile.vm, profile.vmSlot)
+      : getRunnerCapacity({
+          workDirectories: [profile.directory, actionsState],
+          busy: slot.busy(),
+          slots: slot.size,
+          reservedMemMb,
+        });
   const runJob = async (profile, claim, signal) => {
+    if (profile.vm) return runIsolatedClaim(profile, claim, signal);
     const memMb = parseJobClaim(claim.run.labels ?? []).memMb;
     reservedMemMb += memMb;
     try {
@@ -1401,7 +1679,7 @@ async function serve(state, exitStatusOnSupersede, { slots, supervised }) {
     const label = `GitEdge profile ${profile.id}`;
     const session = createDispatchSession({
       label,
-      slot,
+      slot: profile.vmSlot ?? slot,
       getCapacity: () => localCapacity(profile),
       validateOffer: (labels, capacity) => validateLocalJobClaim(labels, capacity, 360),
       runJob: (claim, signal) => runJob(profile, claim, signal),
@@ -1539,10 +1817,11 @@ async function main() {
     },
   });
   const [action, profileId] = positionals;
+  if (action === "execute-vm-job") return executeVmJob();
   const state = path.resolve(values["state-dir"] ?? stateDefault);
   if (!action || values.help) {
     console.log(
-      "Usage: pnpm run runner-broker -- init|register-gitedge|list|remove|set-slots|serve|service [options]\n\nregister-gitedge --origin URL --owner OWNER [--repository REPO] --label LABEL --runner-path DIR [--max-job-minutes N] [--daily-minutes N] [--cost N] [--slots N]\nA generic GitEdge runner executes matched workflow, GitHub and native signing jobs. Native signing uses the SDK and receives protected secrets for each task.\nset-slots PROFILE N: sets how many jobs the profile may run at once (1-16, default 1).\nserve [--slots N] [--supersede-exit-status N]: runs a supervised broker that keeps one outbound WebSocket per profile to GitEdge and runs the jobs it assigns, up to the largest profile slot count at once (GitEdge workflow and signing jobs run alone). The supervisor restarts the broker when it stops sending heartbeats or reports. Run one broker per registration; a profile whose credential another broker took over stops reconnecting, lets running jobs finish, and the broker exits with status 78 (or N).\nservice install|start|stop|status --install-dir DIR [--state-dir DIR] [--run-as-user USER]\nAll commands accept --state-dir DIR. Registration reads GITEDGE_TOKEN."
+      "Usage: pnpm run runner-broker -- init|register-gitedge|list|remove|set-slots|verify-vm-images|serve|service [options]\n\nregister-gitedge --origin URL --owner OWNER [--repository REPO] --label LABEL --runner-path DIR [--max-job-minutes N] [--daily-minutes N] [--cost N] [--slots N]\nA generic GitEdge runner executes matched workflow, GitHub and native signing jobs with task-scoped secrets.\nset-slots PROFILE N: sets profile concurrency (1-16, default 1). VM profiles must match vm.json.\nverify-vm-images: recovers owned VM remnants, boots and checks every configured image, then removes the verification VMs.\nserve [--slots N] [--supersede-exit-status N]: starts a supervised broker with one outbound WebSocket per profile. Native profiles share the largest profile slot count and workflow/signing jobs run alone. With vm.json, each job uses a disposable VM and pool slots share the physical host budget; --slots is unavailable. Image verification must pass before connecting. The supervisor restarts an unresponsive worker. A superseded registration finishes running jobs and exits with status 78 (or N).\nservice install|start|stop|status --install-dir DIR [--state-dir DIR] [--run-as-user USER]\nAll commands accept --state-dir DIR. Registration reads GITEDGE_TOKEN."
     );
     return;
   }
@@ -1556,6 +1835,16 @@ async function main() {
     return withStateLock(state, action, () => addGitEdge(state, values));
   }
   if (action === "list") return listProfiles(state);
+  if (action === "verify-vm-images")
+    return withStateLock(state, action, async () => {
+      const pool = await loadVmPools(state);
+      if (!pool) throw new Error("Configure VM pools in vm.json first.");
+      await recoverJobVms(pool);
+      for (const config of pool.configs.values()) {
+        const report = await verifyVmImage(config, AbortSignal.timeout(10 * 60_000));
+        console.log(JSON.stringify({ profile: config.id, ...report }));
+      }
+    });
   if (action === "remove" && profileId)
     return withStateLock(state, `remove:${profileId}`, () => removeProfile(state, profileId));
   if (action === "set-slots" && profileId && positionals.length === 3)
@@ -1624,7 +1913,7 @@ async function main() {
     return;
   }
   throw new Error(
-    "Expected init, register-gitedge, list, remove <profile>, set-slots <profile> <n>, serve, or service."
+    "Expected init, register-gitedge, list, remove <profile>, set-slots <profile> <n>, verify-vm-images, serve, or service."
   );
 }
 
