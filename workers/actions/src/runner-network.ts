@@ -81,6 +81,10 @@ export async function retryRunnerNetworkFailure(
       `UPDATE actions_runner_network_retries SET state='requested',requested_at=?
       WHERE retry_key=? AND state='pending' AND changes()=1`
     ).bind(now, key),
+    env.DB.prepare(
+      `DELETE FROM actions_job_tokens WHERE run_id=? AND revoked_at IS NOT NULL
+      AND EXISTS (SELECT 1 FROM actions_runner_runs WHERE run_id=? AND status='queued')`
+    ).bind(runId, runId),
   ]);
   if (results[2].meta.changes !== 1) return false;
   createLogger(env.LOG_LEVEL, { service: "runner" }).info("runner:network-retry-queued", {
