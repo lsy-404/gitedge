@@ -52,6 +52,8 @@ runs-on: [self-hosted, linux, allow-limited-connect]
 
 使用策略标签前须升级参与调度的 broker；旧版本会把它当成普通标签而拒绝领取。
 
+GitHub 连接凭证须有目标仓库的 Actions 写入权限才能请求自动重跑；缺少权限时记录失败，不重复请求，也不更换为其他凭证。
+
 ## 容量与领取
 
 每个 broker 与 Actions Worker 保持一条出站 WebSocket（`GET /api/actions/runner/connect`，使用 runner 凭据）。连接建立后的第一帧必须是 `report`，之后每 30 秒以及执行槽状态变化时再次上报操作系统、架构、逻辑 CPU、负载、可用及总内存、工作盘可用空间、工具和 GPU；`capacity.slots` 为 broker 的执行槽数（1–16），`capacity.busy` 为当前占用的槽数；可用内存已扣除本机运行中任务申请的内存。Linux 使用 MemAvailable 并受 cgroup 剩余内存限制；macOS 包含可回收页面。GPU 使用 systeminformation，在独立进程中探测，最长八秒，工具与 GPU 清单缓存十分钟。显存指标为已安装的单卡独立显存。同一 runner 的新连接会以 4003 关闭旧连接；超过 90 秒没有收到上报（或连接后始终未上报）的连接视为卡死，服务端每 30 秒检查一次并以 4008 关闭、标记离线并收回其 `offer`，broker 随后重连；凭据被撤销，或注册者在每次上报、调度和领取时复查不再拥有该命名空间（所有者）或仓库（管理员）作用域时，以 4001 关闭。每条连接每 10 秒最多接收 20 帧，超出、帧无效或超过 16 KiB 时以 4002 关闭。
