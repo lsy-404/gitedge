@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { NamespaceSlugSchema } from "./account";
 import { RepositorySlugSchema } from "./repository-controls";
-import { isResourceLabel } from "../runner-scheduling.mjs";
+import { isJobPolicyLabel, isResourceLabel } from "../runner-scheduling.mjs";
 
 export const RUNNER_TOKEN_PREFIX = "ge_runner_";
 export const ACTION_JOB_TOKEN_PREFIX = "ge_job_";
@@ -108,7 +108,8 @@ export function isRunnerSystemLabel(label: string): boolean {
     ["linux", "macos", "windows", "x64", "arm", "arm64", "amd64", "x86_64", "aarch64"].includes(
       normalized
     ) ||
-    isResourceLabel(normalized)
+    isResourceLabel(normalized) ||
+    isJobPolicyLabel(normalized)
   );
 }
 export const RunnerCustomLabelsSchema = z
@@ -127,7 +128,9 @@ export const RegisterRunnerInputSchema = z
   .object({
     name: z.string().trim().min(1).max(80),
     scope: RunnerScopeSchema,
-    labels: RunnerLabelsSchema.refine((labels) => labels.every((label) => !isResourceLabel(label))),
+    labels: RunnerLabelsSchema.refine((labels) =>
+      labels.every((label) => !isResourceLabel(label) && !isJobPolicyLabel(label))
+    ),
   })
   .strict();
 export type RegisterRunnerInput = z.infer<typeof RegisterRunnerInputSchema>;

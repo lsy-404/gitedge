@@ -7,6 +7,10 @@ import {
   type ActionWorkflow,
 } from "../../../packages/contracts/src/actions";
 import { RunnerLabelsSchema } from "../../../packages/contracts/src/runners";
+import {
+  ALLOW_LIMITED_CONNECT_LABEL,
+  isJobPolicyLabel,
+} from "../../../packages/contracts/runner-scheduling.mjs";
 import { WorkflowValidationError } from "./workflow";
 import { parseCronSchedules } from "./cron";
 
@@ -103,6 +107,7 @@ export function parseRunnerWorkflow(path: string, source: string): RunnerWorkflo
   if (!jobs.success || Object.keys(jobs.data).length < 1 || Object.keys(jobs.data).length > 16)
     fail("Runner workflows require between 1 and 16 jobs.");
   const labels = new Set<string>();
+  let allowsLimitedConnect = true;
   let timeoutMinutes = 0;
   for (const [id, item] of Object.entries(jobs.data)) {
     const job = RecordSchema.safeParse(item);
@@ -122,7 +127,9 @@ export function parseRunnerWorkflow(path: string, source: string): RunnerWorkflo
       fail(`Job '${id}' requires literal runs-on labels for one matching host.`);
     if (!required.data.some((label) => label.toLowerCase() === "self-hosted"))
       fail(`Job '${id}' must explicitly target self-hosted runners.`);
-    for (const label of required.data) labels.add(label.toLowerCase());
+    allowsLimitedConnect &&= required.data.some(isJobPolicyLabel);
+    for (const label of required.data)
+      if (!isJobPolicyLabel(label)) labels.add(label.toLowerCase());
     const timeout = z
       .number()
       .int()
@@ -143,6 +150,7 @@ export function parseRunnerWorkflow(path: string, source: string): RunnerWorkflo
         fail("Original artifact actions reject custom GitHub hosts and are unsupported.");
     }
   }
+  if (allowsLimitedConnect) labels.add(ALLOW_LIMITED_CONNECT_LABEL);
   if (labels.size > 40) fail("The workflow requires too many runner labels.");
   const name = z
     .string()

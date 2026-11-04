@@ -36,6 +36,7 @@ import type { RunnerWorkflow } from "./runner-workflow";
 import { claimGithubRunner, githubRunnerLease } from "./github-runners";
 import { notifyRunnerDispatch, type RunnerDispatch } from "./runner-dispatch";
 import { handleSigningMachineCallback } from "./signing-execution";
+import { retryRunnerNetworkFailure } from "./runner-network";
 import {
   claimRunnerCandidate,
   clearRunnerFailures,
@@ -1172,6 +1173,8 @@ export async function runnerMachineRequest(request: Request, env: RunnerEnv): Pr
     )
       .bind(now, parsed.data.runId)
       .run();
+    if (changed && parsed.data.conclusion === "failure")
+      await retryRunnerNetworkFailure(env, runner, parsed.data.runId, hash, bounded, now);
     const run = await getRunnerRun(env, parsed.data.runId);
     if (run) await publishCheck(env, run);
     await notifyRunnerDispatch(env, runner.namespace_id);

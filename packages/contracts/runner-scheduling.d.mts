@@ -1,8 +1,12 @@
 import type { JobClaim, RunnerBudget, RunnerCapacity } from "./src/runners.js";
 export const RESOURCE_LABEL_PREFIXES: readonly string[];
+export const LIMITED_CONNECT_LABEL: "limited-connect";
+export const ALLOW_LIMITED_CONNECT_LABEL: "allow-limited-connect";
 
 export function hasNeedLabels(labels: unknown): boolean;
 export function isResourceLabel(label: string): boolean;
+export function isJobPolicyLabel(label: string): boolean;
+export function runnerNetworkReasons(required: string[], available: string[]): string[];
 export function parseJobClaim(labels: unknown, defaultMinutes?: number): JobClaim;
 export function matchesLabels(required: unknown, available: unknown): boolean;
 export function matchesCapacity(

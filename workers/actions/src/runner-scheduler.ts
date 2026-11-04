@@ -16,10 +16,13 @@ import {
 } from "../../../packages/contracts/src/runners";
 import {
   RESOURCE_LABEL_PREFIXES,
+  ALLOW_LIMITED_CONNECT_LABEL,
+  LIMITED_CONNECT_LABEL,
   eligibilityReasons,
   hasNeedLabels,
   matchesLabels,
   parseJobClaim,
+  runnerNetworkReasons,
 } from "../../../packages/contracts/runner-scheduling.mjs";
 import type { RunnerEnv, RunnerRow } from "./runners";
 
@@ -39,6 +42,8 @@ export interface RunnerCandidate {
   generation: number | null;
   nonce: string | null;
   platform: "macos" | "windows" | "ios" | null;
+  network_retry_key?: string | null;
+  retry_source_runner_id?: string | null;
 }
 
 export interface EvaluatedRunnerCandidate {
@@ -96,7 +101,10 @@ const usageExpression = (alias: string, now: number, cutoff: number) => `
       AND j.status IN ('running','completed') AND COALESCE(j.completed_at, ${now})>${cutoff}), 0) / 60000.0
   + COALESCE((SELECT SUM(MAX(0, MIN(json_extract(e.metadata_json,'$.completedAt'), ${now}) - MAX(json_extract(e.metadata_json,'$.startedAt'), ${cutoff})))
     FROM audit_events e WHERE e.subject_user_id=${alias}.created_by AND e.created_at>${cutoff}
-      AND e.action='actions.runner_demand_requeued' AND e.target_type='runner' AND e.target_id=${alias}.id), 0) / 60000.0`;
+      AND e.action='actions.runner_demand_requeued' AND e.target_type='runner' AND e.target_id=${alias}.id), 0) / 60000.0
+  + COALESCE((SELECT SUM(MAX(0,MIN(n.completed_at,${now})-MAX(n.started_at,${cutoff})))
+    FROM actions_runner_network_retries n WHERE n.kind='gitedge' AND n.source_runner_id=${alias}.id
+      AND n.completed_at>${cutoff}),0) / 60000.0`;
 
 export async function runnerUsageMinutes24h(
   env: RunnerEnv,
@@ -121,21 +129,28 @@ async function queryRunnerCandidates(
   runner: RunnerRow,
   target: CandidateTarget
 ): Promise<RunnerCandidate[]> {
-  const runnerLabels = JSON.stringify(parseLabels(runner.labels_json) ?? []);
-  const ordinaryLabel = RESOURCE_LABEL_PREFIXES.map(
-    (prefix) => `lower(required.value) NOT LIKE '${prefix}%'`
-  ).join(" AND ");
+  const available = parseLabels(runner.labels_json) ?? [];
+  const runnerLabels = JSON.stringify(available);
+  const limited = runnerNetworkReasons([], available).length ? 1 : 0;
+  const ordinaryLabel =
+    RESOURCE_LABEL_PREFIXES.map((prefix) => `lower(required.value) NOT LIKE '${prefix}%'`).join(
+      " AND "
+    ) + ` AND lower(required.value)<>'${ALLOW_LIMITED_CONNECT_LABEL}'`;
   const gitedgeTarget = target === null ? null : target.kind === "gitedge" ? target.id : "";
   const githubTarget = target === null ? null : target.kind === "github" ? target.id : "";
   const rows = await env.DB.prepare(
     `SELECT * FROM (
       SELECT 'gitedge' AS kind,CASE WHEN s.run_id IS NULL THEN 'workflow' ELSE 'signing' END AS execution_kind,
         j.run_id AS id,p.id AS repository_id,a.created_at,j.labels_json,j.timeout_minutes AS default_minutes,
-        s.request_id,s.stage,s.input_digest,s.workflow_oid,s.profile_revision,s.generation,s.nonce,s.platform
+        s.request_id,s.stage,s.input_digest,s.workflow_oid,s.profile_revision,s.generation,s.nonce,s.platform,
+        retry.retry_key AS network_retry_key,retry.source_runner_id AS retry_source_runner_id
       FROM actions_runner_runs j JOIN actions_runs a ON a.id=j.run_id
         JOIN repositories p ON p.id=a.repository_id JOIN users u ON u.id=a.created_by
         LEFT JOIN actions_signing_runs s ON s.run_id=j.run_id
+        LEFT JOIN actions_runner_network_retries retry ON retry.retry_key='gitedge:'||j.run_id
       WHERE j.status='queued' AND (? IS NULL OR j.run_id=?) AND p.namespace_id=? AND (? IS NULL OR p.id=?)
+        AND (?=0 OR EXISTS (SELECT 1 FROM json_each(j.labels_json) WHERE lower(value)='${ALLOW_LIMITED_CONNECT_LABEL}'))
+        AND (retry.retry_key IS NULL OR (?=0 AND retry.source_runner_id IS NOT ?))
         AND p.deleted_at IS NULL AND p.archived=0 AND p.actions_enabled=1
         AND p.actions_runner_enabled=1 AND u.disabled_at IS NULL
         AND (s.run_id IS NULL OR (s.owner_id=? AND s.repository_id=p.id))
@@ -145,11 +160,16 @@ async function queryRunnerCandidates(
       UNION ALL
       SELECT 'github' AS kind,'workflow' AS execution_kind,j.id,p.id AS repository_id,j.created_at,
         j.labels_json,360 AS default_minutes,NULL AS request_id,NULL AS stage,
-        NULL AS input_digest,NULL AS workflow_oid,NULL AS profile_revision,NULL AS generation,NULL AS nonce,NULL AS platform
+        NULL AS input_digest,NULL AS workflow_oid,NULL AS profile_revision,NULL AS generation,NULL AS nonce,NULL AS platform,
+        retry.retry_key AS network_retry_key,retry.source_runner_id AS retry_source_runner_id
       FROM actions_github_runner_jobs j JOIN forge_github_connections c ON c.id=j.connection_id
         JOIN repositories p ON p.id=c.repository_id JOIN users u ON u.id=c.created_by
+        LEFT JOIN actions_runner_network_retries retry ON retry.kind='github'
+          AND retry.connection_id=j.connection_id AND retry.github_run_id=j.github_run_id
       WHERE j.status='queued' AND (? IS NULL OR j.id=?) AND c.enabled=1 AND c.runner_enabled=1
         AND p.namespace_id=? AND (? IS NULL OR p.id=?)
+        AND (?=0 OR EXISTS (SELECT 1 FROM json_each(j.labels_json) WHERE lower(value)='${ALLOW_LIMITED_CONNECT_LABEL}'))
+        AND (retry.retry_key IS NULL OR (?=0 AND retry.source_runner_id IS NOT ?))
         AND p.deleted_at IS NULL AND p.archived=0 AND p.actions_enabled=1 AND u.disabled_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM json_each(j.labels_json) required
           WHERE ${ordinaryLabel}
@@ -162,6 +182,9 @@ async function queryRunnerCandidates(
       runner.namespace_id,
       runner.repository_id,
       runner.repository_id,
+      limited,
+      limited,
+      runner.id,
       runner.created_by,
       runnerLabels,
       githubTarget,
@@ -169,6 +192,9 @@ async function queryRunnerCandidates(
       runner.namespace_id,
       runner.repository_id,
       runner.repository_id,
+      limited,
+      limited,
+      runner.id,
       runnerLabels,
       target === null ? RUNNER_CLAIM_CANDIDATE_LIMIT : 1
     )
@@ -227,6 +253,13 @@ export function evaluateRunnerCandidate(
   }
   if (labels) {
     const available = parseLabels(runner.labels_json) ?? [];
+    for (const reason of runnerNetworkReasons(labels, available)) reasons.add(reason);
+    if (
+      candidate.network_retry_key &&
+      (candidate.retry_source_runner_id === runner.id ||
+        available.some((label) => label.toLowerCase() === LIMITED_CONNECT_LABEL))
+    )
+      reasons.add("retry-device");
     for (const label of claim.labels) {
       if (!matchesLabels([label], available)) reasons.add(`label:${label}`);
     }
@@ -305,6 +338,10 @@ export async function claimRunnerCandidate(
     runner.id,
     limit,
   ];
+  const limited = runnerNetworkReasons([], parseLabels(runner.labels_json) ?? []).length ? 1 : 0;
+  const retryGuard = `AND NOT EXISTS (SELECT 1 FROM actions_runner_network_retries n WHERE
+    ${candidate.kind === "gitedge" ? "n.retry_key='gitedge:'||actions_runner_runs.run_id" : "n.kind='github' AND n.connection_id=actions_github_runner_jobs.connection_id AND n.github_run_id=actions_github_runner_jobs.github_run_id"}
+    AND (n.source_runner_id=? OR ?=1))`;
   let claimed: { id: string } | null;
   if (candidate.kind === "gitedge") {
     claimed = await env.DB.prepare(
@@ -313,6 +350,7 @@ export async function claimRunnerCandidate(
        WHERE run_id=? AND status='queued'
          ${signingJobGuard}
          ${admissionGuard}
+         ${retryGuard}
          AND ${runnerGuard}
        RETURNING run_id AS id`
     )
@@ -338,6 +376,8 @@ export async function claimRunnerCandidate(
         candidate.nonce,
         candidate.platform,
         ...admissionBindings,
+        runner.id,
+        limited,
         ...runnerBindings
       )
       .first<{ id: string }>();
@@ -347,6 +387,7 @@ export async function claimRunnerCandidate(
         lease_expires_at=?,started_at=?,cleanup_pending=1
        WHERE id=? AND status='queued'
          ${admissionGuard}
+         ${retryGuard}
          AND ${runnerGuard}
        RETURNING id`
     )
@@ -357,6 +398,8 @@ export async function claimRunnerCandidate(
         now,
         candidate.id,
         ...admissionBindings,
+        runner.id,
+        limited,
         ...runnerBindings
       )
       .first<{ id: string }>();

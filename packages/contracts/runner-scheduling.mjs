@@ -5,6 +5,8 @@ const MAX_DISK_MB = 1_048_576_000;
 const MAX_MINUTES = 360;
 const CPU_PREFERENCE_WEIGHT = 10;
 const TOOL_NAME = /^[a-z0-9][a-z0-9._+-]{0,63}$/;
+export const LIMITED_CONNECT_LABEL = "limited-connect";
+export const ALLOW_LIMITED_CONNECT_LABEL = "allow-limited-connect";
 export const RESOURCE_LABEL_PREFIXES = Object.freeze([
   "need-",
   "ram-",
@@ -43,6 +45,18 @@ export function isResourceLabel(label) {
   );
 }
 
+export function isJobPolicyLabel(label) {
+  return typeof label === "string" && label.toLowerCase() === ALLOW_LIMITED_CONNECT_LABEL;
+}
+
+export function runnerNetworkReasons(required, available) {
+  if (!Array.isArray(required) || !Array.isArray(available)) return ["claim-invalid"];
+  return available.some((label) => label.toLowerCase() === LIMITED_CONNECT_LABEL) &&
+    !required.some(isJobPolicyLabel)
+    ? ["limited-connect"]
+    : [];
+}
+
 export function parseJobClaim(labels, defaultMinutes = 360) {
   if (
     !Array.isArray(labels) ||
@@ -67,6 +81,7 @@ export function parseJobClaim(labels, defaultMinutes = 360) {
 
   for (const label of labels) {
     const lower = label.toLowerCase();
+    if (isJobPolicyLabel(lower)) continue;
     if (!isResourceLabel(lower)) {
       ordinary.push(lower);
       continue;

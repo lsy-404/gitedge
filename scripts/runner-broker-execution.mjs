@@ -1,4 +1,8 @@
-import { parseJobClaim, matchesLabels } from "../packages/contracts/runner-scheduling.mjs";
+import {
+  parseJobClaim,
+  matchesLabels,
+  runnerNetworkReasons,
+} from "../packages/contracts/runner-scheduling.mjs";
 import { localExecutionMinutes } from "./runner-capacity.mjs";
 
 export function runnerProfileForClaim(profile, claim) {
@@ -26,6 +30,7 @@ export function runnerJobMatches(labels, profileLabels, hostLabels) {
   const available = new Set([...hostLabels, ...profileLabels].map((label) => label.toLowerCase()));
   return (
     claim.valid &&
+    runnerNetworkReasons(labels, profileLabels).length === 0 &&
     claim.labels.includes("self-hosted") &&
     matchesLabels(claim.labels, [...available])
   );

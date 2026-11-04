@@ -8,11 +8,18 @@ import { readJsonLimited } from "../../../src/worker/common/readText";
 import { repositoryRole } from "../../../src/worker/common/repositories";
 import { createLogger } from "../../../src/worker/common/logger";
 import { auditStatement } from "../../../src/worker/common/audit";
+import {
+  githubNetworkRetryKey,
+  isNetworkFailure,
+  permitsNetworkRetry,
+  type RunnerNetworkRetry,
+} from "../../../src/worker/common/runner-network";
 import { githubCredentials, type GithubConnectionRow } from "./github-sync-store";
 import {
   GithubApiError,
   githubRepoPath,
   githubRequest,
+  githubJobLog,
   GithubRepositorySchema,
 } from "./github-client";
 import type { ForgeEnv } from "./common";
@@ -36,6 +43,16 @@ const JobSchema = z.object({
     ])
     .nullable(),
   labels: z.array(z.string()).max(40),
+  steps: z
+    .array(
+      z.object({
+        number: z.number().int().positive(),
+        conclusion: z.string().nullable(),
+        started_at: z.string().nullable(),
+        completed_at: z.string().nullable(),
+      })
+    )
+    .default([]),
 });
 const JitSchema = z.object({
   runner: z.object({ id: z.number().int().positive() }),
@@ -183,12 +200,141 @@ async function cleanup(
           ? "cancelled"
           : "failure";
   }
+  if (await retryNetworkJob(env, job, connection, remote)) return;
   await env.DB.prepare(
     `UPDATE actions_github_runner_jobs SET cleanup_pending=0,conclusion=? WHERE id=? AND status='completed'
      AND github_runner_id IS ? AND lease_hash IS ?`
   )
     .bind(conclusion, job.id, job.github_runner_id, job.lease_hash)
     .run();
+}
+
+async function retryNetworkJob(
+  env: ForgeEnv,
+  job: GitHubRunnerJobRecord,
+  connection: GithubConnectionRow,
+  remote: z.infer<typeof JobSchema> | undefined
+): Promise<boolean> {
+  if (
+    !remote ||
+    remote.status !== "completed" ||
+    remote.conclusion !== "failure" ||
+    job.conclusion === "cancelled" ||
+    job.started_at === null ||
+    job.completed_at === null ||
+    !(await allowed(env, connection, job.runner_id))
+  )
+    return false;
+  const key = githubNetworkRetryKey(connection.id, job.github_run_id);
+  let retry = await env.DB.prepare("SELECT * FROM actions_runner_network_retries WHERE retry_key=?")
+    .bind(key)
+    .first<RunnerNetworkRetry>();
+  if (retry && retry.source_job_id !== job.id) return false;
+  if (retry && retry.state !== "pending") return false;
+  const credentials = await githubCredentials(env, connection);
+  if (!retry) {
+    const runner = await env.DB.prepare("SELECT labels_json FROM actions_runners WHERE id=?")
+      .bind(job.runner_id)
+      .first<{ labels_json: string }>();
+    const labels = z.array(z.string()).parse(JSON.parse(job.labels_json));
+    const available = runner ? z.array(z.string()).parse(JSON.parse(runner.labels_json)) : [];
+    if (!permitsNetworkRetry(labels, available)) return false;
+    const failed = remote.steps.filter((step) => step.conclusion === "failure").at(-1);
+    if (!failed?.started_at || !failed.completed_at) return false;
+    const started = Date.parse(failed.started_at),
+      completed =
+        Date.parse(failed.completed_at) + (/\.\d+Z$/.test(failed.completed_at) ? 1 : 1000);
+    if (!Number.isFinite(started) || !Number.isFinite(completed)) return false;
+    const log = await githubJobLog(
+      credentials.token,
+      connection.owner,
+      connection.name,
+      job.github_job_id
+    );
+    if (log === null) return false;
+    const failedLog = log
+      .split(/\r?\n/)
+      .filter((line) => {
+        const timestamp = /^\d{4}-\d{2}-\d{2}T[\d:.]+Z/.exec(line)?.[0];
+        const at = timestamp ? Date.parse(timestamp) : NaN;
+        return at >= started && at < completed;
+      })
+      .join("\n");
+    if (!isNetworkFailure(failedLog)) return false;
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO actions_runner_network_retries
+      (retry_key,kind,repository_id,connection_id,github_run_id,source_job_id,source_runner_id,
+       source_lease_hash,failure_log,started_at,completed_at,state,created_at)
+      VALUES (?,'github',?,?,?,?,?,?,?,?,?,'pending',?)`
+    )
+      .bind(
+        key,
+        connection.repository_id,
+        connection.id,
+        job.github_run_id,
+        job.id,
+        job.runner_id,
+        job.lease_hash,
+        `GitHub failed step ${failed.number} reported a network transport error.`,
+        job.started_at,
+        job.completed_at,
+        Date.now()
+      )
+      .run();
+    retry = await env.DB.prepare("SELECT * FROM actions_runner_network_retries WHERE retry_key=?")
+      .bind(key)
+      .first<RunnerNetworkRetry>();
+    if (!retry || retry.source_job_id !== job.id || retry.state !== "pending") return false;
+  }
+  const path = githubRepoPath(connection.owner, connection.name);
+  const run = z
+    .object({ id: z.number(), head_sha: z.string(), status: z.string() })
+    .parse(await githubRequest(credentials.token, `${path}/actions/runs/${job.github_run_id}`));
+  if (
+    run.id !== job.github_run_id ||
+    run.head_sha !== job.head_oid ||
+    Date.now() - retry.created_at > 21_600_000
+  ) {
+    await env.DB.prepare(
+      "UPDATE actions_runner_network_retries SET state='failed',error_code='retry_identity_or_deadline' WHERE retry_key=? AND state='pending'"
+    )
+      .bind(key)
+      .run();
+    return false;
+  }
+  if (run.status !== "completed") return true;
+  const claimed = await env.DB.prepare(
+    "UPDATE actions_runner_network_retries SET state='requested',requested_at=? WHERE retry_key=? AND state='pending' RETURNING retry_key"
+  )
+    .bind(Date.now(), key)
+    .first();
+  if (!claimed) return false;
+  try {
+    await githubRequest(
+      credentials.token,
+      `${path}/actions/jobs/${job.github_job_id}/rerun`,
+      "POST"
+    );
+    createLogger(env.LOG_LEVEL, { service: "github-runner" }).info(
+      "github-runner:network-retry-requested",
+      { id: job.id, githubRunId: job.github_run_id }
+    );
+  } catch (cause) {
+    const code =
+      cause instanceof GithubApiError
+        ? `github_http_${cause.status}`
+        : "github_request_outcome_unknown";
+    await env.DB.prepare(
+      "UPDATE actions_runner_network_retries SET state=?,error_code=? WHERE retry_key=?"
+    )
+      .bind(cause instanceof GithubApiError ? "failed" : "requested", code, key)
+      .run();
+    createLogger(env.LOG_LEVEL, { service: "github-runner" }).warn(
+      "github-runner:network-retry-failed",
+      { id: job.id, code }
+    );
+  }
+  return false;
 }
 
 export async function stopGithubRunners(

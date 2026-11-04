@@ -68,11 +68,62 @@ export async function githubRequest(
   }
   const text = await readTextLimited(response.body, 1_048_576);
   if (text === null) throw new Error("github_response_limit");
+  if (text === "") return null;
   try {
     return JSON.parse(text);
   } catch {
     throw new Error("github_invalid_response");
   }
+}
+
+export async function githubJobLog(
+  token: string,
+  owner: string,
+  repository: string,
+  jobId: number
+): Promise<string | null> {
+  if (!Number.isSafeInteger(jobId) || jobId < 1) throw new Error("invalid_github_job");
+  const response = await fetch(
+    `https://api.github.com${githubRepoPath(owner, repository)}/actions/jobs/${jobId}/logs`,
+    {
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${token}`,
+        "User-Agent": "GitEdge-Sync",
+        "X-GitHub-Api-Version": "2026-03-10",
+      },
+      redirect: "manual",
+      signal: AbortSignal.timeout(8_000),
+    }
+  );
+  if (response.status === 404 || response.status === 410) {
+    await response.body?.cancel();
+    return null;
+  }
+  if (response.status !== 302) {
+    await response.body?.cancel();
+    throw new GithubApiError(response.status);
+  }
+  const location = response.headers.get("Location");
+  await response.body?.cancel();
+  if (!location || location.length > 8192) throw new Error("github_log_location_invalid");
+  const url = new URL(location);
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.port ||
+    ![".blob.core.windows.net", ".actions.githubusercontent.com"].some((suffix) =>
+      url.hostname.endsWith(suffix)
+    )
+  )
+    throw new Error("github_log_location_invalid");
+  const log = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(8_000) });
+  if (!log.ok) {
+    await log.body?.cancel();
+    throw new GithubApiError(log.status);
+  }
+  return readTextLimited(log.body, 1_048_576);
 }
 
 export function githubRepoPath(owner: string, repository: string): string {

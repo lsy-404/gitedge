@@ -21,6 +21,8 @@ import {
   hasNeedLabels,
   matchesLabels,
   parseJobClaim,
+  LIMITED_CONNECT_LABEL,
+  runnerNetworkReasons,
 } from "../../../packages/contracts/runner-scheduling.mjs";
 import { errorResponse } from "../../../src/worker/common/http";
 import { readRunnerDeviceHealth, type DeviceHealthEnv } from "./device-health";
@@ -82,6 +84,8 @@ interface QueueDbRow {
   labels_json: string;
   created_at: number;
   minutes: number;
+  network_retry_key: string | null;
+  retry_source_runner_id: string | null;
 }
 
 const MAX_RUNNERS = 100;
@@ -223,6 +227,7 @@ function runnerUsageReasons(
 ): string[] {
   const reasons: string[] = [];
   const runnerLabels = safeLabels(row.labels_json);
+  reasons.push(...runnerNetworkReasons(labels, runnerLabels));
   if (!matchesLabels(claim.labels, runnerLabels)) {
     for (const label of claim.labels)
       if (!runnerLabels.some((available) => available.toLowerCase() === label.toLowerCase()))
@@ -258,8 +263,10 @@ async function queueRows(
   const [gitedge, github] = await Promise.all([
     env.DB.prepare(
       `SELECT 'gitedge' AS kind,a.id,n.slug||'/'||p.slug AS repository,p.namespace_id,p.id AS repository_id,
-      j.labels_json,a.created_at,j.timeout_minutes AS minutes FROM actions_runner_runs j
+      j.labels_json,a.created_at,j.timeout_minutes AS minutes,
+      retry.retry_key AS network_retry_key,retry.source_runner_id AS retry_source_runner_id FROM actions_runner_runs j
       JOIN actions_runs a ON a.id=j.run_id JOIN repositories p ON p.id=a.repository_id JOIN namespaces n ON n.id=p.namespace_id
+      LEFT JOIN actions_runner_network_retries retry ON retry.retry_key='gitedge:'||j.run_id
       WHERE j.status='queued' AND p.deleted_at IS NULL AND ((p.system_kind='account_runner' AND n.created_by=?) OR (p.system_kind IS NULL AND (
         EXISTS (SELECT 1 FROM namespace_memberships m WHERE m.namespace_id=p.namespace_id AND m.user_id=? AND m.role='owner') OR
         EXISTS (SELECT 1 FROM repository_collaborators c WHERE c.repository_id=p.id AND c.user_id=? AND c.role='admin'))))
@@ -270,9 +277,13 @@ async function queueRows(
       .all<QueueDbRow>(),
     env.DB.prepare(
       `SELECT 'github' AS kind,j.id,n.slug||'/'||p.slug AS repository,p.namespace_id,p.id AS repository_id,
-      j.labels_json,j.created_at,360 AS minutes FROM actions_github_runner_jobs j
+      j.labels_json,j.created_at,360 AS minutes,
+      retry.retry_key AS network_retry_key,retry.source_runner_id AS retry_source_runner_id FROM actions_github_runner_jobs j
       JOIN forge_github_connections c ON c.id=j.connection_id JOIN repositories p ON p.id=c.repository_id
-      JOIN namespaces n ON n.id=p.namespace_id WHERE j.status='queued' AND p.deleted_at IS NULL AND ((p.system_kind='account_runner' AND n.created_by=?) OR (p.system_kind IS NULL AND (
+      JOIN namespaces n ON n.id=p.namespace_id
+      LEFT JOIN actions_runner_network_retries retry ON retry.kind='github'
+        AND retry.connection_id=j.connection_id AND retry.github_run_id=j.github_run_id
+      WHERE j.status='queued' AND p.deleted_at IS NULL AND ((p.system_kind='account_runner' AND n.created_by=?) OR (p.system_kind IS NULL AND (
         EXISTS (SELECT 1 FROM namespace_memberships m WHERE m.namespace_id=p.namespace_id AND m.user_id=? AND m.role='owner') OR
         EXISTS (SELECT 1 FROM repository_collaborators c WHERE c.repository_id=p.id AND c.user_id=? AND c.role='admin'))))
       ${repositoryFilter}
@@ -474,6 +485,12 @@ export async function handleRunnerOverview(
                 running.has(runner.id)
               )
             : ["scope"];
+        if (
+          job.network_retry_key &&
+          (job.retry_source_runner_id === runner.id ||
+            runnerView.labels.some((label) => label.toLowerCase() === LIMITED_CONNECT_LABEL))
+        )
+          reasons.push("retry-device");
         if (reasons.length) blockedBy[runnerView.id] = reasons;
       }
       return {

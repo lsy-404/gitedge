@@ -59,7 +59,7 @@ export const runnerMessages = {
     runnerCustomLabels: "自定义路由标签",
     runnerCustomLabelsHint: "例如 device, ip-residential, gpu",
     runnerCustomLabelsHelp:
-      "用逗号分隔；系统平台与资源标签不可编辑。添加 limited-connect 表示受限网络。",
+      "用逗号分隔；平台、资源及作业策略标签不可编辑。添加 limited-connect 表示受限网络。",
     runnerLimitedConnect: "LIMITED CONNECT · 受限网络",
     runnerCustomLabelsSave: "保存标签",
     runnerCustomLabelsError: "无法保存标签。请检查标签格式并重试。",
@@ -204,7 +204,7 @@ export const runnerMessages = {
     runnerCustomLabels: "Custom routing labels",
     runnerCustomLabelsHint: "For example: device, ip-residential, gpu",
     runnerCustomLabelsHelp:
-      "Separate labels with commas. System platform and resource labels are fixed. Add limited-connect for a restricted network.",
+      "Separate labels with commas. Platform, resource and job policy labels are fixed. Add limited-connect for a restricted network.",
     runnerLimitedConnect: "LIMITED CONNECT · Restricted network",
     runnerCustomLabelsSave: "Save labels",
     runnerCustomLabelsError: "Could not save labels. Check the label format and try again.",
