@@ -88,9 +88,13 @@ try {
   if ($existingIso -and $existingIso.Attached) { throw 'The ISO is already mounted; refusing to take ownership of an existing mount.' }
   $iso = Mount-DiskImage -ImagePath $IsoPath -PassThru -ErrorAction Stop
   $mountedIso = $true
-  $media = @($iso | Get-Disk | Get-Partition | Get-Volume | Where-Object DriveLetter)
+  $media = @($iso | Get-Volume | Where-Object DriveLetter)
   if ($media.Count -ne 1) { throw 'The ISO must expose exactly one mounted volume with a drive letter.' }
   $mediaRoot = "$($media[0].DriveLetter):\"
+  $signature = Get-AuthenticodeSignature (Join-Path $mediaRoot 'setup.exe')
+  if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Microsoft') {
+    throw 'The Windows installation media signature is invalid.'
+  }
   $imageFile = @((Join-Path $mediaRoot 'sources\install.wim'), (Join-Path $mediaRoot 'sources\install.esd') |
     Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }) | Select-Object -First 1
   if (-not $imageFile) { throw 'The ISO must contain sources\install.wim or sources\install.esd.' }
@@ -104,10 +108,10 @@ try {
   $disk = $vhd | Mount-VHD -PassThru -ErrorAction Stop | Get-Disk
   Initialize-Disk -Number $disk.Number -PartitionStyle GPT -ErrorAction Stop | Out-Null
   $efi = New-Partition -DiskNumber $disk.Number -Size 260MB -GptType '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' -AssignDriveLetter -ErrorAction Stop
-  $efi = $efi | Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'System' -Confirm:$false -ErrorAction Stop
+  $efi | Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'System' -Confirm:$false -ErrorAction Stop | Out-Null
   $msr = New-Partition -DiskNumber $disk.Number -Size 16MB -GptType '{e3c9e316-0b5c-4db8-817d-f92df00215ae}' -ErrorAction Stop
   $osPartition = New-Partition -DiskNumber $disk.Number -UseMaximumSize -GptType '{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}' -AssignDriveLetter -ErrorAction Stop
-  $osPartition = $osPartition | Format-Volume -FileSystem NTFS -NewFileSystemLabel 'Windows' -Confirm:$false -ErrorAction Stop
+  $osPartition | Format-Volume -FileSystem NTFS -NewFileSystemLabel 'Windows' -Confirm:$false -ErrorAction Stop | Out-Null
   foreach ($partition in @($efi, $osPartition)) {
     $letter = [string]$partition.DriveLetter
     if (-not $letter) { throw 'Windows did not assign a temporary drive letter to a required partition.' }
@@ -151,8 +155,9 @@ Set-Content -LiteralPath (Join-Path $markerDirectory 'setup.complete') -Value 'r
 <?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend">
   <settings pass="oobeSystem">
+    <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"><InputLocale>en-US</InputLocale><SystemLocale>en-US</SystemLocale><UILanguage>en-US</UILanguage><UserLocale>en-US</UserLocale></component>
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-      <OOBE><HideEULAPage>true</HideEULAPage><HideLocalAccountScreen>true</HideLocalAccountScreen><ProtectYourPC>3</ProtectYourPC></OOBE>
+      <OOBE><HideEULAPage>true</HideEULAPage><HideLocalAccountScreen>true</HideLocalAccountScreen><HideOEMRegistrationScreen>true</HideOEMRegistrationScreen><HideOnlineAccountScreens>true</HideOnlineAccountScreens><ProtectYourPC>3</ProtectYourPC></OOBE>
       <UserAccounts><AdministratorPassword><Value>$passwordXml</Value><PlainText>true</PlainText></AdministratorPassword></UserAccounts>
       <AutoLogon><Enabled>true</Enabled><LogonCount>1</LogonCount><Username>Administrator</Username><Password><Value>$passwordXml</Value><PlainText>true</PlainText></Password></AutoLogon>
       <FirstLogonCommands><SynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"><Order>1</Order><CommandLine>powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\Windows\Setup\Scripts\RunnerImageFirstLogon.ps1</CommandLine><Description>Finalize runner image setup</Description><RequiresUserInput>false</RequiresUserInput></SynchronousCommand></FirstLogonCommands>

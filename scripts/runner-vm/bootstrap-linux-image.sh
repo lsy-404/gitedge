@@ -23,7 +23,7 @@ fail() {
 }
 
 [[ ${1:-} == --apply ]] || { usage; fail 'explicit --apply is required.'; }
-[[ $# -eq 8 ]] || { usage; fail 'expected eight arguments after --apply.'; }
+[[ $# -eq 9 ]] || { usage; fail 'expected eight arguments after --apply.'; }
 shift
 broker_archive=$1
 broker_sha=$2
@@ -71,83 +71,30 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 chmod 0700 "$stage"
 
-# Inspect archive member types and paths before extracting untrusted input.
-python3 - "$broker_archive" "$node_archive" "$runner_archive" "$stage" <<'PY'
+python3 - "$broker_archive" "$node_archive" "$runner_archive" "$stage" <<'PY_ARCHIVE'
 import json
-import os
+import pathlib
 import re
 import sys
 import tarfile
 
 broker_path, node_path, runner_path, stage = sys.argv[1:]
-limits = (1 << 30, 1 << 30, 1 << 30)
-
-def inspect(path, limit, prefix=None, allow_internal_links=False):
-    if os.path.getsize(path) > limit:
-        raise SystemExit(f"archive exceeds {limit} byte limit: {path}")
-    with tarfile.open(path, "r:*") as archive:
+stage = pathlib.Path(stage)
+for source, target in [(broker_path, "broker"), (node_path, "node"), (runner_path, "runner")]:
+    with tarfile.open(source, "r:*") as archive:
         members = archive.getmembers()
-        if not members or len(members) > 50000:
-            raise SystemExit(f"archive has an invalid entry count: {path}")
-        total = 0
-        names = set()
-        for member in members:
-            name = member.name.rstrip("/")
-            parts = name.split("/")
-            if (not name or name.startswith("/") or "\\" in name
-                    or any(part in ("", ".", "..") for part in parts)
-                    or name in names):
-                raise SystemExit(f"archive has an unsafe or duplicate path: {path}")
-            names.add(name)
-            if prefix and parts[0] != prefix:
-                raise SystemExit(f"unexpected top-level archive path: {path}")
-            if member.isfile():
-                total += member.size
-                if total > limit:
-                    raise SystemExit(f"archive expanded size exceeds limit: {path}")
-        for member in members:
-            name = member.name.rstrip("/")
-            if member.issym() and allow_internal_links:
-                target = member.linkname
-                if os.path.isabs(target) or "\\" in target:
-                    raise SystemExit(f"archive contains an unsafe symbolic link: {path}")
-                resolved = os.path.normpath(os.path.join(os.path.dirname(name), target))
-                if (resolved == ".." or resolved.startswith("../")
-                        or resolved.split("/", 1)[0] != prefix or resolved not in names):
-                    raise SystemExit(f"archive symbolic link escapes or is unresolved: {path}")
-            elif not (member.isdir() or member.isfile()):
-                raise SystemExit(f"archive contains a link or special file: {path}")
-        return archive, names
-
-_, broker_names = inspect(broker_path, limits[0], "gitedge")
-_, node_names = inspect(node_path, limits[1], "node-v24.22.2-linux-x64", True)
-_, runner_names = inspect(runner_path, limits[2])
-required_broker = {"gitedge/package.json", "gitedge/pnpm-lock.yaml",
-                   "gitedge/scripts/runner-vm/guest.mjs"}
-if not required_broker <= broker_names:
-    raise SystemExit("broker archive lacks package metadata, lockfile, or guest agent")
-with tarfile.open(broker_path, "r:*") as broker:
-    manifest_member = broker.extractfile("gitedge/package.json")
-    if manifest_member is None:
-        raise SystemExit("broker package manifest is unreadable")
-    manifest_bytes = manifest_member.read(4 * 1024 * 1024 + 1)
-if len(manifest_bytes) > 4 * 1024 * 1024:
-    raise SystemExit("broker package manifest is too large")
-try:
-    package_manager = json.loads(manifest_bytes)["packageManager"]
-except (KeyError, TypeError, json.JSONDecodeError):
-    raise SystemExit("broker package.json must declare packageManager")
-match = re.fullmatch(r"pnpm@(\d+\.\d+\.\d+)(?:\+sha512\.[A-Za-z0-9+/=_-]+)?", package_manager)
-if match is None:
-    raise SystemExit("broker packageManager must pin an exact pnpm version")
-with open(os.path.join(stage, "pnpm-version"), "w", encoding="ascii") as output:
-    output.write(match.group(1))
-if "node-v24.22.2-linux-x64/bin/node" not in node_names:
-    raise SystemExit("Node archive does not contain the expected x64 distribution")
-required_runner = {"config.sh", "run.sh", "bin/installdependencies.sh"}
-if not required_runner <= runner_names:
-    raise SystemExit("Actions runner archive is missing required official files")
-PY
+        if len(members) > 100000 or sum(m.size for m in members) > 2 * 1024**3:
+            raise SystemExit("Archive exceeds the image bootstrap limit")
+        archive.extractall(stage / target, members=members, filter="data")
+manifest = json.loads((stage / "broker/gitedge/package.json").read_text())
+match = re.fullmatch(r"pnpm@(\d+\.\d+\.\d+)(?:\+sha512\.[A-Za-z0-9+/=_-]+)?", manifest.get("packageManager", ""))
+if not match:
+    raise SystemExit("The broker must pin an exact pnpm version")
+(stage / "pnpm-version").write_text(match.group(1))
+for target in ["broker/gitedge/scripts/runner-vm/guest.mjs", "node/node-v24.22.2-linux-x64/bin/node", "runner/bin/installdependencies.sh"]:
+    if not (stage / target).is_file():
+        raise SystemExit("An archive is missing required runtime files")
+PY_ARCHIVE
 
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -159,23 +106,18 @@ install -d -o runner -g runner -m 0750 /opt/gitedge/job
 
 node_root=/opt/gitedge/tools/node-$node_version
 [[ ! -e $node_root ]] || fail "Node installation target already exists: $node_root"
-mkdir -p "$stage/node"
-tar -xJf "$node_archive" -C "$stage/node" --no-same-owner --no-same-permissions
 mv "$stage/node/node-v$node_version-linux-x64" "$node_root"
 ln -sfn "$node_root" /opt/gitedge/tools/node
 
 runner_root=/opt/gitedge/actions-runner
 [[ ! -e $runner_root ]] || fail "Actions runner target already exists: $runner_root"
-mkdir -p "$runner_root"
-tar -xzf "$runner_archive" -C "$runner_root" --no-same-owner --no-same-permissions
+mv "$stage/runner" "$runner_root"
 chown -R runner:runner "$runner_root"
 
 broker_root=/opt/gitedge/broker
 [[ ! -e $broker_root ]] || fail "broker target already exists: $broker_root"
 mkdir -p /opt/gitedge
-# The broker archive has exactly one approved top-level directory.
-tar -xf "$broker_archive" -C /opt/gitedge --no-same-owner --no-same-permissions
-mv /opt/gitedge/gitedge "$broker_root"
+mv "$stage/broker/gitedge" "$broker_root"
 chown -R root:root "$broker_root"
 chmod -R go-w "$broker_root"
 

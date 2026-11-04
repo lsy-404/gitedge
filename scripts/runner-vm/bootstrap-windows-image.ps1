@@ -78,6 +78,10 @@ function Assert-GuestIdentity {
   if ([string]$operatingSystem.Caption -notmatch 'Windows Server 2022') {
     throw 'Image bootstrap requires Windows Server 2022.'
   }
+  $setup = Get-ItemProperty 'HKLM:\SYSTEM\Setup'
+  if ($setup.OOBEInProgress -eq 1 -or $setup.SystemSetupInProgress -eq 1) {
+    throw 'Wait for Windows setup and first logon to complete before installing image tools.'
+  }
   $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
   if ($identity.User.Value -notmatch '-500$') {
     throw 'Run image bootstrap under the guest built-in Administrator account.'
@@ -245,7 +249,13 @@ function Add-MachinePath([string[]]$Directories) {
 }
 
 function Invoke-Checked([string]$Executable, [string[]]$Arguments, [string]$Label) {
-  & $Executable @Arguments
+  $previous = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = 'Continue'
+    & $Executable @Arguments 2>&1 | ForEach-Object { Write-Output ([string]$_) }
+  } finally {
+    $ErrorActionPreference = $previous
+  }
   if ($LASTEXITCODE -ne 0) { throw "$Label failed with exit code $LASTEXITCODE." }
 }
 
@@ -480,7 +490,7 @@ try {
 }
 
 $null = New-Item -ItemType Directory -Path $buildToolsRoot -ErrorAction Stop
-$buildToolsArguments = "--quiet --wait --norestart --nocache --installPath `"$buildToolsRoot`" --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.Windows10SDK.20348 --add Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre"
+$buildToolsArguments = "--quiet --wait --norestart --nocache --installPath `"$buildToolsRoot`" --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.Windows11SDK.26100 --add Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre"
 $buildToolsProcess = Start-Process -FilePath $buildToolsInstaller -ArgumentList $buildToolsArguments -Wait -PassThru -NoNewWindow
 if ($buildToolsProcess.ExitCode -eq 3010) {
   Write-Warning 'Build Tools installed but Windows reports that a restart is required. The guest was not restarted.'
@@ -490,17 +500,17 @@ if ($buildToolsProcess.ExitCode -eq 3010) {
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) { throw 'The Visual Studio instance locator was not installed.' }
 $vswhereArguments = @(
-  '-products', '*', '-path', $buildToolsRoot, '-requires',
+  '-products', '*', '-requires',
   'Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
-  'Microsoft.VisualStudio.Component.Windows10SDK.20348',
+  'Microsoft.VisualStudio.Component.Windows11SDK.26100',
   'Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre',
-  '-property', 'installationPath'
+  '-format', 'json', '-utf8'
 )
-$componentInstance = [string](& $vswhere @vswhereArguments)
-if ($LASTEXITCODE -ne 0 -or $componentInstance.Trim() -ine $buildToolsRoot) {
-  throw 'The required x64 C++ tools, Windows Server 2022 SDK, and Spectre runtimes were not installed.'
+$instances = @((& $vswhere @vswhereArguments | Out-String | ConvertFrom-Json) | Where-Object { $_.installationPath -ieq $buildToolsRoot })
+if ($LASTEXITCODE -ne 0 -or $instances.Count -ne 1) {
+  throw 'The required x64 C++ tools, Windows SDK 26100, and Spectre runtimes were not installed.'
 }
-$installedBuildToolsVersion = [string](& $vswhere -products '*' -property catalog_productDisplayVersion -path $buildToolsRoot)
+$installedBuildToolsVersion = [string]$instances[0].catalog.productDisplayVersion
 if ($LASTEXITCODE -ne 0 -or $installedBuildToolsVersion.Trim() -cne $BuildToolsProductVersion) {
   throw 'The installed Build Tools product version did not match the supplied version.'
 }
@@ -527,6 +537,14 @@ $environmentText = @(
   "set `"CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linkPath`""
 ) -join "`r`n"
 [System.IO.File]::WriteAllText($environmentScript, $environmentText + "`r`n", [System.Text.Encoding]::ASCII)
+$entrypoint = @(
+  '@echo off'
+  "call `"$environmentScript`""
+  'if errorlevel 1 exit /b %errorlevel%'
+  ('"' + (Join-Path $nodeRoot 'node.exe') + '" "' + (Join-Path $brokerRoot 'scripts\runner-broker.mjs') + '" execute-vm-job')
+  'exit /b %errorlevel%'
+) -join "`r`n"
+[IO.File]::WriteAllText((Join-Path $InstallRoot 'run-vm-job.cmd'), $entrypoint + "`r`n", [Text.Encoding]::ASCII)
 
 $machinePaths = @($InstallRoot, $nodeRoot, $pythonRoot, $pythonScripts, (Join-Path $gitRoot 'bin'), (Join-Path $gitRoot 'cmd'),
   $powerShellRoot, $pnpmRoot, $cargoBin)
@@ -556,8 +574,8 @@ if ((& (Join-Path $cargoBin 'rustc.exe') --version) -notmatch [regex]::Escape($R
   throw 'Rust toolchain version verification failed.'
 }
 
-$environmentProbe = 'call "' + $environmentScript + '" && where.exe cl.exe && where.exe link.exe && if not defined PYTHON exit /b 2 && "%PYTHON%" --version'
-$environmentOutput = @(& $env:ComSpec /d /c $environmentProbe)
+$environmentProbe = 'call "' + $environmentScript + '" && where.exe cl.exe && where.exe link.exe && "!PYTHON!" --version'
+$environmentOutput = @(& $env:ComSpec /d /v:on /c $environmentProbe)
 if ($LASTEXITCODE -ne 0 -or ($environmentOutput -join "`n") -notmatch "Python $([regex]::Escape($pythonVersion))") {
   throw 'The guest runner environment did not resolve MSVC and Python.'
 }
