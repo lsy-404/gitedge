@@ -415,6 +415,7 @@ export async function getVmCapacity(config, slot) {
   return {
     os: config.guest.platform,
     arch: config.guest.arch,
+    isolation: "vm",
     cpus: config.machine.cpus,
     memTotalMb: config.machine.memoryMiB,
     memFreeMb: config.verified.memFreeMb,

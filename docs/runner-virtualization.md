@@ -4,6 +4,8 @@ GitEdge's optional VM runner pools use disposable Hyper-V guests on a Windows x6
 
 Each dispatched GitHub job, GitEdge workflow, or signing request gets one new VM and one differencing disk based on its configured VHDX image. The broker records private recovery metadata in the job directory, then removes the VM and run directory when the job ends. When the broker starts, it scans its owned run directories and attempts to clean up VMs left by an interrupted job. Base images are shared read-only inputs; job writes go to differencing disks.
 
+Verified VM pools report `isolation: "vm"` in their capacity. The dispatcher counts all running job kinds against each pool's slots. Native profiles retain whole-host exclusivity for GitEdge workflows and signing jobs.
+
 ## Configuration
 
 This example starts one Windows slot with 8 vCPUs and 12 GiB, and one Linux slot with 8 vCPUs and 8 GiB. Size guests for the workflows they accept. The broker checks aggregate vCPU, memory, slot, and free-disk budgets across both pools. Reserve host capacity with `reserveCpus`, `reserveMemoryMiB`, and `reserveDiskMiB`; it also requires at least 8 GiB of currently free host memory beyond each VM it starts. Ensure the host has enough physical CPU, RAM, and disk for the chosen limits.

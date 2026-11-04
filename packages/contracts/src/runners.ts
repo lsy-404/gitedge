@@ -30,6 +30,7 @@ export const RunnerCapacitySchema = z
   .object({
     os: z.enum(["linux", "macos", "windows"]),
     arch: z.enum(["x64", "arm64"]),
+    isolation: z.enum(["host", "vm"]).optional(),
     cpus: z.number().int().min(1).max(512),
     load1: z.number().finite().nonnegative().nullable(),
     memTotalMb: z.number().int().positive().max(1_048_576),

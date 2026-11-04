@@ -290,6 +290,21 @@ export async function claimRunnerCandidate(
     minutes,
     minutes,
   ];
+  const capacity = readRunnerCapacity(runner.capacity_json);
+  const isolated = capacity?.isolation === "vm";
+  const limit = isolated || candidate.kind === "github" ? (capacity?.slots ?? 1) : 1;
+  const admissionGuard = `AND (?=1 OR ?='gitedge' OR NOT EXISTS (
+      SELECT 1 FROM actions_runner_runs busy WHERE busy.runner_id=? AND busy.status='running'))
+    AND (SELECT COUNT(*) FROM actions_runner_runs busy WHERE busy.runner_id=? AND busy.status='running')
+      +(SELECT COUNT(*) FROM actions_github_runner_jobs busy WHERE busy.runner_id=? AND busy.status='running')<?`;
+  const admissionBindings = [
+    isolated ? 1 : 0,
+    candidate.kind,
+    runner.id,
+    runner.id,
+    runner.id,
+    limit,
+  ];
   let claimed: { id: string } | null;
   if (candidate.kind === "gitedge") {
     claimed = await env.DB.prepare(
@@ -297,8 +312,7 @@ export async function claimRunnerCandidate(
         lease_expires_at=MIN(?,?+MIN(timeout_minutes,?)*60000),timeout_minutes=MIN(timeout_minutes,?),started_at=?
        WHERE run_id=? AND status='queued'
          ${signingJobGuard}
-         AND NOT EXISTS (SELECT 1 FROM actions_runner_runs busy WHERE busy.runner_id=? AND busy.status='running')
-         AND NOT EXISTS (SELECT 1 FROM actions_github_runner_jobs busy WHERE busy.runner_id=? AND busy.status='running')
+         ${admissionGuard}
          AND ${runnerGuard}
        RETURNING run_id AS id`
     )
@@ -323,8 +337,7 @@ export async function claimRunnerCandidate(
         candidate.generation,
         candidate.nonce,
         candidate.platform,
-        runner.id,
-        runner.id,
+        ...admissionBindings,
         ...runnerBindings
       )
       .first<{ id: string }>();
@@ -333,8 +346,7 @@ export async function claimRunnerCandidate(
       `UPDATE actions_github_runner_jobs SET status='running',runner_id=?,lease_hash=?,
         lease_expires_at=?,started_at=?,cleanup_pending=1
        WHERE id=? AND status='queued'
-         AND NOT EXISTS (SELECT 1 FROM actions_runner_runs busy WHERE busy.runner_id=? AND busy.status='running')
-         AND (SELECT COUNT(*) FROM actions_github_runner_jobs busy WHERE busy.runner_id=? AND busy.status='running')<?
+         ${admissionGuard}
          AND ${runnerGuard}
        RETURNING id`
     )
@@ -344,9 +356,7 @@ export async function claimRunnerCandidate(
         now + GITHUB_RUNNER_LEASE_MS,
         now,
         candidate.id,
-        runner.id,
-        runner.id,
-        readRunnerCapacity(runner.capacity_json)?.slots ?? 1,
+        ...admissionBindings,
         ...runnerBindings
       )
       .first<{ id: string }>();

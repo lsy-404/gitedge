@@ -626,13 +626,15 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
         .first<{ exclusive: number; shared: number }>();
       const exclusive = running?.exclusive ?? 0;
       const shared = running?.shared ?? 0;
-      if (exclusive > 0 || shared >= capacity.slots) continue;
+      const runningTotal = exclusive + shared;
+      if ((capacity.isolation !== "vm" && exclusive > 0) || runningTotal >= capacity.slots)
+        continue;
       idle.push({
         row,
         capacity,
         budget: readRunnerBudget(row.budget_json),
         used: await runnerUsageMinutes24h(this.env, id, now),
-        running: shared,
+        running: runningTotal,
       });
     }
     this.rotation = start + inspected;
@@ -674,8 +676,12 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
       let best: { runner: IdleRunner; labels: string[]; score: number } | null = null;
       for (const runner of idle) {
         if (taken.has(runner.row.id) || declined.has(`${key}:${runner.row.id}`)) continue;
-        // GitEdge workflow and signing runs need the whole host; only GitHub jobs share slots.
-        if (candidate.kind === "gitedge" && runner.running > 0) continue;
+        if (
+          runner.capacity.isolation !== "vm" &&
+          candidate.kind === "gitedge" &&
+          runner.running > 0
+        )
+          continue;
         const evaluated = evaluateRunnerCandidate(
           runner.row,
           runner.capacity,
