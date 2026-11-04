@@ -155,15 +155,21 @@ export const windowsCredentialsSchema = z
     client_secret: z.string().min(1).max(10_000),
   })
   .strict();
-export const windowsRecipeSchema = z
-  .object({
-    product_name: executableName,
-    electron_version: z.string().regex(/^\d+\.\d+\.\d+$/),
-    executable_name: executableName.refine((value) => value.endsWith(".exe")),
-    installer: z.enum(["nsis", "squirrel"]),
-    portable: z.boolean(),
-  })
-  .strict();
+export const signedFileName = z
+  .string()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\.(?:exe|dll|node|msix)$/i);
+export const windowsRecipeSchema = z.union([
+  z
+    .object({
+      product_name: executableName,
+      electron_version: z.string().regex(/^\d+\.\d+\.\d+$/),
+      executable_name: executableName.refine((value) => value.endsWith(".exe")),
+      installer: z.enum(["nsis", "squirrel"]),
+      portable: z.boolean(),
+    })
+    .strict(),
+  z.object({ installer: z.literal("none") }).strict(),
+]);
 export const windowsManifestSchema = z
   .object({
     schema_version: z.literal(1),
@@ -207,6 +213,7 @@ export const windowsVerificationSchema = z
             path: z.union([
               z.enum(["product.exe", "product-portable.exe", "RELEASES"]),
               z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*-full\.nupkg$/),
+              signedFileName,
             ]),
             size: z.number().int().positive(),
             sha256,
@@ -214,7 +221,7 @@ export const windowsVerificationSchema = z
           .strict()
       )
       .min(1)
-      .max(4)
+      .max(64)
       .refine((files) => new Set(files.map((file) => file.path)).size === files.length),
   })
   .strict();

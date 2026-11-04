@@ -20,6 +20,7 @@ import {
   credentialsSchema,
   iosCredentialsSchema,
   manifestSchema,
+  signedFileName,
   verificationSchema,
   windowsCredentialsSchema,
 } from "./contract.mjs";
@@ -143,8 +144,10 @@ const SAFE_OUTPUTS = new Set([
   "product-portable.exe",
   "RELEASES",
 ]);
-const safeOutput = (name) =>
-  SAFE_OUTPUTS.has(name) || /^[A-Za-z0-9][A-Za-z0-9_.-]*-full\.nupkg$/.test(name);
+const safeOutput = (name, manifest) =>
+  manifest.stage === "windows_sign" && manifest.windows.installer === "none"
+    ? signedFileName.safeParse(name).success
+    : SAFE_OUTPUTS.has(name) || /^[A-Za-z0-9][A-Za-z0-9_.-]*-full\.nupkg$/.test(name);
 
 export class ClientError extends Error {
   constructor(code, status = 0) {
@@ -541,7 +544,8 @@ async function validateOutput(outputDir, manifest) {
   if (
     !entries.some((entry) => entry.name === "verification.json" && entry.isFile()) ||
     entries.some(
-      (entry) => !entry.isFile() || (entry.name !== "verification.json" && !safeOutput(entry.name))
+      (entry) =>
+        !entry.isFile() || (entry.name !== "verification.json" && !safeOutput(entry.name, manifest))
     )
   )
     throw new ClientError("INVALID_OUTPUT");
@@ -602,7 +606,7 @@ async function validateOutput(outputDir, manifest) {
   )
     throw new ClientError("INVALID_OUTPUT");
   for (const item of verification.files) {
-    if (!safeOutput(item.path) || !entries.some((entry) => entry.name === item.path))
+    if (!safeOutput(item.path, manifest) || !entries.some((entry) => entry.name === item.path))
       throw new ClientError("INVALID_OUTPUT");
     const info = await stat(path.join(outputDir, item.path));
     if (!info.isFile() || info.size !== item.size || info.size > manifest.max_artifact_bytes)

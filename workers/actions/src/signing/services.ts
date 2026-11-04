@@ -20,6 +20,7 @@ import {
   macosVerificationSchema,
   windowsVerificationSchema,
   iosVerificationSchema,
+  signedFileName,
 } from "../../../../packages/contracts/signing-native.mjs";
 import type { TrustedUser } from "../../../../packages/contracts/src/index";
 import { trustedHeaders } from "../../../../packages/contracts/src/index";
@@ -924,12 +925,23 @@ async function verifyOutput(
     const azure = profile.policy.azure;
     if (!parsed.success || !fields.success || !recipe || !azure) return false;
     const report = parsed.data;
-    const expectedFiles =
-      recipe.installer === "squirrel"
-        ? ["product.exe", "RELEASES"]
-        : recipe.portable
-          ? ["product.exe", "product-portable.exe"]
-          : ["product.exe"];
+    const names = report.files.map((file) => file.path);
+    let filesMatch: boolean;
+    if (recipe.installer === "none") {
+      filesMatch = names.every((name) => signedFileName.safeParse(name).success);
+    } else {
+      const expectedFiles =
+        recipe.installer === "squirrel"
+          ? ["product.exe", "RELEASES"]
+          : recipe.portable
+            ? ["product.exe", "product-portable.exe"]
+            : ["product.exe"];
+      const nupkg = names.filter((name) => /^[A-Za-z0-9][A-Za-z0-9_.-]*-full\.nupkg$/.test(name));
+      filesMatch =
+        expectedFiles.every((name) => names.includes(name)) &&
+        names.length === expectedFiles.length + (recipe.installer === "squirrel" ? 1 : 0) &&
+        nupkg.length === (recipe.installer === "squirrel" ? 1 : 0);
+    }
     return (
       fields.data.request_id === context.requestId &&
       fields.data.generation === context.generation &&
@@ -940,7 +952,7 @@ async function verifyOutput(
       report.version === version &&
       report.architecture === recipe.architecture &&
       report.subject === azure.subject &&
-      expectedFiles.every((path) => report.files.some((file) => file.path === path))
+      filesMatch
     );
   }
   if (platform === "ios") {

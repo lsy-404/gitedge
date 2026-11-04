@@ -18,6 +18,25 @@ Without `releaseTagPattern`, a source build must come from its repository's defa
 
 Use the signing profile panel to approve a profile and install platform credential JSON. GitHub source-read credentials use purpose `github-source` and JSON `{ "token": "..." }`. Windows platform credentials must be exactly `{ "tenant_id": "...", "client_id": "...", "client_secret": "..." }`; the broker does not use a preconfigured managed or workload identity. The service encrypts credentials at rest and grants them per authorized task. Credential writes and removal require recent human authentication. The panel exposes configuration metadata, never stored secret values.
 
+## Windows recipes
+
+A Windows source ZIP holds `source.json` (`source_sha`, `version`, `bundle_id`, `architecture`) and an `app/` directory. The recipe in `policy.project.windows` decides what the signing host does with it:
+
+- `installer: nsis` or `installer: squirrel` (with `product_name`, `electron_version`, `executable_name` and `portable`) signs an Electron application and builds its installer. The output is `product.exe`, plus `product-portable.exe` or the Squirrel `RELEASES` and `.nupkg` files.
+- `installer: none` signs the files placed directly in `app/` and returns them under their own names. It accepts up to 64 `.exe`, `.dll`, `.node` or `.msix` files, without subdirectories. Use it for builds that package their own installer and sign each file through a sign command, such as Tauri. An MSIX package's manifest `Publisher` must equal the certificate subject.
+
+```yaml
+policy:
+  project:
+    windows:
+      bundle_id: com.example.app
+      architecture: x64
+      max_unpacked_bytes: 2000000000
+      installer: none
+```
+
+Both recipes verify each signature with SignTool (`/pa`, all signatures, timestamp required) and check the signer subject against `policy.azure.subject`.
+
 ## Submit from a workflow
 
 Use an exact-Runner-repository token with `repo:write` to submit and `repo:read` to poll/download, or a job credential bound to that Runner repository. A normal project's job credential cannot submit on behalf of the account Runner. Profile approval, credential installation and removal require a human browser session.

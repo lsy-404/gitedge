@@ -89,18 +89,26 @@ const SigningMacosRecipeSchema = z
   })
   .strict();
 
-const SigningWindowsRecipeSchema = z
-  .object({
-    bundle_id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9.-]{0,254}$/),
-    architecture: z.enum(["x64", "arm64"]),
-    max_unpacked_bytes: z.number().int().positive().max(8_000_000_000),
-    product_name: z.string().min(1).max(255),
-    electron_version: z.string().regex(/^\d+\.\d+\.\d+$/),
-    executable_name: z.string().min(1).max(255),
-    installer: z.enum(["nsis", "squirrel"]),
-    portable: z.boolean(),
-  })
-  .strict();
+const SigningWindowsTargetShape = {
+  bundle_id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9.-]{0,254}$/),
+  architecture: z.enum(["x64", "arm64"]),
+  max_unpacked_bytes: z.number().int().positive().max(8_000_000_000),
+};
+
+const SigningWindowsRecipeSchema = z.union([
+  z
+    .object({
+      ...SigningWindowsTargetShape,
+      product_name: z.string().min(1).max(255),
+      electron_version: z.string().regex(/^\d+\.\d+\.\d+$/),
+      executable_name: z.string().min(1).max(255),
+      installer: z.enum(["nsis", "squirrel"]),
+      portable: z.boolean(),
+    })
+    .strict(),
+  // Signs the submitted files as they are, for builds that package their own installer.
+  z.object({ ...SigningWindowsTargetShape, installer: z.literal("none") }).strict(),
+]);
 
 const SigningIosRecipeSchema = z
   .object({

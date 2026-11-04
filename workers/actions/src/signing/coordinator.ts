@@ -629,13 +629,16 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
           bundle_id: windows.bundle_id,
           architecture: windows.architecture,
           max_unpacked_bytes: windows.max_unpacked_bytes,
-          windows: {
-            product_name: windows.product_name,
-            electron_version: windows.electron_version,
-            executable_name: windows.executable_name,
-            installer: windows.installer,
-            portable: windows.portable,
-          },
+          windows:
+            windows.installer === "none"
+              ? { installer: "none" }
+              : {
+                  product_name: windows.product_name,
+                  electron_version: windows.electron_version,
+                  executable_name: windows.executable_name,
+                  installer: windows.installer,
+                  portable: windows.portable,
+                },
           azure,
         };
       } else if (profile.platform === "ios") {

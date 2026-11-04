@@ -24,6 +24,7 @@ import { pipeline } from "node:stream/promises";
 import yauzl from "yauzl";
 import { createRequire } from "node:module";
 import {
+  signedFileName,
   sourceMetadataSchema,
   windowsCredentialsSchema,
   windowsManifestSchema,
@@ -45,6 +46,7 @@ export function setSigningAbortSignal(signal) {
 
 const TIMESTAMP_URL = "http://timestamp.acs.microsoft.com";
 const SIGNABLE_EXTENSIONS = new Set([".exe", ".dll", ".node"]);
+const MAX_SIGNED_FILES = 64;
 const NSIS_TOOLS = new Map([
   ["makensis", "makensis"],
   ["7z", "7z"],
@@ -957,6 +959,91 @@ async function signSquirrel(manifest, appDir, work, output, signScript, configPa
   }
 }
 
+async function isZipArchive(file) {
+  const handle = await open(file, constants.O_RDONLY);
+  try {
+    const header = Buffer.alloc(4);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    return bytesRead === header.length && header.readUInt32LE(0) === 0x04034b50;
+  } finally {
+    await handle.close();
+  }
+}
+
+async function signFiles(manifest, appDir, output, signScript, configPath, authorize, step) {
+  step("static_verification");
+  const entries = await readdir(appDir, { withFileTypes: true });
+  if (!entries.length || entries.length > MAX_SIGNED_FILES)
+    throw new Error("signed file count rejected");
+  const signable = [];
+  for (const entry of entries) {
+    const target = path.join(appDir, entry.name);
+    const metadata = await lstat(target);
+    if (
+      !metadata.isFile() ||
+      metadata.isSymbolicLink() ||
+      !signedFileName.safeParse(entry.name).success
+    )
+      throw new Error("signed file rejected");
+    // Installers built for x86 (such as NSIS stubs) are signed as they are, so the machine type is not checked.
+    if (path.extname(entry.name).toLowerCase() === ".msix") {
+      if (!(await isZipArchive(target))) throw new Error("invalid MSIX package");
+    } else {
+      await inspectPeMachine(target);
+    }
+    signable.push(target);
+  }
+  signable.sort((left, right) => left.localeCompare(right, "en"));
+  await writeFile(
+    configPath,
+    JSON.stringify({
+      azure: manifest.azure,
+      app_root: appDir,
+      signable_files: signable,
+      allowed_roots: [appDir],
+    }),
+    { flag: "wx", mode: 0o600 }
+  );
+  step("authorization");
+  const credentials = windowsCredentialsSchema.parse(await authorize());
+  step("codesign");
+  await invokePowerShell(signScript, "SignFolder", configPath, appDir, "app", credentials);
+  step("signature_verification");
+  const files = [];
+  for (const file of signable) {
+    await invokePowerShell(signScript, "Verify", configPath, file, "app");
+    files.push(await copyOutput(file, output, path.basename(file), manifest.max_artifact_bytes));
+  }
+  return files;
+}
+
+async function writeReport(manifest, output, files) {
+  if (files.reduce((sum, item) => sum + item.size, 0) > manifest.max_artifact_bytes)
+    throw new Error("signed outputs exceed approved size");
+  const report = windowsVerificationSchema.parse({
+    schema_version: 1,
+    request_id: manifest.request_id,
+    generation: manifest.generation,
+    stage: manifest.stage,
+    input_digest: manifest.input_digest,
+    recipe_sha: manifest.recipe_sha,
+    policy_digest: manifest.policy_digest,
+    bundle_id: manifest.bundle_id,
+    version: manifest.version,
+    architecture: manifest.architecture,
+    subject: manifest.azure.subject,
+    authenticode_verified: true,
+    timestamp_verified: true,
+    nested_signatures_verified: true,
+    files,
+  });
+  await writeFile(path.join(output, "verification.json"), JSON.stringify(report), {
+    flag: "wx",
+    mode: 0o600,
+  });
+  return report;
+}
+
 async function execute(manifestInput, inputZip, outputDir, authorize) {
   const manifest = windowsManifestSchema.parse(manifestInput);
   if (process.platform !== "win32") throw new Error("Windows native signing host required");
@@ -980,6 +1067,20 @@ async function execute(manifestInput, inputZip, outputDir, authorize) {
     );
     failureCode = "archive_validation";
     const appDir = await extractInput(archivePath, unpackRoot, manifest);
+    if (manifest.windows.installer === "none") {
+      const files = await signFiles(
+        manifest,
+        appDir,
+        output,
+        script,
+        configPath,
+        authorize,
+        (code) => {
+          failureCode = code;
+        }
+      );
+      return await writeReport(manifest, output, files);
+    }
     failureCode = "static_verification";
     const executable = path.join(appDir, manifest.windows.executable_name);
     const executableStat = await lstat(executable);
@@ -1069,31 +1170,11 @@ async function execute(manifestInput, inputZip, outputDir, authorize) {
     }
     failureCode = "signature_verification";
     const productName = `${manifest.windows.product_name}-${manifest.architecture}`;
-    const files = await collectReportFiles(output, manifest, productName);
-    if (files.reduce((sum, item) => sum + item.size, 0) > manifest.max_artifact_bytes)
-      throw new Error("signed outputs exceed approved size");
-    const report = windowsVerificationSchema.parse({
-      schema_version: 1,
-      request_id: manifest.request_id,
-      generation: manifest.generation,
-      stage: manifest.stage,
-      input_digest: manifest.input_digest,
-      recipe_sha: manifest.recipe_sha,
-      policy_digest: manifest.policy_digest,
-      bundle_id: manifest.bundle_id,
-      version: manifest.version,
-      architecture: manifest.architecture,
-      subject: manifest.azure.subject,
-      authenticode_verified: true,
-      timestamp_verified: true,
-      nested_signatures_verified: true,
-      files,
-    });
-    await writeFile(path.join(output, "verification.json"), JSON.stringify(report), {
-      flag: "wx",
-      mode: 0o600,
-    });
-    return report;
+    return await writeReport(
+      manifest,
+      output,
+      await collectReportFiles(output, manifest, productName)
+    );
   } catch (error) {
     await rm(output, { recursive: true, force: true });
     await mkdir(output, { recursive: true, mode: 0o700 });

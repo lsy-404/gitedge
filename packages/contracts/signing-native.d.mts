@@ -48,6 +48,7 @@ export declare const windowsCredentialsSchema: z.ZodType<{
   client_id: string;
   client_secret: string;
 }>;
+export declare const signedFileName: z.ZodType<string>;
 export declare const windowsRecipeSchema: z.ZodType<unknown>;
 export declare const windowsManifestSchema: z.ZodType<unknown>;
 export type WindowsVerification = {

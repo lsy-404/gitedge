@@ -59,7 +59,7 @@ if ($Mode -eq 'SignFolder') {
 } elseif (-not [System.IO.File]::Exists($file)) {
   throw 'signable file missing'
 }
-if ($Mode -in @('Sign', 'Verify') -and [System.IO.Path]::GetExtension($file) -notin @('.exe', '.dll', '.node')) {
+if ($Mode -in @('Sign', 'Verify') -and [System.IO.Path]::GetExtension($file) -notin @('.exe', '.dll', '.node', '.msix')) {
   throw 'unsupported Authenticode file type'
 }
 
@@ -99,7 +99,7 @@ switch ($Mode) {
         $candidate = [System.IO.Path]::GetFullPath($entry)
         if (-not (Test-WithinRoot $candidate $config.app_root)) { throw 'signing path outside approved roots' }
         if (-not [System.IO.File]::Exists($candidate)) { throw 'signable file missing' }
-        if ([System.IO.Path]::GetExtension($candidate) -notin @('.exe', '.dll', '.node')) { throw 'unsupported Authenticode file type' }
+        if ([System.IO.Path]::GetExtension($candidate) -notin @('.exe', '.dll', '.node', '.msix')) { throw 'unsupported Authenticode file type' }
         [System.Management.Automation.WildcardPattern]::Escape([System.IO.Path]::GetRelativePath($catalogRoot, $candidate))
       })
       if ($entries.Count -eq 0) { throw 'No files were found to sign' }
