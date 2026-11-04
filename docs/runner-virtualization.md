@@ -97,6 +97,8 @@ The host must be Windows x64 with Hyper-V and the required networking cmdlets av
 
 Windows guest control uses PowerShell Direct and a host-side guest credential protected with machine-scoped DPAPI. Keep that credential file on the host with a private ACL; never include it in an image or template. It is separate from broker profile registration credentials.
 
+Before executing a job, the controller sets each Windows guest to UTC and synchronizes its clock over PowerShell Direct. Startup fails if the measured clock difference exceeds five seconds.
+
 Linux guest control uses SSH with a pinned Ed25519 host public key and a controller private key. Keep the private key on the host with host-only permissions. The guest image supplies its host key; cloud-init adds the controller's public key and configures the static address. The controller private key is not copied into the guest or job disk. Replace both public-key placeholders with complete Ed25519 public keys before use.
 
 Base images should contain the broker runtime, the official GitHub Actions runner files, Node and other required build tools. Do not bake GitEdge host registration credentials into images. The broker keeps registration state in its protected host profile directories and uses the corresponding profile ID to select a pool.

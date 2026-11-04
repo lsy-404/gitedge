@@ -896,6 +896,23 @@ function Configure-GuestNetwork {
   } -ErrorAction Stop
 }
 
+function Configure-GuestClock {
+  $null = Invoke-Command -Session $script:session -ScriptBlock {
+    Set-TimeZone -Id UTC -ErrorAction Stop
+    [TimeZoneInfo]::ClearCachedData()
+  } -ErrorAction Stop
+  $utc = [DateTimeOffset]::UtcNow.ToString('o')
+  $guestEpoch = Invoke-Command -Session $script:session -ArgumentList $utc -ScriptBlock {
+    param($Utc)
+    $target = [DateTimeOffset]::Parse($Utc, [Globalization.CultureInfo]::InvariantCulture)
+    Set-Date -Date $target.LocalDateTime -ErrorAction Stop | Out-Null
+    return [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  } -ErrorAction Stop
+  if ([Math]::Abs([long]$guestEpoch - [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) -gt 5000) {
+    throw 'The Windows guest clock is not synchronized with the controller.'
+  }
+}
+
 function Initialize-Guest([string]$GuestAgent) {
   $root = [string]$script:config.guestRoot
   $node = [string]$script:config.guestNode
@@ -1170,6 +1187,7 @@ function Invoke-Create([object]$Request) {
   }
   $null = Start-VM -Name $script:vmName -ErrorAction Stop
   Wait-ForGuestSession
+  Configure-GuestClock
   Configure-GuestNetwork
   if ($null -eq $Request.guestAgent -or [string]::IsNullOrWhiteSpace([string]$Request.guestAgent)) {
     throw 'The guest Node agent source is invalid.'
