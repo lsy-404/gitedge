@@ -14,3 +14,4 @@ coverage/
 workers/*/wrangler.production.jsonc
 
 !/test/
+/agents
