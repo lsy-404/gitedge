@@ -485,6 +485,7 @@ $pnpm = Join-Path $pnpmRoot 'pnpm.cmd'
 Push-Location $brokerRoot
 try {
   Invoke-Checked $pnpm @('install', '--frozen-lockfile', '--prod', '--registry=https://registry.npmjs.org') 'GitEdge production dependency install'
+  Invoke-Checked (Join-Path $nodeRoot 'node.exe') @('scripts/actions-runner.mjs', 'setup') 'GitEdge workflow runtime installation'
 } finally {
   Pop-Location
 }

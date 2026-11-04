@@ -103,6 +103,8 @@ Linux guest control uses SSH with a pinned Ed25519 host public key and a control
 
 Base images should contain the broker runtime, the official GitHub Actions runner files, Node and other required build tools. Do not bake GitEdge host registration credentials into images. The broker keeps registration state in its protected host profile directories and uses the corresponding profile ID to select a pool.
 
+Run `node scripts/actions-runner.mjs setup` during image preparation to cache the verified GitEdge workflow engine. Workflow heartbeats and completion reports retry transient transport failures while their execution lease remains valid.
+
 Complete Windows setup before installing guest tools. Shut the image OS down normally before freezing its VHDX; a forced VM reset can discard pending writes. Verify the extracted runtime files after unmounting the image, as well as the input archive hash.
 
 Windows and Linux images share the same job lifecycle and labels, but install their platform-specific toolchain during image preparation. Keep base images separate from broker state, pool VM storage, and registration credentials. This document describes the configured design; the example is not evidence that a pool has been provisioned or validated.
@@ -110,5 +112,7 @@ Windows and Linux images share the same job lifecycle and labels, but install th
 ## Verification and scale-up
 
 Run `node scripts/runner-broker.mjs verify-vm-images --state-dir <state>` with the controller account before starting `serve`. Verification boots a fresh guest for each pool, checks platform, tools, and the broker release hash, and removes those guests. `serve` repeats this verification before connecting. A VM configuration error stops startup.
+
+Stop the previous broker before updating it. If an earlier release left an `active.lock` file after an unclean stop, verify that its recorded process is gone before removing that file. The current directory lock recovers automatically after sixty seconds without an update.
 
 After real jobs and reclamation pass on one slot per platform, stop the controller while idle, set each pool to `slots: 2`, add a second unique address to each pool, and update the corresponding profile slot counts. Recheck aggregate budgets and image verification before restarting. Verify overlapping real jobs and confirm that VM configurations and differencing disks disappear afterward.

@@ -146,6 +146,7 @@ cd "$runner_root"
 
 cd "$broker_root"
 pnpm install --frozen-lockfile --prod
+node scripts/actions-runner.mjs setup
 
 systemctl enable --now docker.service
 if ! docker info >/dev/null 2>&1; then

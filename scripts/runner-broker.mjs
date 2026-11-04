@@ -295,6 +295,48 @@ async function apiRequest(origin, token, route, options = {}, timeoutMs = 20_000
   }
 }
 
+async function leaseRequest(origin, token, route, options, expiresAt, runId) {
+  for (let attempt = 0; ; attempt++) {
+    const remaining = expiresAt - Date.now() - 1_000;
+    if (remaining <= 0) throw new Error("The runner lease expired before completing the request.");
+    try {
+      return await apiRequest(
+        origin,
+        token,
+        route,
+        {
+          ...options,
+          signal: AbortSignal.any([options.signal, AbortSignal.timeout(remaining)].filter(Boolean)),
+        },
+        Math.min(15_000, remaining)
+      );
+    } catch (error) {
+      const status = error.cause?.status;
+      const transient =
+        error.name === "TimeoutError" ||
+        error.name === "TypeError" ||
+        error.cause?.name === "TypeError" ||
+        status === 429 ||
+        (status >= 500 && status <= 599);
+      const delay = Math.min(10_000, 2_000 * 2 ** attempt);
+      if (!transient || options.signal?.aborted || expiresAt - Date.now() <= delay + 1_000)
+        throw error;
+      console.error(
+        JSON.stringify({
+          event: "runner-transport-retry",
+          time: new Date().toISOString(),
+          runId,
+          operation: route.split("/").at(-1),
+          attempt: attempt + 1,
+          leaseRemainingMs: expiresAt - Date.now(),
+          errorType: error.name,
+        })
+      );
+      await sleep(delay, options.signal);
+    }
+  }
+}
+
 async function addGitEdge(state, values) {
   const origin = originValue(values.origin ?? "");
   const owner = values.owner;
@@ -584,16 +626,18 @@ async function runClaimedGitHub(profile, claim, signal) {
     return bytes.subarray(start).toString("utf8");
   };
   const complete = async () => {
-    await apiRequest(profile.origin, profile.credential, "/api/actions/runner/github/complete", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        runId,
-        leaseToken,
-        conclusion,
-        log: logTail(),
-      }),
-    });
+    await leaseRequest(
+      profile.origin,
+      profile.credential,
+      "/api/actions/runner/github/complete",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ runId, leaseToken, conclusion, log: logTail() }),
+      },
+      leaseExpiresAt,
+      runId
+    );
   };
   const heartbeatController = new AbortController();
   const heartbeatSignal = AbortSignal.any([execution, heartbeatController.signal]);
@@ -607,48 +651,19 @@ async function runClaimedGitHub(profile, claim, signal) {
         heartbeatSignal
       );
       if (child && child.exitCode !== null) return;
-      let response;
-      for (let attempt = 0; ; attempt++) {
-        const remaining = leaseExpiresAt - Date.now() - 1_000;
-        if (remaining <= 0) throw new Error("GitHub runner lease expired before renewal.");
-        try {
-          response = await apiRequest(
-            profile.origin,
-            profile.credential,
-            "/api/actions/runner/github/heartbeat",
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ runId, leaseToken }),
-              signal: AbortSignal.any([heartbeatSignal, AbortSignal.timeout(remaining)]),
-            },
-            Math.min(15_000, remaining)
-          );
-          break;
-        } catch (error) {
-          const status = error.cause?.status;
-          const transient =
-            error.name === "TimeoutError" ||
-            error.name === "TypeError" ||
-            error.cause?.name === "TypeError" ||
-            status === 429 ||
-            (status >= 500 && status <= 599);
-          const delay = Math.min(10_000, 2_000 * 2 ** attempt);
-          if (!transient || heartbeatSignal.aborted || leaseExpiresAt - Date.now() <= delay + 1_000)
-            throw error;
-          console.error(
-            JSON.stringify({
-              event: "github-heartbeat-transport-retry",
-              time: new Date().toISOString(),
-              runId,
-              attempt: attempt + 1,
-              leaseRemainingMs: leaseExpiresAt - Date.now(),
-              errorType: error.name,
-            })
-          );
-          await sleep(delay, heartbeatSignal);
-        }
-      }
+      const response = await leaseRequest(
+        profile.origin,
+        profile.credential,
+        "/api/actions/runner/github/heartbeat",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ runId, leaseToken }),
+          signal: heartbeatSignal,
+        },
+        leaseExpiresAt,
+        runId
+      );
       if (
         typeof response?.data?.cancelled !== "boolean" ||
         typeof response.data.assigned !== "boolean" ||
@@ -1141,7 +1156,7 @@ function runnerScript() {
   return path.join(root, "scripts", "actions-runner.mjs");
 }
 
-async function runGitEdge(profile, run, leaseToken, signal) {
+async function runGitEdge(profile, run, leaseToken, signal, leaseExpiresAt) {
   let eventPayload = run.eventPayload;
   let eventPayloadSource;
   let jobClaim;
@@ -1274,9 +1289,12 @@ async function runGitEdge(profile, run, leaseToken, signal) {
   const heartbeatSignal = AbortSignal.any([signal, heartbeatController.signal]);
   const heartbeat = async () => {
     while (!heartbeatSignal.aborted && child.exitCode === null) {
-      await sleep(30_000, heartbeatSignal);
+      await sleep(
+        Math.min(30_000, Math.max(0, leaseExpiresAt - Date.now() - 50_000)),
+        heartbeatSignal
+      );
       if (child.exitCode !== null) return;
-      const response = await apiRequest(
+      const response = await leaseRequest(
         profile.origin,
         profile.credential,
         "/api/actions/runner/heartbeat",
@@ -1285,14 +1303,18 @@ async function runGitEdge(profile, run, leaseToken, signal) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ runId: run.id, leaseToken }),
           signal: heartbeatSignal,
-        }
+        },
+        leaseExpiresAt,
+        run.id
       );
       if (
         typeof response?.data?.cancelRequested !== "boolean" ||
-        !Number.isFinite(response.data.leaseExpiresAt)
+        !Number.isFinite(response.data.leaseExpiresAt) ||
+        (!response.data.cancelRequested && response.data.leaseExpiresAt <= Date.now())
       )
         throw new Error("GitEdge returned an invalid lease heartbeat response.");
       if (response.data.cancelRequested) throw new Error("GitEdge requested cancellation.");
+      leaseExpiresAt = response.data.leaseExpiresAt;
     }
   };
   let failure;
@@ -1322,7 +1344,7 @@ async function runGitEdge(profile, run, leaseToken, signal) {
     let start = Math.max(0, bytes.length - 16_384);
     while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) start++;
     const tail = bytes.subarray(start).toString("utf8");
-    const completed = await apiRequest(
+    const completed = await leaseRequest(
       profile.origin,
       profile.credential,
       "/api/actions/runner/complete",
@@ -1330,13 +1352,16 @@ async function runGitEdge(profile, run, leaseToken, signal) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ runId: run.id, leaseToken, conclusion, log: tail }),
-      }
+      },
+      leaseExpiresAt,
+      run.id
     ).catch((error) => {
       console.error(`Could not report GitEdge run ${run.id}: ${error.message}`);
     });
-    if (completed?.data?.completed !== true)
+    if (completed?.data?.completed !== true) {
       console.error(`GitEdge did not confirm completion for run ${run.id}.`);
-    else console.log(`GitEdge run ${run.id}: ${conclusion}. Log: ${logFile}`);
+      process.stdout.write(tail + "\n");
+    } else console.log(`GitEdge run ${run.id}: ${conclusion}. Log: ${logFile}`);
   }
   if (failure && failure.message !== "GitEdge requested cancellation." && !signal.aborted)
     throw failure;
@@ -1355,30 +1380,43 @@ async function runAssignedClaim(profile, claim, signal) {
     await runClaimedSigning(profile, claim, signal);
   } else {
     console.log(`GitEdge profile ${profile.id}: running ${claim.run.id}.`);
-    await runGitEdge(runnerProfileForClaim(profile, claim), claim.run, claim.leaseToken, signal);
+    await runGitEdge(
+      runnerProfileForClaim(profile, claim),
+      claim.run,
+      claim.leaseToken,
+      signal,
+      claim.leaseExpiresAt
+    );
   }
 }
 
-async function renewIsolatedLease(profile, claim, signal) {
+async function renewIsolatedLease(profile, claim, signal, expiresAt = claim.leaseExpiresAt) {
   const signing = claim.run.kind === "signing";
   const endpoint = signing
     ? `/api/actions/runner/signing/requests/${claim.run.requestId}/heartbeat`
     : claim.run.kind === "github"
       ? "/api/actions/runner/github/heartbeat"
       : "/api/actions/runner/heartbeat";
-  const response = await apiRequest(profile.origin, profile.credential, endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(signing
-        ? { "X-Runner-Run-Id": claim.run.id, "X-Runner-Lease-Token": claim.leaseToken }
+  const response = await leaseRequest(
+    profile.origin,
+    profile.credential,
+    endpoint,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(signing
+          ? { "X-Runner-Run-Id": claim.run.id, "X-Runner-Lease-Token": claim.leaseToken }
+          : {}),
+      },
+      ...(!signing
+        ? { body: JSON.stringify({ runId: claim.run.id, leaseToken: claim.leaseToken }) }
         : {}),
+      signal,
     },
-    ...(!signing
-      ? { body: JSON.stringify({ runId: claim.run.id, leaseToken: claim.leaseToken }) }
-      : {}),
-    signal,
-  });
+    expiresAt,
+    claim.run.id
+  );
   const data = response?.data;
   if (data?.cancelled || data?.cancelRequested || data?.completed)
     throw new Error("GitEdge requested cancellation.");
@@ -1409,7 +1447,7 @@ async function runIsolatedClaim(profile, claim, signal) {
   const renew = (async () => {
     while (!bootSignal.aborted) {
       await sleep(15_000, bootSignal);
-      leaseExpiresAt = await renewIsolatedLease(profile, claim, bootSignal);
+      leaseExpiresAt = await renewIsolatedLease(profile, claim, bootSignal, leaseExpiresAt);
     }
   })().catch((error) => {
     if (!bootstrapStop.signal.aborted && !executionSignal.aborted) {
