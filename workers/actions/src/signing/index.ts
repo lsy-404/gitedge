@@ -154,7 +154,7 @@ export async function reconcileSigningRequests(
             "UPDATE actions_signing_runs SET reconcile_state='failed' WHERE request_id=? AND owner_id=? AND run_id=?"
           ).bind(candidate.requestId, candidate.ownerId, candidate.runId),
         ]);
-        await stub.releaseSource(candidate.requestId);
+        if (candidate.conclusion === "cancelled") await stub.releaseSource(candidate.requestId);
         failed++;
         continue;
       }
@@ -1668,7 +1668,6 @@ export async function handleSigningMachineRoute(
         z.object({ state: z.literal("failed") }),
         body
       );
-      await coordinator(env, context.ownerId).releaseSource(id);
       return dataResponse(result);
     }
     return errorResponse(405, "method_not_allowed", "Signing operation is not supported.");
