@@ -398,16 +398,13 @@ export async function openRunnerCacheStore({ directory, maxBytes }) {
             const entryCount = db.prepare("SELECT COUNT(*) AS amount FROM entries").get().amount;
             if (entryCount >= maxEntries) {
               const now = Date.now();
-              const rank = (row) => [
-                Math.floor(frequency(row.hits, row.frequency_at, now)),
-                row.accessed_at,
-              ];
+              const rank = (row) => candidateRank(row, now);
               const candidate = db
                 .prepare("SELECT * FROM entries WHERE status = 'ready'")
                 .all()
                 .filter((row) => !activeReads.has(row.id))
                 .sort((left, right) => compareRank(rank(left), rank(right)))[0];
-              if (!candidate || compareRank(rank(candidate), [Math.floor(hits), now]) > 0)
+              if (!candidate || compareRank(rank(candidate), [Math.floor(hits), 0, now]) > 0)
                 throw new Error("Cache metadata capacity is full.");
               cacheId(candidate.id);
               await removeEntryFiles(candidate);
