@@ -24,6 +24,8 @@ Each job receives an expiring capability bound to its runner, repository and sou
 
 The store learns from restore requests. Retention ranks seven-day decaying access frequency first, archive size second, then last access. Frequent large entries take priority over frequent small entries; cold small entries are evicted first. A new upload cannot displace higher-priority entries. Concurrent blocks reserve space before writing, active downloads are pinned, and archives stay in ordered blocks to avoid a second merged copy. An upload that cannot fit is accepted and discarded. Metadata and interrupted uploads are bounded; startup reclaims incomplete work.
 
+Windows images install Git for Windows under `%ProgramFiles%\Git`, where the standard cache client finds GNU tar. Keep the MSVC compiler and linker paths selected by the image bootstrap.
+
 Place storage in a dedicated private directory. On Windows Server, enforce an additional physical hard quota on that directory, for example `New-FsrmQuota -Path D:\GitEdgeRunnerCache -Size 1000000000000`. Do not use `-SoftLimit`. This also bounds metadata and filesystem overhead. Keep free space for the host and VM differencing disks outside the cache budget.
 
 Stop the broker while idle before changing configuration or runtime files. VM base images must contain the same broker release as the controller. Verify fresh Windows and Linux guests, then confirm a save followed by a restore in a different guest and inspect the reported usage. Removing a profile from `profiles` disables persistence for future jobs; existing cached objects are reclaimed by the normal budget policy.

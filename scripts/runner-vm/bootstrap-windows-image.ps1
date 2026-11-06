@@ -406,7 +406,7 @@ if (-not $AcceptBuildToolsLicense) {
 
 $toolsRoot = Join-Path $InstallRoot 'tools'
 $nodeRoot = Join-Path $toolsRoot "node-v$NodeVersion-win-x64"
-$gitRoot = Join-Path $toolsRoot 'git'
+$gitRoot = Join-Path $env:ProgramFiles 'Git'
 $powerShellRoot = Join-Path $toolsRoot "powershell-$PowerShellVersion"
 $pnpmRoot = Join-Path $toolsRoot 'pnpm'
 $pythonRoot = Join-Path $toolsRoot "python-$pythonVersion"
