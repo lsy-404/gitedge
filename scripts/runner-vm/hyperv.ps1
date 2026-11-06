@@ -199,14 +199,17 @@ function Add-NetworkAclRule([object]$Rules, [hashtable]$Seen, [string]$Action, [
 function Get-ExpectedNetworkAclRules([string[]]$HostAddresses) {
   $rules = [System.Collections.Generic.List[object]]::new()
   $seen = @{}
-  if ($null -ne $script:machine.egressProxyPort) {
-    $port = $script:machine.egressProxyPort
+  $portWeight = 45000
+  foreach ($field in @('egressProxyPort', 'cachePort')) {
+    if ($null -eq $script:machine.$field) { continue }
+    $port = $script:machine.$field
     if (($port -isnot [int] -and $port -isnot [long]) -or $port -lt 1 -or $port -gt 65535) {
-      throw 'machine.egressProxyPort must be a TCP port.'
+      throw "machine.$field must be a TCP port."
     }
     $rules.Add(@{ Action = 'Allow'; Direction = 'Outbound'; LocalIPAddress = "$($script:guestNetwork.address)/32";
       RemoteIPAddress = "$($script:guestNetwork.gateway)/32"; LocalPort = 'ANY'; RemotePort = [string]$port;
-      Protocol = 'TCP'; Weight = 45000; Stateful = $true })
+      Protocol = 'TCP'; Weight = $portWeight; Stateful = $true })
+    $portWeight++
   }
   if ([string]$script:machine.guestPlatform -eq 'linux') {
     $rules.Add(@{ Action = 'Allow'; Direction = 'Inbound'; LocalIPAddress = "$($script:guestNetwork.address)/32";

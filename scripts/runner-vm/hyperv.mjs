@@ -247,6 +247,7 @@ function assertMachineMatchesConfig(machine, config) {
     machine.cpus !== config.cpus ||
     machine.memoryMiB !== config.memoryMiB ||
     machine.egressProxyPort !== config.egressProxyPort ||
+    machine.cachePort !== config.cachePort ||
     machine.switchName !== config.switchName
   )
     fail("The create config does not match the private runner VM metadata.");
@@ -300,6 +301,11 @@ function validateConfig(config, context) {
   )
     fail("config.egressProxyPort must be a TCP port.");
   if (
+    config.cachePort !== undefined &&
+    (!Number.isSafeInteger(config.cachePort) || config.cachePort < 1 || config.cachePort > 65535)
+  )
+    fail("config.cachePort must be a TCP port.");
+  if (
     !Number.isSafeInteger(config.memoryMiB) ||
     config.memoryMiB < 1 ||
     config.memoryMiB > Math.floor(Number.MAX_SAFE_INTEGER / (1024 * 1024))
@@ -332,6 +338,7 @@ function validateConfig(config, context) {
       guestNode,
       guestPlatform: config.guestPlatform,
       ...(config.egressProxyPort === undefined ? {} : { egressProxyPort: config.egressProxyPort }),
+      ...(config.cachePort === undefined ? {} : { cachePort: config.cachePort }),
       ...(credentialPath ? { credentialPath } : ssh),
     },
     context: { id, directory, signal: context.signal },

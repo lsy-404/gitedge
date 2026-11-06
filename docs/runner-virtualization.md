@@ -95,6 +95,8 @@ The controller installs per-VM adapter ACLs. Inbound traffic is denied by defaul
 
 The host must be Windows x64 with Hyper-V and the required networking cmdlets available. The controller uses Windows PowerShell by default. To select PowerShell 7, set `GITEDGE_HYPERV_POWERSHELL` in the broker service's environment to its absolute executable path.
 
+Persistent dependency and build caches require explicit broker configuration. See [runner-cache.md](runner-cache.md) for shared device budgets, ref isolation and the private `machine.cachePort` exception.
+
 ## Guest access and image contents
 
 Windows guest control uses PowerShell Direct and a host-side guest credential protected with machine-scoped DPAPI. Keep that credential file on the host with a private ACL; never include it in an image or template. It is separate from broker profile registration credentials.

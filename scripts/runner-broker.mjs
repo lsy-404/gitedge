@@ -49,6 +49,8 @@ import {
   vmSlot,
 } from "./runner-vm.mjs";
 import { createRunDirectory } from "./runner-run-root.mjs";
+import { loadRunnerCache, patchRunnerCacheEnvironment, cacheEnvironment } from "./runner-cache.mjs";
+import { createRunnerCacheProxy } from "./runner-cache-protocol.mjs";
 import { pruneRunArtifacts, runArtifactRoots } from "./runner-retention.mjs";
 import {
   getRunnerCapacity,
@@ -617,6 +619,7 @@ async function runClaimedGitHub(profile, claim, signal) {
   let output = "";
   let conclusion = "failure";
   let executionError;
+  let cacheProxy;
   const logTail = () => {
     const bytes = Buffer.from(
       output.replaceAll(run.encodedJitConfig, "[REDACTED]").replaceAll(leaseToken, "[REDACTED]")
@@ -693,12 +696,14 @@ async function runClaimedGitHub(profile, claim, signal) {
       recursive: true,
       mode: constants.COPYFILE_FICLONE,
     });
+    await patchRunnerCacheEnvironment(runner);
+    cacheProxy = await createRunnerCacheProxy({ endpoint: profile.cacheEndpoint });
     if (heartbeatFailure) throw heartbeatFailure;
     if (execution.aborted) throw execution.reason;
     const env = { ...process.env };
     for (const key of Object.keys(env))
       if (
-        /^(?:GH_|GITHUB_|GITEDGE_|ACTIONS_RUNNER_INPUT_|RUNNER_TOKEN$|ACTIONS_RUNTIME_TOKEN$)/i.test(
+        /^(?:GH_|GITHUB_|GITEDGE_|ACTIONS_RUNNER_INPUT_|RUNNER_TOKEN$|ACTIONS_RUNTIME_TOKEN$|ACTIONS_RESULTS_|ACTIONS_CACHE_)/i.test(
           key
         )
       )
@@ -706,6 +711,7 @@ async function runClaimedGitHub(profile, claim, signal) {
     env.ACTIONS_RUNNER_INPUT_JITCONFIG = run.encodedJitConfig;
     env.RUNNER_ALLOW_RUNASROOT = "1";
     env.GH_CONFIG_DIR = path.join(runDir, "gh-config");
+    Object.assign(env, cacheEnvironment(cacheProxy.url, profile.cacheEndpoint));
     await mkdir(env.GH_CONFIG_DIR, { mode: 0o700 });
     child = spawn(path.join(runner, "bin", executable("Runner.Listener")), ["run"], {
       cwd: runner,
@@ -736,6 +742,7 @@ async function runClaimedGitHub(profile, claim, signal) {
     heartbeatController.abort();
     if (child && child.exitCode === null) await killChild(child);
     await heartbeat.catch(() => {});
+    await cacheProxy?.close();
     await rm(runner, { recursive: true, force: true });
     await complete().catch((error) => {
       console.error(`Could not report GitHub run ${runId}: ${error.message}`);
@@ -1273,6 +1280,7 @@ async function runGitEdge(profile, run, leaseToken, signal, leaseExpiresAt) {
       ...childEnvironment,
       GITEDGE_TOKEN: run.token,
       GITEDGE_BROKER_SLOT_HELD: "1",
+      ...(profile.cacheEndpoint ? { GITEDGE_CACHE_ENDPOINT: profile.cacheEndpoint } : {}),
     },
     stdio: ["ignore", "pipe", "pipe"],
     detached: process.platform !== "win32",
@@ -1425,7 +1433,7 @@ async function renewIsolatedLease(profile, claim, signal, expiresAt = claim.leas
   return data.leaseExpiresAt;
 }
 
-async function runIsolatedClaim(profile, claim, signal) {
+async function runIsolatedClaim(profile, claim, signal, cache) {
   if (!/^[0-9a-f-]{36}$/i.test(claim.run.id) || !/^[0-9a-f]{64}$/i.test(claim.leaseToken))
     throw new Error("Invalid isolated job lease identity.");
   const stop = new AbortController();
@@ -1456,10 +1464,13 @@ async function runIsolatedClaim(profile, claim, signal) {
     }
   });
   let vm;
+  let cacheSession;
   try {
     const capacity = await getVmCapacity(profile.vm, profile.vmSlot);
     validateLocalJobClaim(claim.run.labels ?? profile.labels, capacity, claim.run.timeoutMinutes);
-    vm = await createJobVm(profile.vm, executionSignal, profile.vmSlot.claimAddress());
+    const address = profile.vmSlot.claimAddress();
+    vm = await createJobVm(profile.vm, executionSignal, address);
+    cacheSession = cache?.createSession(profile, claim, address);
     console.log(
       `${new Date().toISOString()} VM ${vm.name} started for ${profile.id} run ${claim.run.id}.`
     );
@@ -1479,6 +1490,7 @@ async function runIsolatedClaim(profile, claim, signal) {
           labels: profile.labels,
           runnerPath: profile.vm.guest.runnerPath,
           budget: profile.budget,
+          cacheEndpoint: cacheSession?.url,
         },
         claim: { ...claim, leaseExpiresAt },
       })
@@ -1557,6 +1569,7 @@ async function runIsolatedClaim(profile, claim, signal) {
       await vm.dispose();
       console.log(`${new Date().toISOString()} VM ${vm.name} reclaimed after run ${claim.run.id}.`);
     }
+    await cacheSession?.close();
   }
 }
 
@@ -1691,24 +1704,29 @@ async function serve(state, exitStatusOnSupersede, { slots, supervised }) {
   const ledger = { memory: 0, cpus: 0 };
   for (const profile of profiles)
     if (profile.vm) profile.vmSlot = vmSlot(vmPools, profile.vm, slot, ledger);
+  const cache = await loadRunnerCache(state, profiles);
   let reservedMemMb = 0; // memory claimed by jobs running on this broker
-  const localCapacity = (profile) =>
-    profile.vm
+  const localCapacity = async (profile) => ({
+    ...(await (profile.vm
       ? getVmCapacity(profile.vm, profile.vmSlot)
       : getRunnerCapacity({
           workDirectories: [profile.directory, actionsState],
           busy: slot.busy(),
           slots: slot.size,
           reservedMemMb,
-        });
+        }))),
+    cache: cache?.capacity(profile) ?? { supported: false },
+  });
   const runJob = async (profile, claim, signal) => {
-    if (profile.vm) return runIsolatedClaim(profile, claim, signal);
+    if (profile.vm) return runIsolatedClaim(profile, claim, signal, cache);
+    const cacheSession = cache?.createSession(profile, claim);
     const memMb = parseJobClaim(claim.run.labels ?? []).memMb;
     reservedMemMb += memMb;
     try {
-      await runAssignedClaim(profile, claim, signal);
+      await runAssignedClaim({ ...profile, cacheEndpoint: cacheSession?.url }, claim, signal);
     } finally {
       reservedMemMb -= memMb;
+      await cacheSession?.close();
     }
   };
   const liveness = { lastReportAt: 0, open: 0 };
@@ -1796,6 +1814,10 @@ async function serve(state, exitStatusOnSupersede, { slots, supervised }) {
   } finally {
     clearInterval(retention);
     clearInterval(heartbeat);
+    controller.abort();
+    await Promise.allSettled(clients.map((client) => client.done));
+    await Promise.allSettled(clients.map((client) => client.session.drain()));
+    await cache?.close();
   }
   if (superseded) process.exitCode = exitStatusOnSupersede;
 }

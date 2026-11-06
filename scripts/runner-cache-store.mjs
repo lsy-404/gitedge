@@ -171,10 +171,6 @@ export async function openRunnerCacheStore({ directory, maxBytes }) {
       );
       CREATE INDEX IF NOT EXISTS learned_updated ON learned(updated_at);
     `);
-    database
-      .prepare("UPDATE entries SET expires_at = ? WHERE status = 'ready'")
-      .run(Number.MAX_SAFE_INTEGER);
-
     const staleUploads = database.prepare("SELECT id FROM entries WHERE status != 'ready'").all();
     for (const row of staleUploads) {
       cacheId(row.id);
@@ -258,7 +254,8 @@ export async function openRunnerCacheStore({ directory, maxBytes }) {
         .all(Date.now());
       for (const row of expired) {
         cacheId(row.id);
-        if (activeReads.has(row.id) || activeWrites.has(row.id)) continue;
+        if (activeReads.has(row.id) || activeWrites.has(row.id) || lifecycleOps.has(row.id))
+          continue;
         await removeEntryFiles(row);
       }
     };
@@ -330,7 +327,7 @@ export async function openRunnerCacheStore({ directory, maxBytes }) {
         const active = activeWrites.get(id);
         active?.delete(blockId);
         if (active?.size === 0) activeWrites.delete(id);
-        const row = db.prepare("SELECT status, expires_at FROM entries WHERE id = ?").get(id);
+        const row = db.prepare("SELECT id, status, expires_at FROM entries WHERE id = ?").get(id);
         if (!row) return;
         if (row.status === "discarded") {
           await cleanupDiscarded(id);

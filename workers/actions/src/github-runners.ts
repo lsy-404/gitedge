@@ -143,11 +143,17 @@ export async function claimGithubRunner(
       return null;
     }
     const source = await env.DB.prepare(
-      `SELECT c.owner,c.name,p.slug,n.slug AS namespace FROM forge_github_connections c
+      `SELECT c.owner,c.name,c.github_repository_id,p.slug,n.slug AS namespace FROM forge_github_connections c
        JOIN repositories p ON p.id=c.repository_id JOIN namespaces n ON n.id=p.namespace_id WHERE c.id=?`
     )
       .bind(job.connection_id)
-      .first<{ owner: string; name: string; slug: string; namespace: string }>();
+      .first<{
+        owner: string;
+        name: string;
+        github_repository_id: number;
+        slug: string;
+        namespace: string;
+      }>();
     if (!source) throw new Error("GitHub runner connection disappeared.");
     return {
       run: {
@@ -161,6 +167,7 @@ export async function claimGithubRunner(
         labels: JSON.parse(job.labels_json),
         encodedJitConfig: result.encodedJitConfig,
         githubRunnerId: result.githubRunnerId,
+        githubRepositoryId: source.github_repository_id,
         timeoutMinutes: claim.minutes,
       },
       leaseExpiresAt: now + GITHUB_RUNNER_LEASE_MS,

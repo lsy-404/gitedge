@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { patchRunnerCacheEnvironment, cacheEnvironment } from "./runner-cache.mjs";
+import { createRunnerCacheProxy } from "./runner-cache-protocol.mjs";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { constants, createReadStream, createWriteStream } from "node:fs";
 import {
@@ -330,6 +332,8 @@ async function runWorkflow(values, state) {
       ? "https://api.github.com/graphql"
       : `${origin.origin}/api/graphql`;
   const environment = { ...process.env };
+  const cacheEndpoint = environment.GITEDGE_CACHE_ENDPOINT;
+  delete environment.GITEDGE_CACHE_ENDPOINT;
   delete environment.GITEDGE_BROKER_SLOT_HELD;
   for (const key of Object.keys(environment)) {
     if (
@@ -363,6 +367,7 @@ async function runWorkflow(values, state) {
   const envFile = path.join(run, "environment");
   const configFile = path.join(run, "server.json");
   const eventPayloadFile = eventPayload ? path.join(run, "event.json") : undefined;
+  let cacheProxy;
   try {
     const runtime = await installRuntime(state);
     await mkdir(ghConfig, { mode: 0o700 });
@@ -374,6 +379,9 @@ async function runWorkflow(values, state) {
       recursive: true,
       mode: constants.COPYFILE_FICLONE,
     });
+    await patchRunnerCacheEnvironment(runner);
+    cacheProxy = await createRunnerCacheProxy({ endpoint: cacheEndpoint, upstream: `${backend}/` });
+    Object.assign(environment, cacheEnvironment(cacheProxy.url, cacheEndpoint));
     for (const name of ["Runner.Client", "Runner.Server", "Runner.Listener"]) {
       await writeFile(
         path.join(runtime, `${executable(name)}.portable.config`),
@@ -512,6 +520,7 @@ async function runWorkflow(values, state) {
     }
   } finally {
     await stopChildren();
+    await cacheProxy?.close();
     await Promise.all(
       [runner, secretFile, envFile, configFile, ghConfig, eventPayloadFile]
         .filter(Boolean)
