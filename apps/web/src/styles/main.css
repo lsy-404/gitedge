@@ -92,9 +92,6 @@
   --line-height-body: 1.5;
   --line-height-section: 28px;
   --line-height-title: 32px;
-
-  --duration-fast: 120ms;
-  --duration-normal: 180ms;
 }
 :root[data-theme="light"] {
   color-scheme: light;
@@ -130,10 +127,11 @@
   --fluent-radius: var(--radius-md);
   --fluent-panel-radius: var(--radius-lg);
   --fluent-shadow: var(--shadow-lg);
-  --fluent-fast: var(--duration-fast);
   --fluent-font: var(--font-sans);
 }
 .fluent-theme {
+  --duration-fast: var(--fluent-fast);
+  --duration-normal: var(--fluent-normal);
   --ease-standard: var(--fluent-ease);
   min-height: 100vh;
   color: var(--fg-default);
