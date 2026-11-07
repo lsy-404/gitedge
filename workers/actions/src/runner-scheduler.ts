@@ -228,6 +228,12 @@ export function evaluateRunnerCandidate(
   const labels = parseLabels(candidate.labels_json);
   const claim = parseJobClaim(labels, candidate.default_minutes);
   const reasons = new Set<string>();
+  if (
+    runner.hosted_job_id &&
+    (runner.hosted_job_id !== candidate.id || runner.hosted_job_kind !== candidate.kind)
+  )
+    reasons.add("hosted-job-scope");
+  if (runner.expires_at != null && runner.expires_at <= Date.now()) reasons.add("runner-expired");
   if (!labels || !claim.valid) reasons.add("claim-invalid");
   if (runner.repository_id !== null && candidate.repository_id !== runner.repository_id)
     reasons.add("scope");
@@ -305,6 +311,8 @@ export async function claimRunnerCandidate(
     )))`;
   const runnerGuard = `EXISTS (SELECT 1 FROM actions_runners r WHERE r.id=? AND r.revoked_at IS NULL
     AND r.namespace_id=? AND r.created_by=? AND r.repository_id IS ?
+    AND (r.expires_at IS NULL OR r.expires_at>?)
+    AND (r.hosted_job_id IS NULL OR (r.hosted_job_id=? AND r.hosted_job_kind=?))
     AND r.labels_json IS ?
     AND (r.held_until IS NULL OR r.held_until<=?) AND r.capacity_reported_at IS ?
     AND r.capacity_json IS ? AND r.budget_json IS ?
@@ -315,6 +323,9 @@ export async function claimRunnerCandidate(
     runner.namespace_id,
     runner.created_by,
     runner.repository_id,
+    now,
+    candidate.id,
+    candidate.kind,
     runner.labels_json,
     now,
     capacityReportedAt,

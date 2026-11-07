@@ -71,6 +71,9 @@ export interface RunnerRow {
   consecutive_failures: number;
   held_until: number | null;
   connected: number;
+  hosted_job_kind?: RunnerJobKind | null;
+  hosted_job_id?: string | null;
+  expires_at?: number | null;
 }
 interface RunRow {
   id: string;
@@ -164,10 +167,10 @@ export async function authenticateRunner(
   if (!token) return null;
   const row = await env.DB.prepare(
     `${runnersSelect} JOIN users u ON u.id = r.created_by
-    WHERE r.token_hash = ? AND r.revoked_at IS NULL AND u.disabled_at IS NULL
+    WHERE r.token_hash = ? AND r.revoked_at IS NULL AND (r.expires_at IS NULL OR r.expires_at>?) AND u.disabled_at IS NULL
     AND (r.repository_id IS NULL OR (p.deleted_at IS NULL AND p.namespace_id = r.namespace_id))`
   )
-    .bind(await sha256Hex(token))
+    .bind(await sha256Hex(token), Date.now())
     .first<RunnerRow>();
   return row && (await ownsScope(env, row.created_by, row.namespace_id, row.repository_id))
     ? row
