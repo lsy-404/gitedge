@@ -249,7 +249,7 @@ async function imageFor(env: ForgeEnv, row: Reservation): Promise<string> {
   const arm = arches.some((arch) => ["arm64", "aarch64"].includes(arch));
   const x64 = arches.some((arch) => ["x64", "amd64", "x86_64"].includes(arch));
   if ((arm && x64) || arches.includes("arm")) throw new Error("hosted_arch_unsupported");
-  if (os === "macos") return x64 ? "macos-15-intel" : "macos-15";
+  if (os === "macos") return x64 ? "macos-26-intel" : "macos-26";
   if (os === "windows" && !arm) return "windows-2025";
   if (os === "linux" && !arm) return "ubuntu-24.04";
   throw new Error("hosted_platform_unsupported");
