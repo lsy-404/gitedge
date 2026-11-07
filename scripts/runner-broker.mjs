@@ -1655,7 +1655,7 @@ function parseSlots(value) {
   return slots;
 }
 
-async function serve(state, exitStatusOnSupersede, { slots, supervised }) {
+async function serve(state, exitStatusOnSupersede, { slots, supervised, once, expiresAt }) {
   const controller = new AbortController();
   const stop = () => controller.abort(new Error("Stopped."));
   for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, stop);
@@ -1731,6 +1731,16 @@ async function serve(state, exitStatusOnSupersede, { slots, supervised }) {
   };
   const liveness = { lastReportAt: 0, open: 0 };
   let superseded = false;
+  let assigned = false;
+  let hostedError;
+  const expiry = expiresAt
+    ? setTimeout(
+        () => {
+          if (!assigned) controller.abort(new Error("Hosted runner registration expired."));
+        },
+        Math.max(0, expiresAt - Date.now())
+      )
+    : undefined;
   const clients = profiles.map((profile) => {
     const label = `GitEdge profile ${profile.id}`;
     const session = createDispatchSession({
@@ -1738,7 +1748,20 @@ async function serve(state, exitStatusOnSupersede, { slots, supervised }) {
       slot: profile.vmSlot ?? slot,
       getCapacity: () => localCapacity(profile),
       validateOffer: (labels, capacity) => validateLocalJobClaim(labels, capacity, 360),
-      runJob: (claim, signal) => runJob(profile, claim, signal),
+      runJob: async (claim, signal) => {
+        if (once) {
+          assigned = true;
+          reconnect.abort();
+        }
+        try {
+          await runJob(profile, claim, signal);
+        } catch (error) {
+          if (once) hostedError = error;
+          throw error;
+        } finally {
+          if (once) controller.abort(new Error("Hosted runner completed its job."));
+        }
+      },
       signal: controller.signal,
     });
     const unsubscribe = slot.subscribe(() => session.onSlotChange());
@@ -1814,12 +1837,98 @@ async function serve(state, exitStatusOnSupersede, { slots, supervised }) {
   } finally {
     clearInterval(retention);
     clearInterval(heartbeat);
+    clearTimeout(expiry);
     controller.abort();
     await Promise.allSettled(clients.map((client) => client.done));
     await Promise.allSettled(clients.map((client) => client.session.drain()));
     await cache?.close();
   }
   if (superseded) process.exitCode = exitStatusOnSupersede;
+  if (hostedError) throw hostedError;
+  return assigned;
+}
+
+async function serveHosted(state, values) {
+  const origin = originValue(values.origin ?? "");
+  const bootstrapToken = process.env.GITEDGE_HOSTED_BOOTSTRAP_TOKEN;
+  const oidcToken = process.env.GITEDGE_HOSTED_OIDC_TOKEN;
+  delete process.env.GITEDGE_HOSTED_BOOTSTRAP_TOKEN;
+  delete process.env.GITEDGE_HOSTED_OIDC_TOKEN;
+  for (const key of [
+    "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+    "ACTIONS_RUNTIME_TOKEN",
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "GITHUB_ENTERPRISE_TOKEN",
+    "GH_ENTERPRISE_TOKEN",
+  ])
+    delete process.env[key];
+  if (!bootstrapToken || !oidcToken || /\s/.test(bootstrapToken) || /\s/.test(oidcToken))
+    throw new Error("Hosted runner bootstrap and OIDC tokens are required.");
+  if (!values["runner-path"]) throw new Error("Hosted runner requires --runner-path.");
+  const runnerPath = path.resolve(values["runner-path"]);
+  await access(path.join(runnerPath, "bin", executable("Runner.Listener")), constants.X_OK);
+  if ((await readdir(path.join(state, "profiles"))).length)
+    throw new Error("Hosted runner state must not contain existing profiles.");
+  let response;
+  const deadline = Date.now() + 60_000;
+  while (!response) {
+    try {
+      response = await apiRequest(origin, bootstrapToken, "/api/actions/hosted-runners/bootstrap", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bootstrapToken, oidcToken, labels: [...hostLabels()] }),
+      });
+    } catch (error) {
+      if (error.cause?.status !== 409 || Date.now() >= deadline) throw error;
+      await sleep(2_000);
+    }
+  }
+  const runner = response?.data?.runner;
+  const credential = response?.data?.token;
+  if (
+    typeof runner?.id !== "string" ||
+    !/^[A-Za-z0-9._-]{1,100}$/.test(runner.id) ||
+    !Array.isArray(runner.labels) ||
+    typeof credential !== "string" ||
+    !credential ||
+    /\s/.test(credential) ||
+    !Number.isFinite(runner.expiresAt) ||
+    runner.expiresAt <= Date.now()
+  )
+    throw new Error("GitEdge returned invalid hosted runner registration metadata.");
+  repositorySegment(runner.scope?.owner, "owner");
+  repositorySegment(runner.scope?.repository, "repository");
+  validateLabels(runner.labels);
+  validateProfileHostLabels(runner.labels);
+  const id = "hosted";
+  const directory = path.join(state, "profiles", id);
+  await mkdir(directory, { mode: 0o700 });
+  try {
+    await writePrivate(
+      path.join(directory, "profile.json"),
+      JSON.stringify({
+        id,
+        kind: "gitedge",
+        origin,
+        owner: runner.scope.owner,
+        repository: runner.scope.repository,
+        labels: runner.labels,
+        runnerPath,
+        runnerId: runner.id,
+      })
+    );
+    await writePrivate(path.join(directory, "credential"), credential);
+    const assigned = await serve(state, supersededExitStatus, {
+      slots: 1,
+      supervised: false,
+      once: true,
+      expiresAt: runner.expiresAt,
+    });
+    if (!assigned) throw new Error("Hosted runner stopped before receiving its job.");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 }
 
 async function removeProfile(state, id) {
@@ -1883,12 +1992,19 @@ async function main() {
     console.log(
       "Usage: pnpm run runner-broker -- init|register-gitedge|list|remove|set-slots|verify-vm-images|serve|service [options]\n\nregister-gitedge --origin URL --owner OWNER [--repository REPO] --label LABEL --runner-path DIR [--max-job-minutes N] [--daily-minutes N] [--cost N] [--slots N]\nA generic GitEdge runner executes matched workflow, GitHub and native signing jobs with task-scoped secrets.\nset-slots PROFILE N: sets profile concurrency (1-16, default 1). VM profiles must match vm.json.\nverify-vm-images: recovers owned VM remnants, boots and checks every configured image, then removes the verification VMs.\nserve [--slots N] [--supersede-exit-status N]: starts a supervised broker with one outbound WebSocket per profile. Native profiles share the largest profile slot count and workflow/signing jobs run alone. With vm.json, each job uses a disposable VM and pool slots share the physical host budget; --slots is unavailable. Image verification must pass before connecting. The supervisor restarts an unresponsive worker. A superseded registration finishes running jobs and exits with status 78 (or N).\nservice install|start|stop|status --install-dir DIR [--state-dir DIR] [--run-as-user USER]\nAll commands accept --state-dir DIR. Registration reads GITEDGE_TOKEN."
     );
+    console.log(
+      "hosted --origin URL --runner-path DIR --state-dir DIR: exchanges the hosted bootstrap and OIDC tokens from the environment and serves one assigned job."
+    );
     return;
   }
   await ensureState(state);
   if (action === "init") {
     console.log(`Runner broker state initialized at ${state}.`);
     return;
+  }
+  if (action === "hosted") {
+    if (positionals.length !== 1) throw new Error("hosted does not accept a profile argument.");
+    return withStateLock(state, action, () => serveHosted(state, values));
   }
   if (action === "register-gitedge") {
     if (positionals.length !== 1) throw new Error(`${action} does not accept a profile argument.`);
@@ -1973,7 +2089,7 @@ async function main() {
     return;
   }
   throw new Error(
-    "Expected init, register-gitedge, list, remove <profile>, set-slots <profile> <n>, verify-vm-images, serve, or service."
+    "Expected init, hosted, register-gitedge, list, remove <profile>, set-slots <profile> <n>, verify-vm-images, serve, or service."
   );
 }
 
