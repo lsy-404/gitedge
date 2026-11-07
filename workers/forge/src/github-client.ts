@@ -31,7 +31,10 @@ export async function githubRequest(
 ): Promise<unknown> {
   const url = new URL(path, "https://api.github.com");
   if (
-    (!path.startsWith("/repos/") && !(path === "/graphql" && method === "POST")) ||
+    (!path.startsWith("/repos/") &&
+      !(path === "/graphql" && method === "POST") &&
+      !(path === "/user" && method === "GET") &&
+      !(path === "/user/repos" && method === "POST")) ||
     url.pathname !== path.split("?")[0] ||
     path.includes("\\")
   )

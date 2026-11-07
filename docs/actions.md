@@ -2,6 +2,12 @@
 
 GitEdge provides the container executor and an optional local runner broker. The original `actions run` command remains available for one explicitly selected workflow; the broker connects enabled `.github/workflows/` jobs to GitEdge runner profiles.
 
+## Emergency hosted runners
+
+An account owner can enable emergency hosted runners by submitting `{"connectionId":"…","includedOnlyConfirmed":true}` to `POST /api/forge/hosted-runner-settings`, confirming the GitHub account's paid Actions budget is zero. The connection must belong to that account. GitEdge creates or uses a private `gitedge-emergency-runners` repository in the connected GitHub user's account and verifies its identity on each dispatch. `DELETE` disables the setting. A queued runner job may use a temporary GitHub-hosted machine after 15 minutes; the normal queue remains available if provisioning fails.
+
+GitHub enforces the account's Actions spending budget when the hosted job starts. Set the paid Actions budget to zero to prevent charges beyond included usage; GitEdge does not independently check billing balances. Hosted runners use GitHub's available machine images and must satisfy the job's operating system, architecture and resource requirements.
+
 ## Original GitHub action packages
 
 Install Node 24, pnpm and the official [GitHub Actions runner](https://github.com/actions/runner) for the current machine. The command downloads [Runner.Server](https://github.com/ChristopherHX/runner.server) v3.14.0 and verifies its pinned SHA-256. Both upstream projects use the MIT license.
