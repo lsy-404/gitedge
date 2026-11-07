@@ -212,9 +212,9 @@ async function imageFor(env: ForgeEnv, row: Reservation): Promise<string> {
   const job =
     row.job_kind === "github"
       ? await env.DB.prepare(
-          "SELECT j.labels_json, NULL AS platform FROM actions_github_runner_jobs j JOIN forge_github_connections c ON c.id=j.connection_id WHERE j.id=? AND c.created_by=? AND c.enabled=1 AND c.runner_enabled=1 AND j.status='queued'"
+          "SELECT j.labels_json, NULL AS platform FROM actions_github_runner_jobs j JOIN forge_github_connections c ON c.id=j.connection_id WHERE j.id=? AND c.created_by=? AND c.repository_id=? AND c.enabled=1 AND c.runner_enabled=1 AND j.status='queued'"
         )
-          .bind(row.job_id, row.owner_id)
+          .bind(row.job_id, row.owner_id, row.repository_id)
           .first<{ labels_json: string; platform: string | null }>()
       : await env.DB.prepare(
           "SELECT r.labels_json, s.platform FROM actions_runner_runs r LEFT JOIN actions_signing_runs s ON s.run_id=r.run_id WHERE r.run_id=? AND r.status='queued'"
