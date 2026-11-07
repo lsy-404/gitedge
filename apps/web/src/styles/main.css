@@ -95,7 +95,6 @@
 
   --duration-fast: 120ms;
   --duration-normal: 180ms;
-  --ease-standard: cubic-bezier(0.16, 1, 0.3, 1);
 }
 :root[data-theme="light"] {
   color-scheme: light;
@@ -132,10 +131,10 @@
   --fluent-panel-radius: var(--radius-lg);
   --fluent-shadow: var(--shadow-lg);
   --fluent-fast: var(--duration-fast);
-  --fluent-ease: var(--ease-standard);
   --fluent-font: var(--font-sans);
 }
 .fluent-theme {
+  --ease-standard: var(--fluent-ease);
   min-height: 100vh;
   color: var(--fg-default);
   background: var(--bg-canvas);
