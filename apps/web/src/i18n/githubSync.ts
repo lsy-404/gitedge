@@ -1,5 +1,7 @@
 export const githubSyncMessages = {
   "zh-CN": {
+    hostedRunnerRepositoryAccess:
+      "GitHub 无法创建应急仓库。如果该私有仓库已存在，请在此 GitHub 连接的仓库访问权限中将其加入。",
     githubSyncConnectionError: "连接不可用，请检查 GitHub 权限、凭证和仓库可见性后重新连接。",
     auditAction_github_sync_connected: "连接 GitHub 同步",
     auditAction_github_sync_updated: "更新 GitHub 同步",
@@ -53,6 +55,8 @@ export const githubSyncMessages = {
     githubSyncExternalOrigin: "GitHub · 不计批准",
   },
   en: {
+    hostedRunnerRepositoryAccess:
+      "GitHub could not create the emergency repository. If the private emergency repository already exists, include it in this GitHub connection’s repository access.",
     githubSyncConnectionError:
       "The connection is unavailable. Check GitHub permissions, credentials and repository visibility, then reconnect.",
     auditAction_github_sync_connected: "Connected GitHub synchronization",

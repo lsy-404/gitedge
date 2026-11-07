@@ -369,6 +369,7 @@ export function errorMessage(
   fallbackKey = "apiError"
 ): string {
   if (cause instanceof ApiError) {
+    if (cause.code === "hosted_runner_repository_access") return t("hostedRunnerRepositoryAccess");
     if (cause.quota)
       return t("quotaReached", {
         resource: t(`quotaResource_${cause.quota.resource}`),
