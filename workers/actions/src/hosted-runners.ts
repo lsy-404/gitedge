@@ -219,9 +219,16 @@ export async function reconcileHostedRunners(env: RunnerEnv): Promise<void> {
       if (!cancelled.ok) continue;
     }
     await env.DB.prepare(
-      "UPDATE actions_hosted_runner_dispatches SET status='cancelled' WHERE id=? AND status IN ('dispatching','dispatched','consumed','cancel_pending')"
+      `UPDATE actions_hosted_runner_dispatches SET
+        status=CASE WHEN github_run_id IS NOT NULL AND expires_at<=? AND
+          ((job_kind='gitedge' AND EXISTS (SELECT 1 FROM actions_runner_runs j WHERE j.run_id=job_id AND j.status='queued')) OR
+           (job_kind='github' AND EXISTS (SELECT 1 FROM actions_github_runner_jobs j WHERE j.id=job_id AND j.status='queued')))
+          THEN 'failed' ELSE 'cancelled' END,
+        error_code=CASE WHEN github_run_id IS NOT NULL AND expires_at<=? THEN 'hosted_runner_unavailable' ELSE error_code END,
+        created_at=CASE WHEN github_run_id IS NOT NULL AND expires_at<=? THEN ? ELSE created_at END
+       WHERE id=? AND status IN ('dispatching','dispatched','consumed','cancel_pending')`
     )
-      .bind(row.id)
+      .bind(now, now, now, now, row.id)
       .run();
   }
   const jobs = await env.DB.prepare(
