@@ -258,7 +258,9 @@ export async function hostedRunnerOperation(request: Request, env: ForgeEnv): Pr
   if (!connection)
     return errorResponse(
       409,
-      "github_connection_unavailable",
+      input.data.operation === "dispatch"
+        ? "hosted_runner_unavailable"
+        : "github_connection_unavailable",
       "The GitHub connection is unavailable."
     );
   const logger = createLogger(env.LOG_LEVEL, { service: "hosted-runner" });
@@ -281,9 +283,14 @@ export async function hostedRunnerOperation(request: Request, env: ForgeEnv): Pr
         await githubRequest(token, `${runPath}/cancel`, "POST");
       } catch (cause) {
         if (!(cause instanceof GithubApiError) || cause.status !== 409) throw cause;
-        const run = z.object({ status: z.string() }).parse(await githubRequest(token, runPath));
-        if (run.status !== "completed") throw cause;
       }
+      const run = z.object({ status: z.string() }).parse(await githubRequest(token, runPath));
+      if (run.status !== "completed")
+        return errorResponse(
+          409,
+          "hosted_runner_cancel_pending",
+          "GitHub has not completed the runner cancellation."
+        );
       return dataResponse({ cancelled: true });
     }
     if (row.status !== "dispatching" || row.expires_at <= Date.now())
