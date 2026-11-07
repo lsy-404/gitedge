@@ -87,6 +87,7 @@ const WORKFLOW = [
   "          cd runtime",
   "          corepack enable",
   "          pnpm install --frozen-lockfile",
+  "          pnpm --dir scripts/signing install --frozen-lockfile",
   '          case "$RUNNER_OS-$RUNNER_ARCH" in',
   "            Linux-X64) asset=linux-x64; ext=tar.gz ;;",
   "            macOS-ARM64) asset=osx-arm64; ext=tar.gz ;;",
