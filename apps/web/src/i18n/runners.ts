@@ -2,7 +2,7 @@ export const runnerMessages = {
   "zh-CN": {
     hostedRunnerTitle: "GitHub 托管接替",
     hostedRunnerDescription:
-      "作业等待 15 分钟仍没有可用的本机 runner 时，使用 GitHub Actions 的包含额度运行。需要可用额度。",
+      "没有匹配的本机 runner，或匹配的 runner 全部离线超过 5 分钟时，立即使用 GitHub Actions 的包含额度接替。匹配的 runner 在线但忙碌时，等待 15 分钟后接替。需要可用额度。",
     hostedRunnerEnabled: "已启用，私有运行仓库",
     hostedRunnerDisable: "关闭托管接替",
     hostedRunnerNoConnections: "请先为属于你自己的 GitHub 仓库连接启用本机 runner。",
@@ -156,7 +156,7 @@ export const runnerMessages = {
   en: {
     hostedRunnerTitle: "GitHub hosted fallback",
     hostedRunnerDescription:
-      "When a job has waited 15 minutes without an available self-hosted runner, use the included GitHub Actions allowance. Available allowance is required.",
+      "Use the included GitHub Actions allowance immediately when no private runner matches or all matching runners have been offline for over 5 minutes. If a matching runner is online but busy, wait 15 minutes. Available allowance is required.",
     hostedRunnerEnabled: "Enabled · Private execution repository",
     hostedRunnerDisable: "Disable hosted fallback",
     hostedRunnerNoConnections:
