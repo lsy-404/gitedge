@@ -127,6 +127,7 @@ import {
 import { myInvitations, scopedInvitations } from "./invitations";
 import { activeImportPath, handleRepositoryImports } from "./imports";
 import { handleAccountRunner } from "./account-runner";
+import { hostedRunnerOperation, hostedRunnerSettings } from "./hosted-runner";
 import { assignmentsColumn, parseAssignments, replaceAssignments } from "./assignments";
 import {
   canWriteSession,
@@ -2160,6 +2161,7 @@ const worker = {
     if (url.pathname === "/internal/actions-check")
       return actionsCheck(request, env, (id) => repositoryById(env, id));
     if (url.pathname === "/internal/github-runner") return githubRunnerOperation(request, env);
+    if (url.pathname === "/internal/hosted-runner") return hostedRunnerOperation(request, env);
     if (url.pathname === "/internal/github-dispatch") return signingPublishDispatch(request, env);
     if (url.pathname === "/internal/push-event")
       return handlePushEvent(env, request, (id) => repositoryById(env, id));
@@ -2222,6 +2224,8 @@ const worker = {
     }
     const accountRunner = await handleAccountRunner(env, request, user);
     if (accountRunner) return accountRunner;
+    const hostedRunner = await hostedRunnerSettings(env, request, user);
+    if (hostedRunner) return hostedRunner;
     const sessionError = await activeAgentSession(env, user);
     if (sessionError) return sessionError;
     if (
