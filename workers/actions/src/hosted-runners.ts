@@ -6,7 +6,13 @@ import {
   sha256Hex,
   isRunnerSystemLabel,
 } from "../../../packages/contracts/src/index";
-import { matchesLabels, parseJobClaim } from "../../../packages/contracts/runner-scheduling.mjs";
+import {
+  ALLOW_LIMITED_CONNECT_LABEL,
+  LIMITED_CONNECT_LABEL,
+  RESOURCE_LABEL_PREFIXES,
+  matchesLabels,
+  parseJobClaim,
+} from "../../../packages/contracts/runner-scheduling.mjs";
 import { randomHex } from "../../../src/worker/common/encoding";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 import { readJsonLimited } from "../../../src/worker/common/readText";
@@ -184,6 +190,22 @@ interface QueuedJob {
   connection_id: string;
 }
 
+function recentlySeenPrivateRunner(signing: boolean): string {
+  const ordinary = RESOURCE_LABEL_PREFIXES.map(
+    (prefix) => `lower(required.value) NOT LIKE '${prefix}%'`
+  ).join(" AND ");
+  return `EXISTS (SELECT 1 FROM actions_runners r JOIN users ru ON ru.id=r.created_by
+    WHERE r.namespace_id=p.namespace_id AND (r.repository_id IS NULL OR r.repository_id=p.id)
+      AND r.hosted_job_id IS NULL AND r.revoked_at IS NULL AND ru.disabled_at IS NULL
+      AND MAX(COALESCE(r.last_seen_at,0),COALESCE(r.capacity_reported_at,0),r.created_at)>?
+      AND (r.repository_id IS NULL AND EXISTS (SELECT 1 FROM namespace_memberships m WHERE m.namespace_id=r.namespace_id AND m.user_id=r.created_by AND m.role='owner')
+        OR r.repository_id IS NOT NULL AND EXISTS (SELECT 1 FROM repositories rp JOIN namespaces rn ON rn.id=rp.namespace_id LEFT JOIN namespace_memberships m ON m.namespace_id=rn.id AND m.user_id=r.created_by LEFT JOIN repository_collaborators rc ON rc.repository_id=rp.id AND rc.user_id=r.created_by WHERE rp.id=r.repository_id AND rp.deleted_at IS NULL AND (rp.system_kind='account_runner' AND rn.kind='personal' AND rn.created_by=r.created_by OR rp.system_kind IS NOT 'account_runner' AND (m.role='owner' OR rc.role='admin'))))
+      AND NOT EXISTS (SELECT 1 FROM json_each(j.labels_json) required WHERE ${ordinary}
+        AND lower(required.value)<>'${ALLOW_LIMITED_CONNECT_LABEL}' AND lower(required.value) NOT IN (SELECT lower(value) FROM json_each(r.labels_json)))
+      AND (NOT EXISTS (SELECT 1 FROM json_each(r.labels_json) WHERE lower(value)='${LIMITED_CONNECT_LABEL}') OR EXISTS (SELECT 1 FROM json_each(j.labels_json) WHERE lower(value)='${ALLOW_LIMITED_CONNECT_LABEL}'))
+      ${signing ? "AND (s.run_id IS NULL OR (s.owner_id=r.created_by AND s.repository_id=p.id AND (s.platform='windows' AND lower(json_extract(r.capacity_json,'$.os'))='windows' OR s.platform='macos' AND lower(json_extract(r.capacity_json,'$.os'))='macos' OR s.platform='ios' AND lower(json_extract(r.capacity_json,'$.os'))='macos' AND lower(json_extract(r.capacity_json,'$.arch'))='arm64' OR r.capacity_json IS NULL AND (s.platform='windows' AND EXISTS (SELECT 1 FROM json_each(r.labels_json) WHERE lower(value)='windows') OR s.platform IN ('macos','ios') AND EXISTS (SELECT 1 FROM json_each(r.labels_json) WHERE lower(value)='macos') AND (s.platform!='ios' OR EXISTS (SELECT 1 FROM json_each(r.labels_json) WHERE lower(value)='arm64'))))))" : ""})`;
+}
+
 export async function reconcileHostedRunners(env: RunnerEnv): Promise<void> {
   const now = Date.now();
   await env.DB.prepare(
@@ -236,14 +258,14 @@ export async function reconcileHostedRunners(env: RunnerEnv): Promise<void> {
     SELECT 'gitedge' AS kind,j.run_id AS id,p.id AS repository_id,COALESCE(s.owner_id,a.created_by) AS owner_id,
       (SELECT h.connection_id FROM forge_hosted_runner_settings h WHERE h.owner_id=COALESCE(s.owner_id,a.created_by)) AS connection_id,a.created_at
       FROM actions_runner_runs j JOIN actions_runs a ON a.id=j.run_id JOIN repositories p ON p.id=a.repository_id LEFT JOIN actions_signing_runs s ON s.run_id=j.run_id
-      WHERE j.status='queued' AND a.created_at<=? AND p.deleted_at IS NULL AND p.archived=0 AND p.actions_enabled=1 AND p.actions_runner_enabled=1
+      WHERE j.status='queued' AND (a.created_at<=? OR NOT ${recentlySeenPrivateRunner(true)}) AND p.deleted_at IS NULL AND p.archived=0 AND p.actions_enabled=1 AND p.actions_runner_enabled=1
     UNION ALL
     SELECT 'github',j.id,p.id,c.created_by,(SELECT h.connection_id FROM forge_hosted_runner_settings h WHERE h.owner_id=c.created_by),j.created_at FROM actions_github_runner_jobs j JOIN forge_github_connections c ON c.id=j.connection_id JOIN repositories p ON p.id=c.repository_id
-      WHERE j.status='queued' AND j.created_at<=? AND c.enabled=1 AND c.runner_enabled=1 AND p.deleted_at IS NULL AND p.archived=0 AND p.actions_enabled=1
+      WHERE j.status='queued' AND (j.created_at<=? OR NOT ${recentlySeenPrivateRunner(false)}) AND c.enabled=1 AND c.runner_enabled=1 AND p.deleted_at IS NULL AND p.archived=0 AND p.actions_enabled=1
     ) q WHERE connection_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM actions_hosted_runner_dispatches h WHERE h.job_kind=q.kind AND h.job_id=q.id)
     ORDER BY created_at,id LIMIT 10`
   )
-    .bind(now - 15 * 60_000, now - 15 * 60_000)
+    .bind(now - 15 * 60_000, now - 5 * 60_000, now - 15 * 60_000, now - 5 * 60_000)
     .all<QueuedJob>();
   for (const job of jobs.results) {
     const id = crypto.randomUUID(),
