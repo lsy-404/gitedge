@@ -686,6 +686,7 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
   if (isGitHubApiPath(url.pathname)) return handleGitHubCompatibility(request, env);
 
   if (
+    url.pathname === "/api/actions/hosted-runners/bootstrap" ||
     /^\/api\/actions\/runner\/(?:connect|heartbeat|complete|github\/(?:heartbeat|complete)|signing\/requests\/[0-9a-f-]{36}\/(?:start|heartbeat|download|authorize-sign|output(?:\/parts\/\d+|\/complete)?|complete|fail))$/.test(
       url.pathname
     )

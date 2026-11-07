@@ -66,6 +66,7 @@ import {
 import { retryPublishDispatches } from "./signing/publish";
 import { enqueueNativeSigningRun } from "./signing-execution";
 import { kickRunnerDispatch } from "./runner-dispatch";
+import { bootstrapHostedRunner, reconcileHostedRunners } from "./hosted-runners";
 
 export { ActionRunDurableObject as ActionRun };
 export { GitTransfer } from "./git-transfer";
@@ -1784,6 +1785,8 @@ export default {
         return await handleInternalProposal(request, env, "merge_group");
       if (url.pathname === "/internal/push") return await handleInternalPush(request, env);
       if (url.pathname === "/internal/github-runner") return await queueGithubRunner(request, env);
+      if (url.pathname === "/hosted-runners/bootstrap")
+        return await bootstrapHostedRunner(request, env);
       if (
         /^\/runner\/(?:connect|heartbeat|complete|github\/(?:heartbeat|complete)|signing\/requests\/[0-9a-f-]{36}\/(?:start|heartbeat|download|authorize-sign|output(?:\/parts\/\d+|\/complete)?|complete|fail))$/.test(
           url.pathname
@@ -1896,6 +1899,7 @@ export default {
         await expireGithubRunners(env);
         await cleanRunnerSchedulingData(env, Date.now());
         await kickRunnerDispatch(env);
+        await reconcileHostedRunners(env);
         await publishPendingChecks(env);
       })().catch((cause: unknown) => {
         const logger = createLogger(env.LOG_LEVEL, { service: "actions" });
