@@ -1,5 +1,15 @@
 export const runnerMessages = {
   "zh-CN": {
+    hostedRunnerTitle: "GitHub 托管接替",
+    hostedRunnerDescription:
+      "作业等待 15 分钟仍没有可用的本机 runner 时，使用 GitHub Actions 的包含额度运行。需要可用额度。",
+    hostedRunnerEnabled: "已启用，私有运行仓库",
+    hostedRunnerDisable: "关闭托管接替",
+    hostedRunnerNoConnections: "请先为属于你自己的 GitHub 仓库连接启用本机 runner。",
+    hostedRunnerConnection: "GitHub 连接",
+    hostedRunnerChooseConnection: "选择 GitHub 连接",
+    hostedRunnerBudgetConfirmation: "我已在 GitHub 将 Actions 的付费预算设为 0。",
+    hostedRunnerEnable: "启用托管接替",
     runnerDashboardTitle: "Runners",
     runnerDashboardDescription: "查看本机 runner 状态、执行队列与近期运行记录。",
     runnerOnline: "在线",
@@ -144,6 +154,17 @@ export const runnerMessages = {
     runnerSigningCredentialsFileInvalid: "请选择不超过 64 KiB 的有效 JSON 对象文件。",
   },
   en: {
+    hostedRunnerTitle: "GitHub hosted fallback",
+    hostedRunnerDescription:
+      "When a job has waited 15 minutes without an available self-hosted runner, use the included GitHub Actions allowance. Available allowance is required.",
+    hostedRunnerEnabled: "Enabled · Private execution repository",
+    hostedRunnerDisable: "Disable hosted fallback",
+    hostedRunnerNoConnections:
+      "First enable self-hosted runners for a GitHub repository connection you own.",
+    hostedRunnerConnection: "GitHub connection",
+    hostedRunnerChooseConnection: "Choose a GitHub connection",
+    hostedRunnerBudgetConfirmation: "I have set my GitHub Actions spending limit to zero.",
+    hostedRunnerEnable: "Enable hosted fallback",
     runnerDashboardTitle: "Runners",
     runnerDashboardDescription: "Review self-hosted runner health, queued jobs, and recent runs.",
     runnerOnline: "Online",

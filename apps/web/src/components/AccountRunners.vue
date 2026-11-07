@@ -14,6 +14,7 @@ import NoticeBar from "./NoticeBar.vue";
 import StatusBadge from "./StatusBadge.vue";
 import StatusState from "./StatusState.vue";
 import AccountRunnerServices from "./AccountRunnerServices.vue";
+import HostedRunnerSettings from "./HostedRunnerSettings.vue";
 
 const { t, d } = useI18n();
 const overview = ref<RunnerOverview | null>(null);
@@ -313,6 +314,7 @@ onUnmounted(() => {
       >
     </div>
     <AccountRunnerServices />
+    <HostedRunnerSettings v-if="overview" :connections="overview.github" />
     <div v-if="loading" class="box"><StatusState :loading="true" /></div>
     <template v-else-if="overview">
       <NoticeBar v-if="overview.truncated" intent="warning">{{ t("runnerTruncated") }}</NoticeBar>
