@@ -1877,7 +1877,7 @@ async function serveHosted(state, values) {
       response = await apiRequest(origin, bootstrapToken, "/api/actions/hosted-runners/bootstrap", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bootstrapToken, oidcToken, labels: [...hostLabels()] }),
+        body: JSON.stringify({ bootstrapToken, oidcToken, labels: mergeLabels([...hostLabels()]) }),
       });
     } catch (error) {
       if (error.cause?.status !== 409 || Date.now() >= deadline) throw error;
