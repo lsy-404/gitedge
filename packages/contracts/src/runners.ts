@@ -213,6 +213,12 @@ export interface RunnerOverviewGithubConnection {
   pendingCleanup: number;
   lastJobAt: number | null;
 }
+export interface HostedRunnerSettings {
+  connectionId: string;
+  repository: string;
+  repositoryId: string;
+  enabledAt: number;
+}
 export interface RunnerOverviewQueueItem {
   kind: RunnerJobKind;
   id: string;

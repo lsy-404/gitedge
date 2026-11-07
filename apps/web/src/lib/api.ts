@@ -70,7 +70,11 @@ import type {
   GitHubSyncInput,
   GitHubSyncState,
 } from "../../../../packages/contracts/src/github-sync";
-import type { RunnerHistory, RunnerOverview } from "../../../../packages/contracts/src/runners";
+import type {
+  HostedRunnerSettings,
+  RunnerHistory,
+  RunnerOverview,
+} from "../../../../packages/contracts/src/runners";
 import type {
   SigningCredentialStatus,
   SigningCredentialPlatform,
@@ -689,6 +693,15 @@ export const api = {
   usage: () => request<Usage>("/api/forge/usage"),
   runnerOverview: (signal?: AbortSignal) =>
     request<RunnerOverview>("/api/actions/runners/overview", { signal }),
+  hostedRunnerSettings: () =>
+    request<{ settings: HostedRunnerSettings | null }>("/api/forge/hosted-runner-settings"),
+  enableHostedRunner: (connectionId: string) =>
+    request<{ enabled: boolean; repository: string; repositoryId: string }>(
+      "/api/forge/hosted-runner-settings",
+      { method: "POST", body: JSON.stringify({ connectionId, includedOnlyConfirmed: true }) }
+    ),
+  disableHostedRunner: () =>
+    request<{ enabled: boolean }>("/api/forge/hosted-runner-settings", { method: "DELETE" }),
   updateRunnerLabels: (runnerId: string, labels: string[]) =>
     request<{ labels: string[] }>(`/api/actions/runners/${encodeURIComponent(runnerId)}/labels`, {
       method: "PUT",
