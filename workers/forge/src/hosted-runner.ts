@@ -172,13 +172,23 @@ export async function hostedRunnerSettings(
       repo = await remoteRepository(token, githubUser.login);
     } catch (cause) {
       if (!(cause instanceof GithubApiError) || cause.status !== 404) throw cause;
-      repo = GitHubRepo.parse(
-        await githubRequest(token, "/user/repos", "POST", {
-          name: NAME,
-          private: true,
-          auto_init: true,
-        })
-      );
+      try {
+        repo = GitHubRepo.parse(
+          await githubRequest(token, "/user/repos", "POST", {
+            name: NAME,
+            private: true,
+            auto_init: true,
+          })
+        );
+      } catch (createCause) {
+        if (!(createCause instanceof GithubApiError) || createCause.status !== 422)
+          throw createCause;
+        return errorResponse(
+          409,
+          "hosted_runner_repository_access",
+          "GitHub could not create the emergency repository. If the private emergency repository already exists, include it in this GitHub connection’s repository access."
+        );
+      }
     }
     if (
       repo.owner.id !== githubUser.id ||
