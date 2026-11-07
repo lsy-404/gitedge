@@ -258,7 +258,9 @@ export async function hostedRunnerOperation(request: Request, env: ForgeEnv): Pr
   if (!connection)
     return errorResponse(
       409,
-      "github_connection_unavailable",
+      input.data.operation === "dispatch"
+        ? "hosted_runner_unavailable"
+        : "github_connection_unavailable",
       "The GitHub connection is unavailable."
     );
   const logger = createLogger(env.LOG_LEVEL, { service: "hosted-runner" });
