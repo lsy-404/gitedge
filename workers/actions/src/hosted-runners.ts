@@ -111,15 +111,18 @@ export async function bootstrapHostedRunner(request: Request, env: RunnerEnv): P
     (row.platform === "windows" && !host.includes("windows")) ||
     ((row.platform === "macos" || row.platform === "ios") && !host.includes("macos")) ||
     (row.platform === "ios" && !host.includes("arm64")) ||
-    required.filter(isRunnerSystemLabel).some((label) => !matchesLabels([label], input.data.labels))
+    required.filter(isRunnerSystemLabel).some((label) => {
+      const value = label.toLowerCase();
+      if (["amd64", "x86_64"].includes(value)) return !host.includes("x64");
+      if (value === "aarch64") return !host.includes("arm64");
+      return !matchesLabels([label], input.data.labels);
+    })
   )
     return errorResponse(422, "invalid_job", "The hosted runner does not match the job platform.");
   const claim = parseJobClaim(required);
   const labels = RunnerLabelsSchema.safeParse([
     ...input.data.labels,
-    ...claim.labels.filter(
-      (label) => !isRunnerSystemLabel(label) && !host.includes(label.toLowerCase())
-    ),
+    ...claim.labels.filter((label) => !host.includes(label.toLowerCase())),
   ]);
   if (!claim.valid || !labels.success)
     return errorResponse(422, "invalid_job", "The job labels are invalid.");
