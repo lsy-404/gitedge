@@ -64,6 +64,15 @@ function parseLabels(json: string): string[] | null {
   }
 }
 
+export function runnerHasPreferredCache(runner: RunnerRow, capacity: RunnerCapacity): boolean {
+  return (
+    capacity.cache?.supported === true &&
+    (parseLabels(runner.labels_json) ?? []).some(
+      (label) => label.toLowerCase() === "cache-available"
+    )
+  );
+}
+
 function parsedCapacity(json: string | null): RunnerCapacity | null {
   if (json === null) return null;
   try {

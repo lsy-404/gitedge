@@ -36,6 +36,7 @@ import {
   loadRunnerCandidate,
   readRunnerBudget,
   readRunnerCapacity,
+  runnerHasPreferredCache,
   runnerUsageMinutes24h,
   type RunnerCandidate,
 } from "./runner-scheduler";
@@ -673,7 +674,8 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
     for (const candidate of ordered) {
       const key = `${candidate.kind}:${candidate.id}`;
       if (offeredJobs.has(key)) continue;
-      let best: { runner: IdleRunner; labels: string[]; score: number } | null = null;
+      let best: { runner: IdleRunner; labels: string[]; score: number; cache: boolean } | null =
+        null;
       for (const runner of idle) {
         if (taken.has(runner.row.id) || declined.has(`${key}:${runner.row.id}`)) continue;
         if (
@@ -691,7 +693,9 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
         );
         if (evaluated.reasons.length) continue;
         const score = scoreRunner(runner.capacity, runner.budget, runner.used, evaluated.claim);
-        if (!best || score < best.score) best = { runner, labels: evaluated.labels, score };
+        const cache = runnerHasPreferredCache(runner.row, runner.capacity);
+        if (!best || (cache && !best.cache) || (cache === best.cache && score < best.score))
+          best = { runner, labels: evaluated.labels, score, cache };
       }
       if (!best) continue;
       this.offer(best.runner.row.id, candidate, best.labels, now);
