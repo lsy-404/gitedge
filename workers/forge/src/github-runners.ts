@@ -398,6 +398,8 @@ export async function githubRunnerOperation(request: Request, env: ForgeEnv): Pr
       !(await allowed(env, connection, job.runner_id))
     )
       return dataResponse({ allowed: false, assigned: job.assigned === 1 });
+    if (parsed.data.operation === "status" && job.assigned === 1)
+      return dataResponse({ allowed: true, assigned: true });
     const credentials = await githubCredentials(env, connection);
     const path = githubRepoPath(connection.owner, connection.name);
     if (parsed.data.operation === "status") {
