@@ -99,7 +99,8 @@ PY_ARCHIVE
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   ca-certificates curl git build-essential python3 python3-venv pkg-config \
-  unzip zip jq docker.io sudo
+  unzip zip jq docker.io sudo libwebkit2gtk-4.1-dev libssl-dev \
+  libayatana-appindicator3-dev librsvg2-dev libxdo-dev libasound2-dev
 
 mkdir -p /opt/gitedge/tools /opt/gitedge/job
 install -d -o runner -g runner -m 0750 /opt/gitedge/job
@@ -158,6 +159,7 @@ fi
 
 node --version | grep -Fx "v$node_version" >/dev/null || fail 'installed Node version does not match.'
 pnpm --version | grep -Fx "$(cat "$stage/pnpm-version")" >/dev/null || fail 'installed pnpm version does not match.'
+pkg-config --exists webkit2gtk-4.1 gtk+-3.0 openssl ayatana-appindicator3-0.1 librsvg-2.0 alsa || fail 'desktop build dependencies are unavailable.'
 [[ -f $broker_root/scripts/runner-vm/guest.mjs ]] || fail 'guest agent was not installed.'
 
 printf 'Ubuntu guest bootstrap complete. Broker and Actions runner remain unregistered and stopped.\n'
