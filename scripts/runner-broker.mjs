@@ -1615,6 +1615,7 @@ async function executeVmJob() {
   const jobClaim = parseJobClaim(claim.run.labels ?? profile.labels, claim.run.timeoutMinutes);
   const readyDeadline = Date.now() + 120_000;
   let lastRenewedAt = 0;
+  let refreshTools = false;
   while (true) {
     if (Date.now() - lastRenewedAt >= 15_000) {
       claim.leaseExpiresAt = await renewIsolatedLease(profile, claim, controller.signal);
@@ -1622,11 +1623,15 @@ async function executeVmJob() {
     }
     const capacity = await getRunnerCapacity({
       workDirectories: [profile.directory, actionsState],
+      refreshTools,
     });
     const reasons = eligibilityReasons(capacity, undefined, 0, jobClaim);
     if (!reasons.length) break;
-    if (reasons.some((reason) => reason !== "mem" && reason !== "load"))
+    if (
+      reasons.some((reason) => reason !== "mem" && reason !== "load" && !reason.startsWith("tool:"))
+    )
       validateCapacityClaim(jobClaim, capacity);
+    refreshTools = reasons.some((reason) => reason.startsWith("tool:"));
     if (Date.now() >= readyDeadline)
       throw new Error(
         `Guest startup resources are unavailable (${reasons.join(", ")}); memory ${capacity.memFreeMb} MB, load ${capacity.load1} / ${capacity.cpus}.`

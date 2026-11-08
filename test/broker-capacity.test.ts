@@ -212,11 +212,12 @@ describe("runner capacity probes", () => {
   it("caches allowlisted tool probes for ten minutes and excludes an unavailable Docker daemon", async () => {
     let now = 1_000;
     let calls = 0;
+    let dockerReady = false;
     const getTools = createToolProbeCache({
       now: () => now,
       probe: async (command) => {
         calls++;
-        return command !== "docker";
+        return command !== "docker" || dockerReady;
       },
     });
 
@@ -227,9 +228,17 @@ describe("runner capacity probes", () => {
     expect(first).toContain("node");
     expect(calls).toBe(7);
 
+    dockerReady = true;
+    expect(await getTools()).toEqual(first);
+    const refreshed = await getTools({ refresh: true });
+    expect(refreshed).toContain("docker");
+    expect(calls).toBe(14);
+    expect(await getTools()).toEqual(refreshed);
+    expect(calls).toBe(14);
+
     now += 10 * 60_000 + 1;
     await getTools();
-    expect(calls).toBe(14);
+    expect(calls).toBe(21);
   });
 
   it("bounds command probes and reports a nonzero or missing command as unavailable", async () => {

@@ -111,9 +111,9 @@ export function createToolProbeCache({ now = Date.now, probe = runProbe } = {}) 
   let cachedTools;
   let pending;
 
-  return async function getTools() {
-    if (cachedTools && now() < expiresAt) return [...cachedTools];
+  return async function getTools({ refresh = false } = {}) {
     if (pending) return [...(await pending)];
+    if (!refresh && cachedTools && now() < expiresAt) return [...cachedTools];
     pending = Promise.all(
       toolCommands().map(async ([name, command, args]) =>
         (await probe(command, args, toolTimeoutMs)) ? name : null
@@ -219,6 +219,7 @@ export async function getRunnerCapacity({
   busy = 0,
   slots = 1,
   reservedMemMb = 0,
+  refreshTools = false,
 } = {}) {
   const directories = [...new Set(workDirectories ?? [])].map((directory) =>
     path.resolve(directory)
@@ -229,7 +230,7 @@ export async function getRunnerCapacity({
     Promise.all(directories.map((directory) => freeDiskMb(directory))).then((values) =>
       Math.min(...values)
     ),
-    getTools(),
+    getTools({ refresh: refreshTools }),
     getGpus(),
   ]);
   const osFreeMb =
