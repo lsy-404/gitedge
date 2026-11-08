@@ -328,6 +328,8 @@ if ([string]$package.name -cne 'gitedge' -or -not $packageManagerMatch.Success) 
 }
 $pnpmVersion = $packageManagerMatch.Groups[1].Value
 $pythonVersion = '3.14.10'
+$dotnetVersion = '8.0.427'
+$dotnetSha512 = 'a4dd6eb2bf2a2f6fb10997d3e044a229b23ad96a5c86d20494687e34ee73b537d7bd14488ce14cded6917f6778da4d66360e2734020b7ef487d0f29ab144489d'
 
 $portableGitAssetVersion = $PortableGitVersion -replace '\.windows\.', '.'
 $artifactSpecs = @(
@@ -355,6 +357,8 @@ $plan = [ordered]@{
   pnpmSha256 = $PnpmSha256.ToLowerInvariant()
   pythonVersion = $pythonVersion
   pythonSha256 = $PythonSha256.ToLowerInvariant()
+  dotnetVersion = $dotnetVersion
+  dotnetSha512 = $dotnetSha512
   rustToolchainVersion = $RustToolchainVersion
   rustupSha256 = $RustupSha256.ToLowerInvariant()
   buildToolsBootstrapperFileVersion = $BuildToolsBootstrapperFileVersion
@@ -384,6 +388,25 @@ $artifactPaths = @{}
 foreach ($spec in $artifactSpecs) {
   $artifactPaths[$spec.Name] = Get-VerifiedDownload $spec.Uri $spec.Name $spec.Sha $downloads $ArtifactDirectory
 }
+$dotnetArchive = Join-Path $downloads "dotnet-sdk-$dotnetVersion-win-x64.zip"
+if (-not (Test-Path -LiteralPath $dotnetArchive)) {
+  $dotnetTemporary = Join-Path $downloads ('.download-' + [Guid]::NewGuid().ToString('N') + '.tmp')
+  try {
+    $stagedDotnet = if ($ArtifactDirectory) { Join-Path $ArtifactDirectory (Split-Path -Leaf $dotnetArchive) } else { $null }
+    if ($stagedDotnet -and (Test-Path -LiteralPath $stagedDotnet -PathType Leaf)) {
+      Assert-NoReparsePath $stagedDotnet
+      Copy-Item -LiteralPath $stagedDotnet -Destination $dotnetTemporary -ErrorAction Stop
+    } else {
+      & curl.exe --fail --location --proto '=https' --proto-redir '=https' --retry 2 `
+        --connect-timeout 15 --max-time 1800 --output $dotnetTemporary "https://builds.dotnet.microsoft.com/dotnet/Sdk/$dotnetVersion/dotnet-sdk-$dotnetVersion-win-x64.zip"
+      if ($LASTEXITCODE -ne 0) { throw 'The .NET SDK download failed.' }
+    }
+    if ((Get-FileHash -LiteralPath $dotnetTemporary -Algorithm SHA512).Hash -ine $dotnetSha512) { throw 'The .NET SDK checksum did not match.' }
+    Move-Item -LiteralPath $dotnetTemporary -Destination $dotnetArchive -ErrorAction Stop
+  } finally { if (Test-Path -LiteralPath $dotnetTemporary) { Remove-Item -LiteralPath $dotnetTemporary -Force } }
+}
+Assert-NoReparsePath $dotnetArchive
+if ((Get-FileHash -LiteralPath $dotnetArchive -Algorithm SHA512).Hash -ine $dotnetSha512) { throw 'The .NET SDK checksum did not match.' }
 $buildToolsSignature = Get-AuthenticodeSignature -LiteralPath $artifactPaths['vs_BuildTools.exe']
 if ($buildToolsSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
     [string]$buildToolsSignature.SignerCertificate.Subject -notmatch 'CN=Microsoft Corporation(?:,|$)') {
@@ -415,6 +438,7 @@ $pythonExe = Join-Path $pythonRoot 'python.exe'
 $actionsRoot = Join-Path $InstallRoot 'actions-runner'
 $brokerRoot = Join-Path $InstallRoot 'broker'
 $buildToolsRoot = Join-Path $toolsRoot 'BuildTools'
+$dotnetRoot = Join-Path $env:ProgramFiles 'dotnet'
 $cargoHome = Join-Path $profilePath '.cargo'
 $rustupHome = Join-Path $profilePath '.rustup'
 $cargoBin = Join-Path $cargoHome 'bin'
@@ -547,7 +571,25 @@ $entrypoint = @(
 ) -join "`r`n"
 [IO.File]::WriteAllText((Join-Path $InstallRoot 'run-vm-job.cmd'), $entrypoint + "`r`n", [Text.Encoding]::ASCII)
 
-$machinePaths = @($InstallRoot, $nodeRoot, $pythonRoot, $pythonScripts, (Join-Path $gitRoot 'bin'), (Join-Path $gitRoot 'cmd'),
+$null = New-Item -ItemType Directory -Path $dotnetRoot -Force
+Expand-Archive -LiteralPath $dotnetArchive -DestinationPath $dotnetRoot -Force
+$env:PATH = "$dotnetRoot;$env:PATH"
+$proxy = if ($env:HTTPS_PROXY) { $env:HTTPS_PROXY } else { $env:HTTP_PROXY }
+$proxyArgs = @{}
+if ($proxy) {
+  $proxyArgs.Proxy = $proxy
+  [Net.WebRequest]::DefaultWebProxy = [Net.WebProxy]::new($proxy)
+}
+Install-PackageProvider -Name NuGet -ForceBootstrap -Force -Scope AllUsers @proxyArgs | Out-Null
+Install-Module -Name ArtifactSigning -RequiredVersion '0.1.20' -Repository PSGallery -Scope AllUsers -Force @proxyArgs
+Import-Module ArtifactSigning -RequiredVersion '0.1.20' -Force
+if (-not (Get-Command Invoke-ArtifactSigning -ErrorAction SilentlyContinue)) { throw 'The Artifact Signing command is unavailable.' }
+& (Get-Module ArtifactSigning) { Assert-DotnetRuntime; Get-EveryDependency | Out-Null }
+if (-not (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'ArtifactSigning\Microsoft.Windows.SDK.BuildTools\Microsoft.Windows.SDK.BuildTools.10.0.26100.4188\bin\10.0.26100.0\x64\signtool.exe') -PathType Leaf)) {
+  throw 'The Artifact Signing SDK is unavailable.'
+}
+
+$machinePaths = @($InstallRoot, $nodeRoot, $pythonRoot, $pythonScripts, $dotnetRoot, (Join-Path $gitRoot 'bin'), (Join-Path $gitRoot 'cmd'),
   $powerShellRoot, $pnpmRoot, $cargoBin)
 Add-MachinePath $machinePaths
 [Environment]::SetEnvironmentVariable('CARGO_HOME', $cargoHome, 'User')
