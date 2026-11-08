@@ -3,7 +3,11 @@ import os from "node:os";
 import { readFile, statfs } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { matchesCapacity, parseJobClaim } from "../packages/contracts/runner-scheduling.mjs";
+import {
+  eligibilityReasons,
+  matchesCapacity,
+  parseJobClaim,
+} from "../packages/contracts/runner-scheduling.mjs";
 import { captureOutput, killProcessTree } from "./runner-process-tree.mjs";
 
 const megabyte = 1024 * 1024;
@@ -33,8 +37,28 @@ export function validateLocalJobClaim(labels, capacity, defaultMinutes) {
 }
 
 export function validateCapacityClaim(claim, capacity) {
-  if (!claim.valid || !matchesCapacity(capacity, claim))
-    throw new Error("Job resource requirements do not match this runner capacity.");
+  if (!claim.valid || !matchesCapacity(capacity, claim)) {
+    const requirements = {
+      memMb: claim.memMb,
+      cpus: claim.cpus,
+      diskMb: claim.diskMb,
+      gpuVendor: claim.gpuVendor,
+      vramMb: claim.vramMb,
+      tools: claim.tools,
+    };
+    const available = capacity && {
+      memFreeMb: capacity.memFreeMb,
+      cpus: capacity.cpus,
+      diskFreeMb: capacity.diskFreeMb,
+      load1: capacity.load1,
+      tools: capacity.tools,
+      gpus: capacity.gpus?.map(({ vendor, vramMb }) => ({ vendor, vramMb })) ?? null,
+    };
+    const reasons = eligibilityReasons(capacity, undefined, 0, claim);
+    throw new Error(
+      `Job resource requirements do not match this runner capacity: ${JSON.stringify({ reasons, requirements, available })}`
+    );
+  }
   return claim;
 }
 
