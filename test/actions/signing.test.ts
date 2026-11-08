@@ -568,6 +568,33 @@ describe("native signing admission", () => {
         "Bearer source-token-two",
         "Bearer source-token-two",
       ]);
+      githubFetch.mockResolvedValueOnce(new Response("unavailable", { status: 503 }));
+      await expect(
+        hooks.verifySourceCurrent("owner-1", "runner-one", approvedProfile, sourceSubmission)
+      ).rejects.toThrow("signing_source_metadata_unavailable");
+      githubFetch.mockResolvedValueOnce(new Response("unavailable", { status: 503 }));
+      await expect(
+        hooks.verifySource(tokenUser, "runner-one", approvedProfile, sourceSubmission)
+      ).rejects.toThrow("signing_source_run_metadata_failed");
+      githubFetch.mockResolvedValueOnce(Response.json({ unexpected: true }));
+      await expect(
+        hooks.verifySourceCurrent("owner-1", "runner-one", approvedProfile, sourceSubmission)
+      ).rejects.toThrow("signing_source_run_metadata_failed");
+      githubFetch.mockResolvedValueOnce(
+        Response.json({
+          repository: { id: 9999 },
+          head_sha: submission.sourceCommitOid,
+          status: "in_progress",
+          conclusion: null,
+          path: ".github/workflows/build.yml@refs/heads/main",
+          event: "workflow_dispatch",
+          head_branch: "main",
+          actor: { id: 123 },
+        })
+      );
+      await expect(
+        hooks.verifySourceCurrent("owner-1", "runner-one", approvedProfile, sourceSubmission)
+      ).resolves.toBe(false);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -1624,6 +1651,7 @@ describe("native signing stage reconciliation", () => {
       previousVerification: notaryReport,
     };
     const stub = {
+      releaseSource: vi.fn(),
       fetch: vi.fn(async (request: Request) =>
         new URL(request.url).pathname.startsWith("/prepare-next-stage/")
           ? Response.json({
@@ -1676,12 +1704,25 @@ describe("native signing stage reconciliation", () => {
     } as unknown as SigningEnv;
     let notarization: "Accepted" | "In Progress" = "In Progress";
     const enqueue = vi.fn(async () => ({ runId: "22222222-2222-4222-8222-222222222222" }));
+    const verifySourceCurrent = vi.fn(async () => true);
     const hooks = {
-      verifySourceCurrent: vi.fn(async () => true),
+      verifySourceCurrent,
       verifyNotarization: vi.fn(async () => notarization),
       enqueue,
     } as unknown as SigningExecutionHooks;
 
+    verifySourceCurrent.mockRejectedValueOnce(new Error("signing_source_metadata_unavailable"));
+    await expect(reconcileSigningRequests(env, hooks)).resolves.toEqual({
+      queued: 0,
+      skipped: 0,
+      failed: 1,
+    });
+    expect(stub.releaseSource).not.toHaveBeenCalled();
+    expect(
+      stub.fetch.mock.calls.some(([request]) =>
+        new URL(request.url).pathname.startsWith("/fail-source/")
+      )
+    ).toBe(false);
     await expect(reconcileSigningRequests(env, hooks)).resolves.toEqual({
       queued: 0,
       skipped: 1,

@@ -90,9 +90,11 @@ async function githubJson(token: string, path: string): Promise<unknown> {
   });
   if (!response.ok) {
     await response.body?.cancel();
-    return null;
+    throw new Error("signing_source_metadata_unavailable");
   }
-  return readJsonLimited(response, 1_048_576);
+  const body = await readJsonLimited(response, 1_048_576);
+  if (body === null) throw new Error("signing_source_metadata_unavailable");
+  return body;
 }
 
 const githubRunSchema = z
@@ -162,14 +164,14 @@ async function githubTagCommit(
   const initial = reference.safeParse(
     await githubJson(token, `/repos/${fullName}/git/ref/tags/${encodeURIComponent(tag)}`)
   );
-  if (!initial.success) return null;
+  if (!initial.success) throw new Error("signing_source_repository_metadata_failed");
   let object = initial.data.object;
   for (let depth = 0; object.type === "tag" && depth < 4; depth++) {
     const annotated = z
       .object({ object: objectSchema })
       .passthrough()
       .safeParse(await githubJson(token, `/repos/${fullName}/git/tags/${object.sha}`));
-    if (!annotated.success) return null;
+    if (!annotated.success) throw new Error("signing_source_repository_metadata_failed");
     object = annotated.data.object;
   }
   return object.type === "commit" ? object.sha : null;
@@ -193,10 +195,10 @@ async function githubCommitOnDefaultBranch(
         `/repos/${fullName}/compare/${encodeURIComponent(defaultBranch)}...${shaValue}`
       )
     );
+  if (!comparison.success) throw new Error("signing_source_repository_metadata_failed");
   return (
-    comparison.success &&
-    (comparison.data.status === "identical" ||
-      (comparison.data.status === "behind" && comparison.data.ahead_by === 0))
+    comparison.data.status === "identical" ||
+    (comparison.data.status === "behind" && comparison.data.ahead_by === 0)
   );
 }
 
@@ -239,8 +241,8 @@ async function verifySource(
       )
     )
   );
+  if (!run.success) throw new Error("signing_source_run_metadata_failed");
   if (
-    !run.success ||
     String(run.data.repository.id) !== repo.id ||
     run.data.head_sha !== input.sourceCommitOid ||
     run.data.status !== "in_progress" ||
@@ -256,7 +258,7 @@ async function verifySource(
         githubJson(token, `/repos/${repo.fullName}`)
       )
     );
-  if (!repositoryInfo.success) return false;
+  if (!repositoryInfo.success) throw new Error("signing_source_repository_metadata_failed");
   const defaultBranch = repositoryInfo.data.default_branch;
   if (repo.releaseTagPattern) {
     const tag = `v${input.version}`;
@@ -328,8 +330,8 @@ async function verifySourceCurrent(
       `/repos/${repo.fullName}/actions/runs/${encodeURIComponent(input.sourceRunId)}`
     )
   );
+  if (!run.success) throw new Error("signing_source_run_metadata_failed");
   if (
-    !run.success ||
     String(run.data.repository.id) !== repo.id ||
     run.data.head_sha !== input.sourceCommitOid ||
     !(
@@ -345,7 +347,7 @@ async function verifySourceCurrent(
     .object({ default_branch: z.string().min(1).max(256) })
     .passthrough()
     .safeParse(await githubJson(token, `/repos/${repo.fullName}`));
-  if (!repositoryInfo.success) return false;
+  if (!repositoryInfo.success) throw new Error("signing_source_repository_metadata_failed");
   if (repo.releaseTagPattern) {
     const tag = `v${input.version}`;
     if (
