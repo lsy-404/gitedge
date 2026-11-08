@@ -41,6 +41,15 @@ const MAX_PARTS = 10_000;
 const MAX_ATTEMPTS = 5;
 const BACKOFF_MS = [500, 1_000, 2_000, 4_000];
 const REQUEST_TIMEOUT_MS = 300_000;
+const CLIENT_FAILURE_PHASES = new Set([
+  "start",
+  "input_download",
+  "execute_platform",
+  "verify_output",
+  "bundle_output",
+  "upload_output",
+  "complete",
+]);
 const MACOS_FAILURE_PHASES = new Set([
   "input_archive",
   "archive_validation",
@@ -698,6 +707,7 @@ export async function runSigning({
   let heartbeatPromise;
   let heartbeatError;
   let work;
+  let phase;
   const abortController = new AbortController();
   try {
     context = await contextReader(contextFile);
@@ -712,6 +722,7 @@ export async function runSigning({
     await chmod(work, 0o700);
     const outputDir = path.join(work, "output");
     await mkdir(outputDir, { mode: 0o700 });
+    phase = "start";
     const started = await client.start();
     const manifest = started.manifest;
     const pulse = async () => {
@@ -747,6 +758,7 @@ export async function runSigning({
       void pulse();
     }, heartbeatIntervalMs);
     timer.unref?.();
+    phase = "input_download";
     const inputFile = path.join(work, "input.zip");
     await client.download("input", inputFile, {
       digest: manifest.input_digest,
@@ -760,6 +772,7 @@ export async function runSigning({
         maxBytes: manifest.max_artifact_bytes,
       });
     }
+    phase = "execute_platform";
     const family = stageFamily(manifest.stage);
     let credentialsProvided = false;
     const credentialsProvider = async () => {
@@ -798,13 +811,17 @@ export async function runSigning({
         abortController.signal
       );
     if (heartbeatError) throw new ClientError("HEARTBEAT_FAILED");
+    phase = "verify_output";
     const verification = await validateOutput(outputDir, manifest);
+    phase = "bundle_output";
     const bundle = await bundleBuilder(outputDir, verification, work, manifest.max_artifact_bytes);
+    phase = "upload_output";
     await client.uploadOutput(bundle);
     clearInterval(timer);
     timer = undefined;
     if (heartbeatBusy && heartbeatPromise) await heartbeatPromise;
     if (heartbeatError) throw new ClientError("HEARTBEAT_FAILED");
+    phase = "complete";
     await client.complete(bundle, verification);
     return { requestId: context.requestId, outputDigest: bundle.digest, outputSize: bundle.size };
   } catch (error) {
@@ -812,6 +829,7 @@ export async function runSigning({
     if (error instanceof ClientError || error instanceof SigningContextError) throw error;
     const failure = new ClientError("SIGNING_FAILED");
     failure.cause = error;
+    failure.phase = phase;
     throw failure;
   } finally {
     if (timer) clearInterval(timer);
@@ -829,6 +847,11 @@ export function formatClientErrorOutput(error) {
       : undefined;
   const code = error instanceof ClientError ? error.code : (contextCode ?? "SIGNING_FAILED");
   const lines = [code];
+  const phase =
+    error instanceof ClientError && code === "SIGNING_FAILED"
+      ? Object.getOwnPropertyDescriptor(error, "phase")?.value
+      : undefined;
+  if (typeof phase === "string" && CLIENT_FAILURE_PHASES.has(phase)) lines.push(`phase: ${phase}`);
   const causeDescriptor =
     error instanceof ClientError ? Object.getOwnPropertyDescriptor(error, "cause") : undefined;
   const cause =

@@ -100,6 +100,14 @@ describe("safe signing client error output", () => {
     const output = signingFailure(unknown.message, unknown);
 
     expect(output).toBe("SIGNING_FAILED\ncause: Error\n");
+    const failure = new ClientError("SIGNING_FAILED");
+    failure.cause = unknown;
+    failure.phase = "input_download";
+    expect(formatClientErrorOutput(failure)).toBe(
+      "SIGNING_FAILED\nphase: input_download\ncause: Error\n"
+    );
+    failure.phase = "secret=https://private.example/token";
+    expect(formatClientErrorOutput(failure)).toBe("SIGNING_FAILED\ncause: Error\n");
     for (const text of ["not-a-real-secret", "https://", "C:\\", "private\\runner", "signing.p12"])
       expect(output).not.toContain(text);
   });
