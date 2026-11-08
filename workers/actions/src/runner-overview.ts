@@ -395,7 +395,7 @@ export async function handleRunnerOverview(
           )
           .all<SampleDbRow>(),
         env.DB.prepare(
-          `SELECT c.id AS connection_id,p.id AS repository_id,n.slug||'/'||p.slug AS repository,c.owner||'/'||c.name AS remote,c.enabled,c.runner_enabled,
+          `SELECT c.id AS connection_id,c.created_by,p.deleted_at,p.archived,p.id AS repository_id,n.slug||'/'||p.slug AS repository,c.owner||'/'||c.name AS remote,c.enabled,c.runner_enabled,
         c.error_code,c.failure_count,c.last_synced_at,COALESCE(q.queued,0) AS queued,q.oldest_queued_at,
         COALESCE(cl.pending_cleanup,0) AS pending_cleanup,j.last_job_at
         FROM forge_github_connections c JOIN repositories p ON p.id=c.repository_id JOIN namespaces n ON n.id=p.namespace_id
@@ -410,6 +410,9 @@ export async function handleRunnerOverview(
           .bind(user.id, user.id, user.id, ...connectionRepositoryArgs, MAX_CONNECTIONS + 1)
           .all<{
             connection_id: string;
+            created_by: string;
+            deleted_at: number | null;
+            archived: number;
             repository_id: string;
             repository: string;
             remote: string;
@@ -453,6 +456,11 @@ export async function handleRunnerOverview(
     );
     const github = permittedConnections.slice(0, MAX_CONNECTIONS).map((row) => ({
       connectionId: row.connection_id,
+      credentialReusable:
+        row.created_by === user.id &&
+        row.enabled === 1 &&
+        row.deleted_at === null &&
+        row.archived === 0,
       repository: row.repository,
       remote: row.remote,
       enabled: row.enabled === 1,
@@ -556,7 +564,7 @@ export async function handleRunnerOverview(
     ? [JSON.stringify(user.token.repositoryIds)]
     : [];
   const connections = await env.DB.prepare(
-    `SELECT c.id AS connection_id,p.id AS repository_id,n.slug||'/'||p.slug AS repository,
+    `SELECT c.id AS connection_id,c.created_by,p.deleted_at,p.archived,p.id AS repository_id,n.slug||'/'||p.slug AS repository,
     c.owner||'/'||c.name AS remote,c.enabled,c.runner_enabled,c.error_code,c.failure_count,c.last_synced_at,
     COALESCE(q.queued,0) AS queued,q.oldest_queued_at,COALESCE(cl.pending_cleanup,0) AS pending_cleanup,j.last_job_at
     FROM forge_github_connections c JOIN repositories p ON p.id=c.repository_id JOIN namespaces n ON n.id=p.namespace_id
@@ -571,6 +579,9 @@ export async function handleRunnerOverview(
     .bind(user.id, user.id, user.id, ...connectionRepositoryArgs, MAX_CONNECTIONS + 1)
     .all<{
       connection_id: string;
+      created_by: string;
+      deleted_at: number | null;
+      archived: number;
       repository_id: string;
       repository: string;
       remote: string;
@@ -594,6 +605,11 @@ export async function handleRunnerOverview(
     .slice(0, MAX_CONNECTIONS)
     .map((row) => ({
       connectionId: row.connection_id,
+      credentialReusable:
+        row.created_by === user.id &&
+        row.enabled === 1 &&
+        row.deleted_at === null &&
+        row.archived === 0,
       repository: row.repository,
       remote: row.remote,
       enabled: row.enabled === 1,

@@ -201,6 +201,7 @@ export interface RunnerOverviewRunner extends RegisteredRunner {
 }
 export interface RunnerOverviewGithubConnection {
   connectionId: string;
+  credentialReusable: boolean;
   repository: string;
   remote: string;
   enabled: boolean;

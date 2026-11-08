@@ -107,6 +107,24 @@ async function setupGithubSync(
   if (!parsed.success)
     return errorResponse(400, "bad_request", "Invalid GitHub synchronization settings.");
   const input = parsed.data;
+  let token: string;
+  if ("connectionId" in input) {
+    const source = await env.DB.prepare(
+      `SELECT c.* FROM forge_github_connections c JOIN repositories r ON r.id=c.repository_id
+       WHERE c.id=? AND c.created_by=? AND c.enabled=1 AND r.deleted_at IS NULL AND r.archived=0`
+    )
+      .bind(input.connectionId, user.id)
+      .first<GithubConnectionRow>();
+    if (!source || (await repositoryRole(env.DB, source.repository_id, user.id)) !== "admin")
+      return errorResponse(
+        404,
+        "github_source_unavailable",
+        "The selected GitHub connection is unavailable."
+      );
+    token = (await githubCredentials(env, source)).token;
+  } else {
+    token = input.token;
+  }
   const key = await importSealingKey(env.WEBHOOK_ENCRYPTION_KEY);
   if (!key)
     return errorResponse(
@@ -121,7 +139,7 @@ async function setupGithubSync(
       "A public HTTPS GitEdge URL is required for GitHub webhooks."
     );
   const path = githubRepoPath(input.owner, input.repository);
-  const remote = GithubRepositorySchema.parse(await githubRequest(input.token, path));
+  const remote = GithubRepositorySchema.parse(await githubRequest(token, path));
   if (remote.archived)
     return errorResponse(409, "github_archived", "The GitHub repository is archived.");
   if ((repository.visibility === "private") !== remote.private && !input.allowVisibilityMismatch)
@@ -139,7 +157,7 @@ async function setupGithubSync(
     );
   const candidateId = existing?.id ?? crypto.randomUUID();
   const secret = randomHex(32);
-  const tokenBox = await sealText(key, input.token);
+  const tokenBox = await sealText(key, token);
   const secretBox = await sealText(key, secret);
   const candidateCallback = new URL(
     `/api/forge/github-sync/hooks/${candidateId}`,
@@ -207,7 +225,7 @@ async function setupGithubSync(
     const hooks = z
       .array(GithubHookSchema)
       .max(100)
-      .parse(await githubRequest(input.token, `${path}/hooks?per_page=100`));
+      .parse(await githubRequest(token, `${path}/hooks?per_page=100`));
     const owned = hooks.find(
       (hook) => hook.id === configured.hook_id || hook.config.url === callback
     );
@@ -219,7 +237,7 @@ async function setupGithubSync(
       );
     const hook = GithubHookSchema.parse(
       await githubRequest(
-        input.token,
+        token,
         owned ? `${path}/hooks/${owned.id}` : `${path}/hooks`,
         owned ? "PATCH" : "POST",
         {

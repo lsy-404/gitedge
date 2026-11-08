@@ -11,6 +11,10 @@ export const githubSyncMessages = {
     githubSyncOwner: "GitHub 用户或组织",
     githubSyncRepository: "GitHub 仓库",
     githubSyncToken: "GitHub token",
+    githubSyncCredentialSource: "凭证来源",
+    githubSyncNewToken: "输入新的 token",
+    githubSyncSourcesError: "无法加载已有连接，请刷新后重试，或输入新的 token。",
+    githubSyncSourceUnavailable: "所选连接不可用，请检查连接及仓库权限后重试。",
     githubSyncTokenHint:
       "需要目标仓库 Contents、Issues、Pull requests 与 Webhooks 的读写权限；保存后不会再次显示。",
     githubSyncVisibilityMismatch: "允许公开与私有仓库之间的同步",
@@ -67,6 +71,12 @@ export const githubSyncMessages = {
     githubSyncOwner: "GitHub owner",
     githubSyncRepository: "GitHub repository",
     githubSyncToken: "GitHub token",
+    githubSyncCredentialSource: "Credential source",
+    githubSyncNewToken: "Enter a new token",
+    githubSyncSourcesError:
+      "Could not load existing connections. Refresh to retry, or enter a new token.",
+    githubSyncSourceUnavailable:
+      "The selected connection is unavailable. Check the connection and repository permissions, then retry.",
     githubSyncTokenHint:
       "Needs read and write access to Contents, Issues, Pull requests, and Webhooks in the destination repository. It is never shown again after saving.",
     githubSyncVisibilityMismatch: "Allow synchronization between public and private repositories",
