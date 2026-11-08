@@ -26,6 +26,7 @@ import {
   removeSigningCredentials,
   saveApprovedProfile,
   signingCredentialStatus,
+  notarizationDiagnostics,
 } from "./services";
 import {
   accessTokenAllows,
@@ -1020,6 +1021,34 @@ export async function handleSigningRoute(
           )
         );
       }
+    }
+    if (request.method === "GET" && path.length === 4 && path[3] === "diagnostics") {
+      const repositoryId = url.searchParams.get("repositoryId") ?? "";
+      const repository = await ownedRunnerRepository(env, user.id, repositoryId);
+      if (!repository || !runnerAccess(user, repository.id, false))
+        return errorResponse(404, "not_found", "Signing request was not found.");
+      const snapshot = await coordinator(env, user.id).retrySnapshot(
+        z.uuid().parse(path[2]),
+        user.id,
+        repository.id,
+        true
+      );
+      if (!snapshot) return errorResponse(404, "not_found", "Signing request was not found.");
+      const dispatch = SigningReconcileDispatchSchema.parse(JSON.parse(snapshot.dispatchJson));
+      const sourceCurrent = await executionHooks.verifySourceCurrent(
+        user.id,
+        repository.id,
+        dispatch.profile,
+        dispatch.submission
+      );
+      const notarization = await notarizationDiagnostics(
+        env,
+        user.id,
+        repository.id,
+        dispatch.profile,
+        dispatch.previousVerification
+      );
+      return dataResponse({ sourceCurrent, stage: dispatch.stage, notarization });
     }
     if (request.method === "POST" && path.length === 4 && path[3] === "retry")
       return await retrySigningRequest(request, env, user, z.uuid().parse(path[2]), executionHooks);

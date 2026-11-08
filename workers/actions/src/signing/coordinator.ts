@@ -1043,9 +1043,10 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
   private retryDetails(
     id: string,
     ownerId: string,
-    repositoryId: string
+    repositoryId: string,
+    readOnly = false
   ): SigningRetryDetails | null {
-    const row = this.expire(id);
+    const row = readOnly ? this.row(id) : this.expire(id);
     if (!row || row.owner_id !== ownerId || row.repository_id !== repositoryId) return null;
     const previous = previousStage(row.current_stage);
     const output = previous
@@ -1070,8 +1071,13 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
     };
   }
 
-  retrySnapshot(id: string, ownerId: string, repositoryId: string): SigningRetrySnapshot | null {
-    const details = this.retryDetails(id, ownerId, repositoryId);
+  retrySnapshot(
+    id: string,
+    ownerId: string,
+    repositoryId: string,
+    readOnly = false
+  ): SigningRetrySnapshot | null {
+    const details = this.retryDetails(id, ownerId, repositoryId, readOnly);
     return details
       ? { request: details.request, dispatchJson: JSON.stringify(details.dispatch) }
       : null;

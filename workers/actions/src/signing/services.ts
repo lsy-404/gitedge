@@ -798,7 +798,8 @@ async function boundedJson(response: Response, limit: number): Promise<unknown> 
 async function appleNotarizationStatus(
   credentials: Record<string, unknown>,
   id: string,
-  expectedSha: string
+  expectedSha: string,
+  diagnostics?: (issues: Array<{ message: string; path?: string; architecture?: string }>) => void
 ): Promise<"Accepted" | "In Progress" | "Invalid" | "Rejected"> {
   const value = macosCredentialsSchema.parse(credentials).notarization;
   const pem = value.private_key.replace(
@@ -853,7 +854,10 @@ async function appleNotarizationStatus(
     })
     .parse(await getJson());
   if (status.data.id.toLowerCase() !== id.toLowerCase()) throw new Error("notary_id_mismatch");
-  if (["In Progress", "Invalid", "Rejected"].includes(status.data.attributes.status))
+  if (
+    status.data.attributes.status === "In Progress" ||
+    (!diagnostics && ["Invalid", "Rejected"].includes(status.data.attributes.status))
+  )
     return status.data.attributes.status;
   const logs = z
     .object({ data: z.object({ attributes: z.object({ developerLogUrl: z.url() }) }) })
@@ -886,7 +890,58 @@ async function appleNotarizationStatus(
     log.sha256?.toLowerCase() !== expectedSha.toLowerCase()
   )
     throw new Error("notary_log_mismatch");
+  if (diagnostics)
+    diagnostics(
+      z
+        .array(
+          z.object({
+            message: z.string().max(2048),
+            path: z.string().max(1024).nullish(),
+            architecture: z.string().max(64).nullish(),
+          })
+        )
+        .max(100)
+        .nullish()
+        .parse(log.issues)
+        ?.map(({ message, path, architecture }) => ({
+          message: message.replace(/https?:\/\/\S+/gi, "[url]"),
+          ...(path ? { path: path.replace(/https?:\/\/\S+/gi, "[url]") } : {}),
+          ...(architecture
+            ? { architecture: architecture.replace(/https?:\/\/\S+/gi, "[url]") }
+            : {}),
+        })) ?? []
+    );
   return status.data.attributes.status;
+}
+
+export async function notarizationDiagnostics(
+  env: SigningEnv,
+  ownerId: string,
+  repositoryId: string,
+  profile: SigningProfile,
+  raw: unknown
+) {
+  if (profile.platform !== "macos" || !raw) return null;
+  const report = macosVerificationSchema.parse(raw);
+  if (report.stage !== "sign" && report.stage !== "dmg_sign") return null;
+  const credentials = await storedPlatformCredentials(
+    env,
+    ownerId,
+    repositoryId,
+    profile.revision,
+    "macos"
+  );
+  if (!credentials) return null;
+  let issues: Array<{ message: string; path?: string; architecture?: string }> = [];
+  const status = await appleNotarizationStatus(
+    credentials,
+    report.notarization_id,
+    report.notary_archive_sha256,
+    (value) => {
+      issues = value;
+    }
+  );
+  return { status, issues };
 }
 
 const reportContextSchema = z.object({

@@ -1173,6 +1173,11 @@ describe("native signing stage reconciliation", () => {
     }
     expect(row.current_stage).toBe("dmg_finalize");
     expect(row.generation).toBe(4);
+    row.expires_at = 1;
+    const snapshot = coordinator.retrySnapshot(row.id, owner.id, row.repository_id, true);
+    expect(snapshot?.request.state).toBe("accepted");
+    expect(JSON.parse(snapshot!.dispatchJson)).toMatchObject({ stage: "dmg_finalize" });
+    expect(row.state).toBe("accepted");
   });
 
   it("records execution failure once and makes a repeated failure callback idempotent", () => {
