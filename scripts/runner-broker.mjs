@@ -703,7 +703,7 @@ async function runClaimedGitHub(profile, claim, signal) {
     const env = { ...process.env };
     for (const key of Object.keys(env))
       if (
-        /^(?:GH_|GITHUB_|GITEDGE_|ACTIONS_RUNNER_INPUT_|RUNNER_TOKEN$|ACTIONS_RUNTIME_TOKEN$|ACTIONS_RESULTS_|ACTIONS_CACHE_)/i.test(
+        /^(?:GH_|GITHUB_|GITEDGE_|ACTIONS_RUNNER_|RUNNER_TOKEN$|ACTIONS_RUNTIME_TOKEN$|ACTIONS_RESULTS_|ACTIONS_CACHE_)/i.test(
           key
         )
       )

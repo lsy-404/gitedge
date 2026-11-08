@@ -337,7 +337,7 @@ async function runWorkflow(values, state) {
   delete environment.GITEDGE_BROKER_SLOT_HELD;
   for (const key of Object.keys(environment)) {
     if (
-      /^(?:gh_token|github_token|gh_enterprise_token|github_enterprise_token|gitedge_token)$/i.test(
+      /^(?:gh_token|github_token|gh_enterprise_token|github_enterprise_token|gitedge_token|actions_runner_.*)$/i.test(
         key
       )
     )
