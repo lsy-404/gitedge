@@ -60,7 +60,7 @@ if [[ -e "$service_dir/ready" ]]; then
   exit 1
 fi
 
-configured_hostkeys=$(/usr/sbin/sshd -T -f "$sshd_config" 2>/dev/null | /usr/bin/awk '$1 == "hostkey" { print $2 }')
+configured_hostkeys=$(/usr/sbin/sshd -G -f "$sshd_config" 2>/dev/null | /usr/bin/awk 'tolower($1) == "hostkey" { print $2 }')
 [[ "$configured_hostkeys" == "$host_key" ]] || exit 1
 [[ "$(/usr/sbin/systemsetup -getremotelogin 2>/dev/null)" == *On ]] || exit 1
 
