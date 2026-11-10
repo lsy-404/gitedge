@@ -70,7 +70,7 @@ configured_hostkeys=$(/usr/sbin/sshd -G -f "$sshd_config" 2>/dev/null | /usr/bin
 /usr/bin/install -d -o "$user" -g staff -m 0700 "$home/.ssh"
 /usr/bin/install -o "$user" -g staff -m 0600 "$seed/authorized_keys" "$home/.ssh/authorized_keys"
 /usr/sbin/chown -R "$user":staff "$home/.ssh"
-/usr/sbin/chmod 0700 "$home/.ssh"
+/bin/chmod 0700 "$home/.ssh"
 
 derived=$(/usr/bin/ssh-keygen -y -f "$host_key" 2>/dev/null | /usr/bin/awk '{ print $1 " " $2 }')
 expected=$(/usr/bin/awk '{ print $1 " " $2 }' "$host_key.pub")
