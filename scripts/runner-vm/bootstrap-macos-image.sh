@@ -104,6 +104,6 @@ service=$(/usr/sbin/networksetup -listnetworkserviceorder | /usr/bin/awk -v targ
 /usr/sbin/networksetup -setsecurewebproxystate "$service" on
 /usr/sbin/sshd -t -f "$sshd_config"
 /bin/launchctl kickstart -k system/com.openssh.sshd
-/bin/printf '%s\n' "$run_id" > "$service_dir/ready"
+/usr/bin/printf '%s\n' "$run_id" > "$service_dir/ready"
 /usr/sbin/chown root:wheel "$service_dir/ready"
 /bin/chmod 0600 "$service_dir/ready"
