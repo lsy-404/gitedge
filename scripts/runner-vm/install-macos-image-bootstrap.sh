@@ -11,7 +11,7 @@ helper=/Library/PrivilegedHelperTools/com.gitedge.vm-bootstrap.sh
 plist=/Library/LaunchDaemons/com.gitedge.vm-bootstrap.plist
 host_key=/private/var/run/gitedge-vm/ssh_host_ed25519_key
 
-configured_hostkeys=$(/usr/sbin/sshd -T -f /etc/ssh/sshd_config 2>/dev/null | /usr/bin/awk '$1 == "hostkey" { print $2 }')
+configured_hostkeys=$(/usr/sbin/sshd -T -f /etc/ssh/sshd_config 2>/dev/null | /usr/bin/awk 'tolower($1) == "hostkey" { print $2 }')
 if [[ "$configured_hostkeys" != "$host_key" ]]; then
   echo "sshd must be configured to advertise only the per-run host key before sealing." >&2
   exit 1
