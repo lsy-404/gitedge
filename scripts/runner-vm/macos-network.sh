@@ -11,9 +11,40 @@ fail() { echo "$*" >&2; exit 1; }
 [[ $# == 2 && $2 =~ ^[a-z_][a-z0-9_-]*[$]?$ ]] || fail 'Usage: macos-network.sh install|run BROKER_USER'
 mode=$1
 broker=$2
+[[ $mode == install || $mode == run ]] || fail 'Unknown mode.'
+
+preflight() {
+for command in id ip nft python3 ss awk grep socat sleep systemd-notify systemctl install chmod; do
+  command -v "$command" >/dev/null || fail "Required command is missing: $command"
+done
 id "$broker" >/dev/null || fail 'Broker user does not exist.'
 [[ $(id -u "$broker") != 0 ]] || fail 'Broker user must be non-root.'
+for name in "$bridge" gemac1 gemac2; do
+  ! ip link show dev "$name" >/dev/null 2>&1 || fail "Interface $name already exists."
+done
+for family in bridge inet; do
+  ! nft list table "$family" "$table" >/dev/null 2>&1 || fail "Table $family $table already exists."
+done
+python3 - <<'PY'
+import ipaddress
+import json
+import subprocess
 
+network = ipaddress.ip_network('10.253.247.0/29')
+for command in (['ip', '-j', '-4', 'route', 'show', 'table', 'all'], ['ip', '-j', '-4', 'address', 'show']):
+    for entry in json.loads(subprocess.check_output(command)):
+        values = [entry.get('dst', 'default')] if 'dst' in entry else [item['local'] + '/' + str(item['prefixlen']) for item in entry.get('addr_info', []) if item.get('family') == 'inet']
+        for value in values:
+            if value != 'default' and ipaddress.ip_network(value, strict=False).overlaps(network):
+                raise SystemExit('VM subnet overlaps an existing route or address: ' + value)
+PY
+listeners=$(ss -H -ltn)
+if awk '{print $4}' <<< "$listeners" | grep -Eq '(^|[.:])3128$'; then
+  fail 'A listener already uses the VM proxy port.'
+fi
+}
+
+preflight
 if [[ $mode == install ]]; then
   [[ ! -e $installed && ! -L $installed && ! -e $unit && ! -L $unit ]] || fail 'Installation paths already exist.'
   install -o root -g root -m 0755 "$0" "$installed"
@@ -37,30 +68,6 @@ EOF
   systemctl daemon-reload
   systemctl enable --now gitedge-macvm-network.service
   exit
-fi
-[[ $mode == run ]] || fail 'Unknown mode.'
-
-for name in "$bridge" gemac1 gemac2; do
-  ! ip link show dev "$name" >/dev/null 2>&1 || fail "Interface $name already exists."
-done
-for family in bridge inet; do
-  ! nft list table "$family" "$table" >/dev/null 2>&1 || fail "Table $family $table already exists."
-done
-python3 - <<'PY'
-import ipaddress
-import json
-import subprocess
-
-network = ipaddress.ip_network('10.253.247.0/29')
-for command in (['ip', '-j', '-4', 'route', 'show', 'table', 'all'], ['ip', '-j', '-4', 'address', 'show']):
-    for entry in json.loads(subprocess.check_output(command)):
-        values = [entry.get('dst', 'default')] if 'dst' in entry else [item['local'] + '/' + str(item['prefixlen']) for item in entry.get('addr_info', []) if item.get('family') == 'inet']
-        for value in values:
-            if value != 'default' and ipaddress.ip_network(value, strict=False).overlaps(network):
-                raise SystemExit('VM subnet overlaps an existing route or address: ' + value)
-PY
-if ss -H -ltn | awk '{print $4}' | grep -Eq '(^|[.:])(3128|3129)$'; then
-  fail 'A listener already uses a VM service port.'
 fi
 
 have_rules=0
