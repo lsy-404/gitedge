@@ -83,9 +83,25 @@ device=$(/usr/sbin/networksetup -listallhardwareports | /usr/bin/awk -v target="
   /^Ethernet Address: / { if (ethernet && tolower($3) == target) { print device; exit } }
 ')
 [[ "$device" =~ ^[A-Za-z0-9]+$ ]] || exit 1
-/sbin/ifconfig "$device" inet "$address" netmask 255.255.255.248 up
-/sbin/route -n delete default >/dev/null 2>&1 || true
-/sbin/route -n add default "$gateway"
+service=$(/usr/sbin/networksetup -listnetworkserviceorder | /usr/bin/awk -v target="$device" '
+  /^\([0-9]+\) / { service = $0; sub(/^\([0-9]+\) /, "", service); disabled = 0; next }
+  /^\(\*\) / { service = $0; sub(/^\(\*\) /, "", service); disabled = 1; next }
+  /^\(Hardware Port: / {
+    hardware = $0
+    sub(/^.*Device: /, "", hardware)
+    sub(/\).*/, "", hardware)
+    if (hardware == target && !disabled) { matches++; selected = service }
+  }
+  END { if (matches == 1) print selected; else exit 1 }
+')
+[[ -n "$service" ]] || exit 1
+/usr/sbin/networksetup -setmanual "$service" "$address" 255.255.255.248 "$gateway"
+/usr/sbin/networksetup -setdnsservers "$service" Empty
+/usr/sbin/networksetup -setwebproxy "$service" "$gateway" 3128
+/usr/sbin/networksetup -setsecurewebproxy "$service" "$gateway" 3128
+/usr/sbin/networksetup -setproxybypassdomains "$service" localhost 127.0.0.1 "$gateway"
+/usr/sbin/networksetup -setwebproxystate "$service" on
+/usr/sbin/networksetup -setsecurewebproxystate "$service" on
 /usr/sbin/sshd -t -f "$sshd_config"
 /bin/launchctl kickstart -k system/com.openssh.sshd
 /bin/printf '%s\n' "$run_id" > "$service_dir/ready"
