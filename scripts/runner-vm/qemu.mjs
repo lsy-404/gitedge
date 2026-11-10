@@ -224,6 +224,8 @@ function qemuArguments(config, context, files) {
     "-device",
     "hda-duplex",
     "-device",
+    "vmware-svga",
+    "-device",
     "ich9-ahci,id=sata",
   ];
   for (const [id, file, bus] of [
