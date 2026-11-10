@@ -13,7 +13,9 @@ import {
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import os from "node:os";
+import { readFileSync } from "node:fs";
 import { createHypervVm, recoverHypervVm } from "./runner-vm/hyperv.mjs";
+import { createQemuVm, recoverQemuVm } from "./runner-vm/qemu.mjs";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const mebibyte = 1_048_576;
@@ -50,22 +52,25 @@ export async function loadVmPools(state, profiles) {
     throw error;
   });
   if (!info) {
-    if (profiles?.some((profile) => profile.execution === "hyperv"))
+    if (profiles?.some((profile) => ["hyperv", "qemu"].includes(profile.execution)))
       throw new Error("A registered VM profile requires vm.json; host execution is disabled.");
     return undefined;
   }
-  if (process.platform !== "win32" || os.arch() !== "x64")
-    throw new Error("Hyper-V pools require a Windows x64 host.");
   await privatePath(file);
   if (info.size > 65_536) throw new Error("VM pool configuration is too large.");
   const value = JSON.parse(await readFile(file, "utf8"));
   if (
     value.version !== 1 ||
-    value.driver !== "hyperv" ||
+    !["hyperv", "qemu"].includes(value.driver) ||
     !value.pools ||
     Array.isArray(value.pools)
   )
-    throw new Error("Invalid Hyper-V pool configuration.");
+    throw new Error("Invalid VM pool configuration.");
+  if (
+    (value.driver === "hyperv" && (process.platform !== "win32" || os.arch() !== "x64")) ||
+    (value.driver === "qemu" && (process.platform !== "linux" || os.arch() !== "x64"))
+  )
+    throw new Error(`${value.driver} pools require a matching x64 host.`);
   hostPath(value.vmRoot, "vmRoot");
   if (
     path.dirname(value.vmRoot) === value.vmRoot ||
@@ -74,7 +79,7 @@ export async function loadVmPools(state, profiles) {
     throw new Error("VM storage must have its own private directory.");
   const reserveMemoryMiB = integer(
     value.reserveMemoryMiB,
-    4096,
+    value.driver === "qemu" ? 1024 : 4096,
     Math.floor(os.totalmem() / mebibyte) - 1024,
     "reserveMemoryMiB"
   );
@@ -87,13 +92,15 @@ export async function loadVmPools(state, profiles) {
     const config = value.pools[profile.id];
     if (
       !config ||
-      !["windows", "linux"].includes(config.guest?.platform) ||
+      !(value.driver === "qemu"
+        ? config.guest?.platform === "macos"
+        : ["windows", "linux"].includes(config.guest?.platform)) ||
       config.guest.arch !== "x64"
     )
-      throw new Error(`Profile ${profile.id} requires a matching Windows or Linux VM pool.`);
+      throw new Error(`Profile ${profile.id} requires a supported VM guest pool.`);
     config.id = profile.id;
     config.vmRoot = value.vmRoot;
-    config.driver = "hyperv";
+    config.driver = value.driver;
     integer(config.slots, 1, 16, "pool.slots");
     integer(config.machine?.cpus, 1, os.cpus().length - reserveCpus, "machine.cpus");
     integer(
@@ -104,6 +111,65 @@ export async function loadVmPools(state, profiles) {
     );
     integer(config.machine?.diskMiB, 8192, 2_097_152, "machine.diskMiB");
     hostPath(config.machine.baseImage, "machine.baseImage");
+    if (value.driver === "qemu") {
+      for (const key of ["openCoreImage", "systemImage", "runnerDataImage"])
+        hostPath(config.machine[key], `machine.${key}`);
+      if (path.resolve(config.machine.baseImage) !== path.resolve(config.machine.systemImage))
+        throw new Error("QEMU machine.baseImage must be the sealed macOS system image.");
+      for (const key of [
+        "qemu",
+        "qemuImg",
+        "xorriso",
+        "ssh",
+        "sshKeygen",
+        "firmwareCode",
+        "nvramTemplate",
+        "smcConfig",
+        "qemuWorkingDirectory",
+      ]) {
+        hostPath(value[key], key);
+        config[key] = value[key];
+      }
+      if (
+        config.slots !== 2 ||
+        !Array.isArray(config.addresses) ||
+        config.addresses.length !== config.slots ||
+        !Array.isArray(config.slotNetwork) ||
+        config.slotNetwork.length !== config.slots ||
+        config.slotNetwork.some(
+          (entry, index) =>
+            !entry ||
+            entry.address !== ["10.253.247.2", "10.253.247.3"][index] ||
+            entry.address !== config.addresses[index] ||
+            entry.tap !== ["gemac1", "gemac2"][index] ||
+            entry.mac !== ["52:54:00:74:00:01", "52:54:00:74:00:02"][index]
+        ) ||
+        new Set(config.slotNetwork.map((entry) => entry.tap)).size !== config.slots ||
+        new Set(config.slotNetwork.map((entry) => entry.mac.toLowerCase())).size !== config.slots
+      )
+        throw new Error("Each QEMU slot requires a pre-provisioned TAP, MAC, and guest address.");
+      if (
+        config.machine.guestNetwork?.address !== "10.253.247.2" ||
+        config.machine.guestNetwork?.prefixLength !== 29 ||
+        config.machine.guestNetwork?.gateway !== "10.253.247.1" ||
+        !Array.isArray(config.machine.guestNetwork.dns) ||
+        config.machine.guestNetwork.dns.length !== 0 ||
+        config.machine.cachePort !== 3129 ||
+        config.machine.egressProxyPort !== 3128
+      )
+        throw new Error("QEMU guest networking must match the isolated bridge policy.");
+      if (config.guest.sshUser !== "gitedge-runner")
+        throw new Error("The macOS guest account must use the prepared gitedge-runner identity.");
+      for (const key of ["root", "node", "runtimeRoot", "runnerPath"]) {
+        const entry = config.guest[key];
+        if (
+          typeof entry !== "string" ||
+          !/^\/Volumes\/RunnerData\/Users\/gitedge-runner(?:\/[A-Za-z0-9._-]+)*$/.test(entry) ||
+          entry.split("/").some((part) => part === "." || part === "..")
+        )
+          throw new Error(`guest.${key} must stay on the private RunnerData volume.`);
+      }
+    }
     const guestPath = guestPaths(config);
     for (const key of [
       "root",
@@ -190,17 +256,32 @@ export async function recoverJobVms(pool) {
     if (info.size > 65_536) throw new Error("Invalid VM recovery metadata.");
     const marker = JSON.parse(await readFile(markerPath, "utf8"));
     const config = pool.configs.get(marker.pool);
+    const slotNetwork =
+      config?.driver === "qemu"
+        ? config.slotNetwork.find((slot) => slot.address === marker.machine?.guestNetwork?.address)
+        : undefined;
     if (
       marker.version !== 1 ||
-      marker.driver !== "hyperv" ||
+      marker.driver !== config?.driver ||
       marker.id !== entry.name ||
       marker.machine?.vmRoot !== pool.vmRoot ||
       !config ||
       marker.machine.baseImage !== config.machine.baseImage ||
-      !config.addresses.includes(marker.machine.guestNetwork.address)
+      !config.addresses.includes(marker.machine.guestNetwork.address) ||
+      (marker.driver === "qemu" &&
+        (!slotNetwork ||
+          marker.machine.tap !== slotNetwork.tap ||
+          marker.machine.mac !== slotNetwork.mac ||
+          marker.machine.openCoreImage !== config.machine.openCoreImage ||
+          marker.machine.systemImage !== config.machine.systemImage ||
+          marker.machine.runnerDataImage !== config.machine.runnerDataImage))
     )
       throw new Error("VM recovery metadata does not belong to this broker pool.");
-    await recoverHypervVm(marker.machine, { id: entry.name, directory });
+    if (marker.driver === "hyperv")
+      await recoverHypervVm(marker.machine, { id: entry.name, directory });
+    else if (marker.driver === "qemu")
+      await recoverQemuVm(marker.machine, { id: entry.name, directory });
+    else throw new Error("Unknown VM recovery provider.");
     await rm(directory, { recursive: true });
   }
   const disk = await statfs(pool.vmRoot, { bigint: true });
@@ -218,12 +299,26 @@ export async function createJobVm(config, signal, address = config.addresses[0])
   const directory = path.join(config.vmRoot, "runs", id);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   await privatePath(directory, true);
+  const slotNetwork =
+    config.driver === "qemu"
+      ? config.slotNetwork.find((entry) => entry.address === address)
+      : undefined;
+  if (config.driver === "qemu" && !slotNetwork)
+    throw new Error("The QEMU slot has no network assignment.");
   const machine = {
     ...config.machine,
     vmRoot: config.vmRoot,
     guestPlatform: config.guest.platform,
     guestRoot: config.guest.root,
     guestNode: config.guest.node,
+    guestRuntime: config.guest.runtimeRoot,
+    guestAgent: guestPaths(config).join(
+      config.guest.runtimeRoot,
+      "scripts",
+      "runner-vm",
+      "guest.mjs"
+    ),
+    sshUser: config.guest.sshUser,
     arch: config.guest.arch,
     ...(config.guest.platform === "linux"
       ? {
@@ -236,12 +331,14 @@ export async function createJobVm(config, signal, address = config.addresses[0])
         }
       : {}),
     guestNetwork: { ...config.machine.guestNetwork, address },
+    ...(slotNetwork ? { tap: slotNetwork.tap, mac: slotNetwork.mac } : {}),
   };
+  const provider = { ...config, machine };
   await writeFile(
     path.join(directory, ".runner-vm.json"),
     JSON.stringify({
       version: 1,
-      driver: "hyperv",
+      driver: config.driver,
       pool: config.id,
       id,
       createdAt: new Date().toISOString(),
@@ -252,7 +349,10 @@ export async function createJobVm(config, signal, address = config.addresses[0])
   );
   let vm;
   try {
-    vm = await createHypervVm(machine, { id, directory, signal });
+    vm =
+      config.driver === "hyperv"
+        ? await createHypervVm(machine, { id, directory, signal })
+        : await createQemuVm(provider, { id, directory, signal });
     return {
       ...vm,
       async dispose() {
@@ -262,7 +362,8 @@ export async function createJobVm(config, signal, address = config.addresses[0])
     };
   } catch (error) {
     try {
-      await recoverHypervVm(machine, { id, directory });
+      if (config.driver === "hyperv") await recoverHypervVm(machine, { id, directory });
+      else await recoverQemuVm(machine, { id, directory });
       await rm(directory, { recursive: true });
     } catch (cleanupError) {
       throw new AggregateError(
@@ -275,7 +376,25 @@ export async function createJobVm(config, signal, address = config.addresses[0])
 }
 
 export function guestEnvironment(config, scoped = {}) {
-  return { ...config.guest.environment, ...scoped };
+  const proxy =
+    config.driver === "qemu"
+      ? `http://${config.machine.guestNetwork.gateway}:${config.machine.egressProxyPort}`
+      : undefined;
+  return {
+    ...config.guest.environment,
+    ...(proxy
+      ? {
+          HTTP_PROXY: proxy,
+          HTTPS_PROXY: proxy,
+          http_proxy: proxy,
+          https_proxy: proxy,
+          NODE_USE_ENV_PROXY: "1",
+          NO_PROXY: `127.0.0.1,localhost,::1,${config.machine.guestNetwork.gateway}`,
+          no_proxy: `127.0.0.1,localhost,::1,${config.machine.guestNetwork.gateway}`,
+        }
+      : {}),
+    ...scoped,
+  };
 }
 
 async function runtimeDigest(root) {
@@ -345,7 +464,7 @@ export async function verifyVmImage(config, signal) {
       throw new Error(`VM image ${config.id} returned invalid verification output.`);
     }
     if (
-      report.platform !== config.guest.platform ||
+      (report.platform === "darwin" ? "macos" : report.platform) !== config.guest.platform ||
       report.arch !== config.guest.arch ||
       !/^24\./.test(report.node) ||
       !report.tools.includes("git") ||
@@ -361,11 +480,17 @@ export async function verifyVmImage(config, signal) {
 
 export function vmSlot(pool, config, sharedSlot, ledger) {
   const held = new Map();
+  const availableMemoryMiB = () => {
+    if (config.driver !== "qemu") return os.freemem() / mebibyte;
+    const match = /^MemAvailable:\s+(\d+)\s+kB$/m.exec(readFileSync("/proc/meminfo", "utf8"));
+    if (!match) throw new Error("Linux MemAvailable is unavailable for QEMU admission.");
+    return Number(match[1]) / 1024;
+  };
   const canAllocate = () =>
     held.size < config.slots &&
     ledger.memory + config.machine.memoryMiB <= pool.memoryBudgetMiB &&
     ledger.cpus + config.machine.cpus <= pool.cpuBudget &&
-    os.freemem() / mebibyte >= config.machine.memoryMiB + 8192;
+    availableMemoryMiB() >= config.machine.memoryMiB + (config.driver === "hyperv" ? 8192 : 0);
   return {
     size: config.slots,
     busy: () => (canAllocate() ? held.size : config.slots),

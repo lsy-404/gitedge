@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.gitedge.vm-bootstrap</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>/Library/PrivilegedHelperTools/com.gitedge.vm-bootstrap.sh</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StartInterval</key>
+	<integer>5</integer>
+	<key>StandardOutPath</key>
+	<string>/var/log/gitedge-vm-bootstrap.log</string>
+	<key>StandardErrorPath</key>
+	<string>/var/log/gitedge-vm-bootstrap.log</string>
+	<key>UserName</key>
+	<string>root</string>
+	<key>Umask</key>
+	<integer>63</integer>
+</dict>
+</plist>

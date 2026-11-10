@@ -39,8 +39,8 @@ for command in (['ip', '-j', '-4', 'route', 'show', 'table', 'all'], ['ip', '-j'
                 raise SystemExit('VM subnet overlaps an existing route or address: ' + value)
 PY
 listeners=$(ss -H -ltn)
-if awk '{print $4}' <<< "$listeners" | grep -Eq '(^|[.:])3128$'; then
-  fail 'A listener already uses the VM proxy port.'
+if awk '{print $4}' <<< "$listeners" | grep -Eq '(^|[.:])(3128|3129)$'; then
+  fail 'A listener already uses a VM service port.'
 fi
 }
 

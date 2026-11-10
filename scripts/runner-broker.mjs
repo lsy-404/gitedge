@@ -231,7 +231,7 @@ async function loadProfile(state, id) {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(id)) throw new Error("Invalid profile name.");
   const directory = path.join(state, "profiles", id);
   const profile = JSON.parse(await readFile(path.join(directory, "profile.json"), "utf8"));
-  if (profile.execution !== undefined && profile.execution !== "hyperv")
+  if (profile.execution !== undefined && !["hyperv", "qemu"].includes(profile.execution))
     throw new Error("Unsupported profile execution mode.");
   let credential;
   try {
@@ -407,7 +407,7 @@ async function addGitEdge(state, values) {
         {
           id,
           kind: "gitedge",
-          ...(vm ? { execution: "hyperv" } : {}),
+          ...(vm ? { execution: vm.driver } : {}),
           origin,
           owner,
           repository,
@@ -441,7 +441,7 @@ async function setSlots(state, id, value) {
   const slots = parseSlots(value);
   const profile = await loadProfile(state, id);
   const vm = (await loadVmPools(state))?.configs.get(id);
-  if (profile.execution === "hyperv" && !vm)
+  if (profile.execution && !vm)
     throw new Error("The VM profile requires a matching pool in vm.json.");
   if (vm && vm.slots !== slots)
     throw new Error("Configure VM addresses and slot counts together in vm.json.");
@@ -470,7 +470,9 @@ async function listProfiles(state) {
 }
 
 function hostLabels(guest) {
-  const platform = guest ? { windows: "win32", linux: "linux" }[guest.platform] : process.platform;
+  const platform = guest
+    ? { windows: "win32", linux: "linux", macos: "darwin" }[guest.platform]
+    : process.platform;
   const arch = guest?.arch ?? process.arch;
   if (!["darwin", "win32", "linux"].includes(platform))
     throw new Error("The runner broker supports Linux, macOS, and Windows hosts.");

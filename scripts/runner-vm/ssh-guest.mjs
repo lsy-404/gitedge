@@ -9,11 +9,17 @@ export async function createSshGuest(config, context, dispose) {
   const knownHosts = path.join(context.directory, "known_hosts");
   const alias = `ge-${context.id}`;
   await writeFile(knownHosts, `${alias} ${config.sshHostKey}\n`, { flag: "wx", mode: 0o600 });
-  const ssh = path.win32.join(process.env.SystemRoot, "System32", "OpenSSH", "ssh.exe");
+  const windows = process.platform === "win32";
+  const ssh =
+    config.sshExecutable ??
+    (windows
+      ? path.win32.join(process.env.SystemRoot, "System32", "OpenSSH", "ssh.exe")
+      : "/usr/bin/ssh");
   const options = [
     "-T",
+    ...(config.sshBindAddress ? ["-b", config.sshBindAddress] : []),
     "-F",
-    "NUL",
+    windows ? "NUL" : "/dev/null",
     "-o",
     "BatchMode=yes",
     "-o",
@@ -29,6 +35,10 @@ export async function createSshGuest(config, context, dispose) {
     "-o",
     `HostKeyAlias=${alias}`,
     "-o",
+    `GlobalKnownHostsFile=${windows ? "NUL" : "/dev/null"}`,
+    "-o",
+    "UpdateHostKeys=no",
+    "-o",
     `UserKnownHostsFile=${knownHosts}`,
     "-i",
     config.sshKeyPath,
@@ -39,6 +49,7 @@ export async function createSshGuest(config, context, dispose) {
     if (context.signal?.aborted) throw context.signal.reason;
     const command = `sudo -n -- ${quote(config.guestNode)} ${quote(config.sshAgentPath)}`;
     child = spawn(ssh, [...options, command], {
+      env: config.hostEnvironment,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
@@ -81,7 +92,7 @@ export async function createSshGuest(config, context, dispose) {
     const result = await probe.done;
     if (result.code === 0) break;
     if (Date.now() >= deadline)
-      throw new Error(`Linux guest readiness failed: ${result.stderr.toString("utf8")}`);
+      throw new Error(`SSH guest readiness failed: ${result.stderr.toString("utf8")}`);
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }
   let started = false;

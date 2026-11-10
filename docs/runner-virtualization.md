@@ -1,6 +1,6 @@
-# Hyper-V runner pools
+# Disposable VM runner pools
 
-GitEdge's optional VM runner pools use disposable Hyper-V guests on a Windows x64 host. A pool can contain Windows and Linux profiles at the same time. Each registered profile ID must have exactly one entry under `pools`; there must not be an extra pool or a profile without a pool. Save this configuration as `vm.json` in the broker state directory. Registrations created against this configuration record `execution: "hyperv"` in their private profile; a missing VM configuration then stops startup instead of executing on the host.
+GitEdge's optional VM runner pools support disposable Hyper-V guests on Windows x64 and disposable QEMU/KVM macOS guests on Linux x64. Each registered profile ID must have exactly one entry under `pools`; there must not be an extra pool or a profile without a pool. Save this configuration as `vm.json` in the broker state directory. Registrations created against this configuration record the selected driver in their private profile; a missing VM configuration then stops startup instead of executing on the host.
 
 Each dispatched GitHub job, GitEdge workflow, or signing request gets one new VM and one differencing disk based on its configured VHDX image. The broker records private recovery metadata in the job directory, then removes the VM and run directory when the job ends. When the broker starts, it scans its owned run directories and attempts to clean up VMs left by an interrupted job. Base images are shared read-only inputs; job writes go to differencing disks.
 
@@ -8,9 +8,9 @@ Verified VM pools report `isolation: "vm"` in their capacity. The dispatcher cou
 
 ## Configuration
 
-This example starts one Windows slot with 8 vCPUs and 12 GiB, and one Linux slot with 8 vCPUs and 8 GiB. Size guests for the workflows they accept. The broker checks aggregate vCPU, memory, slot, and free-disk budgets across both pools. Reserve host capacity with `reserveCpus`, `reserveMemoryMiB`, and `reserveDiskMiB`; it also requires at least 8 GiB of currently free host memory beyond each VM it starts. Ensure the host has enough physical CPU, RAM, and disk for the chosen limits.
+This example starts one Windows slot with 8 vCPUs and 12 GiB, and one Linux slot with 8 vCPUs and 8 GiB. Size guests for the workflows they accept. The broker checks aggregate vCPU, memory, slot, and free-disk budgets across both pools. Reserve host capacity with `reserveCpus`, `reserveMemoryMiB`, and `reserveDiskMiB`. Hyper-V also requires at least 8 GiB of currently free host memory beyond each VM it starts. QEMU checks Linux `MemAvailable` against guest RAM after the aggregate ledger applies the configured reserve. Ensure the host has enough physical CPU, RAM, and disk for the chosen limits.
 
-`diskMiB` is the host disk budget allocated to each slot. Each job disk is a Hyper-V differencing disk whose parent is the selected base image. `addresses` lists one unique static guest IPv4 address per slot across all pools.
+`diskMiB` is the host disk budget accounted for by each slot. Hyper-V jobs use differencing disks and QEMU jobs use sparse qcow2 overlays on their selected base images. `addresses` lists one unique static guest IPv4 address per slot across all pools.
 
 ```json
 {
@@ -94,6 +94,77 @@ Create the private Hyper-V **Internal** switch and its matching Windows NAT befo
 The controller installs per-VM adapter ACLs. Inbound traffic is denied by default; Linux guests permit host-to-guest SSH on TCP port 22 from the configured gateway only. Outbound access is denied by default, with public IPv4 egress allowed after explicit blocks for private/LAN ranges, the host's IPv4 addresses, link-local metadata destinations, and other reserved ranges. Use a private subnet dedicated to these guests and unique addresses for every slot. No guest adapter is attached to an external switch. If a private forward proxy is required, set `machine.egressProxyPort` to its TCP port on the configured gateway. This adds one stateful outbound exception to that port. Configure `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, and `NODE_USE_ENV_PROXY=1` in the non-secret guest environment; the proxy must independently deny private, host, and metadata destinations. Configure the guest Docker service proxy as well when Docker jobs need it.
 
 The host must be Windows x64 with Hyper-V and the required networking cmdlets available. The controller uses Windows PowerShell by default. To select PowerShell 7, set `GITEDGE_HYPERV_POWERSHELL` in the broker service's environment to its absolute executable path.
+
+## QEMU macOS guests
+
+QEMU pools run only on Linux x64 with KVM and the pre-created bridge/TAP setup documented in [macos-network.md](../scripts/runner-vm/macos-network.md). The broker runs as the unprivileged account that owns the TAPs and can read the root-managed SMC configuration. It requires QEMU, qemu-img, xorriso, OpenSSH client tools, and the sealed image paths to exist before serving. It never creates or changes host networking.
+
+Each job gets independent qcow2 overlays for OpenCore, the macOS system disk, and RunnerData, plus a private copy of NVRAM. The bases remain read-only. Run overlays, seed ISO, per-job SSH keys and guest workspace writes live under `vmRoot`. Attach only the read-only `GITEDGE_SEED` ISO and those per-run overlays; the installer recovery image is not part of a job VM. The broker SSH key is generated per run and stays on the Linux host. The seed contains its public key and that guest's one-time SSH host private key; it contains no runner registration or job token. The macOS LaunchDaemon validates the seed, RunnerData APFS volume, account home, SSH policy and interface MAC before adding the key and bringing up SSH. SSH is pinned to that per-run host key.
+
+The QEMU `vm.json` uses these driver-level paths and slot entries. Use the actual sealed image paths and the registered profile ID; keep the SMC file private and supply only its path.
+
+```json
+{
+  "version": 1,
+  "driver": "qemu",
+  "vmRoot": "/srv/macos/runner-work",
+  "reserveCpus": 2,
+  "reserveMemoryMiB": 3584,
+  "reserveDiskMiB": 4096,
+  "qemu": "/usr/bin/qemu-system-x86_64",
+  "qemuImg": "/usr/bin/qemu-img",
+  "xorriso": "/usr/bin/xorriso",
+  "ssh": "/usr/bin/ssh",
+  "sshKeygen": "/usr/bin/ssh-keygen",
+  "qemuWorkingDirectory": "/srv/macos/OSX-KVM",
+  "firmwareCode": "/srv/macos/OSX-KVM/OVMF_CODE_4M.fd",
+  "nvramTemplate": "/srv/macos/vm/OVMF_VARS-tahoe.fd",
+  "smcConfig": "/srv/macos/vm/private/smc.qemu.conf",
+  "pools": {
+    "macos-profile": {
+      "slots": 2,
+      "addresses": ["10.253.247.2", "10.253.247.3"],
+      "slotNetwork": [
+        { "address": "10.253.247.2", "tap": "gemac1", "mac": "52:54:00:74:00:01" },
+        { "address": "10.253.247.3", "tap": "gemac2", "mac": "52:54:00:74:00:02" }
+      ],
+      "machine": {
+        "baseImage": "/srv/macos-system/mac-system-tahoe.qcow2",
+        "openCoreImage": "/srv/macos/vm/OpenCore-tahoe.qcow2",
+        "systemImage": "/srv/macos-system/mac-system-tahoe.qcow2",
+        "runnerDataImage": "/srv/macos/vm/runner-data-tahoe.qcow2",
+        "cpus": 4,
+        "memoryMiB": 8192,
+        "diskMiB": 102400,
+        "cachePort": 3129,
+        "egressProxyPort": 3128,
+        "guestNetwork": {
+          "address": "10.253.247.2",
+          "prefixLength": 29,
+          "gateway": "10.253.247.1",
+          "dns": []
+        }
+      },
+      "guest": {
+        "platform": "macos",
+        "arch": "x64",
+        "sshUser": "gitedge-runner",
+        "root": "/Volumes/RunnerData/Users/gitedge-runner/work",
+        "node": "/Volumes/RunnerData/Users/gitedge-runner/.local/node/bin/node",
+        "runtimeRoot": "/Volumes/RunnerData/Users/gitedge-runner/gitedge-runtime",
+        "runnerPath": "/Volumes/RunnerData/Users/gitedge-runner/actions-runner",
+        "environment": {}
+      }
+    }
+  }
+}
+```
+
+Use `platform: "macos"` and `arch: "x64"` for Intel guests. The broker reserves aggregate memory as `MemTotal - reserveMemoryMiB`, then admits a QEMU launch only when Linux `MemAvailable` is at least the requested guest RAM. The QEMU check does not add the Hyper-V 8 GiB free-memory margin a second time. Set `reserveCpus` and `reserveMemoryMiB` from the host's measured resources; this is admission accounting, not a performance guarantee.
+
+Place `vmRoot`, the RunnerData base and the persistent cache directory on the mechanical D volume. Keep the sealed system image and Xcode on C. Store the cache server's `cache.json` binding at gateway `10.253.247.1`, port `3129`; each session is still scoped to its runner, repository, ref and job. Guest HTTP and HTTPS traffic uses the isolated bridge proxy at `10.253.247.1:3128`; the guest has no DNS server or other network route.
+
+Before sealing the base, install `bootstrap-macos-image.sh` and its LaunchDaemon with `install-macos-image-bootstrap.sh` after configuring sshd to advertise only `/private/var/run/gitedge-vm/ssh_host_ed25519_key`. The broker requires two pre-provisioned slot assignments: `gemac1` / `52:54:00:74:00:01` / `10.253.247.2`, and `gemac2` / `52:54:00:74:00:02` / `10.253.247.3`. Configure the VM pool's `slotNetwork` entries in that order to match [macos-network.md](../scripts/runner-vm/macos-network.md).
 
 Persistent dependency and build caches require explicit broker configuration. See [runner-cache.md](runner-cache.md) for shared device budgets, ref isolation and the private `machine.cachePort` exception.
 
