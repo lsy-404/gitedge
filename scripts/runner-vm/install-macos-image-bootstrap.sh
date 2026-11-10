@@ -21,3 +21,8 @@ fi
 /usr/bin/install -d -o root -g wheel -m 0755 /Library/PrivilegedHelperTools
 /usr/bin/install -o root -g wheel -m 0755 "$source_dir/bootstrap-macos-image.sh" "$helper"
 /usr/bin/install -o root -g wheel -m 0644 "$source_dir/com.gitedge.vm-bootstrap.plist" "$plist"
+/usr/bin/defaults write /Library/Preferences/SystemConfiguration/autodiskmount AutomountDisksWithoutUserLogin -bool true
+if [[ "$(/usr/bin/plutil -extract AutomountDisksWithoutUserLogin raw -o - /Library/Preferences/SystemConfiguration/autodiskmount.plist)" != true ]]; then
+  echo "Disk Arbitration must mount the runner seed before console login." >&2
+  exit 1
+fi
