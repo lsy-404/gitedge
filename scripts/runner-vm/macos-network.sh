@@ -47,7 +47,7 @@ fi
 preflight
 if [[ $mode == install ]]; then
   [[ ! -e $installed && ! -L $installed && ! -e $unit && ! -L $unit ]] || fail 'Installation paths already exist.'
-  install -o root -g root -m 0755 "$0" "$installed"
+  install -D -o root -g root -m 0755 "$0" "$installed"
   cat > "$unit" <<EOF
 [Unit]
 Description=GitEdge macOS VM isolated network
