@@ -131,7 +131,7 @@ export async function loadVmPools(state, profiles) {
         config[key] = value[key];
       }
       if (
-        config.slots !== 2 ||
+        (config.slots !== 1 && config.slots !== 2) ||
         !Array.isArray(config.addresses) ||
         config.addresses.length !== config.slots ||
         !Array.isArray(config.slotNetwork) ||

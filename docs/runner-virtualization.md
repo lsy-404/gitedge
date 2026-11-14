@@ -101,7 +101,7 @@ QEMU pools run only on Linux x64 with KVM and the pre-created bridge/TAP setup d
 
 Each job gets independent qcow2 overlays for OpenCore, the macOS system disk, and RunnerData, plus a private copy of NVRAM. The bases remain read-only. Run overlays, seed ISO, per-job SSH keys and guest workspace writes live under `vmRoot`. Attach only the read-only `GITEDGE_SEED` ISO and those per-run overlays; the installer recovery image is not part of a job VM. The broker SSH key is generated per run and stays on the Linux host. The seed contains its public key and that guest's one-time SSH host private key; it contains no runner registration or job token. The macOS LaunchDaemon validates the seed, RunnerData APFS volume, account home, SSH policy and interface MAC before adding the key and bringing up SSH. SSH is pinned to that per-run host key.
 
-The QEMU `vm.json` uses these driver-level paths and slot entries. Use the actual sealed image paths and the registered profile ID; keep the SMC file private and supply only its path.
+The QEMU `vm.json` uses these driver-level paths and slot entries. A QEMU pool runs one or two slots; a one-slot pool lists only the first address and `slotNetwork` entry. Use the actual sealed image paths and the registered profile ID; keep the SMC file private and supply only its path.
 
 ```json
 {
