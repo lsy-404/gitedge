@@ -226,7 +226,7 @@ function environment() {
     hooks(approved: boolean): SigningExecutionHooks {
       return {
         loadApprovedProfile: vi.fn(async () => (approved ? profile : null)),
-        verifySource: vi.fn(async () => true),
+        verifySource: vi.fn(async () => ({ ok: true as const })),
         verifySourceCurrent: vi.fn(async () => true),
         verifyNotarization: vi.fn(async () => "Accepted" as const),
         enqueue: vi.fn(async (input) => {
@@ -543,21 +543,21 @@ describe("native signing admission", () => {
         approvedProfile,
         sourceSubmission
       );
-      expect(first).toBe(false);
+      expect(first.ok).toBe(false);
       const second = await hooks.verifySource(
         { ...owner, id: "owner-2" },
         "runner-two",
         approvedProfile,
         sourceSubmission
       );
-      expect(second).toBe(false);
+      expect(second.ok).toBe(false);
       const crossAccount = await hooks.verifySource(
         tokenUser,
         "runner-two",
         approvedProfile,
         sourceSubmission
       );
-      expect(crossAccount).toBe(false);
+      expect(crossAccount.ok).toBe(false);
       githubFetch.mockRejectedValueOnce(new TypeError("private network detail"));
       await expect(
         hooks.verifySource(tokenUser, "runner-one", approvedProfile, sourceSubmission)
@@ -722,7 +722,7 @@ describe("native signing admission", () => {
         validIdentity,
         "https://actions.test"
       );
-      expect(source).toBe(true);
+      expect(source).toEqual({ ok: true });
       const retriedIdentity = await mintIdentity("2");
       await expect(
         hooks.verifySource(
@@ -733,7 +733,7 @@ describe("native signing admission", () => {
           retriedIdentity,
           "https://actions.test"
         )
-      ).resolves.toBe(false);
+      ).resolves.toMatchObject({ ok: false, reason: "run_identity_claim_run_attempt" });
     } finally {
       vi.unstubAllGlobals();
     }

@@ -238,7 +238,7 @@ async function executeStage(input: {
   };
   const hooks: SigningExecutionHooks = {
     loadApprovedProfile: async () => input.profile,
-    verifySource: async () => false,
+    verifySource: async () => ({ ok: false, reason: "run_head_mismatch" }),
     verifySourceCurrent: async () => true,
     enqueue: async () => ({ runId: input.runId }),
     authorizeCredentials: async (context) => ({
@@ -402,7 +402,7 @@ describe("Actions signing Worker integration", () => {
       const hooks: SigningExecutionHooks = {
         loadApprovedProfile: async (_user, _repository, name) =>
           name === selectedProfile.name ? selectedProfile : null,
-        verifySource: async () => true,
+        verifySource: async () => ({ ok: true }),
         verifySourceCurrent: async () => true,
         enqueue: (input) => enqueueNativeSigningRun(signingEnv, input),
         verifyNotarization: async () => "Accepted",

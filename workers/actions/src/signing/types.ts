@@ -57,6 +57,9 @@ export interface SigningRetrySnapshot {
   readonly dispatchJson: string;
 }
 
+export type SourceVerification =
+  { readonly ok: true } | { readonly ok: false; readonly reason: string; readonly detail?: string };
+
 export interface SigningExecutionHooks {
   loadApprovedProfile(
     user: TrustedUser,
@@ -76,7 +79,7 @@ export interface SigningExecutionHooks {
     input: SigningSubmission,
     runIdentity?: string | null,
     audience?: string
-  ): Promise<boolean>;
+  ): Promise<SourceVerification>;
   enqueue(input: SigningQueueInput): Promise<{ runId: string }>;
   verifyNotarization(
     ownerId: string,

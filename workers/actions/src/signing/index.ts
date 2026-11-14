@@ -937,12 +937,21 @@ export async function handleSigningRoute(
         request.headers.get("X-Run-Identity"),
         new URL(request.url).origin
       );
-      if (!source)
+      if (!source.ok) {
+        logger.warn("signing:admission-rejected", {
+          phase,
+          code: "signing_source_not_allowed",
+          reason: source.reason,
+          ...(source.detail ? { detail: source.detail } : {}),
+          profile: submission.profile,
+          platform: submission.platform,
+        });
         return errorResponse(
           422,
           "signing_source_not_allowed",
           "The source run is not authorized by the approved profile."
         );
+      }
       return await acceptSigningSource(
         env,
         user,

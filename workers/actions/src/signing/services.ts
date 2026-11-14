@@ -26,7 +26,7 @@ import type { TrustedUser } from "../../../../packages/contracts/src/index";
 import { trustedHeaders } from "../../../../packages/contracts/src/index";
 import { parseDocument } from "yaml";
 import { z } from "zod";
-import type { SigningEnv, SigningExecutionHooks } from "./types";
+import type { SigningEnv, SigningExecutionHooks, SourceVerification } from "./types";
 import { validateSingleSigningJob } from "../runner-workflow";
 import { readJsonLimited } from "../../../../src/worker/common/readText";
 import {
@@ -121,6 +121,12 @@ const githubRunIdentitySchema = z.object({
   workflow_sha: z.string(),
 });
 
+const sourceRejected = (reason: string, detail?: string): SourceVerification => ({
+  ok: false,
+  reason,
+  ...(detail ? { detail } : {}),
+});
+
 async function verifyGitHubRunIdentity(
   token: string,
   audience: string,
@@ -129,29 +135,38 @@ async function verifyGitHubRunIdentity(
   actorId: number,
   ref: string,
   eventName: string
-): Promise<boolean> {
+): Promise<SourceVerification> {
+  let payload: unknown;
   try {
-    const verified = await jwtVerify(token, githubOidcKeys, {
+    ({ payload } = await jwtVerify(token, githubOidcKeys, {
       issuer: githubOidcIssuer,
       audience,
       algorithms: ["RS256"],
       clockTolerance: 30,
-    });
-    const claims = githubRunIdentitySchema.parse(verified.payload);
-    const workflowRef = `${repo.fullName}/${repo.workflowPath}@${ref}`;
-    return (
-      claims.repository_id === repo.id &&
-      claims.run_id === input.sourceRunId &&
-      claims.run_attempt === "1" &&
-      claims.actor_id === String(actorId) &&
-      claims.ref === ref &&
-      claims.event_name === eventName &&
-      claims.workflow_sha === input.sourceCommitOid &&
-      claims.workflow_ref.toLowerCase() === workflowRef.toLowerCase()
-    );
-  } catch {
-    return false;
+    }));
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    const claim = (error as { claim?: unknown }).claim;
+    const parts = [typeof code === "string" ? code : "unknown"];
+    if (typeof claim === "string") parts.push(claim);
+    return sourceRejected("run_identity_invalid", parts.join(":"));
   }
+  const claims = githubRunIdentitySchema.safeParse(payload);
+  if (!claims.success) return sourceRejected("run_identity_invalid", "claims_schema");
+  const workflowRef = `${repo.fullName}/${repo.workflowPath}@${ref}`;
+  const mismatch = (
+    [
+      ["repository_id", claims.data.repository_id === repo.id],
+      ["run_id", claims.data.run_id === input.sourceRunId],
+      ["run_attempt", claims.data.run_attempt === "1"],
+      ["actor_id", claims.data.actor_id === String(actorId)],
+      ["ref", claims.data.ref === ref],
+      ["event_name", claims.data.event_name === eventName],
+      ["workflow_sha", claims.data.workflow_sha === input.sourceCommitOid],
+      ["workflow_ref", claims.data.workflow_ref.toLowerCase() === workflowRef.toLowerCase()],
+    ] as const
+  ).find(([, matches]) => !matches);
+  return mismatch ? sourceRejected(`run_identity_claim_${mismatch[0]}`) : { ok: true };
 }
 
 async function githubTagCommit(
@@ -210,7 +225,7 @@ async function verifySource(
   profile: SigningProfile,
   runIdentity: string | null = null,
   audience = ""
-): Promise<boolean> {
+): Promise<SourceVerification> {
   const sourceStep = async <T>(code: string, operation: () => Promise<T>): Promise<T> => {
     try {
       return await operation();
@@ -219,7 +234,7 @@ async function verifySource(
     }
   };
   const token = await storedSourceCredential(env, ownerId, repositoryId, profile.revision);
-  if (!token) return false;
+  if (!token) return sourceRejected("source_credential_unavailable");
   const repo = profile.policy.sourceRepositories.find(
     (item) => item.id === input.sourceRepositoryId
   );
@@ -231,8 +246,8 @@ async function verifySource(
     !Array.isArray(repo.events) ||
     !Array.isArray(repo.refs)
   )
-    return false;
-  if (!/^[1-9]\d*$/.test(input.sourceRunId)) return false;
+    return sourceRejected("source_repository_not_allowed");
+  if (!/^[1-9]\d*$/.test(input.sourceRunId)) return sourceRejected("run_id_invalid");
   const run = githubRunSchema.safeParse(
     await sourceStep("signing_source_run_metadata_failed", () =>
       githubJson(
@@ -242,14 +257,12 @@ async function verifySource(
     )
   );
   if (!run.success) throw new Error("signing_source_run_metadata_failed");
-  if (
-    String(run.data.repository.id) !== repo.id ||
-    run.data.head_sha !== input.sourceCommitOid ||
-    run.data.status !== "in_progress" ||
-    run.data.path.split("@")[0] !== repo.workflowPath ||
-    !repo.actorIds.includes(run.data.actor.id)
-  )
-    return false;
+  if (String(run.data.repository.id) !== repo.id) return sourceRejected("run_repository_mismatch");
+  if (run.data.head_sha !== input.sourceCommitOid) return sourceRejected("run_head_mismatch");
+  if (run.data.status !== "in_progress") return sourceRejected("run_not_in_progress");
+  if (run.data.path.split("@")[0] !== repo.workflowPath)
+    return sourceRejected("run_workflow_mismatch");
+  if (!repo.actorIds.includes(run.data.actor.id)) return sourceRejected("run_actor_not_allowed");
   const repositoryInfo = z
     .object({ default_branch: z.string().min(1).max(256) })
     .passthrough()
@@ -262,54 +275,43 @@ async function verifySource(
   const defaultBranch = repositoryInfo.data.default_branch;
   if (repo.releaseTagPattern) {
     const tag = `v${input.version}`;
-    if (
-      run.data.event !== "push" ||
-      run.data.head_branch !== tag ||
-      !new RegExp(repo.releaseTagPattern).test(tag) ||
-      !repo.events.includes("push") ||
-      run.data.status !== "in_progress" ||
-      !runIdentity ||
-      runIdentity.length > 16_384 ||
-      !(await verifyGitHubRunIdentity(
-        runIdentity,
-        audience,
-        repo,
-        input,
-        run.data.actor.id,
-        `refs/tags/${tag}`,
-        "push"
-      ))
-    )
-      return false;
+    if (run.data.event !== "push" || !repo.events.includes("push"))
+      return sourceRejected("run_event_not_allowed");
+    if (run.data.head_branch !== tag || !new RegExp(repo.releaseTagPattern).test(tag))
+      return sourceRejected("run_ref_not_allowed");
+    if (!runIdentity || runIdentity.length > 16_384) return sourceRejected("run_identity_missing");
+    const identity = await verifyGitHubRunIdentity(
+      runIdentity,
+      audience,
+      repo,
+      input,
+      run.data.actor.id,
+      `refs/tags/${tag}`,
+      "push"
+    );
+    if (!identity.ok) return identity;
     const tagCommit = await githubTagCommit(token, repo.fullName, tag);
+    if (tagCommit !== run.data.head_sha) return sourceRejected("release_tag_mismatch");
     if (
-      tagCommit !== run.data.head_sha ||
       !(await githubCommitOnDefaultBranch(token, repo.fullName, defaultBranch, run.data.head_sha))
     )
-      return false;
+      return sourceRejected("release_not_on_default_branch");
   } else {
-    if (
-      run.data.head_branch !== defaultBranch ||
-      !repo.events.includes(run.data.event) ||
-      !repo.refs.includes(run.data.head_branch)
-    )
-      return false;
-    if (
-      !runIdentity ||
-      runIdentity.length > 16_384 ||
-      !(await verifyGitHubRunIdentity(
-        runIdentity,
-        audience,
-        repo,
-        input,
-        run.data.actor.id,
-        `refs/heads/${defaultBranch}`,
-        run.data.event
-      ))
-    )
-      return false;
+    if (run.data.head_branch !== defaultBranch || !repo.refs.includes(run.data.head_branch))
+      return sourceRejected("run_ref_not_allowed");
+    if (!repo.events.includes(run.data.event)) return sourceRejected("run_event_not_allowed");
+    if (!runIdentity || runIdentity.length > 16_384) return sourceRejected("run_identity_missing");
+    return await verifyGitHubRunIdentity(
+      runIdentity,
+      audience,
+      repo,
+      input,
+      run.data.actor.id,
+      `refs/heads/${defaultBranch}`,
+      run.data.event
+    );
   }
-  return true;
+  return { ok: true };
 }
 
 async function verifySourceCurrent(
