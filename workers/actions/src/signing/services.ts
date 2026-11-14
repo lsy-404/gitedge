@@ -259,7 +259,8 @@ async function verifySource(
   if (!run.success) throw new Error("signing_source_run_metadata_failed");
   if (String(run.data.repository.id) !== repo.id) return sourceRejected("run_repository_mismatch");
   if (run.data.head_sha !== input.sourceCommitOid) return sourceRejected("run_head_mismatch");
-  if (run.data.status !== "in_progress") return sourceRejected("run_not_in_progress");
+  // GitHub reports a run as queued while any of its jobs still waits for a runner.
+  if (run.data.status === "completed") return sourceRejected("run_completed");
   if (run.data.path.split("@")[0] !== repo.workflowPath)
     return sourceRejected("run_workflow_mismatch");
   if (!repo.actorIds.includes(run.data.actor.id)) return sourceRejected("run_actor_not_allowed");
@@ -336,11 +337,8 @@ async function verifySourceCurrent(
   if (
     String(run.data.repository.id) !== repo.id ||
     run.data.head_sha !== input.sourceCommitOid ||
-    !(
-      run.data.status === "in_progress" ||
-      (run.data.status === "completed" &&
-        ["success", "failure"].includes(run.data.conclusion ?? ""))
-    ) ||
+    (run.data.status === "completed" &&
+      !["success", "failure"].includes(run.data.conclusion ?? "")) ||
     run.data.path.split("@")[0] !== repo.workflowPath ||
     !repo.actorIds.includes(run.data.actor.id)
   )
