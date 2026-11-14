@@ -170,11 +170,10 @@ async function createToken(
   const now = Date.now();
   const token = ACCESS_TOKEN_PREFIX + randomHex(32);
   const id = crypto.randomUUID();
-  const expiresAt = input.expiresInDays === null ? null : now + input.expiresInDays * 86_400_000;
   const prefix = token.slice(0, DISPLAY_PREFIX_LENGTH);
   // The count guard lives in the INSERT so concurrent requests cannot exceed the active limit.
   const inserted = await env.DB.prepare(
-    "INSERT INTO auth_access_tokens (id, user_id, name, token_hash, prefix, scopes_json, repository_ids_json, expires_at, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM auth_access_tokens WHERE user_id = ? AND revoked_at IS NULL AND (expires_at = 0 OR expires_at > ? OR EXISTS (SELECT 1 FROM auth_git_oauth_refresh r WHERE r.access_id = auth_access_tokens.id AND r.expires_at > ?))) < ?"
+    "INSERT INTO auth_access_tokens (id, user_id, name, token_hash, prefix, scopes_json, repository_ids_json, expires_at, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, 0, ? WHERE (SELECT COUNT(*) FROM auth_access_tokens WHERE user_id = ? AND revoked_at IS NULL AND (expires_at = 0 OR expires_at > ? OR EXISTS (SELECT 1 FROM auth_git_oauth_refresh r WHERE r.access_id = auth_access_tokens.id AND r.expires_at > ?))) < ?"
   )
     .bind(
       id,
@@ -184,7 +183,6 @@ async function createToken(
       prefix,
       JSON.stringify(input.scopes),
       repositoryIdsJson,
-      expiresAt ?? 0,
       now,
       user.id,
       now,
@@ -207,7 +205,6 @@ async function createToken(
     metadata: {
       prefix,
       scopes: input.scopes,
-      expiresAt,
       repositoryIds: input.repositoryIds ?? [],
     },
   });
@@ -221,7 +218,7 @@ async function createToken(
     scopes: input.scopes,
     repositories,
     createdAt: now,
-    expiresAt,
+    expiresAt: null,
     lastUsedAt: null,
     revokedAt: null,
     token,

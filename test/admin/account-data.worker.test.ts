@@ -66,7 +66,6 @@ describe("account export", () => {
       await authCall(alice, "/access-tokens", "POST", {
         name: "export-token",
         scopes: ["repo:read"],
-        expiresInDays: 3,
       })
     );
     await env.DB.prepare(
@@ -237,7 +236,6 @@ describe("account deletion", () => {
       await authCall(leaving, "/access-tokens", "POST", {
         name: "ci",
         scopes: ["repo:read"],
-        expiresInDays: 3,
       })
     );
     const response = await authCall(leaving, "/account/delete", "POST", {

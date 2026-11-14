@@ -179,7 +179,6 @@ describe("account security log and secrecy", () => {
     const created = await authCall(owner, "/access-tokens", "POST", {
       name: "ci",
       scopes: ["repo:read"],
-      expiresInDays: 7,
     });
     expect(created.status).toBe(201);
     const token = await data<CreatedAccessToken>(created);

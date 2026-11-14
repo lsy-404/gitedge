@@ -89,7 +89,6 @@ async function mint(
   const response = await account("/access-tokens", "POST", cookie, {
     name: "ci",
     scopes,
-    expiresInDays: 30,
     ...extra,
   });
   expect(response.status).toBe(201);
@@ -177,23 +176,19 @@ describe("personal access token lifecycle", () => {
     expect(await other.text()).not.toContain(created.id);
   });
 
-  it("enforces required expiry within one year", async () => {
+  it("validates the payload and issues tokens without expiry", async () => {
     for (const body of [
-      { name: "x", scopes: ["repo:read"] },
-      { name: "x", scopes: ["repo:read"], expiresInDays: 366 },
-      { name: "x", scopes: ["repo:read"], expiresInDays: 0 },
-      { name: "x", scopes: [], expiresInDays: 7 },
-      { name: "x", scopes: ["root"], expiresInDays: 7 },
+      { name: "x", scopes: ["repo:read"], expiresInDays: 7 },
+      { name: "x", scopes: [] },
+      { name: "x", scopes: ["root"] },
     ])
       expect((await account("/access-tokens", "POST", aliceCookie, body)).status).toBe(400);
     const created = await mint(aliceCookie, ["repo:read"]);
-    expect((created.expiresAt ?? 0) - Date.now()).toBeGreaterThan(29 * 86_400_000);
-    expect((created.expiresAt ?? 0) - Date.now()).toBeLessThanOrEqual(30 * 86_400_000);
+    expect(created.expiresAt).toBeNull();
   });
 
   it("supports permanent tokens across listing, authentication and revocation", async () => {
     const created = await mint(aliceCookie, ["repo:read"], {
-      expiresInDays: null,
       repositoryIds: ["r1"],
     });
     expect(created.expiresAt).toBeNull();
@@ -219,7 +214,6 @@ describe("personal access token lifecycle", () => {
       name: "x",
       scopes: ["repo:read"],
       repositoryIds: ["r3"],
-      expiresInDays: 7,
     });
     expect(response.status).toBe(404);
   });
@@ -279,7 +273,7 @@ describe("personal access token lifecycle", () => {
           Origin: "https://auth.test",
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ name: "x", scopes: ["admin"], expiresInDays: 7 }),
+        body: JSON.stringify({ name: "x", scopes: ["admin"] }),
       }),
       authEnv
     );
@@ -292,7 +286,7 @@ describe("personal access token lifecycle", () => {
           Origin: "https://auth.test",
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ name: "x", scopes: ["admin"], expiresInDays: 7 }),
+        body: JSON.stringify({ name: "x", scopes: ["admin"] }),
       }),
       authEnv
     );
@@ -309,7 +303,7 @@ describe("personal access token lifecycle", () => {
     const agentRequest = new Request("https://auth.test/access-tokens", {
       method: "POST",
       headers: { Origin: "https://auth.test", "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "x", scopes: ["admin"], expiresInDays: 7 }),
+      body: JSON.stringify({ name: "x", scopes: ["admin"] }),
     });
     const denied = await handleAccessTokenManagement(agentRequest, authEnv, {
       id: "alice-id",
@@ -329,7 +323,6 @@ describe("personal access token lifecycle", () => {
     const stale = await account("/access-tokens", "POST", cookie, {
       name: "stale",
       scopes: ["repo:read"],
-      expiresInDays: 7,
     });
     expect(stale.status).toBe(403);
     expect(await stale.json()).toMatchObject({ error: { code: "reauth_required" } });
@@ -355,7 +348,6 @@ describe("personal access token lifecycle", () => {
     const refused = await account("/access-tokens", "POST", bobCookie, {
       name: "x",
       scopes: ["repo:read"],
-      expiresInDays: 7,
     });
     expect(refused.status).toBe(409);
     await env.DB.prepare("UPDATE auth_access_tokens SET revoked_at = ? WHERE id = 'cap-0'")
@@ -400,7 +392,6 @@ VALUES ('runner-owner-session','runner-owner-agent','alice-id','runner-r1','${aw
     const refused = await account("/access-tokens", "POST", eveCookie, {
       name: "runner access",
       scopes: ["repo:write"],
-      expiresInDays: 30,
       repositoryIds: ["runner-r1"],
     });
     expect(refused.status).toBe(404);
@@ -408,7 +399,6 @@ VALUES ('runner-owner-session','runner-owner-agent','alice-id','runner-r1','${aw
     const collaboratorToken = await account("/access-tokens", "POST", malloryCookie, {
       name: "runner collaborator access",
       scopes: ["repo:write"],
-      expiresInDays: 30,
       repositoryIds: ["runner-r1"],
     });
     expect(collaboratorToken.status).toBe(404);

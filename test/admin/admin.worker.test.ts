@@ -69,7 +69,6 @@ describe("site administrator access", () => {
       await authCall(root, "/access-tokens", "POST", {
         name: "all",
         scopes: ["admin"],
-        expiresInDays: 7,
       })
     );
     expect((await bearer("/admin/users", minted.token)).status).toBe(403);
@@ -186,7 +185,6 @@ describe("disabled accounts", () => {
       await authCall(victim, "/access-tokens", "POST", {
         name: "ci",
         scopes: ["repo:write"],
-        expiresInDays: 7,
       })
     );
     const agentToken = `ge_session_${"1".repeat(64)}`;

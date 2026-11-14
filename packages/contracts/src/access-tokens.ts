@@ -1,8 +1,6 @@
 import { z } from "zod";
 
 export const ACCESS_TOKEN_PREFIX = "gep_";
-export const ACCESS_TOKEN_MAX_DAYS = 365;
-export const ACCESS_TOKEN_EXPIRY_PRESET_DAYS = [7, 30, 90, 365] as const;
 export const ACCESS_TOKEN_MAX_REPOSITORIES = 50;
 
 export const AccessTokenScopes = [
@@ -37,7 +35,6 @@ export const CreateAccessTokenInputSchema = z
       .max(ACCESS_TOKEN_MAX_REPOSITORIES)
       .refine((ids) => new Set(ids).size === ids.length)
       .optional(),
-    expiresInDays: z.number().int().min(1).max(ACCESS_TOKEN_MAX_DAYS).nullable(),
   })
   .strict();
 export type CreateAccessTokenInput = z.infer<typeof CreateAccessTokenInputSchema>;

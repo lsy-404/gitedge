@@ -74,7 +74,6 @@ describe("MCP settings shortcut", () => {
     expect(create).toHaveBeenCalledWith({
       name: "MCP",
       scopes: ["repo:read", "issues:write", "pulls:write"],
-      expiresInDays: 30,
     });
     expect(mounted.root.textContent).toContain("Authorization: Bearer <this token>");
   });

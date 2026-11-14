@@ -52,7 +52,7 @@ async function selectRepositoryMode(root: ParentNode): Promise<void> {
   Object.defineProperty(prototype, "showPopover", { configurable: true, value: () => {} });
   Object.defineProperty(prototype, "hidePopover", { configurable: true, value: () => {} });
   const selectors = root.querySelectorAll<HTMLElement>('[role="combobox"]');
-  const repositorySelector = selectors[1];
+  const repositorySelector = selectors[0];
   try {
     if (!repositorySelector) throw new Error("Missing repository scope selector");
     repositorySelector.click();
@@ -182,28 +182,6 @@ describe("Account settings using Platform Kit", () => {
     expect(mounted.root.textContent).toContain("workspace/app");
     expect(mounted.root.textContent).toContain("Never used");
     expect(mounted.root.textContent).toContain("Never expires");
-
-    expect(mounted.root.querySelector<HTMLElement>('[role="combobox"]')?.textContent).toContain(
-      "30"
-    );
-    Object.defineProperty(HTMLElement.prototype, "showPopover", {
-      configurable: true,
-      value: () => {},
-    });
-    Object.defineProperty(HTMLElement.prototype, "hidePopover", {
-      configurable: true,
-      value: () => {},
-    });
-    mounted.root.querySelector<HTMLElement>('[role="combobox"]')?.click();
-    await settle();
-    const never = Array.from(document.querySelectorAll<HTMLElement>('[role="option"]')).find(
-      (item) => item.textContent?.trim() === "Never expires"
-    );
-    expect(never).toBeDefined();
-    never?.click();
-    await settle();
-    Reflect.deleteProperty(HTMLElement.prototype, "showPopover");
-    Reflect.deleteProperty(HTMLElement.prototype, "hidePopover");
     fill(control(mounted.root, "input"), "CI");
     await settle();
     submit(control(mounted.root, "form"));
@@ -211,7 +189,6 @@ describe("Account settings using Platform Kit", () => {
     expect(create).toHaveBeenCalledWith({
       name: "CI",
       scopes: ["repo:read"],
-      expiresInDays: null,
     });
     expect(mounted.root.querySelector<HTMLInputElement>("input[readonly]")?.value).toBe(
       `gep_${"e".repeat(64)}`

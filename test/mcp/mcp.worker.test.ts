@@ -47,7 +47,6 @@ async function createToken(person: Person, scopes: string[]): Promise<string> {
   const response = await authCall(person, "/access-tokens", "POST", {
     name: scopes.join(" "),
     scopes,
-    expiresInDays: 7,
   });
   expect(response.status).toBe(201);
   return CreatedTokenSchema.parse(await response.json()).data.token;

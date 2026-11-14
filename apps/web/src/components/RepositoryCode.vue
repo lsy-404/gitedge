@@ -97,7 +97,7 @@ const graphMaxLimit = 250;
 const graphLimit = ref(graphPageSize);
 const loadingMore = ref(false);
 const moreError = ref("");
-const token = ref<{ token: string; expiresAt: number | null } | null>(null);
+const token = ref<{ token: string } | null>(null);
 const cloneUrl = computed(() =>
   gatewayCloneUrl(window.location.origin, props.repository.owner, props.repository.name)
 );
@@ -601,10 +601,9 @@ async function issueToken() {
       name: `${props.repository.owner}/${props.repository.name}`.slice(0, 80),
       scopes: [writable ? "repo:write" : "repo:read"],
       repositoryIds: [repositoryId],
-      expiresInDays: 30,
     });
     if (requestVersion !== tokenRequestVersion || repositoryId !== props.repository.id) return;
-    token.value = { token: created.token, expiresAt: created.expiresAt };
+    token.value = { token: created.token };
   } catch (cause) {
     if (requestVersion === tokenRequestVersion) showError(cause);
   } finally {
@@ -906,13 +905,7 @@ onUnmounted(() => {
     <div v-if="token" class="token-once box box-form" role="status">
       <div>
         <strong>{{ t("tokenShownOnce") }}</strong>
-        <p>
-          {{
-            t("tokenExpiry", {
-              date: token.expiresAt === null ? t("patNeverExpires") : d(token.expiresAt, "long"),
-            })
-          }}
-        </p>
+        <p>{{ t("patNeverExpires") }}</p>
       </div>
       <code>{{ token.token }}</code>
       <p>{{ t("patPasteHint") }}</p>

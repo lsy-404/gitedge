@@ -75,18 +75,12 @@ describe("access token scopes", () => {
     expect(accessTokenAllowsRepository({ repositoryIds: ["r1"] }, "r1")).toBe(true);
   });
 
-  it("requires a bounded expiry and unique scopes", () => {
-    const valid = { name: "ci", scopes: ["repo:read"], expiresInDays: 365 };
+  it("rejects an expiry input and duplicate scopes", () => {
+    const valid = { name: "ci", scopes: ["repo:read"] };
     expect(CreateAccessTokenInputSchema.safeParse(valid).success).toBe(true);
-    expect(CreateAccessTokenInputSchema.safeParse({ ...valid, expiresInDays: null }).success).toBe(
-      true
-    );
-    expect(CreateAccessTokenInputSchema.safeParse({ ...valid, expiresInDays: 366 }).success).toBe(
+    expect(CreateAccessTokenInputSchema.safeParse({ ...valid, expiresInDays: 30 }).success).toBe(
       false
     );
-    expect(
-      CreateAccessTokenInputSchema.safeParse({ ...valid, expiresInDays: undefined }).success
-    ).toBe(false);
     expect(
       CreateAccessTokenInputSchema.safeParse({ ...valid, scopes: ["repo:read", "repo:read"] })
         .success

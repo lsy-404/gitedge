@@ -336,9 +336,7 @@ describe("repository Code view", () => {
       ?.click();
     await settle();
 
-    expect(create).toHaveBeenCalledWith(
-      expect.objectContaining({ scopes: ["repo:write"], expiresInDays: 30 })
-    );
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ scopes: ["repo:write"] }));
     expect(mounted.root.querySelector(".token-once code")?.textContent).toBe(
       `gep_${"d".repeat(64)}`
     );
@@ -1006,7 +1004,6 @@ describe("repository Code view interactions", () => {
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
         scopes: ["repo:read"],
-        expiresInDays: 30,
         repositoryIds: [expect.any(String)],
       })
     );

@@ -10,7 +10,6 @@ import {
   type FluentSelectOption,
 } from "@platform-kit/fluent/vue";
 import {
-  ACCESS_TOKEN_EXPIRY_PRESET_DAYS,
   AccessTokenScopes,
   type AccessToken,
   type AccessTokenScope,
@@ -57,7 +56,6 @@ const tokens = ref<AccessToken[]>([]);
 const repositories = ref<Repository[]>([]);
 const name = ref("");
 const selectedScopes = ref<AccessTokenScope[]>(["repo:read"]);
-const expiryDays = ref("30");
 const repositoryMode = ref<"all" | "selected">("all");
 const selectedRepositories = ref<string[]>([]);
 const loading = ref(true);
@@ -66,20 +64,13 @@ const actionError = ref("");
 const reauth = useReauthRetry();
 const creating = ref(false);
 const revokingId = ref("");
-const oneTime = ref<{ token: string; expiresAt: number | null } | null>(null);
+const oneTime = ref<{ token: string } | null>(null);
 const copied = ref(false);
 const now = ref(Date.now());
 let copiedTimer: number | undefined;
 let mcpCopiedTimer: number | undefined;
 let clockTimer: number | undefined;
 
-const expiryOptions = computed<readonly FluentSelectOption[]>(() => [
-  ...ACCESS_TOKEN_EXPIRY_PRESET_DAYS.map((days) => ({
-    value: String(days),
-    label: t("patDays", { days }),
-  })),
-  { value: "never", label: t("patNeverExpires") },
-]);
 const repositoryModeOptions = computed<readonly FluentSelectOption[]>(() => [
   { value: "all", label: t("patRepositoriesAll") },
   { value: "selected", label: t("patRepositoriesSelected") },
@@ -131,7 +122,6 @@ function clearOneTime(): void {
 function prefillMcp(): void {
   name.value = "MCP";
   selectedScopes.value = [...MCP_SCOPES];
-  expiryDays.value = "30";
   repositoryMode.value = "all";
   mcpPreset.value = true;
   createForm.value?.scrollIntoView({ block: "start" });
@@ -179,10 +169,9 @@ async function createToken(): Promise<void> {
     const created = await api.createAccessToken({
       name: name.value.trim(),
       scopes: selectedScopes.value,
-      expiresInDays: expiryDays.value === "never" ? null : Number(expiryDays.value),
       ...(repositoryMode.value === "selected" ? { repositoryIds: selectedRepositories.value } : {}),
     });
-    oneTime.value = { token: created.token, expiresAt: created.expiresAt };
+    oneTime.value = { token: created.token };
     createdForMcp.value = mcpPreset.value;
     mcpPreset.value = false;
     name.value = "";
@@ -322,12 +311,6 @@ onUnmounted(dispose);
             @update:model-value="toggleScope(scope, $event)"
           />
         </fieldset>
-        <FluentSelect
-          v-model="expiryDays"
-          :label="t('patExpiry')"
-          :options="expiryOptions"
-          :disabled="loading"
-        />
         <FluentSelect
           v-model="repositoryMode"
           :label="t('patRepositories')"
