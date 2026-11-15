@@ -108,6 +108,36 @@ async function snapshotArchive(source, destination, maxBytes, expectedDigest) {
   }
 }
 
+const DIAGNOSTIC_TOOLS = new Set([
+  "codesign",
+  "ditto",
+  "hdiutil",
+  "lipo",
+  "notarytool",
+  "plutil",
+  "spctl",
+  "stapler",
+  "tar",
+]);
+
+// Only tools whose arguments never carry credentials may echo their own error text.
+function reportCommandFailure(file, args, code, signal, stderr) {
+  const base = path.basename(file);
+  const tool = base === "xcrun" ? String(args[0]) : base;
+  const detail = DIAGNOSTIC_TOOLS.has(tool)
+    ? stderr
+        .replace(/[A-Za-z0-9+=_-]{24,}/g, "[redacted]")
+        .trim()
+        .split("\n")
+        .slice(-6)
+        .join(" | ")
+        .slice(-600)
+    : "";
+  process.stderr.write(
+    `signing command failed: ${tool} exit=${code} signal=${signal}${detail ? ` detail: ${detail}` : ""}\n`
+  );
+}
+
 async function command(file, args, options = {}) {
   try {
     const {
@@ -140,6 +170,8 @@ async function command(file, args, options = {}) {
       child.stderr.on("data", collect(stderr));
       child.once("error", () => reject(new CommandFailure(null)));
       child.once("close", (code, signal) => {
+        if (failed || code !== 0)
+          reportCommandFailure(file, args, code, signal, Buffer.concat(stderr).toString("utf8"));
         if (failed || code !== 0)
           return reject(
             new CommandFailure(
