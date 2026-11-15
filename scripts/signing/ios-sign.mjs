@@ -681,7 +681,7 @@ async function runIos(manifestInput, artifactZip, outputDirectory, credentialInp
     const password = randomBytes(32).toString("base64url");
     phase = "identity_create";
     await command("/usr/bin/security", ["create-keychain", "-p", password, keychain]);
-    await command("/usr/bin/security", ["set-keychain-settings", "-lut", "300", keychain]);
+    await command("/usr/bin/security", ["set-keychain-settings", "-lut", "3600", keychain]);
     phase = "identity_unlock";
     await command("/usr/bin/security", ["unlock-keychain", "-p", password, keychain]);
     phase = "identity_import";

@@ -497,7 +497,7 @@ async function execute(manifestInput, inputArchivePath, outputDir, credentialsIn
       });
       await writeFile(keyFile, credentials.notarization.private_key, { mode: 0o600, flag: "wx" });
       await command("/usr/bin/security", ["create-keychain", "-p", keychainPassword, keychain]);
-      await command("/usr/bin/security", ["set-keychain-settings", "-lut", "300", keychain]);
+      await command("/usr/bin/security", ["set-keychain-settings", "-lut", "3600", keychain]);
       await command("/usr/bin/security", ["unlock-keychain", "-p", keychainPassword, keychain]);
       failureCode = "keychain_import";
       const publicIntermediate = fileURLToPath(

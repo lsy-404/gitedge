@@ -136,7 +136,7 @@ async function keychainFor(credentials, work, teamId) {
   });
   await command("/usr/bin/security", ["create-keychain", "-p", password, keychain]);
   try {
-    await command("/usr/bin/security", ["set-keychain-settings", "-lut", "300", keychain]);
+    await command("/usr/bin/security", ["set-keychain-settings", "-lut", "3600", keychain]);
     await command("/usr/bin/security", ["unlock-keychain", "-p", password, keychain]);
     await command("/usr/bin/security", [
       "import",
