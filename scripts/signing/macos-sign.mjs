@@ -111,7 +111,7 @@ async function snapshotArchive(source, destination, maxBytes, expectedDigest) {
 async function command(file, args, options = {}) {
   try {
     const {
-      timeout = 120_000,
+      timeout = 1_800_000,
       maxOutput = 8 * 1024 * 1024,
       transientOutput,
       ...spawnOptions
@@ -167,7 +167,7 @@ async function staple(target) {
   for (let attempt = 0; ; attempt++) {
     try {
       await command("/usr/bin/xcrun", ["stapler", "staple", target], {
-        timeout: 60_000,
+        timeout: 600_000,
         transientOutput:
           /Record not found|timed? out|network connection|Could not connect|HTTP (?:429|5\d\d)/i,
       });
@@ -626,7 +626,7 @@ async function execute(manifestInput, inputArchivePath, outputDir, credentialsIn
     failureCode = "stapling";
     await staple(appPath);
     failureCode = "gatekeeper_verification";
-    await command("/usr/bin/xcrun", ["stapler", "validate", appPath], { timeout: 60_000 });
+    await command("/usr/bin/xcrun", ["stapler", "validate", appPath], { timeout: 600_000 });
     await command("/usr/sbin/spctl", ["--assess", "--type", "execute", "--verbose=2", appPath]);
     await verifySignature(appPath, manifest);
     failureCode = "artifact_packaging";
