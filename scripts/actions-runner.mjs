@@ -255,7 +255,7 @@ async function freePort() {
 }
 
 async function ready(url, child) {
-  const deadline = Date.now() + 60_000;
+  const deadline = Date.now() + 300_000;
   while (Date.now() < deadline) {
     controller.signal.throwIfAborted();
     if (child.exitCode !== null)
@@ -271,7 +271,7 @@ async function ready(url, child) {
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  throw new Error("The local execution service did not become ready within 60 seconds.");
+  throw new Error("The local execution service did not become ready within 5 minutes.");
 }
 
 async function runWorkflow(values, state) {

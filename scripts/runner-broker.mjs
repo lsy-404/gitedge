@@ -678,8 +678,8 @@ async function runClaimedGitHub(profile, claim, signal) {
         throw new Error("GitEdge returned an invalid GitHub runner heartbeat.");
       if (response.data.cancelled) throw new Error("GitEdge requested cancellation.");
       leaseExpiresAt = response.data.leaseExpiresAt;
-      if (!response.data.assigned && Date.now() - startedAt >= 120_000)
-        throw new Error("GitHub job was not assigned within 120 seconds.");
+      if (!response.data.assigned && Date.now() - startedAt >= 300_000)
+        throw new Error("GitHub job was not assigned within 5 minutes.");
     }
   })();
   void heartbeat.catch((error) => {
@@ -1615,7 +1615,7 @@ async function executeVmJob() {
   for (const signal of ["SIGINT", "SIGTERM"])
     process.once(signal, () => controller.abort(new Error("Stopped.")));
   const jobClaim = parseJobClaim(claim.run.labels ?? profile.labels, claim.run.timeoutMinutes);
-  const readyDeadline = Date.now() + 120_000;
+  const readyDeadline = Date.now() + 300_000;
   let lastRenewedAt = 0;
   let refreshTools = false;
   while (true) {
