@@ -565,32 +565,40 @@ async function execute(manifestInput, inputArchivePath, outputDir, credentialsIn
       await keychainSearch(keychain, true);
       const identity = await identityHash(keychain, manifest.team_id);
       failureCode = "codesign";
-      try {
-        await sign({
-          app: appPath,
-          identity,
-          keychain,
-          hardenedRuntime: true,
-          preAutoEntitlements: false,
-          preEmbedProvisioningProfile: false,
-          platform: "darwin",
-          type: "distribution",
-          strictVerify: true,
-        });
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : "";
-        const categories = [
-          ["identity", /identity|certificate.*not found|no identity/i],
-          ["chain", /unable to build chain|CSSMERR_TP_NOT_TRUSTED/i],
-          ["acl", /errSecInternalComponent|User interaction is not allowed/i],
-          ["resources", /resource fork|Finder information|unsealed contents/i],
-          ["unsigned_child", /code object is not signed at all/i],
-          ["timestamp", /timestamp|time stamp/i],
-          ["options", /invalid option|unknown option|invalid.*entitlement/i],
-        ];
-        failureCode =
-          "codesign_" + (categories.find(([, pattern]) => pattern.test(detail))?.[0] ?? "failed");
-        throw new Error("application signing failed");
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          await sign({
+            app: appPath,
+            identity,
+            keychain,
+            hardenedRuntime: true,
+            preAutoEntitlements: false,
+            preEmbedProvisioningProfile: false,
+            platform: "darwin",
+            type: "distribution",
+            strictVerify: true,
+          });
+          break;
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : "";
+          const categories = [
+            ["identity", /identity|certificate.*not found|no identity/i],
+            ["chain", /unable to build chain|CSSMERR_TP_NOT_TRUSTED/i],
+            ["acl", /errSecInternalComponent|User interaction is not allowed/i],
+            ["resources", /resource fork|Finder information|unsealed contents/i],
+            ["unsigned_child", /code object is not signed at all/i],
+            ["timestamp", /timestamp|time stamp/i],
+            ["options", /invalid option|unknown option|invalid.*entitlement/i],
+          ];
+          const category = categories.find(([, pattern]) => pattern.test(detail))?.[0] ?? "failed";
+          // Apple's timestamp service drops requests under bursts, and signing again replaces the earlier signatures.
+          if (category === "timestamp" && attempt < 3) {
+            await new Promise((resolve) => setTimeout(resolve, 30_000 * (attempt + 1)));
+            continue;
+          }
+          failureCode = "codesign_" + category;
+          throw new Error("application signing failed");
+        }
       }
       failureCode = "signature_verification";
       await verifySignature(appPath, manifest);
