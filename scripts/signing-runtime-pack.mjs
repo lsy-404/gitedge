@@ -54,7 +54,11 @@ export function packSigningRuntime({ root = repositoryRoot } = {}) {
     throw new Error("The signing runtime sources are missing.");
   assertImportClosure(root, new Set(paths));
   const files = paths.map((path) => {
-    const bytes = readFileSync(join(root, path));
+    const raw = readFileSync(join(root, path));
+    // Normalize checkout line endings so every machine produces the same digest.
+    const bytes = raw.includes(0)
+      ? raw
+      : Buffer.from(raw.toString("latin1").replaceAll("\r\n", "\n"), "latin1");
     return {
       path,
       mode: bytes.subarray(0, 2).toString("latin1") === "#!" ? 0o755 : 0o644,
