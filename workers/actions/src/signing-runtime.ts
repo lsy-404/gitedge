@@ -33,7 +33,7 @@ export async function currentSigningRuntime(
 }
 
 export async function serveSigningRuntime(env: SigningRuntimeEnv, hex: string): Promise<Response> {
-  if (!env.SIGNING_ARTIFACTS || env.SIGNING_RUNTIME_DIGEST !== `sha256:${hex}`)
+  if (!env.SIGNING_ARTIFACTS)
     return errorResponse(404, "not_found", "The signing runtime is not published.");
   const object = await env.SIGNING_ARTIFACTS.get(`signing-runtime/${hex}`);
   if (!object) return errorResponse(404, "not_found", "The signing runtime is not published.");
