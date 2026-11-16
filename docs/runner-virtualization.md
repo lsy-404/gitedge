@@ -178,6 +178,8 @@ Linux guest control uses SSH with a pinned Ed25519 host public key and a control
 
 Base images should contain the broker runtime, the official GitHub Actions runner files, Node and other required build tools. Do not bake GitEdge host registration credentials into images. The broker keeps registration state in its protected host profile directories and uses the corresponding profile ID to select a pool.
 
+Images do not contain signing code or its dependencies: the guest broker fetches and installs the published signing runtime for each signing job. Images need Node 24, pnpm, network access to the GitEdge origin and package registry, and the platform tools listed in [Account Runner signing](account-runner-signing.md#signing-runtime), including Python 3.12 or newer on macOS guests. A pnpm store warmed during image preparation makes that install faster. Keep the guest state directory writable by the job user; it holds `signing-runtime/` and is discarded with the VM.
+
 Run `node scripts/actions-runner.mjs setup` during image preparation to cache the verified GitEdge workflow engine. Workflow heartbeats and completion reports retry transient transport failures while their execution lease remains valid.
 
 Complete Windows setup before installing guest tools. Shut the image OS down normally before freezing its VHDX; a forced VM reset can discard pending writes. Verify the extracted runtime files after unmounting the image, as well as the input archive hash.
