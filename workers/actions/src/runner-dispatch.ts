@@ -18,6 +18,7 @@ import {
 } from "../../../packages/contracts/src/runners";
 import { scoreRunner } from "../../../packages/contracts/runner-scheduling.mjs";
 import { createLogger } from "../../../src/worker/common/logger";
+import { currentSigningRuntime } from "./signing-runtime";
 import {
   claimSpecificCandidate,
   ownsScope,
@@ -670,10 +671,15 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
     const ordered = [...candidates.values()].sort(
       (a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id)
     );
+    let signingRuntime: Awaited<ReturnType<typeof currentSigningRuntime>> | false | undefined;
     const taken = new Set<string>();
     for (const candidate of ordered) {
       const key = `${candidate.kind}:${candidate.id}`;
       if (offeredJobs.has(key)) continue;
+      if (candidate.execution_kind === "signing") {
+        signingRuntime ??= (await currentSigningRuntime(this.env)) ?? false;
+        if (!signingRuntime) continue;
+      }
       let best: { runner: IdleRunner; labels: string[]; score: number; cache: boolean } | null =
         null;
       for (const runner of idle) {

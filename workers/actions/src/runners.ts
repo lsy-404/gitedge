@@ -36,6 +36,11 @@ import type { RunnerWorkflow } from "./runner-workflow";
 import { claimGithubRunner, githubRunnerLease } from "./github-runners";
 import { notifyRunnerDispatch, type RunnerDispatch } from "./runner-dispatch";
 import { handleSigningMachineCallback } from "./signing-execution";
+import {
+  currentSigningRuntime,
+  serveSigningRuntime,
+  type SigningRuntimeEnv,
+} from "./signing-runtime";
 import { retryRunnerNetworkFailure } from "./runner-network";
 import {
   claimRunnerCandidate,
@@ -45,7 +50,7 @@ import {
   recordRunnerFailure,
 } from "./runner-scheduler";
 
-export interface RunnerEnv {
+export interface RunnerEnv extends SigningRuntimeEnv {
   DB: D1Database;
   AUTH?: Pick<Fetcher, "fetch">;
   FORGE: Pick<Fetcher, "fetch">;
@@ -858,6 +863,9 @@ export async function claimSpecificCandidate(
   evaluated: EvaluatedRunnerCandidate,
   now: number
 ): Promise<ClaimOutcome> {
+  const signingRuntime =
+    candidate.execution_kind === "signing" ? await currentSigningRuntime(env) : null;
+  if (candidate.execution_kind === "signing" && !signingRuntime) return { kind: "skipped" };
   const leaseToken = randomHex(32);
   const leaseHash = await sha256Hex(leaseToken);
   const claimed = await claimRunnerCandidate(
@@ -910,6 +918,7 @@ export async function claimSpecificCandidate(
             requestId: candidate.request_id,
             stage: candidate.stage,
             inputDigest: candidate.input_digest,
+            signingRuntime,
             ownerId: row.created_by,
             repositoryId: row.repository_id,
             repository,
@@ -1019,6 +1028,14 @@ async function connectRunner(request: Request, env: RunnerEnv): Promise<Response
 export async function runnerMachineRequest(request: Request, env: RunnerEnv): Promise<Response> {
   const pathname = new URL(request.url).pathname;
   if (pathname === "/runner/connect") return connectRunner(request, env);
+  const runtimeRoute = /^\/runner\/signing\/runtime\/([0-9a-f]{64})$/.exec(pathname);
+  if (runtimeRoute) {
+    if (request.method !== "GET")
+      return errorResponse(405, "method_not_allowed", "The signing runtime is read only.");
+    if (!(await authenticateRunner(request, env)))
+      return errorResponse(401, "unauthorized", "Invalid or revoked runner registration.");
+    return serveSigningRuntime(env, runtimeRoute[1]!);
+  }
   const signingMachineRoute = pathname.startsWith("/runner/signing/requests/");
   if (signingMachineRoute && !["POST", "GET", "PUT"].includes(request.method))
     return errorResponse(
