@@ -49,6 +49,10 @@ interface StoredRow {
   expires_at: number;
 }
 
+function cleanFailureDetail(detail: string): string {
+  return detail.replace(/[\x00-\x1f\x7f-\x9f]+/g, " ").trim();
+}
+
 export class SigningCoordinator extends DurableObject<SigningEnv> {
   constructor(ctx: DurableObjectState, env: SigningEnv) {
     super(ctx, env);
@@ -451,7 +455,15 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
       createdAt: row.created_at,
       expiresAt: row.expires_at,
       completedAt: row.completed_at,
+      failure: row.state === "failed" ? this.failure(row) : null,
     });
+  }
+
+  private failure(row: StoredRow): { reason: string; detail: string } | null {
+    const saved = z
+      .object({ reason: z.string(), detail: z.string() })
+      .safeParse(JSON.parse(row.verification_json ?? "null"));
+    return saved.success ? saved.data : null;
   }
 
   private dispatch(row: StoredRow) {
@@ -703,7 +715,16 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
       this.ctx.storage.sql.exec(
         "UPDATE signing_requests SET state='failed',completed_at=?,verification_json=? WHERE id=? AND state IN ('queued','running')",
         Date.now(),
-        JSON.stringify({ error: code }),
+        JSON.stringify({
+          error: code,
+          ...(typeof payload?.reason === "string"
+            ? {
+                reason: payload.reason,
+                detail:
+                  typeof payload.detail === "string" ? cleanFailureDetail(payload.detail) : "",
+              }
+            : {}),
+        }),
         id
       );
       return { state: "failed" };

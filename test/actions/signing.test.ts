@@ -167,6 +167,7 @@ function environment() {
             createdAt: 1,
             expiresAt: 518400001,
             completedAt: null,
+            failure: null,
           },
           dispatch: {
             profile,
@@ -1499,6 +1500,7 @@ describe("native signing stage reconciliation", () => {
                 createdAt: 1,
                 expiresAt: 518400001,
                 completedAt: null,
+                failure: null,
               },
               dispatch: nextDispatch,
             },
@@ -1673,6 +1675,7 @@ describe("native signing stage reconciliation", () => {
                   createdAt: 1,
                   expiresAt: 518400001,
                   completedAt: null,
+                  failure: null,
                 },
                 dispatch,
               },

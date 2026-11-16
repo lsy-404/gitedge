@@ -263,6 +263,10 @@ export const SigningRequestSchema = z
     createdAt: z.number().int().nonnegative(),
     expiresAt: z.number().int().positive(),
     completedAt: z.number().int().nonnegative().nullable(),
+    failure: z
+      .object({ reason: z.string().regex(/^[a-z0-9_]{1,64}$/), detail: z.string().max(300) })
+      .strict()
+      .nullable(),
   })
   .strict();
 export type SigningRequest = z.infer<typeof SigningRequestSchema>;

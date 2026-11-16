@@ -1694,6 +1694,11 @@ export async function handleSigningMachineRoute(
             .string()
             .regex(/^[a-z][a-z0-9_]{0,63}$/)
             .optional(),
+          reason: z
+            .string()
+            .regex(/^[a-z0-9_]{1,64}$/)
+            .optional(),
+          detail: z.string().max(300).optional(),
         })
         .strict()
         .parse(await readJsonLimited(request, 4096));

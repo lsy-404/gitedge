@@ -23,6 +23,7 @@ const request = {
   createdAt: 1,
   expiresAt: Date.now() + 86_400_000,
   completedAt: 2,
+  failure: null,
 };
 
 describe("signing submission client", () => {

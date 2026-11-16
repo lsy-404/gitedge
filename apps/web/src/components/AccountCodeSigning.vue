@@ -101,6 +101,10 @@ onUnmounted(() => controller?.abort());
                 >{{ t("codeSigningCompleted") }} · {{ d(request.completedAt, "long") }}</span
               >
             </div>
+            <div v-if="request.failure" class="row-meta">
+              {{ t("codeSigningFailure") }} · {{ request.failure.reason
+              }}<template v-if="request.failure.detail"> · {{ request.failure.detail }}</template>
+            </div>
           </div>
         </li>
       </ul>
