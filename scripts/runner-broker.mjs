@@ -29,8 +29,15 @@ import {
 import {
   createSigningWorkflow,
   normalizeSigningWorkflowTimeout,
+  readSigningFailure,
   readSigningReceipt,
+  signingFailureBody,
 } from "./runner-broker-signing-workflow.mjs";
+import {
+  SigningRuntimeError,
+  prepareSigningRuntime,
+  signingRuntimeHex,
+} from "./runner-signing-runtime.mjs";
 import {
   SupersededError,
   createDispatchSession,
@@ -851,6 +858,7 @@ async function runClaimedSigning(profile, claim, signal) {
   const runDirectory = await createRunDirectory(profileState(profile), "signing");
   const contextFile = path.join(runDirectory, "context.json");
   const receiptFile = path.join(runDirectory, "sdk-receipt.json");
+  const failureFile = path.join(runDirectory, "sdk-failure.json");
   const workflowFile = path.join(runDirectory, "workflow.yml");
   const eventPayloadFile = path.join(runDirectory, "event.json");
   const heartbeatController = new AbortController();
@@ -896,11 +904,20 @@ async function runClaimedSigning(profile, claim, signal) {
       if (!workflowDemand.claim.valid || !jobClaim.valid)
         throw new Error("Signing workflow has invalid host requirements.");
       validateLocalJobClaim(requiredLabels, capacity, run.timeoutMinutes);
+      signingRuntimeHex(run.signingRuntime);
+      const clientPath = await prepareSigningRuntimeWithLease({
+        profile,
+        secret: secret.trim(),
+        run,
+        claim,
+        context,
+        signal,
+      });
       await secureSigningPath(runDirectory, true);
       await writePrivate(contextFile, JSON.stringify(context), { secure: true });
       const source = createSigningWorkflow(budgetedWorkflowSource, {
         platform: run.platform,
-        clientPath: path.join(root, "scripts", "signing", "client.mjs"),
+        clientPath,
         contextFile,
         outputParent: runDirectory,
         receiptFile,
@@ -954,19 +971,12 @@ async function runClaimedSigning(profile, claim, signal) {
             const remaining = leaseExpiresAt - Date.now() - 1_000;
             if (remaining <= 0) throw new Error("Signing lease expired before renewal.");
             try {
-              result = await apiRequest(
-                profile.origin,
+              result = await signingHeartbeat(
+                profile,
                 secret.trim(),
-                `/api/actions/runner/signing/requests/${encodeURIComponent(run.requestId)}/heartbeat`,
-                {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    "X-Runner-Run-Id": run.id,
-                    "X-Runner-Lease-Token": claim.leaseToken,
-                  },
-                  signal: runSignal,
-                },
+                run,
+                claim,
+                runSignal,
                 Math.min(20_000, remaining)
               );
               break;
@@ -1020,6 +1030,8 @@ async function runClaimedSigning(profile, claim, signal) {
     } catch (error) {
       if (child && childRunning(child)) await killChild(child);
       if (!signal.aborted) {
+        const failure =
+          error instanceof SigningRuntimeError ? error : await readSigningFailure(failureFile);
         await apiRequest(
           profile.origin,
           secret.trim(),
@@ -1031,7 +1043,7 @@ async function runClaimedSigning(profile, claim, signal) {
               "X-Runner-Run-Id": run.id,
               "X-Runner-Lease-Token": claim.leaseToken,
             },
-            body: JSON.stringify({ code: "execution_failed" }),
+            body: JSON.stringify(signingFailureBody(failure)),
           }
         ).catch((reportError) => {
           console.error(`Could not report failed signing stage ${run.id}: ${reportError.message}`);
@@ -1045,6 +1057,81 @@ async function runClaimedSigning(profile, claim, signal) {
     if (child?.exitCode === null) await killChild(child);
     await rm(runDirectory, { recursive: true, force: true });
   }
+}
+
+function signingHeartbeat(profile, secret, run, claim, signal, timeoutMs) {
+  return apiRequest(
+    profile.origin,
+    secret,
+    `/api/actions/runner/signing/requests/${encodeURIComponent(run.requestId)}/heartbeat`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Runner-Run-Id": run.id,
+        "X-Runner-Lease-Token": claim.leaseToken,
+      },
+      signal,
+    },
+    timeoutMs
+  );
+}
+
+// Installing dependencies can outlast the 2-minute lease, so renew it while preparing.
+async function prepareSigningRuntimeWithLease({ profile, secret, run, claim, context, signal }) {
+  const controller = new AbortController();
+  const preparing = AbortSignal.any([signal, controller.signal]);
+  let leaseFailure;
+  const keeper = (async () => {
+    while (!preparing.aborted) {
+      await sleep(15_000, preparing);
+      const remaining = claim.leaseExpiresAt - Date.now() - 1_000;
+      if (remaining <= 0) throw new Error("Signing lease expired during runtime preparation.");
+      let result;
+      try {
+        result = await signingHeartbeat(
+          profile,
+          secret,
+          run,
+          claim,
+          preparing,
+          Math.min(20_000, remaining)
+        );
+      } catch (error) {
+        const status = error.cause?.status;
+        if (preparing.aborted || (status && status < 500 && status !== 429)) throw error;
+        console.error("Signing heartbeat failed during runtime preparation; will retry.");
+        continue;
+      }
+      if (result?.data?.completed === true) throw new Error("GitEdge requested cancellation.");
+      if (!Number.isFinite(result?.data?.leaseExpiresAt))
+        throw new Error("GitEdge returned an invalid signing lease heartbeat response.");
+      claim.leaseExpiresAt = result.data.leaseExpiresAt;
+      context.leaseExpiresAt = result.data.leaseExpiresAt;
+    }
+  })().catch((error) => {
+    if (preparing.aborted) return;
+    leaseFailure = error;
+    controller.abort(error);
+  });
+  let client;
+  let failure;
+  try {
+    client = await prepareSigningRuntime({
+      origin: profile.origin,
+      credential: secret,
+      runtime: run.signingRuntime,
+      cacheRoot: path.join(profileState(profile), "signing-runtime"),
+      signal: preparing,
+    });
+  } catch (error) {
+    failure = error;
+  }
+  controller.abort();
+  await keeper;
+  if (leaseFailure) throw leaseFailure;
+  if (failure) throw failure;
+  return client;
 }
 
 function validateGitEdgeWorkflow(source, profile) {
