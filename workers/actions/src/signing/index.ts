@@ -17,7 +17,12 @@ import { waitUntil } from "cloudflare:workers";
 import { type TrustedUser } from "../../../../packages/contracts/src/index";
 import { dataResponse, errorResponse } from "../../../../src/worker/common/http";
 import { createLogger } from "../../../../src/worker/common/logger";
-import { SigningCoordinator, coordinator, previousStage } from "./coordinator";
+import {
+  SIGNING_RETENTION_MS,
+  SigningCoordinator,
+  coordinator,
+  previousStage,
+} from "./coordinator";
 import type { SigningEnv, SigningExecutionHooks } from "./types";
 import { attemptPublishDispatch, recordPublishDispatch } from "./publish";
 import {
@@ -1117,7 +1122,7 @@ export async function handleSigningRoute(
         !state.outputSize
       )
         return errorResponse(404, "not_found", "Signing output was not found.");
-      if (!state.completedAt || state.completedAt + 3 * 60 * 60 * 1000 <= Date.now()) {
+      if (!state.completedAt || state.completedAt + SIGNING_RETENTION_MS <= Date.now()) {
         await coordinator(env, user.id).releaseResult(state.id, user.id, repository.id);
         return errorResponse(410, "gone", "Signing output is no longer available.");
       }

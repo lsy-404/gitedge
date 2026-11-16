@@ -53,6 +53,8 @@ function cleanFailureDetail(detail: string): string {
   return detail.replace(/[\x00-\x1f\x7f-\x9f]+/g, " ").trim();
 }
 
+export const SIGNING_RETENTION_MS = 24 * 60 * 60 * 1000;
+
 export class SigningCoordinator extends DurableObject<SigningEnv> {
   constructor(ctx: DurableObjectState, env: SigningEnv) {
     super(ctx, env);
@@ -241,7 +243,7 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
       this.ctx.storage.sql.exec(
         "INSERT OR IGNORE INTO signing_results VALUES (?,?)",
         id,
-        row.completed_at + 3 * 60 * 60 * 1000
+        row.completed_at + SIGNING_RETENTION_MS
       );
       this.ctx.waitUntil(this.scheduleExpiry());
     }
@@ -272,7 +274,7 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
     this.ctx.storage.sql.exec(
       "INSERT OR IGNORE INTO signing_source_uploads VALUES (?,'pending',?)",
       id,
-      Date.now() + 3 * 60 * 60 * 1000
+      Date.now() + SIGNING_RETENTION_MS
     );
     this.ctx.waitUntil(this.scheduleExpiry());
     const upload = this.ctx.storage.sql

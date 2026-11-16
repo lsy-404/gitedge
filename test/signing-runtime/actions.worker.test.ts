@@ -656,8 +656,8 @@ describe("Actions signing Worker integration", () => {
               abandonedId
             )
             .one();
-          expect(row.expires_at - row.created_at).toBeGreaterThanOrEqual(3 * 60 * 60 * 1000);
-          expect(row.expires_at - row.created_at).toBeLessThan(3 * 60 * 60 * 1000 + 10_000);
+          expect(row.expires_at - row.created_at).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000);
+          expect(row.expires_at - row.created_at).toBeLessThan(24 * 60 * 60 * 1000 + 10_000);
           state.storage.sql.exec(
             "UPDATE signing_source_uploads SET expires_at=? WHERE request_id=?",
             Date.now() - 1,
