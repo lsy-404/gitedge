@@ -21,6 +21,7 @@ const DEPENDENCIES = {
   macos: ["@electron/asar", "@electron/fuses", "@electron/osx-sign"],
 };
 const MACOS_BINARIES = ["codesign", "security", "ditto", "plutil", "lipo", "tar", "spctl"];
+const BINARY_DIRECTORY = { spctl: "/usr/sbin" };
 const TOOLS = {
   macos: { binaries: MACOS_BINARIES, xcrun: ["notarytool", "stapler"] },
   dmg: { binaries: [...MACOS_BINARIES, "hdiutil"], xcrun: ["notarytool", "stapler"] },
@@ -74,7 +75,9 @@ export async function preflight(family) {
   await checkPython();
   const { binaries, xcrun } = TOOLS[key];
   for (const name of binaries)
-    await checkTool(name, () => access(`/usr/bin/${name}`, constants.X_OK));
+    await checkTool(name, () =>
+      access(`${BINARY_DIRECTORY[name] ?? "/usr/bin"}/${name}`, constants.X_OK)
+    );
   for (const name of xcrun)
     await checkTool(name, () =>
       execFileAsync("/usr/bin/xcrun", ["--find", name], { timeout: PROBE_TIMEOUT_MS })
