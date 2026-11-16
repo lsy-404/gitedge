@@ -107,7 +107,7 @@ export function loadOperatorConfig({ optional = false } = {}) {
   return parsed.data;
 }
 
-export function renderWorkerConfig(service, operator) {
+export function renderWorkerConfig(service, operator, extraVars = {}) {
   const config = JSON.parse(readFileSync(sourceConfigPath(service), "utf8"));
   config.account_id = operator.accountId;
   for (const database of config.d1_databases ?? []) database.database_id = operator.databaseId;
@@ -116,19 +116,34 @@ export function renderWorkerConfig(service, operator) {
       if (route.custom_domain) route.pattern = operator.domain;
   }
   const settings = DeploymentSettingsSchema.parse(operator.settings);
-  const vars = { ...config.vars, ...operator.vars[service], ...settingsVars(service, settings) };
+  const vars = {
+    ...config.vars,
+    ...operator.vars[service],
+    ...settingsVars(service, settings),
+    ...extraVars,
+  };
   if (service === "auth") vars.SSO_PROVIDERS_JSON = JSON.stringify(operator.ssoProviders);
   if (Object.keys(vars).length > 0) config.vars = vars;
   return config;
 }
 
-export function writeProductionConfigs(operator) {
+export function writeProductionConfigs(operator, { signingRuntimeDigest } = {}) {
   const paths = {};
   for (const service of services) {
     paths[service] = productionConfigPath(service);
     writeFileSync(
       paths[service],
-      `${JSON.stringify(renderWorkerConfig(service, operator), null, 2)}\n`
+      `${JSON.stringify(
+        renderWorkerConfig(
+          service,
+          operator,
+          service === "actions" && signingRuntimeDigest
+            ? { SIGNING_RUNTIME_DIGEST: signingRuntimeDigest }
+            : {}
+        ),
+        null,
+        2
+      )}\n`
     );
   }
   return paths;

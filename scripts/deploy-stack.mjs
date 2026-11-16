@@ -1,4 +1,6 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -6,6 +8,7 @@ import {
   loadOperatorConfig,
   writeProductionConfigs,
 } from "./operator-config.mjs";
+import { packSigningRuntime } from "./signing-runtime-pack.mjs";
 
 const unresolvedIdPattern = /REPLACE_WITH_[A-Z0-9_]+/;
 
@@ -14,6 +17,7 @@ const bootstrapServices = ["git", "forge", "actions", "gateway"];
 const deployOrder = ["limits", "auth", "forge", "actions", "git", "deploy", "mcp", "gateway"];
 
 let activeAccountId;
+let activeSigningRuntime;
 
 export function pnpmInvocation(
   args,
@@ -171,6 +175,46 @@ function ensureAssetBuckets(configs) {
   );
 }
 
+// The bundle is content-addressed, so an existing object under its key is already correct.
+function publishSigningRuntime(configs) {
+  const bucket = readConfig(configs.actions).r2_buckets.find(
+    (entry) => entry.binding === "SIGNING_ARTIFACTS"
+  ).bucket_name;
+  const target = `${bucket}/signing-runtime/${activeSigningRuntime.hex}`;
+  const directory = mkdtempSync(join(tmpdir(), "gitedge-signing-runtime-"));
+  try {
+    const file = join(directory, "runtime.gz");
+    const existing = spawnPnpmSync(
+      ["exec", "wrangler", "r2", "object", "get", target, "--remote", "--file", file],
+      { encoding: "utf8", env: cloudflareEnvironment() }
+    );
+    if (existing.status === 0) {
+      console.log(`Signing runtime ${activeSigningRuntime.digest} is already published`);
+      return true;
+    }
+    writeFileSync(file, activeSigningRuntime.bytes);
+    console.log(`Publishing signing runtime ${activeSigningRuntime.digest}`);
+    return runPnpm(
+      [
+        "exec",
+        "wrangler",
+        "r2",
+        "object",
+        "put",
+        target,
+        "--remote",
+        "--file",
+        file,
+        "--content-type",
+        "application/gzip",
+      ],
+      { cloudflare: true }
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
 function ensureGithubSyncQueue(configs) {
   const config = readConfig(configs.forge);
   const queue = config.queues?.producers?.find(
@@ -209,7 +253,10 @@ function migrateRemote(configs) {
 function prepareConfigs({ dryRun }) {
   const operator = loadOperatorConfig({ optional: dryRun }) ?? dryRunOperatorConfig();
   activeAccountId = operator.accountId;
-  const configs = writeProductionConfigs(operator);
+  activeSigningRuntime = packSigningRuntime();
+  const configs = writeProductionConfigs(operator, {
+    signingRuntimeDigest: activeSigningRuntime.digest,
+  });
   return assertResolvedConfigs(configs) ? configs : null;
 }
 
@@ -230,6 +277,7 @@ export function deployStack({ dryRun = false } = {}) {
   if (!dryRun) {
     if (!migrateRemote(configs)) return false;
     if (!ensureAssetBuckets(configs)) return false;
+    if (!publishSigningRuntime(configs)) return false;
     if (!ensureGithubSyncQueue(configs)) return false;
     if (!bootstrapCyclicWorkers(configs)) return false;
   }
