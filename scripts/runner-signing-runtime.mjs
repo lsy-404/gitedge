@@ -62,7 +62,6 @@ async function download(origin, credential, hex, size, signal) {
     for await (const chunk of response.body) {
       received += chunk.byteLength;
       if (received > size) {
-        await response.body.cancel();
         throw new SigningRuntimeError("runtime_digest_mismatch", "size");
       }
       chunks.push(chunk);
@@ -133,8 +132,17 @@ function pnpmInstall(cwd, signal) {
         signal: AbortSignal.any([signal, AbortSignal.timeout(INSTALL_TIMEOUT_MS)].filter(Boolean)),
       }
     );
-    child.once("error", () =>
-      reject(new SigningRuntimeError("runtime_install_failed", "pnpm_unavailable"))
+    child.once("error", (error) =>
+      reject(
+        new SigningRuntimeError(
+          "runtime_install_failed",
+          error.name === "AbortError"
+            ? signal?.aborted
+              ? "pnpm_aborted"
+              : "pnpm_timeout"
+            : "pnpm_unavailable"
+        )
+      )
     );
     child.once("close", (code) =>
       code === 0
@@ -177,7 +185,8 @@ async function pruneOldVersions(cacheRoot, keep) {
   for (const entry of await readdir(cacheRoot, { withFileTypes: true })) {
     if (!entry.isDirectory() || !/^[0-9a-f]{64}$/.test(entry.name)) continue;
     const marker = await stat(path.join(cacheRoot, entry.name, ".ready")).catch(() => null);
-    versions.push({ name: entry.name, used: marker?.mtimeMs ?? 0 });
+    if (!marker || (await exists(path.join(cacheRoot, `${entry.name}.lock`)))) continue;
+    versions.push({ name: entry.name, used: marker.mtimeMs });
   }
   versions.sort((a, b) => b.used - a.used);
   for (const stale of versions.slice(KEPT_VERSIONS))
@@ -189,14 +198,17 @@ export async function prepareSigningRuntime({ origin, credential, runtime, cache
   const hex = signingRuntimeHex(runtime);
   const directory = path.join(cacheRoot, hex);
   const client = path.join(directory, "scripts", "signing", "client.mjs");
-  await mkdir(cacheRoot, { recursive: true, mode: 0o700 });
-  const release = await lockfile.lock(cacheRoot, {
-    lockfilePath: path.join(cacheRoot, `${hex}.lock`),
-    stale: 60_000,
-    update: 10_000,
-    retries: { retries: 900, factor: 1, minTimeout: 1_000, maxTimeout: 1_000 },
-  });
+  let release;
   try {
+    await mkdir(cacheRoot, { recursive: true, mode: 0o700 });
+    // proper-lockfile keys held locks by this path, so each version needs its own.
+    release = await lockfile.lock(directory, {
+      realpath: false,
+      lockfilePath: path.join(cacheRoot, `${hex}.lock`),
+      stale: 60_000,
+      update: 10_000,
+      retries: { retries: 900, factor: 1, minTimeout: 1_000, maxTimeout: 1_000 },
+    });
     const marker = path.join(directory, ".ready");
     if (await exists(marker)) {
       const now = new Date();
@@ -211,7 +223,7 @@ export async function prepareSigningRuntime({ origin, credential, runtime, cache
     if (signal?.aborted) throw error;
     throw new SigningRuntimeError("runtime_install_failed", error.code ?? error.name);
   } finally {
-    await release();
+    await release?.();
   }
   return client;
 }
