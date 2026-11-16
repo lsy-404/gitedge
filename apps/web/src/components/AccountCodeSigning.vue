@@ -79,7 +79,7 @@ onUnmounted(() => controller?.abort());
       <p v-if="!entries.length" class="settings-empty">{{ t("codeSigningEmpty") }}</p>
       <ul v-else class="settings-list">
         <li
-          v-for="{ request, submission } in entries"
+          v-for="{ request, submission, failure } in entries"
           :key="request.id"
           class="box-row settings-item"
         >
@@ -101,9 +101,9 @@ onUnmounted(() => controller?.abort());
                 >{{ t("codeSigningCompleted") }} · {{ d(request.completedAt, "long") }}</span
               >
             </div>
-            <div v-if="request.failure" class="row-meta">
-              {{ t("codeSigningFailure") }} · {{ request.failure.reason
-              }}<template v-if="request.failure.detail"> · {{ request.failure.detail }}</template>
+            <div v-if="failure" class="row-meta">
+              {{ t("codeSigningFailure") }} · {{ failure.reason
+              }}<template v-if="failure.detail"> · {{ failure.detail }}</template>
             </div>
           </div>
         </li>

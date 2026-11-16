@@ -424,6 +424,7 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
       .map((row) => ({
         request: this.public(row),
         submission: SigningSubmissionSchema.parse(JSON.parse(row.submission_json)),
+        failure: row.state === "failed" ? this.failure(row) : null,
       }));
   }
 
@@ -455,7 +456,6 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
       createdAt: row.created_at,
       expiresAt: row.expires_at,
       completedAt: row.completed_at,
-      failure: row.state === "failed" ? this.failure(row) : null,
     });
   }
 

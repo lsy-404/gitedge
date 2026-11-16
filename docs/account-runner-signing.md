@@ -149,23 +149,23 @@ Delivery is at least once. A dispatch GitHub accepted can still be recorded as f
 
 All paths below are under `/api/actions` on the Gateway. Pass the private Runner's `repositoryId` query parameter.
 
-| Method | Path                                       | Purpose                                                                                  |
-| ------ | ------------------------------------------ | ---------------------------------------------------------------------------------------- |
-| GET    | `/signing/profiles`                        | Read approved profile metadata                                                           |
-| POST   | `/signing/profiles`                        | Approve `{ "name": "profile-name" }` from Runner                                         |
-| GET    | `/signing/profiles/:name/credentials`      | Read credential configuration metadata                                                   |
-| POST   | `/signing/profiles/:name/credentials`      | Install `{ "platform": "macos", "credentials": { ... } }`                                |
-| DELETE | `/signing/profiles/:name/credentials`      | Remove credentials for `{ "platform": "macos" }`                                         |
-| POST   | `/signing/requests`                        | Submit source proof with `Idempotency-Key`                                               |
-| GET    | `/signing/requests/:id`                    | Read request state                                                                       |
-| POST   | `/signing/requests/:id/retry`              | Retry only the failed stage with `{ "runId": "FAILED_RUN_UUID" }` or `{ "runId": null }` |
-| PUT    | `/signing/requests/:id/source/parts/:part` | Upload an authenticated 8 MiB source part                                                |
-| POST   | `/signing/requests/:id/source/complete`    | Verify the uploaded source and queue signing                                             |
-| GET    | `/signing/requests?sourceRunId=...`        | Find requests for an authorized source run                                               |
-| GET    | `/signing/requests/:id/download`           | Download verified final output                                                           |
-| GET    | `/runner/signing/runtime/<hex>`            | Runner credential only: download the configured signing runtime bundle                   |
+| Method | Path                                       | Purpose                                                                                                         |
+| ------ | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| GET    | `/signing/profiles`                        | Read approved profile metadata                                                                                  |
+| POST   | `/signing/profiles`                        | Approve `{ "name": "profile-name" }` from Runner                                                                |
+| GET    | `/signing/profiles/:name/credentials`      | Read credential configuration metadata                                                                          |
+| POST   | `/signing/profiles/:name/credentials`      | Install `{ "platform": "macos", "credentials": { ... } }`                                                       |
+| DELETE | `/signing/profiles/:name/credentials`      | Remove credentials for `{ "platform": "macos" }`                                                                |
+| POST   | `/signing/requests`                        | Submit source proof with `Idempotency-Key`                                                                      |
+| GET    | `/signing/requests/:id`                    | Read request state                                                                                              |
+| POST   | `/signing/requests/:id/retry`              | Retry only the failed stage with `{ "runId": "FAILED_RUN_UUID" }` or `{ "runId": null }`                        |
+| PUT    | `/signing/requests/:id/source/parts/:part` | Upload an authenticated 8 MiB source part                                                                       |
+| POST   | `/signing/requests/:id/source/complete`    | Verify the uploaded source and queue signing                                                                    |
+| GET    | `/signing/requests?sourceRunId=...`        | Find requests for an authorized source run                                                                      |
+| GET    | `/signing/requests/:id/download`           | Download verified final output                                                                                  |
+| GET    | `/runner/signing/runtime/<hex>`            | Runner credential only: download any published signing runtime bundle; the broker verifies its size and SHA-256 |
 
-The runner failure callback `POST /runner/signing/requests/:id/fail` accepts an optional `reason` (`^[a-z0-9_]{1,64}$`, for example `runtime_digest_mismatch` or `preflight_python`) and `detail` (up to 300 characters; control characters are replaced by spaces). A failed request returns them as `failure: { reason, detail }` from `GET /signing/requests/:id` and the account signing list shows them; `failure` is `null` otherwise.
+The runner failure callback `POST /runner/signing/requests/:id/fail` accepts an optional `reason` (`^[a-z0-9_]{1,64}$`, for example `runtime_digest_mismatch` or `preflight_python`) and `detail` (up to 300 characters; control characters are replaced by spaces). The account signing list returns them beside each request as `failure: { reason, detail }`, `null` unless the request failed; the request object itself is unchanged.
 
 Runner callbacks require the registered runner credential and matching native run lease. Signing profile approval and the task/lease authorization govern signing and credential access. Account-runner capacity, cancellation, history and repository admission limits apply to signing stages.
 
