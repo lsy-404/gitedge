@@ -8,6 +8,12 @@ Install the broker and platform toolchain on each host, then register it with th
 
 macOS profiles need the required Apple signing and notarization tools. iOS profiles need the approved Xcode, SDK, certificate and provisioning profile. Windows profiles need the approved Microsoft signing tooling. The broker reports its real OS, architecture and available tools so the scheduler can match requirements; custom labels do not change the host platform.
 
+## Signing runtime
+
+The signing scripts that a runner executes are published by the server. `pnpm run deploy` packs every file under `scripts/signing/` (without `node_modules`) plus `packages/contracts/signing-native.mjs` into one gzip-compressed JSON bundle (`{ "format": 1, "files": [{ "path", "mode", "data" }] }`, sorted paths, base64 data), uploads it to the `SIGNING_ARTIFACTS` bucket as `signing-runtime/<hex>` unless that object exists, and renders `SIGNING_RUNTIME_DIGEST=sha256:<hex>` (SHA-256 of the uploaded bytes) into the Actions Worker. `node scripts/signing-runtime-pack.mjs [output]` prints the digest and size of the current sources and optionally writes the bundle. The pack fails when a script reachable from `client.mjs` imports a relative file outside the bundle.
+
+A signing claim carries `run.signingRuntime = { "digest": "sha256:<hex>", "size": <bytes> }`. When the digest is not configured or its object is missing, signing runs are not offered to runners and a warning is logged; other runs are unaffected.
+
 ## Approve a definition and credentials
 
 Keep signing profiles in `.gitedge/signing/<name>.yml` within Runner. A profile pins a workflow path and commit from the same private repository, a platform, timeout and product/source policy. Approval reads that exact workflow from GitEdge and stores an immutable snapshot. Editing YAML does not authorize a new revision; approve it again explicitly.
@@ -144,6 +150,9 @@ All paths below are under `/api/actions` on the Gateway. Pass the private Runner
 | POST   | `/signing/requests/:id/source/complete`    | Verify the uploaded source and queue signing                                             |
 | GET    | `/signing/requests?sourceRunId=...`        | Find requests for an authorized source run                                               |
 | GET    | `/signing/requests/:id/download`           | Download verified final output                                                           |
+| GET    | `/runner/signing/runtime/<hex>`            | Runner credential only: download the configured signing runtime bundle                   |
+
+The runner failure callback `POST /runner/signing/requests/:id/fail` accepts an optional `reason` (`^[a-z0-9_]{1,64}$`, for example `runtime_digest_mismatch` or `preflight_python`) and `detail` (up to 300 characters; control characters are replaced by spaces). A failed request returns them as `failure: { reason, detail }` from `GET /signing/requests/:id` and the account signing list shows them; `failure` is `null` otherwise.
 
 Runner callbacks require the registered runner credential and matching native run lease. Signing profile approval and the task/lease authorization govern signing and credential access. Account-runner capacity, cancellation, history and repository admission limits apply to signing stages.
 

@@ -170,3 +170,5 @@ Cost and privacy:
 ## Actions
 
 `USER_GROUP_LIMITS_JSON` is generated from `settings.userGroups`, identically to Auth, Gateway and Forge. Actions reads `builtinRunnerEnabled` and `maxBuiltinRunnerRunsPerHour` from the repository creator's group before reserving a container run. The existing per-run execution, snapshot, output and transfer bounds still apply. Self-hosted runners use the registered host's own capacity and budgets; see [Actions](actions.md).
+
+`SIGNING_RUNTIME_DIGEST` (`sha256:<hex>`) is rendered by `pnpm run deploy`, which packs `scripts/signing/` and the shared signing contract, uploads the bundle to the `SIGNING_ARTIFACTS` bucket as `signing-runtime/<hex>` and sets the digest on the Actions Worker. Do not set it by hand. Without a valid digest and its object, signing runs are not dispatched to runners.
