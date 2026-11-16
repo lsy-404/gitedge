@@ -31,6 +31,8 @@ import {
   SigningContextError,
 } from "./context.mjs";
 
+import { PreflightError, preflight } from "./preflight.mjs";
+
 export { readSigningContext } from "./context.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -638,8 +640,10 @@ async function executePlatform(
 ) {
   const family = stageFamily(manifest.stage);
   const credentials = manifest.stage.endsWith("finalize") ? undefined : credentialsProvider;
+  if (process.platform !== (family.windows ? "win32" : "darwin"))
+    throw new ClientError("NATIVE_HOST_REQUIRED");
+  await preflight(family);
   if (family.windows) {
-    if (process.platform !== "win32") throw new ClientError("NATIVE_HOST_REQUIRED");
     const executor = await import("./windows.mjs");
     executor.setSigningAbortSignal(signal);
     try {
@@ -648,7 +652,6 @@ async function executePlatform(
       executor.setSigningAbortSignal(undefined);
     }
   }
-  if (process.platform !== "darwin") throw new ClientError("NATIVE_HOST_REQUIRED");
   if (family.ios) {
     const executor = await import("./ios-sign.mjs");
     executor.setSigningAbortSignal(signal);
@@ -860,7 +863,8 @@ export function formatClientErrorOutput(error) {
       : error instanceof Error && !(error instanceof SigningContextError)
         ? error
         : undefined;
-  if (cause instanceof Error) {
+  if (cause instanceof PreflightError) lines.push(`preflight: ${cause.reason}`);
+  else if (cause instanceof Error) {
     const messageDescriptor = Object.getOwnPropertyDescriptor(cause, "message");
     const message = typeof messageDescriptor?.value === "string" ? messageDescriptor.value : "";
     const diagnostic = safeSigningDiagnostic(message);
@@ -868,6 +872,27 @@ export function formatClientErrorOutput(error) {
     else lines.push(`cause: ${safeErrorClass(cause)}`);
   }
   return `${lines.join("\n")}\n`;
+}
+
+export function clientFailureReport(error) {
+  const cause =
+    error instanceof ClientError
+      ? Object.getOwnPropertyDescriptor(error, "cause")?.value
+      : undefined;
+  if (cause instanceof PreflightError)
+    return { reason: cause.reason, ...(cause.detail ? { detail: cause.detail } : {}) };
+  const [code, ...lines] = formatClientErrorOutput(error).trim().split("\n");
+  const specific =
+    lines.find((line) => line.startsWith("diagnostic: "))?.slice("diagnostic: ".length) ??
+    lines.find((line) => line.startsWith("phase: "))?.slice("phase: ".length) ??
+    code;
+  return {
+    reason: specific
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .slice(0, 64),
+    detail: lines.join("; ").slice(0, 300),
+  };
 }
 
 function safeSigningDiagnostic(message) {
@@ -941,6 +966,13 @@ export async function main(args = process.argv.slice(2)) {
     const result = await runSigning({ contextFile, outputParent });
     await writeFile(receiptFile, JSON.stringify(result), { flag: "wx", mode: 0o600 });
   } catch (error) {
+    const receiptFile = args[6];
+    if (typeof receiptFile === "string" && path.isAbsolute(receiptFile))
+      await writeFile(
+        path.join(path.dirname(receiptFile), "sdk-failure.json"),
+        JSON.stringify(clientFailureReport(error)),
+        { mode: 0o600 }
+      ).catch(() => {});
     writeSync(2, formatClientErrorOutput(error));
     process.exitCode = 1;
   }

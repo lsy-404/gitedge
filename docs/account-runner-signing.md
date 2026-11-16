@@ -14,6 +14,19 @@ The signing scripts that a runner executes are published by the server. `pnpm ru
 
 A signing claim carries `run.signingRuntime = { "digest": "sha256:<hex>", "size": <bytes> }`. When the digest is not configured or its object is missing, signing runs are not offered to runners and a warning is logged; other runs are unaffected.
 
+### On the runner
+
+The signing code and its dependency lockfile are published with each GitEdge deployment; a runner needs no preinstalled signing packages. Each signing claim names the published runtime by digest. Before the job starts, the broker downloads it with its runner credential, checks its size and SHA-256, unpacks it into `signing-runtime/<digest>` under the broker state directory, runs `pnpm install --frozen-lockfile --prod --prefer-offline` there, and keeps the three most recently used versions. The state directory must be writable by the account that runs jobs.
+
+A runner therefore needs Node.js 24 or newer, pnpm, network access to the GitEdge origin and the npm registry (or a warm pnpm store), and the platform tools below. Before the platform step the signing client verifies Node, its dependencies and these tools, and fails with a specific reason such as `preflight_python`, `preflight_dependency` or `preflight_tool_notarytool`; download and install failures report `runtime_download_failed`, `runtime_digest_mismatch`, `runtime_invalid` or `runtime_install_failed`. The reason and a short detail appear on the signing request.
+
+- macOS and iOS: Python 3.12 or newer (`PYTHON` selects the interpreter, default `python3`), `codesign`, `security`, `lipo` and `xcrun` with `notarytool` and `stapler`; iOS also needs `xcodebuild`, `vtool` and `openssl`, and DMG stages need `hdiutil` and `ditto`.
+- Windows: PowerShell 7 (`pwsh`) and the approved Microsoft signing tooling.
+
+Installing dependencies adds time to every job on a disposable VM. To speed this up, warm the pnpm store in the VM image by running `pnpm install --frozen-lockfile --prod` once against `scripts/signing` of a recent release and keeping the store; correctness never depends on the warm-up.
+
+On a macOS host where jobs run as root, the Developer ID intermediate certificates must be installed in the System keychain so `codesign` can build the chain.
+
 ## Approve a definition and credentials
 
 Keep signing profiles in `.gitedge/signing/<name>.yml` within Runner. A profile pins a workflow path and commit from the same private repository, a platform, timeout and product/source policy. Approval reads that exact workflow from GitEdge and stores an immutable snapshot. Editing YAML does not authorize a new revision; approve it again explicitly.

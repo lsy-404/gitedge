@@ -188,8 +188,20 @@ async function authenticateExecutionLease(
   runId: string,
   leaseToken: string
 ): Promise<RunnerRow | null> {
-  if (request.method !== "POST" || !z.string().uuid().safeParse(runId).success) return null;
+  if (!z.string().uuid().safeParse(runId).success) return null;
   const pathname = new URL(request.url).pathname;
+  if (request.method === "GET" && /^\/runner\/signing\/runtime\/[0-9a-f]{64}$/.test(pathname)) {
+    const lease = await env.DB.prepare(
+      `SELECT j.runner_id FROM actions_runner_runs j
+       WHERE j.run_id=? AND j.lease_hash=? AND j.status='running'
+       AND j.lease_expires_at>? AND j.started_at+j.timeout_minutes*60000>?
+       AND EXISTS(SELECT 1 FROM actions_signing_runs s WHERE s.run_id=j.run_id)`
+    )
+      .bind(runId, await sha256Hex(leaseToken), Date.now(), Date.now())
+      .first<{ runner_id: string }>();
+    return lease ? leaseRunner(env, lease.runner_id) : null;
+  }
+  if (request.method !== "POST") return null;
   const github = /^\/runner\/github\/(heartbeat|complete)$/.test(pathname);
   const native = /^\/runner\/(heartbeat|complete)$/.test(pathname);
   const signing = /^\/runner\/signing\/requests\/([0-9a-f-]{36})\/(heartbeat|fail)$/i.exec(
@@ -232,13 +244,16 @@ async function authenticateExecutionLease(
           signing?.[1] ?? null
         )
         .first<{ runner_id: string }>();
-  if (!active) return null;
+  return active ? leaseRunner(env, active.runner_id) : null;
+}
+
+async function leaseRunner(env: RunnerEnv, runnerId: string): Promise<RunnerRow | null> {
   const row = await env.DB.prepare(
     `${runnersSelect} JOIN users u ON u.id=r.created_by
      WHERE r.id=? AND r.revoked_at IS NULL AND u.disabled_at IS NULL
      AND (r.repository_id IS NULL OR (p.deleted_at IS NULL AND p.namespace_id=r.namespace_id))`
   )
-    .bind(active.runner_id)
+    .bind(runnerId)
     .first<RunnerRow>();
   return row && (await ownsScope(env, row.created_by, row.namespace_id, row.repository_id))
     ? row

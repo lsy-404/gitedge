@@ -91,3 +91,21 @@ export async function readSigningReceipt(receiptFile, requestId) {
     throw new Error("The trusted signing step did not leave a valid completion receipt.");
   return receipt;
 }
+
+export async function readSigningFailure(failureFile) {
+  try {
+    return JSON.parse(await readFile(failureFile, "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+export function signingFailureBody(failure) {
+  const body = { code: "execution_failed" };
+  if (typeof failure?.reason === "string" && /^[a-z0-9_]{1,64}$/.test(failure.reason)) {
+    body.reason = failure.reason;
+    if (typeof failure.detail === "string" && failure.detail.length > 0)
+      body.detail = failure.detail.slice(0, 300);
+  }
+  return body;
+}
