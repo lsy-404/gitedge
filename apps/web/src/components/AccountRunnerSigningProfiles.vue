@@ -20,6 +20,7 @@ import { useReauthRetry } from "../lib/reauth";
 import { FluentButton } from "@platform-kit/fluent/vue";
 import NoticeBar from "./NoticeBar.vue";
 import ReauthPrompt from "./ReauthPrompt.vue";
+import TextField from "./TextField.vue";
 
 const props = defineProps<{ repositoryId: string }>();
 const { t, d } = useI18n();
@@ -28,8 +29,13 @@ const profileName = ref("");
 const profiles = ref<SigningProfileMetadata[]>([]);
 const statuses = ref(new Map<string, SigningCredentialStatus>());
 const loading = ref(false);
-const busy = ref<string | null>(null);
+const sourceBatch = Symbol("source batch");
+const busy = ref<string | typeof sourceBatch | null>(null);
 const error = ref("");
+const sourceToken = ref("");
+const sourceProfiles = ref<string[]>([]);
+const sourceSaved = ref(0);
+const sourceFailed = ref<string[]>([]);
 const windowsFormProfile = ref<string | null>(null);
 const windowsTenantId = ref("");
 const windowsClientId = ref("");
@@ -96,6 +102,48 @@ async function installWindows(profile: SigningProfileMetadata): Promise<void> {
     } finally {
       busy.value = null;
     }
+  };
+  await operation();
+}
+
+function finishSourceBatch(): void {
+  sourceToken.value = "";
+  busy.value = null;
+}
+
+function cancelSourceBatch(): void {
+  reauth.pending.value = null;
+  finishSourceBatch();
+}
+
+async function installSourceBatch(): Promise<void> {
+  if (busy.value || reauth.pending.value || !sourceProfiles.value.length) return;
+  if (!SigningSourceCredentialSchema.safeParse({ token: sourceToken.value.trim() }).success) return;
+
+  const selected = [...sourceProfiles.value];
+  const repositoryId = props.repositoryId;
+  let next = 0;
+  sourceSaved.value = 0;
+  sourceFailed.value = [];
+  error.value = "";
+  busy.value = sourceBatch;
+
+  const operation = async () => {
+    for (; next < selected.length; next += 1) {
+      const name = selected[next]!;
+      try {
+        const status = await installSigningCredentials(repositoryId, name, "github-source", {
+          token: sourceToken.value.trim(),
+        });
+        statuses.value.set(statusKey(name, "github-source"), status);
+        sourceSaved.value += 1;
+        sourceProfiles.value = sourceProfiles.value.filter((selectedName) => selectedName !== name);
+      } catch (cause) {
+        if (reauth.intercept(cause, operation)) return;
+        sourceFailed.value.push(name);
+      }
+    }
+    finishSourceBatch();
   };
   await operation();
 }
@@ -260,6 +308,52 @@ onMounted(() => void refresh());
     </form>
     <p class="row-meta">{{ t("runnerSigningProfilePathHint") }}</p>
     <p v-if="loading && !profiles.length" class="row-meta">{{ t("loading") }}</p>
+    <form
+      v-if="profiles.length"
+      class="source-credentials-form"
+      @submit.prevent="installSourceBatch"
+    >
+      <TextField
+        v-model="sourceToken"
+        type="password"
+        autocomplete="new-password"
+        spellcheck="false"
+        maxlength="512"
+        required
+        :disabled="busy !== null || !!reauth.pending.value"
+        >{{ t("runnerSigningSourceToken") }}</TextField
+      >
+      <fieldset class="source-profile-choices" :disabled="busy !== null || !!reauth.pending.value">
+        <legend class="field-label">{{ t("runnerSigningSourceProfiles") }}</legend>
+        <label v-for="profile in profiles" :key="profile.name" class="inline-choice">
+          <input v-model="sourceProfiles" type="checkbox" :value="profile.name" />
+          {{ profile.name }}
+        </label>
+      </fieldset>
+      <div class="profile-actions">
+        <FluentButton
+          type="submit"
+          tone="primary"
+          :busy="busy === sourceBatch && !reauth.pending.value"
+          :disabled="
+            busy !== null || !!reauth.pending.value || !sourceToken.trim() || !sourceProfiles.length
+          "
+          >{{ t("runnerSigningSourceSave", { count: sourceProfiles.length }) }}</FluentButton
+        >
+        <FluentButton
+          v-if="busy === sourceBatch && reauth.pending.value"
+          type="button"
+          @click="cancelSourceBatch"
+          >{{ t("runnerSigningSourceCancel") }}</FluentButton
+        >
+      </div>
+      <NoticeBar v-if="sourceSaved" intent="success">
+        {{ t("runnerSigningSourceSaved", { count: sourceSaved }) }}
+      </NoticeBar>
+      <NoticeBar v-if="sourceFailed.length" intent="error">
+        {{ t("runnerSigningSourceFailed", { profiles: sourceFailed.join(", ") }) }}
+      </NoticeBar>
+    </form>
     <article v-for="profile in profiles" :key="profile.name" class="signing-profile">
       <div>
         <strong>{{ profile.name }}</strong>
@@ -417,6 +511,7 @@ onMounted(() => void refresh());
 }
 .profile-approval,
 .signing-profile,
+.source-credentials-form,
 .windows-credentials-form {
   display: grid;
   gap: 0.5rem;
@@ -432,6 +527,19 @@ onMounted(() => void refresh());
 .profile-approval input {
   min-height: 2.5rem;
   padding: 0.4rem 0.6rem;
+}
+.source-credentials-form {
+  max-width: 38rem;
+}
+.source-profile-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+  margin: 0;
+  min-width: 0;
 }
 .signing-profile {
   border-top: 1px solid var(--color-border, #d1d5db);

@@ -318,6 +318,112 @@ describe("AccountRunners", () => {
     expect(mounted.root.textContent).not.toContain("source-token-not-rendered");
   });
 
+  it("updates only selected profiles, resumes after reauthentication and reports partial failure", async () => {
+    const profile = {
+      name: "mac-release",
+      revision: "a".repeat(40),
+      platform: "macos" as const,
+      workflowOid: "b".repeat(40),
+      workflowPath: ".github/workflows/sign.yml",
+      enabled: true,
+      approvedAt: Date.now(),
+    };
+    vi.spyOn(api, "signingProfiles").mockResolvedValue({
+      profiles: [
+        profile,
+        { ...profile, name: "windows-release", platform: "windows" },
+        {
+          ...profile,
+          name: "other-release",
+        },
+        { ...profile, name: "ios-release", platform: "ios" },
+      ],
+    });
+    vi.spyOn(api, "signingCredentialStatus").mockImplementation(async (_id, name, platform) => ({
+      name,
+      revision: profile.revision,
+      platform,
+      configured: false,
+      updatedAt: null,
+    }));
+    const install = vi
+      .spyOn(api, "installSigningCredentials")
+      .mockResolvedValueOnce({
+        name: profile.name,
+        revision: profile.revision,
+        platform: "github-source",
+        configured: true,
+        updatedAt: Date.now(),
+      })
+      .mockRejectedValueOnce(new ApiError(403, "reauth", "reauth_required"))
+      .mockRejectedValueOnce(new ApiError(403, "forbidden", "forbidden"))
+      .mockResolvedValueOnce({
+        name: "ios-release",
+        revision: profile.revision,
+        platform: "github-source",
+        configured: true,
+        updatedAt: Date.now(),
+      });
+    vi.spyOn(api, "security").mockResolvedValue({
+      passwordEnabled: true,
+      email: null,
+      emailAvailable: true,
+      totp: { enabled: false, available: true },
+      passkeys: [],
+      recoveryCodesRemaining: 0,
+      secondFactorEnabled: false,
+      recentAuth: { valid: false, expiresAt: null, methods: ["password"] },
+    });
+    vi.spyOn(api, "reauthenticate").mockResolvedValue({
+      recentAuthAt: Date.now(),
+      expiresAt: Date.now() + 600_000,
+    });
+
+    const mounted = await mountAt("/_verify/signing-batch", "/_verify/signing-batch", () =>
+      h(AccountRunnerSigningProfiles, { repositoryId: "runner-repository" })
+    );
+    await settle();
+
+    const form = mounted.root.querySelector<HTMLFormElement>(".source-credentials-form")!;
+    const token = form.querySelector<HTMLInputElement>('input[type="password"]')!;
+    const choices = [...form.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
+    expect(choices.every((choice) => !choice.checked)).toBe(true);
+    fill(token, "  example-source-token  ");
+    submit(form);
+    expect(install).not.toHaveBeenCalled();
+
+    for (const name of ["mac-release", "windows-release", "ios-release"]) {
+      choices.find((choice) => choice.value === name)!.click();
+      await settle();
+    }
+    submit(form);
+    await settle();
+    expect(install.mock.calls.map(([, name]) => name)).toEqual(["mac-release", "windows-release"]);
+    expect(token.disabled).toBe(true);
+
+    fill(
+      mounted.root.querySelector<HTMLInputElement>('input[autocomplete="current-password"]')!,
+      "recent-auth-test"
+    );
+    submit(mounted.root.querySelector<HTMLFormElement>(".box-form")!);
+    await settle();
+
+    expect(install.mock.calls).toEqual(
+      ["mac-release", "windows-release", "windows-release", "ios-release"].map((name) => [
+        "runner-repository",
+        name,
+        "github-source",
+        { token: "example-source-token" },
+      ])
+    );
+    expect(form.textContent).toContain("updated for 2 profile(s)");
+    expect(form.textContent).toContain("Updates failed for windows-release");
+    expect(token.value).toBe("");
+    expect(choices.filter((choice) => choice.checked).map((choice) => choice.value)).toEqual([
+      "windows-release",
+    ]);
+  });
+
   it("retries Windows credential installation after recent-auth confirmation", async () => {
     const profile = {
       name: "release",
