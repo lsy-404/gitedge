@@ -17,9 +17,11 @@ import {
   credentialsSchema as macosCredentialsSchema,
   windowsCredentialsSchema,
   iosCredentialsSchema,
+  androidCredentialsSchema,
   macosVerificationSchema,
   windowsVerificationSchema,
   iosVerificationSchema,
+  androidVerificationSchema,
   signedFileName,
 } from "../../../../packages/contracts/signing-native.mjs";
 import type { TrustedUser } from "../../../../packages/contracts/src/index";
@@ -413,6 +415,16 @@ async function credentialKey(secret: string) {
   return crypto.subtle.importKey("raw", keyBytes(secret), "AES-GCM", false, ["encrypt", "decrypt"]);
 }
 function credentialSchema(platform: string): (value: unknown) => Record<string, unknown> {
+  if (platform === "android")
+    return (value) => {
+      const parsed = androidCredentialsSchema.parse(value);
+      return {
+        keystore_p12: parsed.keystore_p12,
+        store_password: parsed.store_password,
+        key_alias: parsed.key_alias,
+        key_password: parsed.key_password,
+      };
+    };
   if (platform === "ios")
     return (value) => {
       const parsed = iosCredentialsSchema.parse(value);
@@ -624,7 +636,8 @@ export async function saveApprovedProfile(
   if (
     (parsed.platform === "macos" && stage !== "sign") ||
     (parsed.platform === "windows" && stage !== "windows_sign") ||
-    (parsed.platform === "ios" && stage !== "ios_sign")
+    (parsed.platform === "ios" && stage !== "ios_sign") ||
+    (parsed.platform === "android" && stage !== "android_sign")
   )
     throw new Error("signing_profile_stage_mismatch");
   if (parsed.name !== name) throw new Error("signing_profile_name_mismatch");
@@ -1010,6 +1023,24 @@ async function verifyOutput(
       report.architecture === recipe.architecture &&
       report.subject === azure.subject &&
       filesMatch
+    );
+  }
+  if (platform === "android") {
+    const parsed = androidVerificationSchema.safeParse(raw);
+    const fields = reportContextSchema.safeParse(raw);
+    const recipe = project.android;
+    if (!parsed.success || !fields.success || !recipe) return false;
+    const report = parsed.data;
+    return (
+      fields.data.request_id === context.requestId &&
+      fields.data.generation === context.generation &&
+      fields.data.input_digest === sourceDigest &&
+      fields.data.recipe_sha === profile.workflowOid &&
+      fields.data.policy_digest === profile.policyDigest &&
+      report.source_sha === sourceCommitOid &&
+      report.package_name === recipe.package_name &&
+      report.certificate_sha256 === recipe.certificate_sha256 &&
+      report.version === version
     );
   }
   if (platform === "ios") {

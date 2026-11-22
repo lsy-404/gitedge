@@ -13,6 +13,7 @@ import { PullAttentionReasonSchema } from "../../packages/contracts/src/forge";
 import { ProfileActivitySchema } from "../../packages/contracts/src/profiles";
 import {
   SigningRequestStateSchema,
+  SigningPlatformSchema,
   SigningStageSchema,
 } from "../../packages/contracts/src/signing";
 
@@ -49,7 +50,7 @@ const dynamicKeys: Record<string, readonly string[]> = {
   "deployWizard.state.": ["pending", "running", "done", "failed"],
   actionsConclusion_: ["success", "failure", "cancelled"],
   runnerState_: ["idle", "busy", "held", "offline"],
-  runnerSigningPlatform_: ["windows", "macos", "ios"],
+  runnerSigningPlatform_: SigningPlatformSchema.options,
   codeSigningState_: SigningRequestStateSchema.options,
   codeSigningStage_: SigningStageSchema.options,
   profileActivity_: ProfileActivitySchema.shape.kind.options,

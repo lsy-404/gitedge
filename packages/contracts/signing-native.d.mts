@@ -99,5 +99,33 @@ export type IosVerification = {
   files: [{ path: "signed.ipa"; size: number; sha256: string }];
 };
 export declare const iosVerificationSchema: z.ZodType<IosVerification>;
+export declare const androidPackageName: z.ZodType<string>;
+export declare const androidManifestSchema: z.ZodType<unknown>;
+export declare const androidSourceMetadataSchema: z.ZodType<unknown>;
+export declare const androidCredentialsSchema: z.ZodType<{
+  keystore_p12: string;
+  store_password: string;
+  key_alias: string;
+  key_password: string;
+}>;
+export type AndroidVerification = {
+  schema_version: 1;
+  request_id: string;
+  generation: number;
+  stage: "android_sign";
+  input_digest: string;
+  recipe_sha: string;
+  policy_digest: string;
+  source_sha: string;
+  version: string;
+  version_code: number;
+  package_name: string;
+  certificate_sha256: string;
+  v1_verified: boolean;
+  v2_verified: true;
+  v3_verified: true;
+  files: [{ path: "signed.apk"; size: number; sha256: string }];
+};
+export declare const androidVerificationSchema: z.ZodType<AndroidVerification>;
 export declare const manifestSchema: z.ZodType<unknown>;
 export declare const verificationSchema: z.ZodType<unknown>;

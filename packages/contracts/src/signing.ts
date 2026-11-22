@@ -3,9 +3,15 @@ import { z } from "zod";
 export const SIGNING_MAX_ARCHIVE_BYTES = 2_000_000_000;
 export const SIGNING_PART_BYTES = 8 * 1024 * 1024;
 
-export const SigningPlatformSchema = z.enum(["windows", "macos", "ios"]);
+export const SigningPlatformSchema = z.enum(["windows", "macos", "ios", "android"]);
 export type SigningPlatform = z.infer<typeof SigningPlatformSchema>;
-export const SigningCredentialPlatformSchema = z.enum(["windows", "macos", "ios", "github-source"]);
+export const SigningCredentialPlatformSchema = z.enum([
+  "windows",
+  "macos",
+  "ios",
+  "android",
+  "github-source",
+]);
 export type SigningCredentialPlatform = z.infer<typeof SigningCredentialPlatformSchema>;
 export const SigningStageSchema = z.enum([
   "sign",
@@ -14,6 +20,7 @@ export const SigningStageSchema = z.enum([
   "dmg_finalize",
   "windows_sign",
   "ios_sign",
+  "android_sign",
 ]);
 export type SigningStage = z.infer<typeof SigningStageSchema>;
 
@@ -118,6 +125,16 @@ const SigningIosRecipeSchema = z
   })
   .strict();
 
+const SigningAndroidRecipeSchema = z
+  .object({
+    package_name: z
+      .string()
+      .max(255)
+      .regex(/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$/),
+    certificate_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  })
+  .strict();
+
 const SigningProjectSchema = z
   .object({
     id: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
@@ -126,6 +143,7 @@ const SigningProjectSchema = z
     macos: SigningMacosRecipeSchema.optional(),
     windows: SigningWindowsRecipeSchema.optional(),
     ios: SigningIosRecipeSchema.optional(),
+    android: SigningAndroidRecipeSchema.optional(),
   })
   .strict();
 
@@ -159,9 +177,12 @@ export const SigningPolicySchema = z
   })
   .strict()
   .superRefine((policy, context) => {
-    const platforms = [policy.project.macos, policy.project.windows, policy.project.ios].filter(
-      Boolean
-    ).length;
+    const platforms = [
+      policy.project.macos,
+      policy.project.windows,
+      policy.project.ios,
+      policy.project.android,
+    ].filter(Boolean).length;
     if (platforms !== 1)
       context.addIssue({ code: "custom", message: "signing_policy_platform_ambiguous" });
     if (policy.project.macos && (!policy.teamId || policy.stage !== "sign"))
@@ -170,6 +191,11 @@ export const SigningPolicySchema = z
       context.addIssue({ code: "custom", message: "signing_windows_policy_invalid" });
     if (policy.project.ios && (!policy.teamId || policy.stage !== "ios_sign"))
       context.addIssue({ code: "custom", message: "signing_ios_policy_invalid" });
+    if (
+      policy.project.android &&
+      (policy.teamId || policy.azure || policy.stage !== "android_sign")
+    )
+      context.addIssue({ code: "custom", message: "signing_android_policy_invalid" });
   });
 export type SigningPolicy = z.infer<typeof SigningPolicySchema>;
 

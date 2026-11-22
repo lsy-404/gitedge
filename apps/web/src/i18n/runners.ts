@@ -127,6 +127,7 @@ export const runnerMessages = {
     runnerSigningPlatform_windows: "Windows",
     runnerSigningPlatform_macos: "macOS",
     runnerSigningPlatform_ios: "iOS",
+    runnerSigningPlatform_android: "Android",
     runnerSigningProfilesTitle: "签名配置",
 
     runnerSigningProfilesDescription:
@@ -144,6 +145,8 @@ export const runnerMessages = {
     runnerSigningCredentialsInstall: "从 JSON 安装凭据",
     runnerSigningWindowsCredentialsHelp:
       "输入 Azure 应用的 tenant_id、client_id 和 client_secret。凭据由服务端加密保存，并按任务下发。",
+    runnerSigningAndroidCredentialsHelp:
+      "JSON 包含 keystore_p12（PKCS12 密钥库的 Base64）、store_password、key_alias 和 key_password。签名后的证书指纹必须与配置中的 certificate_sha256 一致。",
     runnerSigningWindowsCredentialsInstall: "输入 Windows 凭据",
     runnerSigningWindowsCredentialsSave: "加密保存凭据",
     runnerSigningWindowsCredentialsCancel: "取消",
@@ -293,6 +296,7 @@ export const runnerMessages = {
     runnerSigningPlatform_windows: "Windows",
     runnerSigningPlatform_macos: "macOS",
     runnerSigningPlatform_ios: "iOS",
+    runnerSigningPlatform_android: "Android",
     runnerSigningProfilesTitle: "Signing profiles",
 
     runnerSigningProfilesDescription:
@@ -310,6 +314,8 @@ export const runnerMessages = {
     runnerSigningCredentialsInstall: "Install credentials from JSON",
     runnerSigningWindowsCredentialsHelp:
       "Enter the Azure application's tenant_id, client_id, and client_secret. Credentials are encrypted on the server and delivered per task.",
+    runnerSigningAndroidCredentialsHelp:
+      "The JSON holds keystore_p12 (the PKCS12 keystore in Base64), store_password, key_alias, and key_password. The signing certificate fingerprint must match certificate_sha256 in the profile.",
     runnerSigningWindowsCredentialsInstall: "Enter Windows credentials",
     runnerSigningWindowsCredentialsSave: "Encrypt and save credentials",
     runnerSigningWindowsCredentialsCancel: "Cancel",

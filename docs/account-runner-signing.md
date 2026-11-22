@@ -6,7 +6,7 @@ Signing runs use the private account Runner repository and the same generic runn
 
 Install the broker and platform toolchain on each host, then register it with the standard `register-gitedge` command for the account Runner repository. Keep the GitEdge registration token and local runner state private. The broker stores the returned GitEdge runner credential; signing credentials remain encrypted on the server and are delivered only to the authorized task under its active lease.
 
-macOS profiles need the required Apple signing and notarization tools. iOS profiles need the approved Xcode, SDK, certificate and provisioning profile. Windows profiles need the approved Microsoft signing tooling. The broker reports its real OS, architecture and available tools so the scheduler can match requirements; custom labels do not change the host platform.
+macOS profiles need the required Apple signing and notarization tools. iOS profiles need the approved Xcode, SDK, certificate and provisioning profile. Windows profiles need the approved Microsoft signing tooling. Android profiles need a Java runtime and Android SDK build-tools on a macOS or Linux host. The broker reports its real OS, architecture and available tools so the scheduler can match requirements; custom labels do not change the host platform.
 
 ## Signing runtime
 
@@ -22,6 +22,7 @@ A runner therefore needs Node.js 24 or newer, pnpm, network access to the GitEdg
 
 - macOS and iOS: Python 3.12 or newer (`PYTHON` selects the interpreter, default `python3`), `codesign`, `security`, `lipo` and `xcrun` with `notarytool` and `stapler`; iOS also needs `xcodebuild`, `vtool` and `openssl`, and DMG stages need `hdiutil` and `ditto`.
 - Windows: PowerShell 7 (`pwsh`) and the approved Microsoft signing tooling.
+- Android (macOS or Linux): a Java runtime (`JAVA_HOME/bin/java`, or `java` on `PATH`) and Android SDK build-tools 30 or newer with `aapt2`, `zipalign` and `lib/apksigner.jar`. The newest installed build-tools under `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `~/Library/Android/sdk` (macOS) or `~/Android/Sdk` (Linux) are used, so set `ANDROID_HOME` and `JAVA_HOME` in the broker environment when jobs run as another account. Preflight reports `preflight_tool_java`, `preflight_tool_android_build_tools`, `preflight_tool_aapt2` or `preflight_tool_apksigner`.
 
 Installing dependencies adds time to every job on a disposable VM. To speed this up, warm the pnpm store in the VM image by running `pnpm install --frozen-lockfile --prod` once against `scripts/signing` of a recent release and keeping the store; correctness never depends on the warm-up.
 
@@ -55,6 +56,54 @@ policy:
 ```
 
 Both recipes verify each signature with SignTool (`/pa`, all signatures, timestamp required) and check the signer subject against `policy.azure.subject`.
+
+## Android profiles
+
+An Android profile signs one release APK with an upload or app-signing key kept in GitEdge. The broker reports the tools `java` and `android-build-tools` when they work on the host, and Android signing jobs require both plus Node.js (`need-tool-node`, `need-tool-java`, `need-tool-android-build-tools`); they run on any macOS or Linux runner that reports them. Hosted fallback runners use Linux. Labels from the pinned workflow are added as usual, so a workflow pinned for Android should not require `macOS`, `ARM64` or iOS-only tools unless the Android key must stay on that host.
+
+```json
+{
+  "name": "application-android",
+  "platform": "android",
+  "timeoutMinutes": 30,
+  "enabled": true,
+  "workflowPath": ".github/workflows/signing.yml",
+  "workflowOid": "0123456789abcdef0123456789abcdef01234567",
+  "policy": {
+    "stage": "android_sign",
+    "project": {
+      "id": "application-android",
+      "enabled": true,
+      "max_artifact_bytes": 500000000,
+      "android": {
+        "package_name": "com.example.app",
+        "certificate_sha256": "<64 lowercase hex characters>"
+      }
+    },
+    "sourceRepositories": [ ... ]
+  }
+}
+```
+
+`certificate_sha256` pins the signing certificate: the SHA-256 digest of the DER certificate, as printed by `apksigner verify --print-certs` or by `keytool -list -v` without colons and in lowercase. Android policies cannot set `teamId` or `azure`.
+
+Platform credentials are exactly `{ "keystore_p12": "<base64 PKCS12 keystore>", "store_password": "...", "key_alias": "...", "key_password": "..." }`. Passwords and the alias must be single lines.
+
+The source ZIP holds exactly two root files: `unsigned.apk` (the unsigned release APK) and `source.json`:
+
+```json
+{
+  "platform": "android",
+  "package_name": "com.example.app",
+  "version": "1.2.3",
+  "version_code": 10203,
+  "source_sha": "0123456789abcdef0123456789abcdef01234567"
+}
+```
+
+The submission `version` must equal `source.json` `version` and the APK `versionName`; `version_code` must equal the APK `versionCode`; the package name must match the policy and the APK. The host checks the archive digest and layout, reads the APK with `aapt2 dump badging` (debuggable APKs are rejected), runs `zipalign -p 4`, signs with `apksigner` (APK Signature Scheme v2 and v3; v1 follows the APK's `minSdkVersion`), and verifies the result with `apksigner verify --print-certs`: exactly one signer whose certificate digest equals `certificate_sha256`. The keystore and password files exist only inside a private temporary directory during signing and are removed afterwards. The output contains `signed.apk` and `verification.json` (`version_code`, `certificate_sha256`, `v1_verified`, `v2_verified`, `v3_verified` and the APK digest).
+
+Failures are reported as `android_<phase>_<code>`, for example `android_source_source_binding`, `android_apk_metadata_apk_version`, `android_signature_verification_certificate_mismatch` or `android_tools_build_tools_unavailable`.
 
 ## Submit from a workflow
 

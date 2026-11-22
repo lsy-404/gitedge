@@ -17,6 +17,7 @@ import { randomHex } from "../../../src/worker/common/encoding";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 import { readJsonLimited } from "../../../src/worker/common/readText";
 import type { RunnerEnv } from "./runners";
+import type { SigningPlatform } from "../../../packages/contracts/src/signing";
 import { createLogger } from "../../../src/worker/common/logger";
 
 const issuer = "https://token.actions.githubusercontent.com";
@@ -55,7 +56,7 @@ interface Dispatch {
   owner: string;
   repository: string;
   labels_json: string;
-  platform: "macos" | "ios" | "windows" | null;
+  platform: SigningPlatform | null;
 }
 
 export async function bootstrapHostedRunner(request: Request, env: RunnerEnv): Promise<Response> {
@@ -118,6 +119,7 @@ export async function bootstrapHostedRunner(request: Request, env: RunnerEnv): P
     (row.platform === "windows" && !host.includes("windows")) ||
     ((row.platform === "macos" || row.platform === "ios") && !host.includes("macos")) ||
     (row.platform === "ios" && !host.includes("arm64")) ||
+    (row.platform === "android" && !host.includes("linux") && !host.includes("macos")) ||
     claim.labels.filter(isRunnerSystemLabel).some((label) => {
       const value = label.toLowerCase();
       if (["amd64", "x86_64"].includes(value)) return !host.includes("x64");
@@ -203,7 +205,7 @@ function recentlySeenPrivateRunner(signing: boolean): string {
       AND NOT EXISTS (SELECT 1 FROM json_each(j.labels_json) required WHERE ${ordinary}
         AND lower(required.value)<>'${ALLOW_LIMITED_CONNECT_LABEL}' AND lower(required.value) NOT IN (SELECT lower(value) FROM json_each(r.labels_json)))
       AND (NOT EXISTS (SELECT 1 FROM json_each(r.labels_json) WHERE lower(value)='${LIMITED_CONNECT_LABEL}') OR EXISTS (SELECT 1 FROM json_each(j.labels_json) WHERE lower(value)='${ALLOW_LIMITED_CONNECT_LABEL}'))
-      ${signing ? "AND (s.run_id IS NULL OR (s.owner_id=r.created_by AND s.repository_id=p.id AND (s.platform='windows' AND lower(json_extract(r.capacity_json,'$.os'))='windows' OR s.platform='macos' AND lower(json_extract(r.capacity_json,'$.os'))='macos' OR s.platform='ios' AND lower(json_extract(r.capacity_json,'$.os'))='macos' AND lower(json_extract(r.capacity_json,'$.arch'))='arm64' OR r.capacity_json IS NULL AND (s.platform='windows' AND EXISTS (SELECT 1 FROM json_each(r.labels_json) WHERE lower(value)='windows') OR s.platform IN ('macos','ios') AND EXISTS (SELECT 1 FROM json_each(r.labels_json) WHERE lower(value)='macos') AND (s.platform!='ios' OR EXISTS (SELECT 1 FROM json_each(r.labels_json) WHERE lower(value)='arm64'))))))" : ""})`;
+      ${signing ? "AND (s.run_id IS NULL OR (s.owner_id=r.created_by AND s.repository_id=p.id AND (s.platform='windows' AND lower(json_extract(r.capacity_json,'$.os'))='windows' OR s.platform='macos' AND lower(json_extract(r.capacity_json,'$.os'))='macos' OR s.platform='ios' AND lower(json_extract(r.capacity_json,'$.os'))='macos' AND lower(json_extract(r.capacity_json,'$.arch'))='arm64' OR s.platform='android' AND lower(json_extract(r.capacity_json,'$.os')) IN ('macos','linux') OR r.capacity_json IS NULL AND (s.platform='windows' AND EXISTS (SELECT 1 FROM json_each(r.labels_json) WHERE lower(value)='windows') OR s.platform IN ('macos','ios') AND EXISTS (SELECT 1 FROM json_each(r.labels_json) WHERE lower(value)='macos') AND (s.platform!='ios' OR EXISTS (SELECT 1 FROM json_each(r.labels_json) WHERE lower(value)='arm64'))))))" : ""})`;
 }
 
 export async function reconcileHostedRunners(env: RunnerEnv): Promise<void> {

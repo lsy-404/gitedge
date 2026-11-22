@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import { windowsCredentialsSchema } from "../../../../packages/contracts/signing-native.mjs";
+import {
+  androidCredentialsSchema,
+  windowsCredentialsSchema,
+} from "../../../../packages/contracts/signing-native.mjs";
 import { SigningSourceCredentialSchema } from "../../../../packages/contracts/src/signing";
 import { onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
@@ -220,6 +223,7 @@ async function install(
     const values = credentials;
     if (platform === "github-source") credentials = SigningSourceCredentialSchema.parse(values);
     else if (platform === "windows") credentials = windowsCredentialsSchema.parse(values);
+    else if (platform === "android") credentials = androidCredentialsSchema.parse(values);
   } catch {
     error.value = t("runnerSigningCredentialsFileInvalid");
     return;
@@ -376,6 +380,9 @@ onMounted(() => void refresh());
       </div>
       <p v-if="profile.platform === 'windows'" class="row-meta">
         {{ t("runnerSigningWindowsCredentialsHelp") }}
+      </p>
+      <p v-else-if="profile.platform === 'android'" class="row-meta">
+        {{ t("runnerSigningAndroidCredentialsHelp") }}
       </p>
       <div v-if="profile.platform === 'windows'" class="profile-actions">
         <FluentButton type="button" :disabled="busy !== null" @click="toggleWindowsForm(profile)">{{

@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { access, constants } from "node:fs/promises";
 import { promisify } from "node:util";
+import { findAndroidBuildTools, javaCommand } from "./android-tools.mjs";
 
 const execFileAsync = promisify(execFile);
 const PROBE_TIMEOUT_MS = 15_000;
@@ -17,6 +18,7 @@ const COMMON_DEPENDENCIES = ["zod", "archiver"];
 const DEPENDENCIES = {
   windows: ["yauzl", "electron-builder", "electron-winstaller"],
   ios: ["yauzl"],
+  android: ["yauzl"],
   dmg: ["@electron/asar", "@electron/fuses", "@electron/osx-sign"],
   macos: ["@electron/asar", "@electron/fuses", "@electron/osx-sign"],
 };
@@ -56,7 +58,15 @@ async function checkTool(name, probe) {
 }
 
 export async function preflight(family) {
-  const key = family.windows ? "windows" : family.ios ? "ios" : family.dmg ? "dmg" : "macos";
+  const key = family.windows
+    ? "windows"
+    : family.ios
+      ? "ios"
+      : family.android
+        ? "android"
+        : family.dmg
+          ? "dmg"
+          : "macos";
   if (Number(process.versions.node.split(".")[0]) < 24)
     throw new PreflightError("preflight_node", process.versions.node);
   for (const name of [...COMMON_DEPENDENCIES, ...DEPENDENCIES[key]]) {
@@ -69,6 +79,22 @@ export async function preflight(family) {
   if (key === "windows") {
     await checkTool("pwsh", () =>
       execFileAsync("pwsh.exe", ["-NoProfile", "-Command", "exit 0"], { timeout: PROBE_TIMEOUT_MS })
+    );
+    return;
+  }
+  if (key === "android") {
+    await checkTool("java", () =>
+      execFileAsync(javaCommand(), ["-version"], { timeout: PROBE_TIMEOUT_MS })
+    );
+    const tools = await findAndroidBuildTools();
+    if (!tools) throw new PreflightError("preflight_tool_android_build_tools", "not_found");
+    await checkTool("aapt2", () =>
+      execFileAsync(tools.aapt2, ["version"], { timeout: PROBE_TIMEOUT_MS })
+    );
+    await checkTool("apksigner", () =>
+      execFileAsync(javaCommand(), ["-jar", tools.apksignerJar, "--version"], {
+        timeout: PROBE_TIMEOUT_MS,
+      })
     );
     return;
   }

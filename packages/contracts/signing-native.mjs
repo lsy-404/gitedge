@@ -18,6 +18,7 @@ export const bundleName = executableName.refine((value) =>
 );
 export const stageSchema = z.enum(["sign", "finalize", "dmg_sign", "dmg_finalize"]);
 const iosStage = z.literal("ios_sign");
+const androidStage = z.literal("android_sign");
 const base64 = z
   .string()
   .regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/)
@@ -303,13 +304,97 @@ export const iosVerificationSchema = z
   })
   .strict();
 
+export const androidPackageName = z
+  .string()
+  .max(255)
+  .regex(/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$/);
+const androidVersionCode = z.number().int().positive().max(2_100_000_000);
+
+export const androidManifestSchema = z
+  .object({
+    schema_version: z.literal(1),
+    request_id: z.uuid(),
+    generation: z.number().int().positive(),
+    stage: androidStage,
+    project_id: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
+    input_digest: archiveDigest,
+    recipe_sha: commitSha,
+    policy_digest: archiveDigest,
+    source_sha: commitSha,
+    version: sourceMetadataSchema.shape.version,
+    package_name: androidPackageName,
+    certificate_sha256: sha256,
+    max_artifact_bytes: z.number().int().positive().max(2_000_000_000),
+  })
+  .strict();
+
+export const androidSourceMetadataSchema = z
+  .object({
+    platform: z.literal("android"),
+    package_name: androidPackageName,
+    version: sourceMetadataSchema.shape.version,
+    version_code: androidVersionCode,
+    source_sha: commitSha,
+  })
+  .strict();
+
+export const androidCredentialsSchema = z
+  .object({
+    keystore_p12: base64.max(100_000),
+    store_password: z
+      .string()
+      .min(1)
+      .max(512)
+      .regex(/^[^\r\n]+$/),
+    key_alias: z
+      .string()
+      .min(1)
+      .max(255)
+      .regex(/^[^\r\n]+$/),
+    key_password: z
+      .string()
+      .min(1)
+      .max(512)
+      .regex(/^[^\r\n]+$/),
+  })
+  .strict();
+
+export const androidVerificationSchema = z
+  .object({
+    schema_version: z.literal(1),
+    request_id: z.uuid(),
+    generation: z.number().int().positive(),
+    stage: androidStage,
+    input_digest: archiveDigest,
+    recipe_sha: commitSha,
+    policy_digest: archiveDigest,
+    source_sha: commitSha,
+    version: sourceMetadataSchema.shape.version,
+    version_code: androidVersionCode,
+    package_name: androidPackageName,
+    certificate_sha256: sha256,
+    v1_verified: z.boolean(),
+    v2_verified: z.literal(true),
+    v3_verified: z.literal(true),
+    files: z
+      .array(
+        z
+          .object({ path: z.literal("signed.apk"), size: z.number().int().positive(), sha256 })
+          .strict()
+      )
+      .length(1),
+  })
+  .strict();
+
 export const manifestSchema = z.union([
   macosManifestSchema,
   windowsManifestSchema,
   iosManifestSchema,
+  androidManifestSchema,
 ]);
 export const verificationSchema = z.union([
   macosVerificationSchema,
   windowsVerificationSchema,
   iosVerificationSchema,
+  androidVerificationSchema,
 ]);

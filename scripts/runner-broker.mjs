@@ -811,9 +811,15 @@ async function runClaimedSigning(profile, claim, signal) {
     typeof run.profileRevision !== "string" ||
     !/^[0-9a-f]{40}$/.test(run.profileRevision) ||
     typeof run.stage !== "string" ||
-    !["sign", "finalize", "dmg_sign", "dmg_finalize", "windows_sign", "ios_sign"].includes(
-      run.stage
-    ) ||
+    ![
+      "sign",
+      "finalize",
+      "dmg_sign",
+      "dmg_finalize",
+      "windows_sign",
+      "ios_sign",
+      "android_sign",
+    ].includes(run.stage) ||
     typeof run.inputDigest !== "string" ||
     !/^sha256:[a-f0-9]{64}$/.test(run.inputDigest) ||
     typeof run.generation !== "number" ||
@@ -821,11 +827,12 @@ async function runClaimedSigning(profile, claim, signal) {
     run.generation < 1 ||
     typeof run.nonce !== "string" ||
     !/^[A-Za-z0-9_-]{43}$/.test(run.nonce) ||
-    !["windows", "macos", "ios"].includes(run.platform) ||
+    !["windows", "macos", "ios", "android"].includes(run.platform) ||
     (run.platform === "macos" &&
       !["sign", "finalize", "dmg_sign", "dmg_finalize"].includes(run.stage)) ||
     (run.platform === "windows" && run.stage !== "windows_sign") ||
     (run.platform === "ios" && run.stage !== "ios_sign") ||
+    (run.platform === "android" && run.stage !== "android_sign") ||
     !Number.isSafeInteger(run.timeoutMinutes) ||
     run.timeoutMinutes < 1 ||
     run.timeoutMinutes > 360 ||

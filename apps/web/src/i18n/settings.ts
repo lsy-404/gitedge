@@ -22,6 +22,7 @@ export const settingsMessages = {
     codeSigningStage_dmg_finalize: "公证 DMG",
     codeSigningStage_windows_sign: "Windows 签名",
     codeSigningStage_ios_sign: "iOS 签名",
+    codeSigningStage_android_sign: "Android 签名",
     settingsRepositoryArchived: "此仓库已归档，内容仅可读取。所有者可在仓库设置中恢复编辑。",
     settingsFeatureDisabled: "此仓库已关闭该功能。",
     settingsRegistered: "已登记",
@@ -182,6 +183,7 @@ export const settingsMessages = {
     codeSigningStage_dmg_finalize: "Notarize DMG",
     codeSigningStage_windows_sign: "Windows signing",
     codeSigningStage_ios_sign: "iOS signing",
+    codeSigningStage_android_sign: "Android signing",
     settingsRepositoryArchived:
       "This repository is archived and read-only. Its owner can restore editing in repository settings.",
     settingsFeatureDisabled: "This feature is disabled for this repository.",

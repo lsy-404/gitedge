@@ -6,8 +6,10 @@ import {
   SigningRequestSchema,
   SigningProfileSchema,
   SigningReconcileDispatchSchema,
+  SigningStageSchema,
   SigningSubmissionSchema,
   type SigningMachineContext,
+  type SigningPlatform,
 } from "../../../../packages/contracts/src/signing";
 import {
   manifestSchema,
@@ -254,7 +256,7 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
         /* upload may already be complete */
       }
     }
-    const stageKeys = ["sign", "finalize", "dmg_sign", "dmg_finalize", "windows_sign", "ios_sign"]
+    const stageKeys = SigningStageSchema.options
       .filter((stage) => row.state !== "succeeded" || stage !== row.current_stage)
       .map((stage) => `signing/${row.owner_id}/${row.repository_id}/${id}/${stage}.zip`);
     await this.env.SIGNING_ARTIFACTS.delete([key, ...stageKeys]);
@@ -505,9 +507,7 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
       profile.name !== submission.profile ||
       profile.platform !== submission.platform ||
       containsCredentialMaterial(profile.policy) ||
-      !["sign", "finalize", "dmg_sign", "dmg_finalize", "windows_sign", "ios_sign"].includes(
-        String(profile.policy.stage)
-      )
+      !SigningStageSchema.safeParse(profile.policy.stage).success
     )
       throw new Error("signing_profile_not_approved");
     return this.ctx.storage.transactionSync(() => {
@@ -654,6 +654,24 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
                   portable: windows.portable,
                 },
           azure,
+        };
+      } else if (profile.platform === "android") {
+        const android = project.android;
+        if (!android) throw new Error("signing_android_profile_invalid");
+        manifest = {
+          schema_version: 1,
+          request_id: id,
+          generation: row.generation,
+          stage: "android_sign",
+          project_id: project.id,
+          input_digest: inputDigest,
+          recipe_sha: profile.workflowOid,
+          policy_digest: profile.policyDigest,
+          source_sha: submission.sourceCommitOid,
+          version: submission.version,
+          package_name: android.package_name,
+          certificate_sha256: android.certificate_sha256,
+          max_artifact_bytes: project.max_artifact_bytes,
         };
       } else if (profile.platform === "ios") {
         const ios = project.ios;
@@ -869,6 +887,7 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
       const terminal =
         profile.platform === "windows" ||
         profile.platform === "ios" ||
+        profile.platform === "android" ||
         (profile.platform === "macos" &&
           (row.current_stage === "dmg_finalize" ||
             (row.current_stage === "finalize" &&
@@ -1501,7 +1520,7 @@ export async function queueSigningRequest(
     workflowOid: string;
     workflowPath: string;
     workflowSource: string;
-    platform: "windows" | "macos" | "ios";
+    platform: SigningPlatform;
     timeoutMinutes: number;
     policy: Record<string, unknown>;
   },

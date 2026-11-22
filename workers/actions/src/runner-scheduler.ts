@@ -1,3 +1,4 @@
+import type { SigningPlatform } from "../../../packages/contracts/src/signing";
 import {
   RunnerBudgetSchema,
   RunnerCapacitySchema,
@@ -41,7 +42,7 @@ export interface RunnerCandidate {
   profile_revision: string | null;
   generation: number | null;
   nonce: string | null;
-  platform: "macos" | "windows" | "ios" | null;
+  platform: SigningPlatform | null;
   network_retry_key?: string | null;
   retry_source_runner_id?: string | null;
 }
@@ -262,7 +263,8 @@ export function evaluateRunnerCandidate(
       !capacity ||
       (candidate.platform === "windows" && capacity.os !== "windows") ||
       (candidate.platform === "macos" && capacity.os !== "macos") ||
-      (candidate.platform === "ios" && (capacity.os !== "macos" || capacity.arch !== "arm64"))
+      (candidate.platform === "ios" && (capacity.os !== "macos" || capacity.arch !== "arm64")) ||
+      (candidate.platform === "android" && capacity.os !== "macos" && capacity.os !== "linux")
     )
       reasons.add("signing-platform");
   }

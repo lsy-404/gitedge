@@ -19,7 +19,7 @@ const CONTEXT_SCHEMA = z
     runnerId: UUID,
     runId: UUID,
     requestId: UUID,
-    platform: z.enum(["windows", "macos", "ios"]),
+    platform: z.enum(["windows", "macos", "ios", "android"]),
     workflowOid: z.string().regex(/^[0-9a-f]{40}$/),
     profileRevision: z.string().regex(/^[0-9a-f]{40}$/),
     generation: z.number().int().positive(),

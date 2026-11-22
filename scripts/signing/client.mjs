@@ -17,6 +17,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
+  androidCredentialsSchema,
   credentialsSchema,
   iosCredentialsSchema,
   manifestSchema,
@@ -151,6 +152,7 @@ const SAFE_OUTPUTS = new Set([
   "signed.dmg",
   "product.dmg",
   "signed.ipa",
+  "signed.apk",
   "product.exe",
   "product-portable.exe",
   "RELEASES",
@@ -289,9 +291,11 @@ export function createSigningClient({
     if (
       (parsed.stage === "ios_sign"
         ? "ios"
-        : parsed.stage === "windows_sign"
-          ? "windows"
-          : "macos") !== identity.platform
+        : parsed.stage === "android_sign"
+          ? "android"
+          : parsed.stage === "windows_sign"
+            ? "windows"
+            : "macos") !== identity.platform
     )
       throw new ClientError("PLATFORM_MISMATCH");
     return { ...result, manifest: parsed };
@@ -504,7 +508,7 @@ export function createSigningClient({
 async function bundleOutput(outputDir, verification, work, maxBytes) {
   const bundle = path.join(work, "output.zip");
   const payloads = verification.files.map((file) => path.join(outputDir, file.path));
-  if (process.platform === "win32") {
+  if (process.platform !== "darwin") {
     const { createWriteStream } = await import("node:fs");
     const { ZipArchive } = await import("archiver");
     await new Promise((resolve, reject) => {
@@ -541,11 +545,22 @@ async function bundleOutput(outputDir, verification, work, maxBytes) {
 }
 
 function stageFamily(stage) {
-  if (!["sign", "finalize", "dmg_sign", "dmg_finalize", "windows_sign", "ios_sign"].includes(stage))
+  if (
+    ![
+      "sign",
+      "finalize",
+      "dmg_sign",
+      "dmg_finalize",
+      "windows_sign",
+      "ios_sign",
+      "android_sign",
+    ].includes(stage)
+  )
     throw new ClientError("INVALID_MANIFEST");
   return {
     windows: stage === "windows_sign",
     ios: stage === "ios_sign",
+    android: stage === "android_sign",
     dmg: stage.startsWith("dmg_"),
   };
 }
@@ -572,7 +587,9 @@ async function validateOutput(outputDir, manifest) {
     verification.policy_digest !== manifest.policy_digest ||
     (manifest.stage === "windows_sign"
       ? verification.subject !== manifest.azure.subject
-      : verification.team_id !== manifest.team_id)
+      : manifest.stage === "android_sign"
+        ? verification.certificate_sha256 !== manifest.certificate_sha256
+        : verification.team_id !== manifest.team_id)
   )
     throw new ClientError("INVALID_OUTPUT");
   if (
@@ -585,6 +602,7 @@ async function validateOutput(outputDir, manifest) {
   if (
     !stageFamily(manifest.stage).windows &&
     !stageFamily(manifest.stage).ios &&
+    !stageFamily(manifest.stage).android &&
     (verification.team_id !== manifest.team_id ||
       verification.bundle_id !== manifest.bundle_id ||
       verification.version !== manifest.version ||
@@ -600,6 +618,7 @@ async function validateOutput(outputDir, manifest) {
     dmg_sign: "signed.dmg",
     dmg_finalize: "product.dmg",
     ios_sign: "signed.ipa",
+    android_sign: "signed.apk",
   }[manifest.stage];
   if (
     manifest.stage !== "windows_sign" &&
@@ -614,6 +633,15 @@ async function validateOutput(outputDir, manifest) {
       verification.source_sha !== manifest.source_sha ||
       verification.version !== manifest.version ||
       verification.architecture !== manifest.architecture)
+  )
+    throw new ClientError("INVALID_OUTPUT");
+  if (
+    stageFamily(manifest.stage).android &&
+    (verification.package_name !== manifest.package_name ||
+      verification.source_sha !== manifest.source_sha ||
+      verification.version !== manifest.version ||
+      verification.v2_verified !== true ||
+      verification.v3_verified !== true)
   )
     throw new ClientError("INVALID_OUTPUT");
   for (const item of verification.files) {
@@ -640,9 +668,22 @@ async function executePlatform(
 ) {
   const family = stageFamily(manifest.stage);
   const credentials = manifest.stage.endsWith("finalize") ? undefined : credentialsProvider;
-  if (process.platform !== (family.windows ? "win32" : "darwin"))
+  if (
+    family.android
+      ? process.platform !== "darwin" && process.platform !== "linux"
+      : process.platform !== (family.windows ? "win32" : "darwin")
+  )
     throw new ClientError("NATIVE_HOST_REQUIRED");
   await preflight(family);
+  if (family.android) {
+    const executor = await import("./android-sign.mjs");
+    executor.setSigningAbortSignal(signal);
+    try {
+      return await executor.executeAndroid(manifest, inputFile, outputDir, credentials, signal);
+    } finally {
+      executor.setSigningAbortSignal(undefined);
+    }
+  }
   if (family.windows) {
     const executor = await import("./windows.mjs");
     executor.setSigningAbortSignal(signal);
@@ -789,6 +830,7 @@ export async function runSigning({
       if (manifest.stage.endsWith("finalize")) {
         return;
       }
+      if (family.android) return androidCredentialsSchema.parse(authorization.credentials);
       return family.ios
         ? iosCredentialsSchema.parse(authorization.credentials)
         : credentialsSchema.parse(authorization.credentials);
@@ -898,6 +940,9 @@ export function clientFailureReport(error) {
 function safeSigningDiagnostic(message) {
   const macos = /^macOS signing operation failed: ([a-z_]+)$/.exec(message);
   if (macos && MACOS_FAILURE_PHASES.has(macos[1])) return `macos:${macos[1]}`;
+
+  const android = /^Android signing operation failed: (android_[a-z0-9_]{1,56})$/.exec(message);
+  if (android) return android[1];
 
   const dmg = /^disk image operation failed: ([a-z0-9_-]+)$/.exec(message);
   if (dmg) {

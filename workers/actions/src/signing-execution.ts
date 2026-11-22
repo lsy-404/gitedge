@@ -1,4 +1,8 @@
-import type { SigningPlatform } from "../../../packages/contracts/src/signing";
+import {
+  SigningPlatformSchema,
+  SigningStageSchema,
+  type SigningPlatform,
+} from "../../../packages/contracts/src/signing";
 import { RUNNER_LEASE_MS } from "../../../packages/contracts/src/runners";
 import {
   createSigningExecutionHooks,
@@ -211,10 +215,8 @@ export async function enqueueNativeSigningRun(
 ): Promise<{ runId: string }> {
   if (
     (input.runId !== undefined && !/^[0-9a-f-]{36}$/i.test(input.runId)) ||
-    !["sign", "finalize", "dmg_sign", "dmg_finalize", "windows_sign", "ios_sign"].includes(
-      input.stage
-    ) ||
-    (input.platform !== "windows" && input.platform !== "macos" && input.platform !== "ios") ||
+    !SigningStageSchema.safeParse(input.stage).success ||
+    !SigningPlatformSchema.safeParse(input.platform).success ||
     !/^[0-9a-f]{40}$/.test(input.workflowOid) ||
     !/^[0-9a-f]{40}$/.test(input.profileRevision) ||
     !/^sha256:[a-f0-9]{64}$/.test(input.inputDigest) ||
@@ -226,12 +228,18 @@ export async function enqueueNativeSigningRun(
     throw new Error("invalid_signing_queue_input");
 
   const workflow = validateSingleSigningJob(input.workflowPath, input.workflowSource);
+  const platformLabels =
+    input.platform === "android"
+      ? ["need-tool-node", "need-tool-java", "need-tool-android-build-tools"]
+      : [
+          input.platform === "windows" ? "Windows" : "macOS",
+          ...(input.platform === "ios" ? ["ARM64"] : []),
+          "need-tool-node",
+          "need-tool-python",
+        ];
   const labels = [
     "self-hosted",
-    input.platform === "windows" ? "Windows" : "macOS",
-    ...(input.platform === "ios" ? ["ARM64"] : []),
-    "need-tool-node",
-    "need-tool-python",
+    ...platformLabels,
     ...workflow.labels.filter((label) => {
       const match = /^need-time-(\d+)m$/i.exec(label);
       if (!match) return true;
@@ -255,7 +263,7 @@ export async function enqueueNativeSigningRun(
   )
     .bind(input.repositoryId, input.ownerId, input.ownerId)
     .first<{ id: string; namespace_id: string; slug: string; owner: string }>();
-  const initialStage = ["sign", "windows_sign", "ios_sign"].includes(input.stage);
+  const initialStage = ["sign", "windows_sign", "ios_sign", "android_sign"].includes(input.stage);
   if (!repository) throw new Error("signing_runner_unavailable");
   const approvedProfile = await env.DB.prepare(
     `SELECT 1 AS active FROM actions_signing_profiles WHERE owner_id=? AND repository_id=?
@@ -276,7 +284,7 @@ export async function enqueueNativeSigningRun(
     const admittedRequest = await env.DB.prepare(
       `SELECT 1 FROM actions_signing_runs WHERE request_id=? AND owner_id=? AND repository_id=?
        AND profile_revision=? AND workflow_oid=? AND platform=?
-       AND stage IN ('sign','windows_sign','ios_sign') LIMIT 1`
+       AND stage IN ('sign','windows_sign','ios_sign','android_sign') LIMIT 1`
     )
       .bind(
         input.requestId,

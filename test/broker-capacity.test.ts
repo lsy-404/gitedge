@@ -226,19 +226,19 @@ describe("runner capacity probes", () => {
     expect(first).toEqual(second);
     expect(first).not.toContain("docker");
     expect(first).toContain("node");
-    expect(calls).toBe(7);
+    expect(calls).toBe(9);
 
     dockerReady = true;
     expect(await getTools()).toEqual(first);
     const refreshed = await getTools({ refresh: true });
     expect(refreshed).toContain("docker");
-    expect(calls).toBe(14);
+    expect(calls).toBe(18);
     expect(await getTools()).toEqual(refreshed);
-    expect(calls).toBe(14);
+    expect(calls).toBe(18);
 
     now += 10 * 60_000 + 1;
     await getTools();
-    expect(calls).toBe(21);
+    expect(calls).toBe(27);
   });
 
   it("bounds command probes and reports a nonzero or missing command as unavailable", async () => {

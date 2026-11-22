@@ -9,10 +9,12 @@ import {
   parseJobClaim,
 } from "../packages/contracts/runner-scheduling.mjs";
 import { captureOutput, killProcessTree } from "./runner-process-tree.mjs";
+import { javaCommand } from "./signing/android-tools.mjs";
 
 const megabyte = 1024 * 1024;
 const toolCacheMs = 10 * 60_000;
 const toolTimeoutMs = 3_000;
+const jvmToolTimeoutMs = 10_000;
 
 export function parseRunnerBudget(values) {
   const budget = {};
@@ -80,6 +82,13 @@ const toolCommands = () => [
   ["python", process.platform === "win32" ? "python" : "python3", ["--version"]],
   ["go", "go", ["version"]],
   ["rust", "rustc", ["--version"]],
+  ["java", javaCommand(), ["-version"], jvmToolTimeoutMs],
+  [
+    "android-build-tools",
+    process.execPath,
+    [fileURLToPath(new URL("./signing/android-tools.mjs", import.meta.url))],
+    jvmToolTimeoutMs,
+  ],
 ];
 
 function runProbe(command, args, timeoutMs, spawnChild = spawn) {
@@ -115,8 +124,8 @@ export function createToolProbeCache({ now = Date.now, probe = runProbe } = {}) 
     if (pending) return [...(await pending)];
     if (!refresh && cachedTools && now() < expiresAt) return [...cachedTools];
     pending = Promise.all(
-      toolCommands().map(async ([name, command, args]) =>
-        (await probe(command, args, toolTimeoutMs)) ? name : null
+      toolCommands().map(async ([name, command, args, timeout = toolTimeoutMs]) =>
+        (await probe(command, args, timeout)) ? name : null
       )
     ).then((results) => results.filter(Boolean));
     try {

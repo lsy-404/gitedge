@@ -247,7 +247,8 @@ async function imageFor(env: ForgeEnv, row: Reservation): Promise<string> {
   );
   const claim = parseJobClaim(labels);
   if (!claim.valid || claim.gpuVendor || claim.vramMb) throw new Error("hosted_labels_unsupported");
-  const platform = job.platform === "ios" ? "macos" : job.platform;
+  const platform =
+    job.platform === "ios" ? "macos" : job.platform === "android" ? "linux" : job.platform;
   if (new Set(systems).size > 1 || (platform && systems.some((system) => system !== platform)))
     throw new Error("hosted_platform_conflict");
   const os = platform ?? systems[0];
