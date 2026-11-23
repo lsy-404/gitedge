@@ -55,7 +55,7 @@ Both recipes verify each signature with SignTool (`/pa`, all signatures, timesta
 
 ## Android profiles
 
-An Android profile signs one release APK with an upload or app-signing key kept in GitEdge. The broker reports the tools `java` and `android-build-tools` when they work on the host, and Android signing jobs require both plus Node.js (`need-tool-node`, `need-tool-java`, `need-tool-android-build-tools`); they run on any macOS or Linux runner that reports them. Hosted fallback runners use Linux. Labels from the pinned workflow are added as usual, so a workflow pinned for Android should not require `macOS`, `ARM64` or iOS-only tools unless the Android key must stay on that host.
+An Android profile signs one release APK with an upload or app-signing key kept in GitEdge. The broker reports the tools `java` and `android-build-tools` when they work on the host, or, for a VM pool, when image verification finds them in the guest (set `JAVA_HOME` and `ANDROID_HOME` in the pool's `guest.environment`), and Android signing jobs require both plus Node.js (`need-tool-node`, `need-tool-java`, `need-tool-android-build-tools`); they run on any macOS or Linux runner that reports them. Hosted fallback runners use Linux. Labels from the pinned workflow are added as usual, so a workflow pinned for Android should not require `macOS`, `ARM64` or iOS-only tools unless the Android key must stay on that host.
 
 ```json
 {

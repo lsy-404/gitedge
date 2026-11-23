@@ -433,7 +433,23 @@ export async function verifyVmImage(config, signal) {
       if(launcher.status!==0||launcher.stdout.trim()!==${JSON.stringify(String(LAUNCHER_VERSION))})throw new Error('Guest runner launcher must be version ${LAUNCHER_VERSION}; rebuild or update the image launcher.');
       fs.accessSync(${JSON.stringify(guestPath.join(config.guest.runnerPath, "bin", config.guest.platform === "windows" ? "Runner.Listener.exe" : "Runner.Listener"))});
       const commands={pnpm:process.platform==='win32'?['cmd.exe',['/d','/c','pnpm.cmd','--version']]:['pnpm',['--version']],git:['git',['--version']],docker:['docker',['version','--format','{{.Server.Version}}']],python:[process.platform==='win32'?'python':'python3',['--version']],go:['go',['version']],rust:['rustc',['--version']]};
-      const tools=['node',...Object.entries(commands).filter(([,v])=>available(...v)).map(([k])=>k)];
+      const java=process.env.JAVA_HOME?require('node:path').join(process.env.JAVA_HOME,'bin',process.platform==='win32'?'java.exe':'java'):'java';
+      commands.java=[java,['-version']];
+      const androidBuildTools=()=>{
+        if(process.platform!=='darwin'&&process.platform!=='linux')return false;
+        const path=require('node:path');
+        const roots=[process.env.ANDROID_HOME,process.env.ANDROID_SDK_ROOT,path.join(os.homedir(),...(process.platform==='darwin'?['Library','Android','sdk']:['Android','Sdk']))].filter(root=>root&&path.isAbsolute(root));
+        for(const root of roots){
+          let versions;
+          try{versions=fs.readdirSync(path.join(root,'build-tools'))}catch{continue}
+          for(const version of versions.filter(v=>/^\\d+(?:\\.\\d+){0,3}$/.test(v)&&Number(v.split('.')[0])>=30).sort((a,b)=>b.localeCompare(a,undefined,{numeric:true}))){
+            const directory=path.join(root,'build-tools',version);
+            if(available(path.join(directory,'aapt2'),['version'])&&available(java,['-jar',path.join(directory,'lib','apksigner.jar'),'--version']))return true;
+          }
+        }
+        return false;
+      };
+      const tools=['node',...Object.entries(commands).filter(([,v])=>available(...v)).map(([k])=>k),...(androidBuildTools()?['android-build-tools']:[])];
       const disk=fs.statfsSync(${JSON.stringify(config.guest.root)},{bigint:true});
       console.log(JSON.stringify({platform:process.platform==='win32'?'windows':process.platform,arch:os.arch(),node:process.versions.node,tools,memFreeMb:Math.floor(os.freemem()/1048576),diskFreeMb:Number(disk.bavail*disk.bsize/1048576n)}));
       })().catch(error=>{console.error(error.message);process.exitCode=1});`;
