@@ -107,6 +107,10 @@ function overview(overrides: Partial<RunnerOverview> = {}): RunnerOverview {
 beforeEach(() => {
   applyAccountPreferences({ ...DefaultAccountPreferences, locale: "en" });
   Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+  vi.spyOn(api, "signingSourceCredentialStatus").mockResolvedValue({
+    configured: false,
+    updatedAt: null,
+  });
 });
 afterEach(async () => {
   await unmountAll();
@@ -233,7 +237,7 @@ describe("AccountRunners", () => {
     expect(signingProfiles).toHaveBeenCalledWith("account-runner");
   });
 
-  it("approves a named Runner profile and installs source credentials without rendering the token", async () => {
+  it("approves a named Runner profile and installs Windows credentials without rendering the secret", async () => {
     const profile = {
       name: "release",
       revision: "a".repeat(40),
@@ -300,70 +304,18 @@ describe("AccountRunners", () => {
     findButton(mounted.root, "Approve profile").click();
     await settle();
     expect(approveProfile).toHaveBeenCalledWith("runner-repository", "release");
-
-    const fileInput = mounted.root.querySelector<HTMLInputElement>('input[type="file"]')!;
-    const secretFile = new File(
-      [JSON.stringify({ token: "source-token-not-rendered" })],
-      "source.json",
-      {
-        type: "application/json",
-      }
-    );
-    Object.defineProperty(fileInput, "files", { value: [secretFile], configurable: true });
-    fileInput.dispatchEvent(new Event("change", { bubbles: true }));
-    await settle();
-    expect(install).toHaveBeenCalledWith("runner-repository", "release", "github-source", {
-      token: "source-token-not-rendered",
-    });
-    expect(mounted.root.textContent).not.toContain("source-token-not-rendered");
   });
 
-  it("updates only selected profiles, resumes after reauthentication and reports partial failure", async () => {
-    const profile = {
-      name: "mac-release",
-      revision: "a".repeat(40),
-      platform: "macos" as const,
-      workflowOid: "b".repeat(40),
-      workflowPath: ".github/workflows/sign.yml",
-      enabled: true,
-      approvedAt: Date.now(),
-    };
-    vi.spyOn(api, "signingProfiles").mockResolvedValue({
-      profiles: [
-        profile,
-        { ...profile, name: "windows-release", platform: "windows" },
-        {
-          ...profile,
-          name: "other-release",
-        },
-        { ...profile, name: "ios-release", platform: "ios" },
-      ],
-    });
-    vi.spyOn(api, "signingCredentialStatus").mockImplementation(async (_id, name, platform) => ({
-      name,
-      revision: profile.revision,
-      platform,
-      configured: false,
-      updatedAt: null,
-    }));
+  it("saves and revokes the shared source token, resuming after reauthentication", async () => {
+    vi.spyOn(api, "signingProfiles").mockResolvedValue({ profiles: [] });
     const install = vi
-      .spyOn(api, "installSigningCredentials")
-      .mockResolvedValueOnce({
-        name: profile.name,
-        revision: profile.revision,
-        platform: "github-source",
-        configured: true,
-        updatedAt: Date.now(),
-      })
+      .spyOn(api, "installSigningSourceCredential")
       .mockRejectedValueOnce(new ApiError(403, "reauth", "reauth_required"))
-      .mockRejectedValueOnce(new ApiError(403, "forbidden", "forbidden"))
-      .mockResolvedValueOnce({
-        name: "ios-release",
-        revision: profile.revision,
-        platform: "github-source",
-        configured: true,
-        updatedAt: Date.now(),
-      });
+      .mockResolvedValueOnce({ configured: true, updatedAt: Date.now() });
+    const remove = vi
+      .spyOn(api, "removeSigningSourceCredential")
+      .mockResolvedValue({ configured: false, updatedAt: null });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
     vi.spyOn(api, "security").mockResolvedValue({
       passwordEnabled: true,
       email: null,
@@ -379,27 +331,18 @@ describe("AccountRunners", () => {
       expiresAt: Date.now() + 600_000,
     });
 
-    const mounted = await mountAt("/_verify/signing-batch", "/_verify/signing-batch", () =>
+    const mounted = await mountAt("/_verify/signing-source", "/_verify/signing-source", () =>
       h(AccountRunnerSigningProfiles, { repositoryId: "runner-repository" })
     );
     await settle();
 
     const form = mounted.root.querySelector<HTMLFormElement>(".source-credentials-form")!;
     const token = form.querySelector<HTMLInputElement>('input[type="password"]')!;
-    const choices = [...form.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
-    expect(choices.every((choice) => !choice.checked)).toBe(true);
+    expect(form.textContent).toContain("Not installed");
     fill(token, "  example-source-token  ");
     submit(form);
-    expect(install).not.toHaveBeenCalled();
-
-    for (const name of ["mac-release", "windows-release", "ios-release"]) {
-      choices.find((choice) => choice.value === name)!.click();
-      await settle();
-    }
-    submit(form);
     await settle();
-    expect(install.mock.calls.map(([, name]) => name)).toEqual(["mac-release", "windows-release"]);
-    expect(token.disabled).toBe(true);
+    expect(install).toHaveBeenCalledTimes(1);
 
     fill(
       mounted.root.querySelector<HTMLInputElement>('input[autocomplete="current-password"]')!,
@@ -407,21 +350,15 @@ describe("AccountRunners", () => {
     );
     submit(mounted.root.querySelector<HTMLFormElement>(".box-form")!);
     await settle();
-
-    expect(install.mock.calls).toEqual(
-      ["mac-release", "windows-release", "windows-release", "ios-release"].map((name) => [
-        "runner-repository",
-        name,
-        "github-source",
-        { token: "example-source-token" },
-      ])
-    );
-    expect(form.textContent).toContain("updated for 2 profile(s)");
-    expect(form.textContent).toContain("Updates failed for windows-release");
+    expect(install).toHaveBeenLastCalledWith("runner-repository", "example-source-token");
     expect(token.value).toBe("");
-    expect(choices.filter((choice) => choice.checked).map((choice) => choice.value)).toEqual([
-      "windows-release",
-    ]);
+    expect(form.textContent).toContain("Encrypted and stored");
+    expect(mounted.root.textContent).not.toContain("example-source-token");
+
+    findButton(mounted.root, "Revoke token").click();
+    await settle();
+    expect(remove).toHaveBeenCalledWith("runner-repository");
+    expect(form.textContent).toContain("Not installed");
   });
 
   it("retries Windows credential installation after recent-auth confirmation", async () => {

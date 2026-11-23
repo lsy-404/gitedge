@@ -10,14 +10,18 @@ import type {
   SigningCredentialStatus,
   SigningCredentialPlatform,
   SigningProfileMetadata,
+  SigningSourceCredentialStatus,
 } from "../../../../packages/contracts/src/signing";
 import { errorMessage } from "../lib/api";
 import {
   approveSigningProfile,
   getSigningCredentialStatus,
+  getSigningSourceCredentialStatus,
   installSigningCredentials,
+  installSigningSourceCredential,
   listSigningProfiles,
   removeSigningCredentials,
+  removeSigningSourceCredential,
 } from "../lib/runnerSigning";
 import { useReauthRetry } from "../lib/reauth";
 import { FluentButton } from "@platform-kit/fluent/vue";
@@ -32,13 +36,10 @@ const profileName = ref("");
 const profiles = ref<SigningProfileMetadata[]>([]);
 const statuses = ref(new Map<string, SigningCredentialStatus>());
 const loading = ref(false);
-const sourceBatch = Symbol("source batch");
-const busy = ref<string | typeof sourceBatch | null>(null);
+const busy = ref<string | null>(null);
 const error = ref("");
 const sourceToken = ref("");
-const sourceProfiles = ref<string[]>([]);
-const sourceSaved = ref(0);
-const sourceFailed = ref<string[]>([]);
+const sourceStatus = ref<SigningSourceCredentialStatus | null>(null);
 const windowsFormProfile = ref<string | null>(null);
 const windowsTenantId = ref("");
 const windowsClientId = ref("");
@@ -109,44 +110,38 @@ async function installWindows(profile: SigningProfileMetadata): Promise<void> {
   await operation();
 }
 
-function finishSourceBatch(): void {
-  sourceToken.value = "";
-  busy.value = null;
-}
-
-function cancelSourceBatch(): void {
-  reauth.pending.value = null;
-  finishSourceBatch();
-}
-
-async function installSourceBatch(): Promise<void> {
-  if (busy.value || reauth.pending.value || !sourceProfiles.value.length) return;
-  if (!SigningSourceCredentialSchema.safeParse({ token: sourceToken.value.trim() }).success) return;
-
-  const selected = [...sourceProfiles.value];
-  const repositoryId = props.repositoryId;
-  let next = 0;
-  sourceSaved.value = 0;
-  sourceFailed.value = [];
-  error.value = "";
-  busy.value = sourceBatch;
-
+async function installSource(): Promise<void> {
+  const token = sourceToken.value.trim();
+  if (busy.value || !SigningSourceCredentialSchema.safeParse({ token }).success) return;
   const operation = async () => {
-    for (; next < selected.length; next += 1) {
-      const name = selected[next]!;
-      try {
-        const status = await installSigningCredentials(repositoryId, name, "github-source", {
-          token: sourceToken.value.trim(),
-        });
-        statuses.value.set(statusKey(name, "github-source"), status);
-        sourceSaved.value += 1;
-        sourceProfiles.value = sourceProfiles.value.filter((selectedName) => selectedName !== name);
-      } catch (cause) {
-        if (reauth.intercept(cause, operation)) return;
-        sourceFailed.value.push(name);
-      }
+    busy.value = "source";
+    error.value = "";
+    try {
+      sourceStatus.value = await installSigningSourceCredential(props.repositoryId, token);
+      sourceToken.value = "";
+    } catch (cause) {
+      if (reauth.intercept(cause, operation)) return;
+      error.value = errorMessage(cause, t);
+    } finally {
+      busy.value = null;
     }
-    finishSourceBatch();
+  };
+  await operation();
+}
+
+async function removeSource(): Promise<void> {
+  if (busy.value || !window.confirm(t("runnerSigningSourceRemoveConfirm"))) return;
+  const operation = async () => {
+    busy.value = "source";
+    error.value = "";
+    try {
+      sourceStatus.value = await removeSigningSourceCredential(props.repositoryId);
+    } catch (cause) {
+      if (reauth.intercept(cause, operation)) return;
+      error.value = errorMessage(cause, t);
+    } finally {
+      busy.value = null;
+    }
   };
   await operation();
 }
@@ -160,21 +155,20 @@ async function refresh(): Promise<void> {
   error.value = "";
   try {
     profiles.value = await listSigningProfiles(props.repositoryId);
+    sourceStatus.value = await getSigningSourceCredentialStatus(props.repositoryId);
     const next = new Map<string, SigningCredentialStatus>();
     await Promise.all(
       profiles.value.flatMap((profile) =>
-        ([profile.platform, "github-source"] as SigningCredentialPlatform[]).map(
-          async (platform) => {
-            try {
-              next.set(
-                statusKey(profile.name, platform),
-                await getSigningCredentialStatus(props.repositoryId, profile.name, platform)
-              );
-            } catch {
-              // Missing credentials remain visible as not configured.
-            }
+        [profile.platform].map(async (platform) => {
+          try {
+            next.set(
+              statusKey(profile.name, platform),
+              await getSigningCredentialStatus(props.repositoryId, profile.name, platform)
+            );
+          } catch {
+            // Missing credentials remain visible as not configured.
           }
-        )
+        })
       )
     );
     statuses.value = next;
@@ -221,8 +215,7 @@ async function install(
     credentials = JSON.parse(await file.text());
     if (!isCredentialObject(credentials)) throw new Error("invalid_credentials");
     const values = credentials;
-    if (platform === "github-source") credentials = SigningSourceCredentialSchema.parse(values);
-    else if (platform === "windows") credentials = windowsCredentialsSchema.parse(values);
+    if (platform === "windows") credentials = windowsCredentialsSchema.parse(values);
     else if (platform === "android") credentials = androidCredentialsSchema.parse(values);
   } catch {
     error.value = t("runnerSigningCredentialsFileInvalid");
@@ -290,6 +283,48 @@ onMounted(() => void refresh());
     <p class="row-meta">{{ t("runnerSigningProfilesDescription") }}</p>
     <NoticeBar v-if="error" intent="error">{{ error }}</NoticeBar>
     <ReauthPrompt v-if="reauth.pending.value" @confirmed="reauth.confirmed" />
+    <form class="source-credentials-form" @submit.prevent="installSource">
+      <div class="row-meta">
+        {{
+          t("runnerSigningSourceCredential", {
+            status: sourceStatus?.configured
+              ? t("runnerSigningCredentialConfigured")
+              : t("runnerSigningCredentialMissing"),
+          })
+        }}
+        <span v-if="sourceStatus?.updatedAt">
+          · {{ d(new Date(sourceStatus.updatedAt), "long") }}</span
+        >
+      </div>
+      <p class="row-meta">{{ t("runnerSigningSourceHelp") }}</p>
+      <TextField
+        v-model="sourceToken"
+        type="password"
+        autocomplete="new-password"
+        spellcheck="false"
+        maxlength="512"
+        required
+        :disabled="busy !== null"
+        >{{ t("runnerSigningSourceToken") }}</TextField
+      >
+      <div class="profile-actions">
+        <FluentButton
+          type="submit"
+          tone="primary"
+          :busy="busy === 'source'"
+          :disabled="busy !== null || !sourceToken.trim()"
+          >{{ t("runnerSigningSourceSave") }}</FluentButton
+        >
+        <FluentButton
+          v-if="sourceStatus?.configured"
+          type="button"
+          tone="danger"
+          :disabled="busy !== null"
+          @click="removeSource"
+          >{{ t("runnerSigningSourceRemove") }}</FluentButton
+        >
+      </div>
+    </form>
     <form class="profile-approval" @submit.prevent="approve">
       <label class="field-label" for="runner-signing-profile-name">{{
         t("runnerSigningProfileName")
@@ -312,52 +347,6 @@ onMounted(() => void refresh());
     </form>
     <p class="row-meta">{{ t("runnerSigningProfilePathHint") }}</p>
     <p v-if="loading && !profiles.length" class="row-meta">{{ t("loading") }}</p>
-    <form
-      v-if="profiles.length"
-      class="source-credentials-form"
-      @submit.prevent="installSourceBatch"
-    >
-      <TextField
-        v-model="sourceToken"
-        type="password"
-        autocomplete="new-password"
-        spellcheck="false"
-        maxlength="512"
-        required
-        :disabled="busy !== null || !!reauth.pending.value"
-        >{{ t("runnerSigningSourceToken") }}</TextField
-      >
-      <fieldset class="source-profile-choices" :disabled="busy !== null || !!reauth.pending.value">
-        <legend class="field-label">{{ t("runnerSigningSourceProfiles") }}</legend>
-        <label v-for="profile in profiles" :key="profile.name" class="inline-choice">
-          <input v-model="sourceProfiles" type="checkbox" :value="profile.name" />
-          {{ profile.name }}
-        </label>
-      </fieldset>
-      <div class="profile-actions">
-        <FluentButton
-          type="submit"
-          tone="primary"
-          :busy="busy === sourceBatch && !reauth.pending.value"
-          :disabled="
-            busy !== null || !!reauth.pending.value || !sourceToken.trim() || !sourceProfiles.length
-          "
-          >{{ t("runnerSigningSourceSave", { count: sourceProfiles.length }) }}</FluentButton
-        >
-        <FluentButton
-          v-if="busy === sourceBatch && reauth.pending.value"
-          type="button"
-          @click="cancelSourceBatch"
-          >{{ t("runnerSigningSourceCancel") }}</FluentButton
-        >
-      </div>
-      <NoticeBar v-if="sourceSaved" intent="success">
-        {{ t("runnerSigningSourceSaved", { count: sourceSaved }) }}
-      </NoticeBar>
-      <NoticeBar v-if="sourceFailed.length" intent="error">
-        {{ t("runnerSigningSourceFailed", { profiles: sourceFailed.join(", ") }) }}
-      </NoticeBar>
-    </form>
     <article v-for="profile in profiles" :key="profile.name" class="signing-profile">
       <div>
         <strong>{{ profile.name }}</strong>
@@ -466,38 +455,6 @@ onMounted(() => void refresh());
           >{{ t("runnerSigningCredentialsRemove") }}</FluentButton
         >
       </div>
-      <div class="row-meta">
-        {{
-          t("runnerSigningSourceCredential", {
-            status: statusFor(profile, "github-source")?.configured
-              ? t("runnerSigningCredentialConfigured")
-              : t("runnerSigningCredentialMissing"),
-          })
-        }}
-        <span v-if="statusFor(profile, 'github-source')?.updatedAt">
-          · {{ d(new Date(statusFor(profile, "github-source")!.updatedAt!), "long") }}</span
-        >
-      </div>
-      <div class="profile-actions">
-        <label class="file-button">
-          {{ t("runnerSigningSourceCredentialsInstall") }}
-          <input
-            type="file"
-            accept="application/json,.json"
-            :disabled="busy !== null"
-            @change="install(profile, 'github-source', $event)"
-          />
-        </label>
-        <FluentButton
-          v-if="statusFor(profile, 'github-source')?.configured"
-          type="button"
-          tone="danger"
-          :busy="busy === profile.name"
-          :disabled="busy !== null"
-          @click="remove(profile, 'github-source')"
-          >{{ t("runnerSigningCredentialsRemove") }}</FluentButton
-        >
-      </div>
     </article>
     <p v-if="!loading && !profiles.length" class="row-meta">
       {{ t("runnerSigningProfilesEmpty") }}
@@ -537,16 +494,6 @@ onMounted(() => void refresh());
 }
 .source-credentials-form {
   max-width: 38rem;
-}
-.source-profile-choices {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2) var(--space-4);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  padding: var(--space-2);
-  margin: 0;
-  min-width: 0;
 }
 .signing-profile {
   border-top: 1px solid var(--color-border, #d1d5db);

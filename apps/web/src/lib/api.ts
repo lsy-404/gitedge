@@ -78,6 +78,7 @@ import type {
 import type {
   SigningCredentialStatus,
   SigningCredentialPlatform,
+  SigningSourceCredentialStatus,
   SigningProfileMetadata,
 } from "../../../../packages/contracts/src/signing";
 import type { PagesSettings, UpdatePagesInput } from "../../../../packages/contracts/src/pages";
@@ -765,6 +766,20 @@ export const api = {
     request<SigningCredentialStatus>(
       `/api/actions/signing/profiles/${encodeURIComponent(name)}/credentials?repositoryId=${encodeURIComponent(repositoryId)}`,
       { method: "DELETE", body: JSON.stringify({ platform }) }
+    ),
+  signingSourceCredentialStatus: (repositoryId: string) =>
+    request<SigningSourceCredentialStatus>(
+      `/api/actions/signing/source-credential?repositoryId=${encodeURIComponent(repositoryId)}`
+    ),
+  installSigningSourceCredential: (repositoryId: string, token: string) =>
+    request<SigningSourceCredentialStatus>(
+      `/api/actions/signing/source-credential?repositoryId=${encodeURIComponent(repositoryId)}`,
+      { method: "POST", body: JSON.stringify({ token }) }
+    ),
+  removeSigningSourceCredential: (repositoryId: string) =>
+    request<SigningSourceCredentialStatus>(
+      `/api/actions/signing/source-credential?repositoryId=${encodeURIComponent(repositoryId)}`,
+      { method: "DELETE" }
     ),
   accountRunner: (signal?: AbortSignal) =>
     request<{ repository: Repository | null }>("/api/forge/account-runner", { signal }),

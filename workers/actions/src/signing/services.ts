@@ -5,6 +5,7 @@ import {
   SigningProfileMetadataSchema,
   SigningCredentialStatusSchema,
   SigningSourceCredentialSchema,
+  SigningSourceCredentialStatusSchema,
   SigningCredentialPlatformSchema,
   type SigningMachineContext,
   type SigningPlatform,
@@ -235,7 +236,7 @@ async function verifySource(
       throw new Error(code);
     }
   };
-  const token = await storedSourceCredential(env, ownerId, repositoryId, profile.revision);
+  const token = await storedSourceCredential(env, ownerId, repositoryId);
   if (!token) return sourceRejected("source_credential_unavailable");
   const repo = profile.policy.sourceRepositories.find(
     (item) => item.id === input.sourceRepositoryId
@@ -324,7 +325,7 @@ async function verifySourceCurrent(
   input: SigningSubmission,
   profile: SigningProfile
 ): Promise<boolean> {
-  const token = await storedSourceCredential(env, ownerId, repositoryId, profile.revision);
+  const token = await storedSourceCredential(env, ownerId, repositoryId);
   const repo = profile.policy.sourceRepositories.find(
     (item) => item.id === input.sourceRepositoryId
   );
@@ -379,13 +380,12 @@ async function verifySourceCurrent(
 async function storedSourceCredential(
   env: SigningEnv,
   ownerId: string,
-  repositoryId: string,
-  revision: string
+  repositoryId: string
 ): Promise<string | null> {
   const row = await env.DB.prepare(
-    `SELECT ciphertext FROM actions_signing_source_credentials WHERE owner_id=? AND repository_id=? AND profile_revision=?`
+    `SELECT ciphertext FROM actions_signing_source_token WHERE owner_id=? AND repository_id=?`
   )
-    .bind(ownerId, repositoryId, revision)
+    .bind(ownerId, repositoryId)
     .first<{ ciphertext: string }>();
   if (!row) return null;
   try {
@@ -393,7 +393,7 @@ async function storedSourceCredential(
     if (!ivText || !cipherText || extra) return null;
     const iv = base64ToBytes(ivText);
     const cipher = base64ToBytes(cipherText);
-    const aad = new TextEncoder().encode(`${ownerId}:${repositoryId}:${revision}:github-source`);
+    const aad = new TextEncoder().encode(`${ownerId}:${repositoryId}:github-source`);
     const plaintext = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv, additionalData: aad },
       await credentialKey(env.SIGNING_ENCRYPTION_KEY),
@@ -456,25 +456,6 @@ export async function installSigningCredentials(
 ): Promise<void> {
   const profile = await readProfile(env, ownerId, repositoryId, profileName);
   if (!profile) throw new Error("signing_profile_not_approved");
-  if (platform === "github-source") {
-    const sourceToken = SigningSourceCredentialSchema.parse(value).token;
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const aad = new TextEncoder().encode(
-      `${ownerId}:${repositoryId}:${profile.revision}:github-source`
-    );
-    const encrypted = await crypto.subtle.encrypt(
-      { name: "AES-GCM", iv, additionalData: aad },
-      await credentialKey(env.SIGNING_ENCRYPTION_KEY),
-      new TextEncoder().encode(JSON.stringify({ token: sourceToken }))
-    );
-    const envelope = `${bytesToBase64(iv)}.${bytesToBase64(new Uint8Array(encrypted))}`;
-    await env.DB.prepare(
-      `INSERT INTO actions_signing_source_credentials(owner_id,repository_id,profile_revision,ciphertext,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(owner_id,repository_id,profile_revision) DO UPDATE SET ciphertext=excluded.ciphertext,updated_at=excluded.updated_at`
-    )
-      .bind(ownerId, repositoryId, profile.revision, envelope, Date.now())
-      .run();
-    return;
-  }
   if (profile.platform !== platform) throw new Error("signing_profile_not_approved");
   const safeValue = credentialSchema(platform)(value);
   const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -503,20 +484,62 @@ export async function removeSigningCredentials(
 ): Promise<void> {
   const profile = await readProfile(env, ownerId, repositoryId, profileName);
   if (!profile) throw new Error("signing_profile_not_approved");
-  if (platform === "github-source") {
-    await env.DB.prepare(
-      `DELETE FROM actions_signing_source_credentials WHERE owner_id=? AND repository_id=? AND profile_revision=?`
-    )
-      .bind(ownerId, repositoryId, profile.revision)
-      .run();
-    return;
-  }
   if (profile.platform !== platform) throw new Error("signing_profile_not_approved");
   await env.DB.prepare(
     `DELETE FROM actions_signing_credentials WHERE owner_id=? AND repository_id=? AND profile_revision=? AND platform=?`
   )
     .bind(ownerId, repositoryId, profile.revision, platform)
     .run();
+}
+
+export async function installSigningSourceCredential(
+  env: SigningEnv,
+  ownerId: string,
+  repositoryId: string,
+  value: unknown
+): Promise<void> {
+  const sourceToken = SigningSourceCredentialSchema.parse(value).token;
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const aad = new TextEncoder().encode(`${ownerId}:${repositoryId}:github-source`);
+  const encrypted = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv, additionalData: aad },
+    await credentialKey(env.SIGNING_ENCRYPTION_KEY),
+    new TextEncoder().encode(JSON.stringify({ token: sourceToken }))
+  );
+  const envelope = `${bytesToBase64(iv)}.${bytesToBase64(new Uint8Array(encrypted))}`;
+  await env.DB.prepare(
+    `INSERT INTO actions_signing_source_token(owner_id,repository_id,ciphertext,updated_at) VALUES(?,?,?,?) ON CONFLICT(owner_id,repository_id) DO UPDATE SET ciphertext=excluded.ciphertext,updated_at=excluded.updated_at`
+  )
+    .bind(ownerId, repositoryId, envelope, Date.now())
+    .run();
+}
+
+export async function removeSigningSourceCredential(
+  env: SigningEnv,
+  ownerId: string,
+  repositoryId: string
+): Promise<void> {
+  await env.DB.prepare(
+    `DELETE FROM actions_signing_source_token WHERE owner_id=? AND repository_id=?`
+  )
+    .bind(ownerId, repositoryId)
+    .run();
+}
+
+export async function signingSourceCredentialStatus(
+  env: SigningEnv,
+  ownerId: string,
+  repositoryId: string
+) {
+  const row = await env.DB.prepare(
+    `SELECT updated_at FROM actions_signing_source_token WHERE owner_id=? AND repository_id=?`
+  )
+    .bind(ownerId, repositoryId)
+    .first<{ updated_at: number }>();
+  return SigningSourceCredentialStatusSchema.parse({
+    configured: Boolean(row),
+    updatedAt: row?.updated_at ?? null,
+  });
 }
 
 export async function listApprovedProfiles(env: SigningEnv, ownerId: string, repositoryId: string) {
@@ -555,20 +578,6 @@ export async function signingCredentialStatus(
   const profile = await readProfile(env, ownerId, repositoryId, profileName);
   if (!profile) return null;
   const platform = SigningCredentialPlatformSchema.parse(kind ?? profile.platform);
-  if (platform === "github-source") {
-    const source = await env.DB.prepare(
-      `SELECT updated_at FROM actions_signing_source_credentials WHERE owner_id=? AND repository_id=? AND profile_revision=?`
-    )
-      .bind(ownerId, repositoryId, profile.revision)
-      .first<{ updated_at: number }>();
-    return SigningCredentialStatusSchema.parse({
-      name: profile.name,
-      revision: profile.revision,
-      platform,
-      configured: Boolean(source),
-      updatedAt: source?.updated_at ?? null,
-    });
-  }
   if (platform !== profile.platform) return null;
   const row = await env.DB.prepare(
     `SELECT updated_at FROM actions_signing_credentials WHERE owner_id=? AND repository_id=? AND profile_revision=? AND platform=?`
@@ -693,10 +702,6 @@ export async function saveApprovedProfile(
   await env.DB.batch([
     env.DB.prepare(
       `DELETE FROM actions_signing_credentials WHERE owner_id=? AND repository_id=? AND profile_revision IN
-      (SELECT revision FROM actions_signing_profiles WHERE owner_id=? AND repository_id=? AND name=? AND revoked_at IS NULL AND revision<>?)`
-    ).bind(user.id, repositoryId, user.id, repositoryId, approved.name, approved.revision),
-    env.DB.prepare(
-      `DELETE FROM actions_signing_source_credentials WHERE owner_id=? AND repository_id=? AND profile_revision IN
       (SELECT revision FROM actions_signing_profiles WHERE owner_id=? AND repository_id=? AND name=? AND revoked_at IS NULL AND revision<>?)`
     ).bind(user.id, repositoryId, user.id, repositoryId, approved.name, approved.revision),
     env.DB.prepare(

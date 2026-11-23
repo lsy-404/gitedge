@@ -36,7 +36,7 @@ Source policy identifies permitted GitHub repository IDs, workflow path, actor I
 
 Without `releaseTagPattern`, a source build must come from its repository's default branch. A release profile additionally checks its approved tag pattern, the exact `v<version>` tag and default-branch ancestry. All submissions require GitHub Actions OIDC proof for that source run. Grant the source job `id-token: write`; the CLI obtains a fresh identity with the Gateway origin as its audience. A caller integrating the client directly supplies `sourceIdentity`, or sets `GITEDGE_SOURCE_IDENTITY` for the CLI. Identity tokens are never part of the stored request.
 
-Use the signing profile panel to approve a profile and install platform credential JSON. GitHub source-read credentials use purpose `github-source` and JSON `{ "token": "..." }`. Windows platform credentials must be exactly `{ "tenant_id": "...", "client_id": "...", "client_secret": "..." }`; the broker does not use a preconfigured managed or workload identity. The service encrypts credentials at rest and grants them per authorized task. Credential writes and removal require recent human authentication. The panel exposes configuration metadata, never stored secret values.
+Use the signing profile panel to approve a profile and install platform credential JSON. A single GitHub personal access token (PAT) for the account Runner repository is pasted once at the top of the panel; every signing profile in the repository uses it to read source runs, it is encrypted with AAD `<owner>:<repository>:github-source`, and it survives profile re-approval. Windows platform credentials must be exactly `{ "tenant_id": "...", "client_id": "...", "client_secret": "..." }`; the broker does not use a preconfigured managed or workload identity. The service encrypts credentials at rest and grants them per authorized task. Credential writes and removal require recent human authentication. The panel exposes configuration metadata, never stored secret values.
 
 ## Windows recipes
 
@@ -202,6 +202,9 @@ All paths below are under `/api/actions` on the Gateway. Pass the private Runner
 | ------ | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
 | GET    | `/signing/profiles`                        | Read approved profile metadata                                                                                  |
 | POST   | `/signing/profiles`                        | Approve `{ "name": "profile-name" }` from Runner                                                                |
+| GET    | `/signing/source-credential`               | Read `{ "configured": true, "updatedAt": 1700000000000 }` for the repository (`?repositoryId=`)                 |
+| POST   | `/signing/source-credential`               | Install the shared GitHub source-read token `{ "token": "..." }`; returns the same status                       |
+| DELETE | `/signing/source-credential`               | Revoke the shared GitHub source-read token; returns the same status                                             |
 | GET    | `/signing/profiles/:name/credentials`      | Read credential configuration metadata                                                                          |
 | POST   | `/signing/profiles/:name/credentials`      | Install `{ "platform": "macos", "credentials": { ... } }`                                                       |
 | DELETE | `/signing/profiles/:name/credentials`      | Remove credentials for `{ "platform": "macos" }`                                                                |

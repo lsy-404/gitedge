@@ -7,10 +7,10 @@ import {
   SigningCoordinator,
 } from "../../workers/actions/src/signing";
 import {
-  installSigningCredentials,
+  installSigningSourceCredential,
   listApprovedProfiles,
   saveApprovedProfile,
-  signingCredentialStatus,
+  signingSourceCredentialStatus,
 } from "../../workers/actions/src/signing/services";
 import type { SigningExecutionHooks, SigningEnv } from "../../workers/actions/src/signing/types";
 import type { TrustedUser } from "../../packages/contracts/src/index";
@@ -467,11 +467,11 @@ describe("native signing admission", () => {
             first: async () =>
               query.includes("SELECT profile_json")
                 ? (profiles.get(`${values[0]}:${values[1]}`) ?? null)
-                : (sourceCredentials.get(`${values[0]}:${values[1]}:${values[2]}`) ?? null),
+                : (sourceCredentials.get(`${values[0]}:${values[1]}`) ?? null),
             run: async () => {
-              if (query.startsWith("INSERT INTO actions_signing_source_credentials"))
-                sourceCredentials.set(`${values[0]}:${values[1]}:${values[2]}`, {
-                  ciphertext: values[3]!,
+              if (query.startsWith("INSERT INTO actions_signing_source_token"))
+                sourceCredentials.set(`${values[0]}:${values[1]}`, {
+                  ciphertext: values[2]!,
                 });
               return {};
             },
@@ -479,22 +479,12 @@ describe("native signing admission", () => {
         }),
       },
     } as unknown as SigningEnv;
-    await installSigningCredentials(
-      env,
-      "owner-1",
-      "runner-one",
-      approvedProfile.name,
-      "github-source",
-      { token: "source-token-one" }
-    );
-    await installSigningCredentials(
-      env,
-      "owner-2",
-      "runner-two",
-      approvedProfile.name,
-      "github-source",
-      { token: "source-token-two" }
-    );
+    await installSigningSourceCredential(env, "owner-1", "runner-one", {
+      token: "source-token-one",
+    });
+    await installSigningSourceCredential(env, "owner-2", "runner-two", {
+      token: "source-token-two",
+    });
     expect(
       [...sourceCredentials.values()].every((row) => !row.ciphertext.includes("source-token"))
     ).toBe(true);
@@ -637,11 +627,11 @@ describe("native signing admission", () => {
             first: async () =>
               query.includes("SELECT profile_json")
                 ? (profiles.get(`${values[0]}:${values[1]}`) ?? null)
-                : (credentials.get(`${values[0]}:${values[1]}:${values[2]}`) ?? null),
+                : (credentials.get(`${values[0]}:${values[1]}`) ?? null),
             run: async () => {
-              if (query.startsWith("INSERT INTO actions_signing_source_credentials"))
-                credentials.set(`${values[0]}:${values[1]}:${values[2]}`, {
-                  ciphertext: values[3]!,
+              if (query.startsWith("INSERT INTO actions_signing_source_token"))
+                credentials.set(`${values[0]}:${values[1]}`, {
+                  ciphertext: values[2]!,
                 });
               return {};
             },
@@ -649,7 +639,7 @@ describe("native signing admission", () => {
         }),
       },
     } as unknown as SigningEnv;
-    await installSigningCredentials(env, owner.id, "runner-repo", profile.name, "github-source", {
+    await installSigningSourceCredential(env, owner.id, "runner-repo", {
       token: "release-source-token",
     });
     const { publicKey, privateKey } = await generateKeyPair("RS256");
@@ -763,16 +753,8 @@ describe("native signing admission", () => {
               if (query.includes("FROM repositories r JOIN namespaces"))
                 return { id: "runner-repo", created_by: owner.id };
               if (query.includes("SELECT profile_json,approved_by,approved_at")) return stored;
-              if (query.includes("SELECT ciphertext FROM actions_signing_source_credentials"))
-                return sourceCredentials.has(
-                  `${String(bound[0])}:${String(bound[1])}:${String(bound[2])}`
-                )
-                  ? { ciphertext: "encrypted" }
-                  : null;
-              if (query.includes("SELECT updated_at FROM actions_signing_source_credentials"))
-                return sourceCredentials.has(
-                  `${String(bound[0])}:${String(bound[1])}:${String(bound[2])}`
-                )
+              if (query.includes("SELECT updated_at FROM actions_signing_source_token"))
+                return sourceCredentials.has(`${String(bound[0])}:${String(bound[1])}`)
                   ? { updated_at: 1 }
                   : null;
               return null;
@@ -785,14 +767,8 @@ describe("native signing admission", () => {
               };
             },
             async run() {
-              if (query.startsWith("INSERT INTO actions_signing_source_credentials"))
-                sourceCredentials.add(
-                  `${String(bound[0])}:${String(bound[1])}:${String(bound[2])}`
-                );
-              if (query.startsWith("DELETE FROM actions_signing_source_credentials"))
-                sourceCredentials.delete(
-                  `${String(bound[0])}:${String(bound[1])}:${String(bound[2])}`
-                );
+              if (query.startsWith("INSERT INTO actions_signing_source_token"))
+                sourceCredentials.add(`${String(bound[0])}:${String(bound[1])}`);
               return {};
             },
             query,
@@ -809,13 +785,6 @@ describe("native signing admission", () => {
                 approved_at: Number(values[6]),
                 revision: String(values[3]),
               };
-            }
-            if (statement.query.startsWith("DELETE FROM actions_signing_source_credentials")) {
-              const values = statement.values();
-              if (stored?.revision !== String(values[5]))
-                sourceCredentials.delete(
-                  `${String(values[0])}:${String(values[1])}:${String(values[5])}`
-                );
             }
           }
           return [];
@@ -855,14 +824,9 @@ describe("native signing admission", () => {
       "runner-repo",
       "desktop-release"
     );
-    await installSigningCredentials(
-      env,
-      owner.id,
-      "runner-repo",
-      "desktop-release",
-      "github-source",
-      { token: "keep-this-on-same-revision" }
-    );
+    await installSigningSourceCredential(env, owner.id, "runner-repo", {
+      token: "shared-across-revisions",
+    });
     await saveApprovedProfile(
       env,
       { ...owner, recentAuthAt: Date.now() },
@@ -870,13 +834,7 @@ describe("native signing admission", () => {
       "desktop-release"
     );
     const rows = await listApprovedProfiles(env, owner.id, "runner-repo");
-    const sourceStatus = await signingCredentialStatus(
-      env,
-      owner.id,
-      "runner-repo",
-      "desktop-release",
-      "github-source"
-    );
+    const sourceStatus = await signingSourceCredentialStatus(env, owner.id, "runner-repo");
     const loaded = await createSigningExecutionHooks(env, {
       enqueue: vi.fn(async () => ({ runId: "22222222-2222-4222-8222-222222222222" })),
     }).loadApprovedProfile(owner, "runner-repo", "desktop-release");
@@ -895,8 +853,8 @@ describe("native signing admission", () => {
       policyDigest: approved.policyDigest,
       workflowSource: workflow,
     });
-    expect(sourceCredentials.has(`${owner.id}:runner-repo:${approved.revision}`)).toBe(true);
-    expect(sourceStatus).toMatchObject({ platform: "github-source", configured: true });
+    expect(sourceCredentials.has(`${owner.id}:runner-repo`)).toBe(true);
+    expect(sourceStatus).toMatchObject({ configured: true, updatedAt: 1 });
   });
 });
 

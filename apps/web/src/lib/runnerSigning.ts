@@ -1,6 +1,7 @@
 import type {
   SigningCredentialStatus,
   SigningCredentialPlatform,
+  SigningSourceCredentialStatus,
   SigningProfileMetadata,
 } from "../../../../packages/contracts/src/signing";
 import { api } from "./api";
@@ -36,4 +37,23 @@ export async function removeSigningCredentials(
   platform: SigningCredentialPlatform
 ): Promise<SigningCredentialStatus> {
   return api.removeSigningCredentials(repositoryId, name, platform);
+}
+
+export async function getSigningSourceCredentialStatus(
+  repositoryId: string
+): Promise<SigningSourceCredentialStatus> {
+  return api.signingSourceCredentialStatus(repositoryId);
+}
+
+export async function installSigningSourceCredential(
+  repositoryId: string,
+  token: string
+): Promise<SigningSourceCredentialStatus> {
+  return api.installSigningSourceCredential(repositoryId, token);
+}
+
+export async function removeSigningSourceCredential(
+  repositoryId: string
+): Promise<SigningSourceCredentialStatus> {
+  return api.removeSigningSourceCredential(repositoryId);
 }

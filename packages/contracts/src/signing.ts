@@ -5,13 +5,7 @@ export const SIGNING_PART_BYTES = 8 * 1024 * 1024;
 
 export const SigningPlatformSchema = z.enum(["windows", "macos", "ios", "android"]);
 export type SigningPlatform = z.infer<typeof SigningPlatformSchema>;
-export const SigningCredentialPlatformSchema = z.enum([
-  "windows",
-  "macos",
-  "ios",
-  "android",
-  "github-source",
-]);
+export const SigningCredentialPlatformSchema = z.enum(["windows", "macos", "ios", "android"]);
 export type SigningCredentialPlatform = z.infer<typeof SigningCredentialPlatformSchema>;
 export const SigningStageSchema = z.enum([
   "sign",
@@ -241,6 +235,13 @@ export type SigningCredentialStatus = z.infer<typeof SigningCredentialStatusSche
 export const SigningSourceCredentialSchema = z
   .object({ token: z.string().min(1).max(512) })
   .strict();
+export const SigningSourceCredentialStatusSchema = z
+  .object({
+    configured: z.boolean(),
+    updatedAt: z.number().int().positive().nullable(),
+  })
+  .strict();
+export type SigningSourceCredentialStatus = z.infer<typeof SigningSourceCredentialStatusSchema>;
 export const SigningSubmissionSchema = z
   .object({
     profile: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),

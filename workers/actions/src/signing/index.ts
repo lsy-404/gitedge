@@ -27,10 +27,13 @@ import type { SigningEnv, SigningExecutionHooks } from "./types";
 import { attemptPublishDispatch, recordPublishDispatch } from "./publish";
 import {
   installSigningCredentials,
+  installSigningSourceCredential,
   listApprovedProfiles,
   removeSigningCredentials,
+  removeSigningSourceCredential,
   saveApprovedProfile,
   signingCredentialStatus,
+  signingSourceCredentialStatus,
   notarizationDiagnostics,
 } from "./services";
 import {
@@ -766,6 +769,35 @@ export async function handleSigningRoute(
   if (!user || user.agentSession)
     return errorResponse(403, "forbidden", "An account owner session is required.");
   try {
+    if (path[1] === "source-credential" && path.length === 2) {
+      const method = request.method;
+      if (method !== "GET" && method !== "POST" && method !== "DELETE")
+        return errorResponse(
+          405,
+          "method_not_allowed",
+          "Signing source credential operation is not supported."
+        );
+      if (method !== "GET") {
+        const authenticationError = recentHumanError(user);
+        if (authenticationError) return authenticationError;
+      }
+      const repositoryId = url.searchParams.get("repositoryId") ?? "";
+      const repository = repositoryId
+        ? await ownedRunnerRepository(env, user.id, repositoryId)
+        : null;
+      if (!repository || !runnerAccess(user, repository.id, false))
+        return errorResponse(404, "not_found", "Runner repository was not found.");
+      if (method === "POST")
+        await installSigningSourceCredential(
+          env,
+          user.id,
+          repository.id,
+          await readJsonLimited(request, 4096)
+        );
+      else if (method === "DELETE")
+        await removeSigningSourceCredential(env, user.id, repository.id);
+      return dataResponse(await signingSourceCredentialStatus(env, user.id, repository.id));
+    }
     if (path[1] === "profiles") {
       const repositoryId = url.searchParams.get("repositoryId") ?? "";
       if (request.method === "POST" && path.length === 2) {
