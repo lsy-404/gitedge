@@ -60,7 +60,19 @@ GitHub 连接凭证须有目标仓库的 Actions 写入权限才能请求自动�
 
 服务端先检查作用域、标签、空闲执行槽、隔离状态、资源和预算；broker 接受任务前再次按本机容量检查。过期容量不会作为其它 runner 可接手的证据。未报告容量的旧实例不能满足显式资源要求。未连接的 runner 在面板中显示为离线，也不会收到任务。
 
-调度由每个命名空间一个 Durable Object 完成。新任务入队、任务完成、runner 变为空闲或断开、`offer` 被拒绝或超时，以及每分钟的定时对账（按最早排队任务的顺序选择命名空间）都会触发一轮调度：已连接 runner 先按连接上记录的忙碌状态与上报时间筛选，再逐个核对数据库状态，每轮最多取 50 台合格的空闲 runner，起点在各轮之间轮转；候选任务按创建顺序合并 GitEdge 与 GitHub 队列，每个 runner 最多检查 25 项；对每个任务，在这些满足全部硬约束的 runner 中选择评分最低者，向其发送 `offer`（每个 runner 同时最多一个，15 秒内未确认视为超时，被拒绝、超时或领取未成功的 runner 对该任务暂时排除 30 秒；broker 因执行槽占用以 `busy`/`slot-busy` 拒绝时不设该排除，runner 视为忙碌直到下一次空闲上报）。`offer.expiresAt` 只供参考，过期只由服务端判定，broker 不应与本地时钟比较。因此任务总是交给当前最合适的空闲主机，不再有让位等待。评分不会放宽任何资源要求。`CPU-PREFER` 只改变评分：以逻辑 CPU 数乘以空闲比例（1 分钟负载折算）作为 CPU 能力，空闲的 4 核优于繁忙的 4 核，并取代默认对富余核心较少主机的偏向。它不增加硬约束，只在多台 runner 同时满足全部硬要求时影响选择；使用该标签前需先把所有 broker 更新到支持它的版本，旧 broker 会把它当作无效标签而拒绝任务。
+调度由每个命名空间一个 Durable Object 完成。新任务入队、任务完成、runner 变为空闲或断开、`offer` 被拒绝或超时，以及每分钟的定时对账（按最早排队任务的顺序选择命名空间）都会触发一轮调度：已连接 runner 先按连接上记录的忙碌状态与上报时间筛选，再逐个核对数据库状态，每轮最多取 50 台合格的空闲 runner，起点在各轮之间轮转；候选任务按创建顺序合并 GitEdge 与 GitHub 队列，每个 runner 最多检查 25 项；对每个任务，在这些满足全部硬约束的 runner 中先按类型优先级、再选择评分最低者，向其发送 `offer`（每个 runner 同时最多一个，15 秒内未确认视为超时，被拒绝、超时或领取未成功的 runner 对该任务暂时排除 30 秒；broker 因执行槽占用以 `busy`/`slot-busy` 拒绝时不设该排除，runner 视为忙碌直到下一次空闲上报）。`offer.expiresAt` 只供参考，过期只由服务端判定，broker 不应与本地时钟比较。因此任务总是交给当前最合适的空闲主机，不再有让位等待。评分不会放宽任何资源要求。`CPU-PREFER` 只改变评分：以逻辑 CPU 数乘以空闲比例（1 分钟负载折算）作为 CPU 能力，空闲的 4 核优于繁忙的 4 核，并取代默认对富余核心较少主机的偏向。它不增加硬约束，只在多台 runner 同时满足全部硬要求时影响选择；使用该标签前需先把所有 broker 更新到支持它的版本，旧 broker 会把它当作无效标签而拒绝任务。
+
+## 类型与优先级
+
+每个自托管注册有一个类型：`owned`（固定资产，自有硬件，默认）或 `rented`（租用的服务器或 VPS）；账户所有者可在账户设置 → Runners 中修改（`PATCH /api/actions/runners/:id/type`，请求体 `{"type":"owned"|"rented"}`）。GitHub 托管应急 runner 的类型固定为 `github-hosted`，不可修改。
+
+账户的 `typePriority` 是三种类型的一个排列，默认 `["owned","rented","github-hosted"]`（`PUT /api/actions/runners/settings`，同时设置 `githubIncludedUsd`）。多台 runner 同时满足一项任务的全部硬约束时，调度先按类型优先级选择，同一类型内再依次比较缓存偏好与评分，因此固定资产总是先于租用服务器与 GitHub 托管 runner。优先级只在合格 runner 之间排序，不放宽任何标签、资源或预算要求；自定义路由标签照常生效。设置按账户个人命名空间保存，该命名空间内的任务使用它；其它命名空间使用默认顺序。
+
+## GitHub 免费额度
+
+账户的共享 GitHub PAT（签名中心的来源读取凭据，保存在账户 Runner 仓库）用于读取本月 Actions 用量：先 `GET /user` 取得登录名，再调用 `GET /users/{login}/settings/billing/usage/summary?product=actions&year=Y&month=M`。令牌需要 fine-grained 的 "Plan: read" 权限或 classic 的 `user` 范围；缺少权限时状态为 `forbidden`，未配置令牌为 `no-token`，其它读取失败为 `error`，令牌不写入日志。用量中的 `discountAmount` 合计为已用免费额度（美元），`netAmount` 合计为已产生的付费金额，各 SKU 的 `grossQuantity` 为分钟数。
+
+状态为 `exhausted` 的条件：付费金额大于 0，或设置了 `githubIncludedUsd` 且已用免费额度不低于该值；否则为 `ok`。启用了 GitHub 托管应急 runner 的账户由定时任务每 15 分钟刷新一次（每轮最多五个账户），也可用 `POST /api/actions/runners/github-quota/refresh` 立即刷新（十秒内重复请求返回缓存）。状态为 `exhausted` 时，应急 runner 不再被派发，排队任务保留在普通队列中；每月初之前的旧状态不再生效，等待新一轮读取。`GET /api/actions/runners/overview` 返回 `typePriority`、`githubIncludedUsd`、`githubQuota` 与每台 runner 的 `type`。
 
 broker 持有执行槽并确认后，服务端按该 runner 的作用域与标签重新读取这项任务并执行原子领取，同时核对注册标签与容量快照，避免并发更新后错误分配；领取进行期间到达的上报只刷新在线时间，不改动容量快照。领取成功后只向发出确认的那条连接下发 `assign`；若该连接已断开，GitEdge 任务按租约回到排队状态并作废其作业凭据，GitHub 作业以取消结束并由定时清理删除临时 runner，这些都不计为基础设施失败。续租、完成与签名回调仍使用原有的 HTTP 接口。
 

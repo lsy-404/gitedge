@@ -5,6 +5,7 @@ import {
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
 import {
+  DEFAULT_RUNNER_TYPE_PRIORITY,
   RunnerBudgetSchema,
   RunnerCapacitySchema,
   RUNNER_CAPACITY_STALE_MS,
@@ -12,6 +13,7 @@ import {
   type RegisteredRunner,
   type RunnerHistory,
   type RunnerHistoryItem,
+  type RegisteredRunnerType,
   type RunnerOverview,
   type RunnerOverviewQueueItem,
   type RunnerOverviewRunner,
@@ -25,6 +27,7 @@ import {
   runnerNetworkReasons,
 } from "../../../packages/contracts/runner-scheduling.mjs";
 import { errorResponse } from "../../../src/worker/common/http";
+import { accountScope, readGithubQuota, readRunnerSettings } from "./github-quota";
 import { readRunnerDeviceHealth, type DeviceHealthEnv } from "./device-health";
 
 interface RunnerOverviewEnv extends DeviceHealthEnv {
@@ -47,6 +50,8 @@ interface RunnerDbRow {
   held_until: number | null;
   consecutive_failures: number;
   connected: number;
+  runner_type: RegisteredRunnerType;
+  hosted_job_id: string | null;
   owner: string;
   repository: string | null;
 }
@@ -135,7 +140,7 @@ function parseRunner(row: RunnerDbRow): RegisteredRunner {
 
 const runnerSelect = `SELECT r.id,r.name,r.namespace_id,r.repository_id,r.created_by,r.labels_json,r.created_at,
   r.last_seen_at,r.revoked_at,r.capacity_json,r.capacity_reported_at,r.budget_json,r.held_until,
-  r.consecutive_failures,r.connected,n.slug AS owner,p.slug AS repository
+  r.consecutive_failures,r.connected,r.runner_type,r.hosted_job_id,n.slug AS owner,p.slug AS repository
   FROM actions_runners r JOIN namespaces n ON n.id=r.namespace_id
   LEFT JOIN repositories p ON p.id=r.repository_id`;
 
@@ -296,6 +301,21 @@ async function queueRows(
     (a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id)
   );
   return { rows: rows.slice(0, MAX_QUEUE), truncated: rows.length > MAX_QUEUE };
+}
+
+async function accountRunnerSettings(
+  env: RunnerOverviewEnv,
+  user: TrustedUser
+): Promise<Pick<RunnerOverview, "typePriority" | "githubIncludedUsd" | "githubQuota">> {
+  const scope = await accountScope(env.DB, user.id);
+  const settings = scope
+    ? await readRunnerSettings(env.DB, scope.namespaceId)
+    : { typePriority: DEFAULT_RUNNER_TYPE_PRIORITY.slice(), githubIncludedUsd: null };
+  return {
+    typePriority: settings.typePriority,
+    githubIncludedUsd: settings.githubIncludedUsd,
+    githubQuota: await readGithubQuota(env.DB, user.id, scope),
+  };
 }
 
 export async function handleRunnerOverview(
@@ -514,6 +534,7 @@ export async function handleRunnerOverview(
     truncated ||= permittedConnections.length > MAX_CONNECTIONS;
     const result: RunnerOverview = {
       generatedAt: now,
+      ...(await accountRunnerSettings(env, user)),
       healthSource: {
         availability: deviceHealth.availability,
         checkedAt: deviceHealth.checkedAt,
@@ -525,6 +546,7 @@ export async function handleRunnerOverview(
         const budget = parseJson(row.budget_json, (value) => RunnerBudgetSchema.parse(value));
         return {
           ...names.get(row.id)!,
+          type: row.hosted_job_id ? ("github-hosted" as const) : row.runner_type,
           state: displayState(row, current !== null, now),
           capacity,
           capacityReportedAt: row.capacity_reported_at,
@@ -625,6 +647,7 @@ export async function handleRunnerOverview(
   const queued = await queueRows(env, user);
   const result: RunnerOverview = {
     generatedAt: now,
+    ...(await accountRunnerSettings(env, user)),
     healthSource: {
       availability: deviceHealth.availability,
       checkedAt: deviceHealth.checkedAt,

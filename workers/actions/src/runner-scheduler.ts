@@ -14,6 +14,7 @@ import {
   type RunnerBudget,
   type RunnerCapacity,
   type RunnerJobKind,
+  type RunnerType,
 } from "../../../packages/contracts/src/runners";
 import {
   RESOURCE_LABEL_PREFIXES,
@@ -226,6 +227,10 @@ export async function loadRunnerCandidate(
   id: string
 ): Promise<RunnerCandidate | null> {
   return (await queryRunnerCandidates(env, runner, { kind, id }))[0] ?? null;
+}
+
+export function effectiveRunnerType(runner: RunnerRow): RunnerType {
+  return runner.hosted_job_id ? "github-hosted" : (runner.runner_type ?? "owned");
 }
 
 export function evaluateRunnerCandidate(

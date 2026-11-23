@@ -6,6 +6,9 @@ import {
   RunnerClaimLabelSnapshotSchema,
   RunnerCompleteInputSchema,
   RunnerLeaseInputSchema,
+  RunnerSettingsUpdateSchema,
+  RunnerTypeUpdateSchema,
+  type RegisteredRunnerType,
   type RunnerBudget,
   type RunnerCapacity,
   type RunnerJobKind,
@@ -43,6 +46,12 @@ import {
 } from "./signing-runtime";
 import { retryRunnerNetworkFailure } from "./runner-network";
 import {
+  accountScope,
+  readRunnerSettings,
+  refreshGithubQuota,
+  writeRunnerSettings,
+} from "./github-quota";
+import {
   claimRunnerCandidate,
   clearRunnerFailures,
   type EvaluatedRunnerCandidate,
@@ -57,6 +66,7 @@ export interface RunnerEnv extends SigningRuntimeEnv {
   GIT?: Pick<Fetcher, "fetch">;
   RUNNER_DISPATCH?: DurableObjectNamespace<RunnerDispatch>;
   LOG_LEVEL?: string;
+  SIGNING_ENCRYPTION_KEY?: string;
 }
 export interface RunnerRow {
   id: string;
@@ -76,6 +86,7 @@ export interface RunnerRow {
   consecutive_failures: number;
   held_until: number | null;
   connected: number;
+  runner_type?: RegisteredRunnerType;
   hosted_job_kind?: RunnerJobKind | null;
   hosted_job_id?: string | null;
   expires_at?: number | null;
@@ -480,6 +491,48 @@ export async function runnerManagement(
       namespaceId: row.namespace_id,
     });
     return dataResponse({ revoked: true });
+  }
+  if (parts.length === 2 && parts[1] === "settings" && request.method === "PUT") {
+    const scope = user.token?.repositoryIds ? null : await accountScope(env.DB, user.id);
+    if (!scope) return errorResponse(404, "not_found", "Runner settings were not found.");
+    const body = RunnerSettingsUpdateSchema.safeParse(await readJsonLimited(request, 4096));
+    if (!body.success) return errorResponse(400, "bad_request", "Invalid runner settings.");
+    await writeRunnerSettings(env.DB, scope.namespaceId, body.data);
+    return dataResponse(await readRunnerSettings(env.DB, scope.namespaceId));
+  }
+  if (
+    parts.length === 3 &&
+    parts[1] === "github-quota" &&
+    parts[2] === "refresh" &&
+    request.method === "POST"
+  ) {
+    if (user.token?.repositoryIds)
+      return errorResponse(404, "not_found", "Runner settings were not found.");
+    return dataResponse(await refreshGithubQuota(env, user.id, { manual: true }));
+  }
+  if (parts.length === 3 && parts[2] === "type" && request.method === "PATCH") {
+    const row = await env.DB.prepare(`${runnersSelect} WHERE r.id = ?`)
+      .bind(parts[1])
+      .first<RunnerRow>();
+    if (
+      !row ||
+      row.revoked_at !== null ||
+      row.hosted_job_id ||
+      !registrationScopeAllowed(user, row.repository_id) ||
+      (user.id !== row.created_by &&
+        !(await ownsScope(env, user.id, row.namespace_id, row.repository_id)))
+    )
+      return errorResponse(404, "not_found", "Runner registration was not found.");
+    const body = RunnerTypeUpdateSchema.safeParse(await readJsonLimited(request, 1024));
+    if (!body.success) return errorResponse(400, "bad_request", "Invalid runner type.");
+    const updated = await env.DB.prepare(
+      "UPDATE actions_runners SET runner_type=? WHERE id=? AND revoked_at IS NULL"
+    )
+      .bind(body.data.type, row.id)
+      .run();
+    if (updated.meta.changes !== 1)
+      return errorResponse(404, "not_found", "Runner registration was not found.");
+    return dataResponse({ id: row.id, type: body.data.type });
   }
   if (parts.length === 3 && parts[2] === "labels" && request.method === "PUT") {
     const row = await env.DB.prepare(`${runnersSelect} WHERE r.id = ?`)

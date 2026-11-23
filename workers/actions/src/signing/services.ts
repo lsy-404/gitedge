@@ -377,8 +377,8 @@ async function verifySourceCurrent(
   );
 }
 
-async function storedSourceCredential(
-  env: SigningEnv,
+export async function storedSourceCredential(
+  env: Pick<SigningEnv, "DB" | "SIGNING_ENCRYPTION_KEY">,
   ownerId: string,
   repositoryId: string
 ): Promise<string | null> {

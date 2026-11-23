@@ -12,12 +12,14 @@ import {
   RUNNER_OFFER_TIMEOUT_MS,
   RUNNER_SOCKET_STALE_MS,
   RUNNER_SOCKET_SWEEP_MS,
+  runnerTypeRank,
   type RunnerBudget,
   type RunnerCapacity,
   type RunnerJobKind,
 } from "../../../packages/contracts/src/runners";
 import { scoreRunner } from "../../../packages/contracts/runner-scheduling.mjs";
 import { createLogger } from "../../../src/worker/common/logger";
+import { readTypePriority } from "./github-quota";
 import { currentSigningRuntime } from "./signing-runtime";
 import {
   claimSpecificCandidate,
@@ -32,6 +34,7 @@ import {
   type RunnerRow,
 } from "./runners";
 import {
+  effectiveRunnerType,
   evaluateRunnerCandidate,
   listRunnerCandidates,
   loadRunnerCandidate,
@@ -668,6 +671,9 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
         .toArray()
         .map((row) => `${row.job_kind}:${row.job_id}:${row.runner_id}`)
     );
+    const priority = idle.length
+      ? await readTypePriority(this.env.DB, idle[0]!.row.namespace_id)
+      : [];
     const ordered = [...candidates.values()].sort(
       (a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id)
     );
@@ -680,8 +686,13 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
         signingRuntime ??= (await currentSigningRuntime(this.env)) ?? false;
         if (!signingRuntime) continue;
       }
-      let best: { runner: IdleRunner; labels: string[]; score: number; cache: boolean } | null =
-        null;
+      let best: {
+        runner: IdleRunner;
+        labels: string[];
+        rank: number;
+        score: number;
+        cache: boolean;
+      } | null = null;
       for (const runner of idle) {
         if (taken.has(runner.row.id) || declined.has(`${key}:${runner.row.id}`)) continue;
         if (
@@ -700,8 +711,14 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
         if (evaluated.reasons.length) continue;
         const score = scoreRunner(runner.capacity, runner.budget, runner.used, evaluated.claim);
         const cache = runnerHasPreferredCache(runner.row, runner.capacity);
-        if (!best || (cache && !best.cache) || (cache === best.cache && score < best.score))
-          best = { runner, labels: evaluated.labels, score, cache };
+        const rank = runnerTypeRank(priority, effectiveRunnerType(runner.row));
+        if (
+          !best ||
+          rank < best.rank ||
+          (rank === best.rank &&
+            ((cache && !best.cache) || (cache === best.cache && score < best.score)))
+        )
+          best = { runner, labels: evaluated.labels, rank, score, cache };
       }
       if (!best) continue;
       this.offer(best.runner.row.id, candidate, best.labels, now);

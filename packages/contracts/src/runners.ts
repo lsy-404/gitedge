@@ -83,6 +83,44 @@ export const RunnerBudgetSchema = z
   .strict();
 export type RunnerBudget = z.infer<typeof RunnerBudgetSchema>;
 
+export const RUNNER_TYPES = ["owned", "rented", "github-hosted"] as const;
+export const RunnerTypeSchema = z.enum(RUNNER_TYPES);
+export type RunnerType = z.infer<typeof RunnerTypeSchema>;
+export const RegisteredRunnerTypeSchema = z.enum(["owned", "rented"]);
+export type RegisteredRunnerType = z.infer<typeof RegisteredRunnerTypeSchema>;
+export const DEFAULT_RUNNER_TYPE_PRIORITY: readonly RunnerType[] = RUNNER_TYPES;
+export const RunnerTypePrioritySchema = z
+  .array(RunnerTypeSchema)
+  .length(RUNNER_TYPES.length)
+  .refine((types) => new Set(types).size === RUNNER_TYPES.length);
+export const RunnerTypeUpdateSchema = z.object({ type: RegisteredRunnerTypeSchema }).strict();
+export const RunnerSettingsUpdateSchema = z
+  .object({
+    typePriority: RunnerTypePrioritySchema,
+    githubIncludedUsd: z.number().finite().min(0).max(1_000_000).nullable(),
+  })
+  .strict();
+export interface RunnerSettings {
+  typePriority: RunnerType[];
+  githubIncludedUsd: number | null;
+}
+export const GithubQuotaStateSchema = z.enum(["ok", "exhausted", "no-token", "forbidden", "error"]);
+export type GithubQuotaState = z.infer<typeof GithubQuotaStateSchema>;
+export interface GithubQuota {
+  state: GithubQuotaState;
+  includedUsedUsd: number;
+  paidUsd: number;
+  minutes: Array<{ sku: string; minutes: number }>;
+  checkedAt: number | null;
+  message: string | null;
+}
+
+// Lower is preferred; types missing from a stored priority sort last.
+export function runnerTypeRank(priority: readonly RunnerType[], type: RunnerType): number {
+  const index = priority.indexOf(type);
+  return index === -1 ? priority.length : index;
+}
+
 export interface JobClaim {
   labels: string[];
   memMb: number;
@@ -172,6 +210,7 @@ export interface RunnerDeviceHealth {
   disks: Array<{ path: string; totalBytes: number; usedPercent: number }>;
 }
 export interface RunnerOverviewRunner extends RegisteredRunner {
+  type: RunnerType;
   state: "idle" | "busy" | "held" | "offline";
   capacity: RunnerCapacity | null;
   capacityReportedAt: number | null;
@@ -231,6 +270,9 @@ export interface RunnerOverviewQueueItem {
 }
 export interface RunnerOverview {
   generatedAt: number;
+  typePriority: RunnerType[];
+  githubIncludedUsd: number | null;
+  githubQuota: GithubQuota;
   healthSource: { availability: "available" | "unavailable"; checkedAt: number };
   runners: RunnerOverviewRunner[];
   github: RunnerOverviewGithubConnection[];
