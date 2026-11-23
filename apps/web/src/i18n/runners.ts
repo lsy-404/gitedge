@@ -49,8 +49,8 @@ export const runnerMessages = {
     githubQuotaIncluded: "每月包含额度（美元）",
     githubQuotaIncludedHint: "Free 为 12，Pro 为 18",
     githubQuotaSave: "保存额度",
-    githubQuotaNoToken: "尚未配置 GitHub 令牌。请使用带 Plan 只读权限的细粒度令牌。",
-    githubQuotaForbidden: "GitHub 令牌缺少 Plan 只读权限，无法读取用量。",
+    githubQuotaNoToken: "尚未保存账户 GitHub 令牌。请在「服务与签名」中保存带 user 权限的经典令牌。",
+    githubQuotaForbidden: "GitHub 令牌无法读取用量。经典令牌需要 user 权限，细粒度令牌需要 Plan 只读权限。",
     runnerDashboardTitle: "Runners",
     runnerDashboardDescription: "查看本机 runner 状态、执行队列与近期运行记录。",
     runnerOnline: "在线",
@@ -252,9 +252,9 @@ export const runnerMessages = {
     githubQuotaIncludedHint: "12 for Free, 18 for Pro",
     githubQuotaSave: "Save quota",
     githubQuotaNoToken:
-      "No GitHub token is configured. Use a fine-grained token with read-only Plan permission.",
+      "No account GitHub token is saved. Save a classic token with the user scope under Services & signing.",
     githubQuotaForbidden:
-      "The GitHub token lacks read-only Plan permission, so usage cannot be read.",
+      "The GitHub token cannot read usage. A classic token needs the user scope; a fine-grained token needs read-only Plan.",
     runnerDashboardTitle: "Runners",
     runnerDashboardDescription: "Review self-hosted runner health, queued jobs, and recent runs.",
     runnerOnline: "Online",

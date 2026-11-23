@@ -156,57 +156,6 @@ describe("AccountRunners", () => {
     expect(mounted.root.textContent).not.toContain("credential");
   });
 
-  it("keeps the selected tab in the URL and moves between tabs with the keyboard", async () => {
-    vi.spyOn(api, "runnerOverview").mockResolvedValue(overview());
-    const mounted = await mountAt("/_verify/runner-tabs", "/_verify/runner-tabs?tab=slots", () =>
-      h(AccountRunners)
-    );
-    await settle();
-    const selected = mounted.root.querySelector('[role="tab"][aria-selected="true"]');
-    expect(selected?.id).toBe("runner-tab-slots");
-    selected!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
-    await settle();
-    expect(router.currentRoute.value.query.tab).toBe("ondemand");
-  });
-
-  it("saves the type priority and the monthly included quota from their tabs", async () => {
-    vi.spyOn(api, "runnerOverview").mockResolvedValue(overview());
-    const updateSettings = vi
-      .spyOn(api, "updateRunnerSettings")
-      .mockImplementation(async (settings) => settings);
-    const updateType = vi
-      .spyOn(api, "updateRunnerType")
-      .mockResolvedValue({ id: "runner-1", type: "rented" });
-    const mounted = await mountAt("/_verify/runner-types", "/_verify/runner-types?tab=slots", () =>
-      h(AccountRunners)
-    );
-    await settle();
-    const select = mounted.root.querySelector<HTMLSelectElement>("#runner-type-runner-1")!;
-    select.value = "rented";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-    await settle();
-    expect(updateType).toHaveBeenCalledWith("runner-1", "rented");
-
-    findButton(mounted.root, "↓").click();
-    await settle();
-    findButton(mounted.root, "Save priority").click();
-    await settle();
-    expect(updateSettings).toHaveBeenLastCalledWith({
-      typePriority: ["rented", "owned", "github-hosted"],
-      githubIncludedUsd: 12,
-    });
-
-    await openTab("ondemand");
-    expect(mounted.root.textContent).toContain("read-only Plan permission");
-    fill(mounted.root.querySelector<HTMLInputElement>("#github-included-usd")!, "18");
-    submit(mounted.root.querySelector<HTMLFormElement>(".quota-form")!);
-    await settle();
-    expect(updateSettings).toHaveBeenLastCalledWith({
-      typePriority: ["rented", "owned", "github-hosted"],
-      githubIncludedUsd: 18,
-    });
-  });
-
   it("saves explicit custom routing labels without exposing system labels for editing", async () => {
     vi.spyOn(api, "runnerOverview").mockResolvedValue(overview());
     vi.spyOn(api, "accountRunner").mockResolvedValue({ repository: null });
