@@ -8,7 +8,6 @@ import {
 } from "./runners";
 import { parseRunnerWorkflow, runnerDispatchInputs } from "./runner-workflow";
 import { queueGithubRunner, expireGithubRunners } from "./github-runners";
-import { accountGithubToken } from "./account-github-token";
 import { cleanRunnerSchedulingData } from "./runner-scheduler";
 import { handleRunnerHistory, handleRunnerOverview } from "./runner-overview";
 import {
@@ -1788,8 +1787,6 @@ export default {
         return await handleInternalProposal(request, env, "merge_group");
       if (url.pathname === "/internal/push") return await handleInternalPush(request, env);
       if (url.pathname === "/internal/github-runner") return await queueGithubRunner(request, env);
-      if (url.pathname === "/internal/account-github-token")
-        return await accountGithubToken(request, env);
       if (url.pathname === "/hosted-runners/bootstrap")
         return await bootstrapHostedRunner(request, env);
       if (
