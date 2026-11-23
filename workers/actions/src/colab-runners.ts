@@ -1,8 +1,6 @@
 import { z } from "zod";
 import {
   COLAB_SESSION_MAX_MS,
-  COLAB_WAKER_STALE_MS,
-  ColabDispatchReportSchema,
   RUNNER_TOKEN_PREFIX,
   RunnerLabelsSchema,
   isRunnerSystemLabel,
@@ -10,7 +8,6 @@ import {
   sha256Hex,
   type ColabDispatchState,
   type ColabDispatchSummary,
-  type ColabWaker,
   type RunnerJobKind,
   type RunnerOverviewColab,
 } from "../../../packages/contracts/src/index";
@@ -19,19 +16,41 @@ import { randomHex } from "../../../src/worker/common/encoding";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 import { createLogger } from "../../../src/worker/common/logger";
 import { readJsonLimited } from "../../../src/worker/common/readText";
+import {
+  ColabAccountUnavailableError,
+  colabAccessToken,
+  readColabAccount,
+  recordComputeUnits,
+} from "./colab/account";
+import { runCell } from "./colab/kernel";
+import { STARTED_MARKER, currentLauncher, launchCell } from "./colab/launch";
+import {
+  TooManyAssignmentsError,
+  assignRuntime,
+  findAssignment,
+  listAssignmentEndpoints,
+  unassignRuntime,
+} from "./colab/session-backend";
 import { accountScope, readRunnerSettings } from "./github-quota";
 import { recentlySeenPrivateRunner } from "./hosted-runners";
-import { currentRunnerKit } from "./runner-kit";
-import type { RunnerEnv, RunnerRow } from "./runners";
+import type { RunnerEnv } from "./runners";
 
 const CLAIM_WINDOW_MS = 10 * 60_000;
 const BOOTSTRAP_WINDOW_MS = 15 * 60_000;
 // Node, the official runner and the runner kit are installed in the fresh runtime first.
 const SETUP_ALLOWANCE_MS = 30 * 60_000;
 const RETRY_AFTER_MS = 15 * 60_000;
-const RETRYABLE_ERRORS = ["colab_waker_unavailable", "colab_connection_failed"];
-const ACTIVE_STATES = "('pending','claimed','starting','running')";
+const RETRYABLE_ERRORS = [
+  "colab_account_unavailable",
+  "colab_assignment_failed",
+  "colab_too_many_assignments",
+];
+const ACTIVE_STATES = "('pending','starting','running')";
+const TERMINAL_STATES = "('finished','failed','cancelled')";
 const RECENT_LIMIT = 10;
+const START_LIMIT = 5;
+const RELEASE_LIMIT = 10;
+const LAUNCH_TIMEOUT_MS = 120_000;
 
 const bootstrapSchema = z
   .object({
@@ -61,7 +80,6 @@ interface DispatchRow {
   repository_id: string;
   session_ms: number;
   state: ColabDispatchState;
-  waker_runner_id: string | null;
   runner_id: string | null;
   claimed_at: number | null;
   expires_at: number;
@@ -76,7 +94,7 @@ function jobLabels(json: string): string[] | null {
   }
 }
 
-// Colab runtimes are Linux x64 without a selectable accelerator through colab-mcp.
+// Dispatches allocate the DEFAULT variant: a Linux x64 CPU runtime.
 export function colabSessionMs(labels: string[], defaultMinutes: number): number | null {
   const claim = parseJobClaim(labels, defaultMinutes);
   if (!claim.valid || claim.gpuVendor || claim.vramMb) return null;
@@ -96,6 +114,29 @@ const jobCompletedOnRunner = `((d.job_kind='gitedge' AND EXISTS (SELECT 1 FROM a
 const colabEnabledFor = (owner: string): string =>
   `EXISTS (SELECT 1 FROM actions_runner_settings rs JOIN namespaces rn ON rn.id=rs.namespace_id
     WHERE rn.kind='personal' AND rn.created_by=${owner} AND rs.colab_enabled=1)`;
+const accountReadyFor = (owner: string): string =>
+  `EXISTS (SELECT 1 FROM actions_colab_accounts ca JOIN users cu ON cu.id=ca.owner_id
+    WHERE ca.owner_id=${owner} AND ca.error IS NULL AND cu.disabled_at IS NULL)`;
+
+function logger(env: RunnerEnv) {
+  return createLogger(env.LOG_LEVEL, { service: "colab-runner" });
+}
+
+function reasonOf(cause: unknown): string {
+  return (cause instanceof Error ? cause.message : "unknown").slice(0, 300);
+}
+
+// Embedded in the launch cell's shell script, so only a plain https origin is accepted.
+function colabOrigin(env: RunnerEnv): string | null {
+  const value = env.PUBLIC_ORIGIN;
+  if (!value) return null;
+  try {
+    const origin = new URL(value).origin;
+    return origin === value.replace(/\/$/, "") && origin.startsWith("https://") ? origin : null;
+  } catch {
+    return null;
+  }
+}
 
 async function revokeRunner(env: RunnerEnv, runnerId: string | null, now: number): Promise<void> {
   if (!runnerId) return;
@@ -106,7 +147,8 @@ async function revokeRunner(env: RunnerEnv, runnerId: string | null, now: number
 
 async function settleDispatches(env: RunnerEnv, now: number): Promise<void> {
   await env.DB.prepare(
-    `DELETE FROM actions_colab_dispatches WHERE state='failed' AND error IN (${RETRYABLE_ERRORS.map(() => "?").join(",")}) AND created_at<?`
+    `DELETE FROM actions_colab_dispatches WHERE state='failed' AND error IN (${RETRYABLE_ERRORS.map(() => "?").join(",")}) AND created_at<?
+      AND (claimed_at IS NULL OR released_at IS NOT NULL)`
   )
     .bind(...RETRYABLE_ERRORS, now - RETRY_AFTER_MS)
     .run();
@@ -114,10 +156,10 @@ async function settleDispatches(env: RunnerEnv, now: number): Promise<void> {
     `SELECT d.id,d.runner_id,
       CASE
         WHEN d.state='running' AND ${jobCompletedOnRunner} THEN 'finished'
-        WHEN d.state='pending' AND d.expires_at<=? THEN 'failed:colab_waker_unavailable'
-        WHEN d.state IN ('claimed','starting') AND d.claimed_at<=? THEN 'failed:colab_bootstrap_timeout'
+        WHEN d.state='pending' AND d.expires_at<=? THEN 'failed:colab_account_unavailable'
+        WHEN d.state='starting' AND d.claimed_at<=? THEN 'failed:colab_bootstrap_timeout'
         WHEN d.expires_at<=? THEN 'failed:colab_session_expired'
-        WHEN d.state IN ('pending','claimed','starting') AND NOT ${colabEnabledFor("d.owner_id")} THEN 'cancelled'
+        WHEN d.state IN ('pending','starting') AND NOT (${colabEnabledFor("d.owner_id")} AND ${accountReadyFor("d.owner_id")}) THEN 'cancelled'
         WHEN NOT ${jobStillQueued} AND NOT (d.state='running' AND ${jobRunningOnRunner}) THEN 'cancelled'
         WHEN EXISTS (SELECT 1 FROM users u WHERE u.id=d.owner_id AND u.disabled_at IS NOT NULL) THEN 'cancelled'
       END AS outcome
@@ -137,12 +179,198 @@ async function settleDispatches(env: RunnerEnv, now: number): Promise<void> {
   }
 }
 
-export async function reconcileColabRunners(env: RunnerEnv): Promise<void> {
+interface ReleaseRow {
+  id: string;
+  owner_id: string;
+  colab_endpoint: string | null;
+}
+
+/** Unassigns the dispatch's runtime and marks it released; throws while Colab still holds it. */
+async function releaseDispatch(env: RunnerEnv, row: ReleaseRow): Promise<void> {
+  const accessToken = await colabAccessToken(env, row.owner_id);
+  // Without a stored endpoint, the dispatch id as notebook hash finds an allocation that raced the failure.
+  const endpoint =
+    row.colab_endpoint ?? (await findAssignment(accessToken, row.id))?.endpoint ?? null;
+  if (endpoint) {
+    try {
+      await unassignRuntime(accessToken, endpoint);
+    } catch (cause) {
+      if ((await listAssignmentEndpoints(accessToken)).includes(endpoint)) throw cause;
+    }
+  }
+  await env.DB.prepare(
+    "UPDATE actions_colab_dispatches SET released_at=? WHERE id=? AND released_at IS NULL"
+  )
+    .bind(Date.now(), row.id)
+    .run();
+  logger(env).info("colab-runner:runtime-released", { id: row.id, endpoint });
+}
+
+async function releaseDispatches(env: RunnerEnv): Promise<void> {
+  const rows = await env.DB.prepare(
+    `SELECT d.id,d.owner_id,d.colab_endpoint FROM actions_colab_dispatches d
+    WHERE d.released_at IS NULL AND d.claimed_at IS NOT NULL AND d.state IN ${TERMINAL_STATES}
+      AND ${accountReadyFor("d.owner_id")}
+    ORDER BY d.claimed_at LIMIT ${RELEASE_LIMIT}`
+  ).all<ReleaseRow>();
+  for (const row of rows.results)
+    await releaseDispatch(env, row).catch((cause: unknown) =>
+      logger(env).warn("colab-runner:release-failed", { id: row.id, reason: reasonOf(cause) })
+    );
+}
+
+/** Cancels the owner's active dispatches and releases their runtimes, for a disconnecting account. */
+export async function stopOwnerDispatches(env: RunnerEnv, ownerId: string): Promise<void> {
+  const now = Date.now();
+  const active = await env.DB.prepare(
+    `UPDATE actions_colab_dispatches SET state='cancelled',bootstrap_token_hash=NULL
+    WHERE owner_id=? AND state IN ${ACTIVE_STATES} RETURNING runner_id`
+  )
+    .bind(ownerId)
+    .all<{ runner_id: string | null }>();
+  for (const row of active.results) await revokeRunner(env, row.runner_id, now);
+  const rows = await env.DB.prepare(
+    `SELECT id,owner_id,colab_endpoint FROM actions_colab_dispatches
+    WHERE owner_id=? AND released_at IS NULL AND claimed_at IS NOT NULL`
+  )
+    .bind(ownerId)
+    .all<ReleaseRow>();
+  for (const row of rows.results)
+    await releaseDispatch(env, row).catch((cause: unknown) =>
+      logger(env).warn("colab-runner:release-failed", { id: row.id, reason: reasonOf(cause) })
+    );
+}
+
+interface StartingDispatch {
+  id: string;
+  owner_id: string;
+  expires_at: number;
+}
+
+async function launchDispatch(
+  env: RunnerEnv,
+  dispatch: StartingDispatch,
+  bootstrapToken: string,
+  origin: string
+): Promise<void> {
+  let reason = "colab_account_unavailable";
+  try {
+    const accessToken = await colabAccessToken(env, dispatch.owner_id);
+    await recordComputeUnits(env, dispatch.owner_id, accessToken);
+    reason = "colab_assignment_failed";
+    const runtime = await assignRuntime(accessToken, dispatch.id).catch((cause: unknown) => {
+      if (cause instanceof TooManyAssignmentsError) reason = "colab_too_many_assignments";
+      throw cause;
+    });
+    const stored = await env.DB.prepare(
+      "UPDATE actions_colab_dispatches SET colab_endpoint=? WHERE id=? AND state='starting' RETURNING id"
+    )
+      .bind(runtime.endpoint, dispatch.id)
+      .first<{ id: string }>();
+    if (!stored) {
+      // The dispatch ended while Colab allocated, so its release may already have run without this endpoint.
+      await env.DB.prepare(
+        "UPDATE actions_colab_dispatches SET colab_endpoint=?,released_at=NULL WHERE id=?"
+      )
+        .bind(runtime.endpoint, dispatch.id)
+        .run();
+      await releaseDispatch(env, {
+        id: dispatch.id,
+        owner_id: dispatch.owner_id,
+        colab_endpoint: runtime.endpoint,
+      }).catch((error: unknown) =>
+        logger(env).warn("colab-runner:release-failed", {
+          id: dispatch.id,
+          reason: reasonOf(error),
+        })
+      );
+      return;
+    }
+    reason = "colab_launch_failed";
+    const launcher = await currentLauncher(env);
+    const result = await runCell(
+      runtime,
+      launchCell({ origin, bootstrapToken, launcher }),
+      STARTED_MARKER,
+      LAUNCH_TIMEOUT_MS
+    );
+    if (result.status !== "matched") throw new Error(result.output || "The launch cell failed.");
+    logger(env).info("colab-runner:runner-starting", {
+      id: dispatch.id,
+      endpoint: runtime.endpoint,
+    });
+  } catch (cause) {
+    if (cause instanceof ColabAccountUnavailableError) reason = "colab_account_unavailable";
+    logger(env).warn("colab-runner:start-failed", {
+      id: dispatch.id,
+      reason,
+      detail: reasonOf(cause),
+    });
+    await env.DB.prepare(
+      "UPDATE actions_colab_dispatches SET state='failed',error=?,bootstrap_token_hash=NULL WHERE id=? AND state='starting'"
+    )
+      .bind(reason, dispatch.id)
+      .run();
+    const row = await env.DB.prepare(
+      "SELECT id,owner_id,colab_endpoint FROM actions_colab_dispatches WHERE id=? AND released_at IS NULL"
+    )
+      .bind(dispatch.id)
+      .first<ReleaseRow>();
+    if (row)
+      await releaseDispatch(env, row).catch((error: unknown) =>
+        logger(env).warn("colab-runner:release-failed", {
+          id: dispatch.id,
+          reason: reasonOf(error),
+        })
+      );
+  }
+}
+
+async function startPendingDispatches(
+  env: RunnerEnv,
+  ctx: ExecutionContext,
+  now: number
+): Promise<void> {
+  const candidates = await env.DB.prepare(
+    `SELECT d.id FROM actions_colab_dispatches d WHERE d.state='pending' AND d.expires_at>?
+      AND ${colabEnabledFor("d.owner_id")} AND ${accountReadyFor("d.owner_id")} AND ${jobStillQueued}
+    ORDER BY d.created_at LIMIT ${START_LIMIT}`
+  )
+    .bind(now)
+    .all<{ id: string }>();
+  if (candidates.results.length === 0) return;
+  const origin = colabOrigin(env);
+  if (!origin) {
+    logger(env).warn("colab-runner:origin-missing");
+    return;
+  }
+  for (const candidate of candidates.results) {
+    const token = randomHex(32);
+    const claimed = await env.DB.prepare(
+      `UPDATE actions_colab_dispatches SET state='starting',claimed_at=?,bootstrap_token_hash=?,expires_at=?+session_ms
+      WHERE id=? AND state='pending' RETURNING id,owner_id,expires_at`
+    )
+      .bind(now, await sha256Hex(token), now, candidate.id)
+      .first<StartingDispatch>();
+    if (!claimed) continue;
+    logger(env).info("colab-runner:dispatch-starting", { id: claimed.id });
+    ctx.waitUntil(
+      launchDispatch(env, claimed, token, origin).catch((cause: unknown) =>
+        logger(env).error("colab-runner:start-crashed", {
+          id: claimed.id,
+          reason: reasonOf(cause),
+        })
+      )
+    );
+  }
+}
+
+export async function reconcileColabRunners(env: RunnerEnv, ctx: ExecutionContext): Promise<void> {
   const now = Date.now();
   await settleDispatches(env, now);
+  await releaseDispatches(env);
   const monthStart = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), 1);
-  const ownerReady = `${colabEnabledFor("q.owner_id")} AND EXISTS (SELECT 1 FROM actions_runners w JOIN users wu ON wu.id=w.created_by
-    WHERE w.created_by=q.owner_id AND w.revoked_at IS NULL AND w.hosted_job_id IS NULL AND wu.disabled_at IS NULL AND w.colab_waker_seen_at>?)`;
+  const ownerReady = `${colabEnabledFor("q.owner_id")} AND ${accountReadyFor("q.owner_id")}`;
   const jobs = await env.DB.prepare(
     `SELECT q.*,
       (SELECT h.connection_id FROM forge_hosted_runner_settings h WHERE h.owner_id=q.owner_id) AS github_connection,
@@ -166,14 +394,7 @@ export async function reconcileColabRunners(env: RunnerEnv): Promise<void> {
         AND h.status IN ('dispatching','dispatched','consumed','cancel_pending'))
     ORDER BY q.created_at,q.id LIMIT 10`
   )
-    .bind(
-      monthStart,
-      now - 15 * 60_000,
-      now - 5 * 60_000,
-      now - 15 * 60_000,
-      now - 5 * 60_000,
-      now - COLAB_WAKER_STALE_MS
-    )
+    .bind(monthStart, now - 15 * 60_000, now - 5 * 60_000, now - 15 * 60_000, now - 5 * 60_000)
     .all<QueuedColabJob>();
   const priorities = new Map<string, boolean>();
   for (const job of jobs.results) {
@@ -216,120 +437,9 @@ export async function reconcileColabRunners(env: RunnerEnv): Promise<void> {
       )
       .run();
     if (inserted.meta.changes === 1)
-      createLogger(env.LOG_LEVEL, { service: "colab-runner" }).info(
-        "colab-runner:dispatch-created",
-        {
-          jobKind: job.kind,
-          jobId: job.id,
-        }
-      );
+      logger(env).info("colab-runner:dispatch-created", { jobKind: job.kind, jobId: job.id });
   }
-}
-
-async function touchWaker(env: RunnerEnv, runnerId: string, now: number): Promise<void> {
-  await env.DB.prepare("UPDATE actions_runners SET colab_waker_seen_at=? WHERE id=?")
-    .bind(now, runnerId)
-    .run();
-}
-
-async function claimDispatch(env: RunnerEnv, runner: RunnerRow): Promise<Response> {
-  const now = Date.now();
-  await touchWaker(env, runner.id, now);
-  const token = randomHex(32);
-  const claimed = await env.DB.prepare(
-    `UPDATE actions_colab_dispatches SET state='claimed',waker_runner_id=?,claimed_at=?,bootstrap_token_hash=?,expires_at=?+session_ms
-    WHERE id=(SELECT d.id FROM actions_colab_dispatches d WHERE d.owner_id=? AND d.state='pending' AND d.expires_at>?
-      AND ${colabEnabledFor("d.owner_id")} AND ${jobStillQueued} ORDER BY d.created_at LIMIT 1)
-    AND state='pending' RETURNING id,job_kind,job_id,expires_at`
-  )
-    .bind(runner.id, now, await sha256Hex(token), now, runner.created_by, now)
-    .first<{ id: string; job_kind: RunnerJobKind; job_id: string; expires_at: number }>();
-  const kit = await currentRunnerKit(env);
-  if (!claimed) return dataResponse({ dispatch: null, kit });
-  createLogger(env.LOG_LEVEL, { service: "colab-runner" }).info("colab-runner:dispatch-claimed", {
-    id: claimed.id,
-    wakerId: runner.id,
-  });
-  return dataResponse({
-    dispatch: {
-      id: claimed.id,
-      jobKind: claimed.job_kind,
-      jobId: claimed.job_id,
-      bootstrapToken: token,
-      bootstrapBy: now + BOOTSTRAP_WINDOW_MS,
-      expiresAt: claimed.expires_at,
-    },
-    kit,
-  });
-}
-
-async function reportDispatch(
-  request: Request,
-  env: RunnerEnv,
-  runner: RunnerRow,
-  id: string
-): Promise<Response> {
-  const now = Date.now();
-  await touchWaker(env, runner.id, now);
-  const body = ColabDispatchReportSchema.safeParse(await readJsonLimited(request, 2048));
-  if (!body.success) return errorResponse(400, "bad_request", "Invalid Colab dispatch report.");
-  const row = await env.DB.prepare(
-    "SELECT * FROM actions_colab_dispatches WHERE id=? AND waker_runner_id=?"
-  )
-    .bind(id, runner.id)
-    .first<DispatchRow>();
-  if (!row) return errorResponse(404, "not_found", "Colab dispatch was not found.");
-  const { state, error } = body.data;
-  if (state === "starting")
-    await env.DB.prepare(
-      "UPDATE actions_colab_dispatches SET state='starting' WHERE id=? AND state='claimed'"
-    )
-      .bind(id)
-      .run();
-  else if (state === "finished" || state === "failed") {
-    // A runner that exits without ever bootstrapping never took the job.
-    const finished = state === "finished" && row.runner_id !== null;
-    const next: ColabDispatchState = finished ? "finished" : "failed";
-    const reason = finished
-      ? null
-      : (error ?? (state === "finished" ? "colab_runner_exited" : "colab_session_failed"));
-    await env.DB.prepare(
-      `UPDATE actions_colab_dispatches SET state=?,error=COALESCE(?,error),bootstrap_token_hash=NULL WHERE id=? AND state IN ${ACTIVE_STATES}`
-    )
-      .bind(next, reason, id)
-      .run();
-    await revokeRunner(env, row.runner_id, now);
-    if (next === "failed")
-      createLogger(env.LOG_LEVEL, { service: "colab-runner" }).warn("colab-runner:session-failed", {
-        id,
-        reason,
-      });
-  }
-  const current = await env.DB.prepare(
-    "SELECT state,error,expires_at FROM actions_colab_dispatches WHERE id=?"
-  )
-    .bind(id)
-    .first<{ state: ColabDispatchState; error: string | null; expires_at: number }>();
-  return dataResponse({
-    state: current?.state ?? "cancelled",
-    error: current?.error ?? null,
-    expiresAt: current?.expires_at ?? now,
-  });
-}
-
-// Runner-credential routes for the host that wakes Colab sessions.
-export async function colabWakerRequest(
-  request: Request,
-  env: RunnerEnv,
-  runner: RunnerRow,
-  pathname: string
-): Promise<Response> {
-  if (runner.hosted_job_id)
-    return errorResponse(403, "forbidden", "Ephemeral runners cannot wake Colab sessions.");
-  if (pathname === "/runner/colab/claim") return claimDispatch(env, runner);
-  const report = /^\/runner\/colab\/dispatches\/([0-9a-f-]{36})$/.exec(pathname);
-  if (report) return reportDispatch(request, env, runner, report[1]);
-  return errorResponse(404, "not_found", "Colab endpoint was not found.");
+  await startPendingDispatches(env, ctx, now);
 }
 
 export async function bootstrapColabRunner(request: Request, env: RunnerEnv): Promise<Response> {
@@ -345,7 +455,7 @@ export async function bootstrapColabRunner(request: Request, env: RunnerEnv): Pr
         ELSE (SELECT labels_json FROM actions_github_runner_jobs WHERE id=d.job_id) END AS labels_json
     FROM actions_colab_dispatches d JOIN repositories p ON p.id=d.repository_id JOIN namespaces n ON n.id=p.namespace_id
     JOIN users u ON u.id=d.owner_id AND u.disabled_at IS NULL
-    WHERE d.bootstrap_token_hash=? AND d.state IN ('claimed','starting') AND d.claimed_at>? AND d.expires_at>?
+    WHERE d.bootstrap_token_hash=? AND d.state='starting' AND d.claimed_at>? AND d.expires_at>?
       AND p.deleted_at IS NULL AND p.archived=0 AND p.actions_enabled=1`
   )
     .bind(hash, now - BOOTSTRAP_WINDOW_MS, now)
@@ -380,7 +490,7 @@ export async function bootstrapColabRunner(request: Request, env: RunnerEnv): Pr
     env.DB.prepare(
       `INSERT INTO actions_runners (id,name,namespace_id,repository_id,created_by,labels_json,token_hash,created_at,hosted_job_kind,hosted_job_id,hosted_type,expires_at)
       SELECT ?,?,?,?,?,?,?,?,?,?,'colab',? WHERE EXISTS (SELECT 1 FROM actions_colab_dispatches d JOIN repositories p ON p.id=d.repository_id
-        WHERE d.id=? AND d.bootstrap_token_hash=? AND d.state IN ('claimed','starting') AND p.deleted_at IS NULL AND p.archived=0 AND p.actions_enabled=1
+        WHERE d.id=? AND d.bootstrap_token_hash=? AND d.state='starting' AND p.deleted_at IS NULL AND p.archived=0 AND p.actions_enabled=1
         AND ${colabEnabledFor("d.owner_id")} AND ((d.job_kind='gitedge' AND p.actions_runner_enabled=1 AND EXISTS (SELECT 1 FROM actions_runner_runs j WHERE j.run_id=d.job_id AND j.status='queued'))
           OR (d.job_kind='github' AND EXISTS (SELECT 1 FROM actions_github_runner_jobs j JOIN forge_github_connections c ON c.id=j.connection_id WHERE j.id=d.job_id AND j.status='queued' AND c.enabled=1 AND c.runner_enabled=1))))`
     ).bind(
@@ -420,14 +530,6 @@ export async function readColabOverview(
   userId: string,
   enabled: boolean
 ): Promise<RunnerOverviewColab> {
-  const wakers = await db
-    .prepare(
-      `SELECT id AS runnerId,name,colab_waker_seen_at AS lastSeenAt FROM actions_runners
-      WHERE created_by=? AND revoked_at IS NULL AND hosted_job_id IS NULL AND colab_waker_seen_at IS NOT NULL
-      ORDER BY colab_waker_seen_at DESC LIMIT ${RECENT_LIMIT}`
-    )
-    .bind(userId)
-    .all<ColabWaker>();
   const recent = await db
     .prepare(
       `SELECT job_id AS jobId,state,created_at AS createdAt,error FROM actions_colab_dispatches
@@ -435,5 +537,5 @@ export async function readColabOverview(
     )
     .bind(userId)
     .all<ColabDispatchSummary>();
-  return { enabled, wakers: wakers.results, recent: recent.results };
+  return { enabled, account: await readColabAccount(db, userId), recent: recent.results };
 }

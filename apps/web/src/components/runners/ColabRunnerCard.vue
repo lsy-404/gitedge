@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { FluentButton } from "@platform-kit/fluent/vue";
+import { FluentButton, FluentField } from "@platform-kit/fluent/vue";
 import type {
+  ColabAccount,
   ColabDispatchState,
   RunnerOverviewColab,
   RunnerSettings,
 } from "../../../../../packages/contracts/src/runners";
-import { COLAB_WAKER_STALE_MS } from "../../../../../packages/contracts/src/runners";
 import { api } from "../../lib/api";
 import type { BadgeTone } from "../../lib/runner-display";
 import NoticeBar from "../NoticeBar.vue";
@@ -16,15 +16,20 @@ import StatusBadge from "../StatusBadge.vue";
 const props = defineProps<{
   colab: RunnerOverviewColab;
   settings: RunnerSettings;
-  generatedAt: number;
 }>();
-const emit = defineEmits<{ settings: [settings: RunnerSettings] }>();
+const emit = defineEmits<{
+  settings: [settings: RunnerSettings];
+  account: [account: ColabAccount | null];
+}>();
 const { t, d } = useI18n();
 const saving = ref(false);
 const error = ref(false);
 
-const online = (lastSeenAt: number): boolean =>
-  props.generatedAt - lastSeenAt < COLAB_WAKER_STALE_MS;
+const code = ref("");
+const awaitingCode = ref(false);
+const accountBusy = ref(false);
+const accountError = ref(false);
+
 const tone = (state: ColabDispatchState): BadgeTone =>
   state === "finished"
     ? "success"
@@ -50,6 +55,47 @@ async function toggle(): Promise<void> {
     saving.value = false;
   }
 }
+
+async function connect(): Promise<void> {
+  accountBusy.value = true;
+  accountError.value = false;
+  try {
+    const { url } = await api.startColabAuthorization();
+    window.open(url, "_blank", "noopener");
+    awaitingCode.value = true;
+  } catch {
+    accountError.value = true;
+  } finally {
+    accountBusy.value = false;
+  }
+}
+
+async function submitCode(): Promise<void> {
+  accountBusy.value = true;
+  accountError.value = false;
+  try {
+    emit("account", await api.connectColabAccount(code.value.trim()));
+    code.value = "";
+    awaitingCode.value = false;
+  } catch {
+    accountError.value = true;
+  } finally {
+    accountBusy.value = false;
+  }
+}
+
+async function disconnect(): Promise<void> {
+  accountBusy.value = true;
+  accountError.value = false;
+  try {
+    await api.disconnectColabAccount();
+    emit("account", null);
+  } catch {
+    accountError.value = true;
+  } finally {
+    accountBusy.value = false;
+  }
+}
 </script>
 
 <template>
@@ -69,17 +115,30 @@ async function toggle(): Promise<void> {
       @click="toggle"
       >{{ colab.enabled ? t("colabDisable") : t("colabEnable") }}</FluentButton
     >
-    <h4>{{ t("colabWakers") }}</h4>
-    <p v-if="colab.wakers.length === 0" class="row-meta">{{ t("colabNoWakers") }}</p>
-    <ul v-else class="colab-list">
-      <li v-for="waker in colab.wakers" :key="waker.runnerId">
-        <span>{{ waker.name }}</span>
-        <StatusBadge :tone="online(waker.lastSeenAt) ? 'success' : 'danger'">{{
-          online(waker.lastSeenAt) ? t("colabWakerOnline") : t("colabWakerOffline")
-        }}</StatusBadge>
-        <span class="row-meta">{{ d(new Date(waker.lastSeenAt), "short") }}</span>
-      </li>
-    </ul>
+    <h4>{{ t("colabAccount") }}</h4>
+    <NoticeBar v-if="accountError" intent="error">{{ t("colabAccountError") }}</NoticeBar>
+    <template v-if="colab.account">
+      <NoticeBar v-if="colab.account.error" intent="error">{{
+        t("colabAccountReconnect")
+      }}</NoticeBar>
+      <p>{{ colab.account.email }}</p>
+      <p v-if="colab.account.balance !== null" class="row-meta">
+        {{ t("colabBalance", { balance: colab.account.balance.toFixed(1) }) }}
+        <template v-if="colab.account.rateHourly">{{
+          t("colabRate", { rate: colab.account.rateHourly.toFixed(2) })
+        }}</template>
+      </p>
+      <FluentButton type="button" tone="subtle" :busy="accountBusy" @click="disconnect">{{
+        t("colabDisconnect")
+      }}</FluentButton>
+    </template>
+    <form v-else-if="awaitingCode" class="colab-code" @submit.prevent="submitCode">
+      <FluentField v-model="code" :label="t('colabCodeLabel')" required minlength="10" />
+      <FluentButton type="submit" :busy="accountBusy">{{ t("colabCodeSubmit") }}</FluentButton>
+    </form>
+    <FluentButton v-else type="button" :busy="accountBusy" @click="connect">{{
+      t("colabConnect")
+    }}</FluentButton>
     <h4>{{ t("colabRecent") }}</h4>
     <p v-if="colab.recent.length === 0" class="row-meta">{{ t("colabNoRecent") }}</p>
     <ul v-else class="colab-list">
@@ -112,6 +171,12 @@ async function toggle(): Promise<void> {
 }
 .colab-card h4 {
   font-size: var(--font-size-body);
+}
+.colab-code {
+  display: grid;
+  gap: var(--space-2);
+  width: 100%;
+  max-width: 28rem;
 }
 .colab-list {
   display: grid;

@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import type {
+  ColabAccount,
   GithubQuota,
   RunnerOverview,
   RunnerSettings,
@@ -11,7 +12,11 @@ import ColabRunnerCard from "./ColabRunnerCard.vue";
 import GithubQuotaCard from "./GithubQuotaCard.vue";
 
 const props = defineProps<{ overview: RunnerOverview }>();
-defineEmits<{ quota: [quota: GithubQuota]; settings: [settings: RunnerSettings] }>();
+defineEmits<{
+  quota: [quota: GithubQuota];
+  settings: [settings: RunnerSettings];
+  account: [account: ColabAccount | null];
+}>();
 const { t } = useI18n();
 const settings = computed<RunnerSettings>(() => ({
   typePriority: props.overview.typePriority,
@@ -34,8 +39,8 @@ const settings = computed<RunnerSettings>(() => ({
     <ColabRunnerCard
       :colab="overview.colab"
       :settings="settings"
-      :generated-at="overview.generatedAt"
       @settings="$emit('settings', $event)"
+      @account="$emit('account', $event)"
     />
   </div>
 </template>

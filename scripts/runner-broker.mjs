@@ -2074,38 +2074,6 @@ async function removeProfile(state, id) {
   console.log(`Removed profile ${id}.`);
 }
 
-// Shares the state directory with a running broker, so it reads the credential without the state lock.
-async function runWaker(state, values) {
-  const entries = (await readdir(path.join(state, "profiles"), { withFileTypes: true }))
-    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-    .map((entry) => entry.name)
-    .sort();
-  let profile;
-  for (const id of entries) {
-    const candidate = await loadProfile(state, id);
-    if (candidate.kind === "gitedge" && candidate.credential?.trim()) {
-      profile = { origin: originValue(candidate.origin), credential: candidate.credential.trim() };
-      break;
-    }
-  }
-  if (!profile) throw new Error(`Register a GitEdge profile in ${state} before waking Colab.`);
-  const { runColabWaker, installColabExtension, COLAB_MCP_SPEC } =
-    await import("./runner-colab-waker.mjs");
-  const controller = new AbortController();
-  for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => controller.abort());
-  const logDir = path.join(state, "colab-mcp-logs");
-  await mkdir(logDir, { recursive: true, mode: 0o700 });
-  await installColabExtension(path.join(state, "colab-extension"));
-  process.exitCode = await runColabWaker({
-    profile,
-    kitDigest: runningKit()?.digest,
-    uvx: values.uvx ?? "uvx",
-    spec: values["colab-mcp"] ?? COLAB_MCP_SPEC,
-    logDir,
-    signal: controller.signal,
-  });
-}
-
 function supersedeExitStatus(value) {
   if (value === undefined) return supersededExitStatus;
   if (!/^\d{1,3}$/.test(value) || Number(value) > 255)
@@ -2136,8 +2104,6 @@ async function main() {
       "supersede-exit-status": { type: "string" },
       slots: { type: "string" },
       "assign-by": { type: "string" },
-      uvx: { type: "string" },
-      "colab-mcp": { type: "string" },
       worker: { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
@@ -2154,7 +2120,7 @@ async function main() {
       "hosted --origin URL --runner-path DIR --state-dir DIR: exchanges the hosted bootstrap and OIDC tokens from the environment and serves one assigned job."
     );
     console.log(
-      "once --state-dir DIR --assign-by MS: serves the single registered profile for one job (used by the launcher's colab mode).\ncolab-waker --state-dir DIR [--uvx PATH] [--colab-mcp SPEC]: claims Colab dispatches with the first registered profile and starts each job in a Colab session through colab-mcp."
+      "once --state-dir DIR --assign-by MS: serves the single registered profile for one job (used by the launcher's colab mode)."
     );
     return;
   }
@@ -2170,11 +2136,6 @@ async function main() {
   if (action === "once") {
     if (positionals.length !== 1) throw new Error("once does not accept a profile argument.");
     return withStateLock(state, action, () => serveOnce(state, values));
-  }
-  if (action === "colab-waker") {
-    if (positionals.length !== 1)
-      throw new Error("colab-waker does not accept a profile argument.");
-    return runWaker(state, values);
   }
   if (action === "register-gitedge") {
     if (positionals.length !== 1) throw new Error(`${action} does not accept a profile argument.`);

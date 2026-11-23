@@ -72,13 +72,13 @@ GitHub 连接凭证须有目标仓库的 Actions 写入权限才能请求自动�
 
 GitHub 托管与 Colab 是两个按需层级，触发时机相同：没有匹配的私有 runner 在 5 分钟内出现过时立即触发，否则任务排队满 15 分钟后触发。两个层级之间按 `typePriority` 中 `github-hosted` 与 `colab` 的先后决定：默认 GitHub 托管在前，只有它无法接单（未启用应急 runner、额度状态为 `exhausted`，或该任务的 GitHub 派发已失败，例如镜像不支持）且账户启用了 Colab 时才创建 Colab 派发；把 `colab` 排到前面则先用 Colab，Colab 派发进行期间 GitHub 层级不再派发，失败后再由 GitHub 接手。定时任务先处理 Colab 再处理 GitHub，保证 Colab 优先时能先占住任务。
 
-Colab 派发还要求账户有在线的唤醒主机（两分钟内轮询过 `POST /api/actions/runner/colab/claim`），并且任务能在 Colab 上运行：Colab 运行时是 Ubuntu Linux x64；要求 Windows、macOS、ARM、`GPU-*` 或 `VRAM-*` 的任务以及签名任务不会派往 Colab（colab-mcp v1.0.2 不提供运行时或加速器控制，无法申请 GPU）。会话时长为 `need-time`（或作业超时）加 30 分钟准备时间，上限为付费方案的 24 小时。每个任务一个 Colab 会话，状态与接口见 [GitEdge Actions](actions.md#on-demand-tiers)。
+Colab 派发还要求账户已连接 Google 账号（需付费 Colab 方案，账号无授权错误），并且任务能在 Colab 上运行：Colab 运行时是 Ubuntu Linux x64 的 CPU 运行时；要求 Windows、macOS、ARM、`GPU-*` 或 `VRAM-*` 的任务以及签名任务不会派往 Colab。会话时长为 `need-time`（或作业超时）加 30 分钟准备时间，上限为付费方案的 24 小时。每个任务一个 Colab 会话，状态与接口见 [GitEdge Actions](actions.md#on-demand-tiers)。
 
 ## GitHub 免费额度
 
 账户的共享 GitHub PAT（签名中心的来源读取凭据，保存在账户 Runner 仓库）用于读取本月 Actions 用量：先 `GET /user` 取得登录名，再调用 `GET /users/{login}/settings/billing/usage/summary?product=actions&year=Y&month=M`。令牌需要 fine-grained 的 "Plan: read" 权限或 classic 的 `user` 范围；缺少权限时状态为 `forbidden`，未配置令牌为 `no-token`，其它读取失败为 `error`，令牌不写入日志。用量中的 `discountAmount` 合计为已用免费额度（美元），`netAmount` 合计为已产生的付费金额，各 SKU 的 `grossQuantity` 为分钟数。
 
-状态为 `exhausted` 的条件：付费金额大于 0，或设置了 `githubIncludedUsd` 且已用免费额度不低于该值；否则为 `ok`。启用了 GitHub 托管应急 runner 的账户由定时任务每 15 分钟刷新一次（每轮最多五个账户），也可用 `POST /api/actions/runners/github-quota/refresh` 立即刷新（十秒内重复请求返回缓存）。状态为 `exhausted` 时，应急 runner 不再被派发，排队任务保留在普通队列中；每月初之前的旧状态不再生效，等待新一轮读取。`GET /api/actions/runners/overview` 返回 `typePriority`、`githubIncludedUsd`、`githubQuota`、`colab`（`enabled`、唤醒主机 `wakers` 及其 `lastSeenAt`、最近十次派发 `recent`）与每台 runner 的 `type`。
+状态为 `exhausted` 的条件：付费金额大于 0，或设置了 `githubIncludedUsd` 且已用免费额度不低于该值；否则为 `ok`。启用了 GitHub 托管应急 runner 的账户由定时任务每 15 分钟刷新一次（每轮最多五个账户），也可用 `POST /api/actions/runners/github-quota/refresh` 立即刷新（十秒内重复请求返回缓存）。状态为 `exhausted` 时，应急 runner 不再被派发，排队任务保留在普通队列中；每月初之前的旧状态不再生效，等待新一轮读取。`GET /api/actions/runners/overview` 返回 `typePriority`、`githubIncludedUsd`、`githubQuota`、`colab`（`enabled`、已连接的 Google 账号 `account`、最近十次派发 `recent`）与每台 runner 的 `type`。
 
 broker 持有执行槽并确认后，服务端按该 runner 的作用域与标签重新读取这项任务并执行原子领取，同时核对注册标签与容量快照，避免并发更新后错误分配；领取进行期间到达的上报只刷新在线时间，不改动容量快照。领取成功后只向发出确认的那条连接下发 `assign`；若该连接已断开，GitEdge 任务按租约回到排队状态并作废其作业凭据，GitHub 作业以取消结束并由定时清理删除临时 runner，这些都不计为基础设施失败。续租、完成与签名回调仍使用原有的 HTTP 接口。
 

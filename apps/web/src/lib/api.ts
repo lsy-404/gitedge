@@ -71,6 +71,7 @@ import type {
   GitHubSyncState,
 } from "../../../../packages/contracts/src/github-sync";
 import type {
+  ColabAccount,
   HostedRunnerSettings,
   RunnerHistory,
   GithubQuota,
@@ -716,6 +717,14 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(settings),
     }),
+  startColabAuthorization: () =>
+    request<{ url: string }>("/api/actions/colab/authorization", { method: "POST" }),
+  connectColabAccount: (code: string) =>
+    request<ColabAccount>("/api/actions/colab/account", {
+      method: "PUT",
+      body: JSON.stringify({ code }),
+    }),
+  disconnectColabAccount: () => request("/api/actions/colab/account", { method: "DELETE" }, true),
   refreshGithubQuota: () =>
     request<GithubQuota>("/api/actions/runners/github-quota/refresh", { method: "POST" }),
   updateRunnerLabels: (runnerId: string, labels: string[]) =>

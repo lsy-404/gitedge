@@ -125,10 +125,8 @@ export interface RunnerSettings {
 }
 // A paid Colab session lasts at most about 24 hours.
 export const COLAB_SESSION_MAX_MS = 24 * 60 * 60_000;
-export const COLAB_WAKER_STALE_MS = 2 * 60_000;
 export const COLAB_DISPATCH_STATES = [
   "pending",
-  "claimed",
   "starting",
   "running",
   "finished",
@@ -136,19 +134,16 @@ export const COLAB_DISPATCH_STATES = [
   "cancelled",
 ] as const;
 export type ColabDispatchState = (typeof COLAB_DISPATCH_STATES)[number];
-export const ColabDispatchReportSchema = z
-  .object({
-    state: z.enum(["starting", "finished", "failed"]).optional(),
-    error: z
-      .string()
-      .regex(/^[a-z0-9_:.-]{1,120}$/)
-      .optional(),
-  })
+export const ColabAuthorizationCodeSchema = z
+  .object({ code: z.string().trim().min(10).max(2048) })
   .strict();
-export interface ColabWaker {
-  runnerId: string;
-  name: string;
-  lastSeenAt: number;
+export interface ColabAccount {
+  email: string;
+  connectedAt: number;
+  balance: number | null;
+  rateHourly: number | null;
+  checkedAt: number | null;
+  error: string | null;
 }
 export interface ColabDispatchSummary {
   jobId: string;
@@ -158,7 +153,7 @@ export interface ColabDispatchSummary {
 }
 export interface RunnerOverviewColab {
   enabled: boolean;
-  wakers: ColabWaker[];
+  account: ColabAccount | null;
   recent: ColabDispatchSummary[];
 }
 export const GithubQuotaStateSchema = z.enum(["ok", "exhausted", "no-token", "forbidden", "error"]);

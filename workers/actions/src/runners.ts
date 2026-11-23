@@ -40,7 +40,6 @@ import { claimGithubRunner, githubRunnerLease } from "./github-runners";
 import { notifyRunnerDispatch, type RunnerDispatch } from "./runner-dispatch";
 import { handleSigningMachineCallback } from "./signing-execution";
 import { serveCurrentRunnerKit, serveRunnerKit, type RunnerKitEnv } from "./runner-kit";
-import { colabWakerRequest } from "./colab-runners";
 import { retryRunnerNetworkFailure } from "./runner-network";
 import {
   accountScope,
@@ -64,6 +63,7 @@ export interface RunnerEnv extends RunnerKitEnv {
   RUNNER_DISPATCH?: DurableObjectNamespace<RunnerDispatch>;
   LOG_LEVEL?: string;
   SIGNING_ENCRYPTION_KEY?: string;
+  PUBLIC_ORIGIN?: string;
 }
 export interface RunnerRow {
   id: string;
@@ -1143,11 +1143,6 @@ export async function runnerMachineRequest(
   if (!signingMachineRoute && request.method !== "POST")
     return errorResponse(405, "method_not_allowed", "Runner operations require POST.");
   const runner = await authenticateRunner(request, env);
-  // Waker polls are not job capacity, so they leave last_seen_at to the dispatcher connection.
-  if (pathname.startsWith("/runner/colab/"))
-    return runner
-      ? colabWakerRequest(request, env, runner, pathname)
-      : errorResponse(401, "unauthorized", "Invalid or revoked runner registration.");
   const signingJobRunnerId =
     !runner && signingMachineRoute ? await authenticateSigningJob(request, env) : null;
   const runnerId = runner?.id ?? signingJobRunnerId;

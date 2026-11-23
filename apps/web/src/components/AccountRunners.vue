@@ -3,7 +3,11 @@ import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import { FluentButton } from "@platform-kit/fluent/vue";
-import type { RunnerOverview, RunnerSettings } from "../../../../packages/contracts/src/runners";
+import type {
+  ColabAccount,
+  RunnerOverview,
+  RunnerSettings,
+} from "../../../../packages/contracts/src/runners";
 import { api, errorMessage } from "../lib/api";
 import NoticeBar from "./NoticeBar.vue";
 import StatusState from "./StatusState.vue";
@@ -100,6 +104,10 @@ function applySettings(settings: RunnerSettings): void {
   });
 }
 
+function applyAccount(account: ColabAccount | null): void {
+  if (overview.value) patchOverview({ colab: { ...overview.value.colab, account } });
+}
+
 function visibilityChanged(): void {
   if (document.visibilityState === "visible") void refresh();
 }
@@ -172,6 +180,7 @@ onUnmounted(() => {
           v-else-if="activeTab === 'ondemand'"
           :overview="overview"
           @quota="(githubQuota) => patchOverview({ githubQuota })"
+          @account="applyAccount"
           @settings="applySettings"
         />
         <RunnerConnectionsTab v-else :connections="overview.github" />

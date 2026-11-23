@@ -300,7 +300,7 @@ export async function reconcileHostedRunners(env: RunnerEnv): Promise<void> {
     SELECT 'github',j.id,p.id,c.created_by,(SELECT h.connection_id FROM forge_hosted_runner_settings h WHERE h.owner_id=c.created_by),j.created_at FROM actions_github_runner_jobs j JOIN forge_github_connections c ON c.id=j.connection_id JOIN repositories p ON p.id=c.repository_id
       WHERE j.status='queued' AND (j.created_at<=? OR NOT ${recentlySeenPrivateRunner(false)}) AND c.enabled=1 AND c.runner_enabled=1 AND p.deleted_at IS NULL AND p.archived=0 AND p.actions_enabled=1
     ) q WHERE connection_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM actions_hosted_runner_dispatches h WHERE h.job_kind=q.kind AND h.job_id=q.id)
-    AND NOT EXISTS (SELECT 1 FROM actions_colab_dispatches cd WHERE cd.job_kind=q.kind AND cd.job_id=q.id AND cd.state IN ('pending','claimed','starting','running'))
+    AND NOT EXISTS (SELECT 1 FROM actions_colab_dispatches cd WHERE cd.job_kind=q.kind AND cd.job_id=q.id AND cd.state IN ('pending','starting','running'))
     AND NOT EXISTS (SELECT 1 FROM actions_github_quota gq JOIN namespaces qn ON qn.id=gq.namespace_id
       WHERE qn.kind='personal' AND qn.created_by=q.owner_id AND gq.state='exhausted' AND gq.checked_at>=?)
     ORDER BY created_at,id LIMIT 10`

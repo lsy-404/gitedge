@@ -70,6 +70,7 @@ import { kickRunnerDispatch } from "./runner-dispatch";
 import { APPLE_REMOTE_SOCKET_ROUTE, handleAppleRemoteSocket } from "./signing/apple-remote-signer";
 import { bootstrapHostedRunner, reconcileHostedRunners } from "./hosted-runners";
 import { bootstrapColabRunner, reconcileColabRunners } from "./colab-runners";
+import { colabAccountRequest } from "./colab/routes";
 import { refreshDueGithubQuotas } from "./github-quota";
 
 export { ActionRunDurableObject as ActionRun };
@@ -1798,7 +1799,7 @@ export default {
       if (url.pathname === "/colab-runners/bootstrap")
         return await bootstrapColabRunner(request, env);
       if (
-        /^\/runner\/(?:connect|heartbeat|complete|colab\/(?:claim|dispatches\/[0-9a-f-]{36})|github\/(?:heartbeat|complete)|kit(?:\/[0-9a-f]{64})?|signing\/requests\/[0-9a-f-]{36}\/(?:start|heartbeat|download|authorize-sign|signer|sign|azure-token|notary(?:\/[0-9a-f-]{36})?|output(?:\/parts\/\d+|\/complete)?|complete|fail))$/.test(
+        /^\/runner\/(?:connect|heartbeat|complete|github\/(?:heartbeat|complete)|kit(?:\/[0-9a-f]{64})?|signing\/requests\/[0-9a-f-]{36}\/(?:start|heartbeat|download|authorize-sign|signer|sign|azure-token|notary(?:\/[0-9a-f-]{36})?|output(?:\/parts\/\d+|\/complete)?|complete|fail))$/.test(
           url.pathname
         )
       )
@@ -1818,6 +1819,7 @@ export default {
         return await handleRunnerHistory(user, env, request);
       if (url.pathname === "/runners" || url.pathname.startsWith("/runners/"))
         return await runnerManagement(request, env, user);
+      if (url.pathname.startsWith("/colab/")) return await colabAccountRequest(request, env, user);
       if (user?.job)
         return errorResponse(403, "forbidden", "Job credentials cannot control Actions.");
       const parts = url.pathname.split("/").filter(Boolean);
@@ -1917,7 +1919,7 @@ export default {
         await kickRunnerDispatch(env);
         await refreshDueGithubQuotas(env);
         // Colab runs first so a Colab-first priority reserves the job before the GitHub tier looks.
-        await reconcileColabRunners(env);
+        await reconcileColabRunners(env, context);
         await reconcileHostedRunners(env);
         await publishPendingChecks(env);
       })().catch((cause: unknown) => {

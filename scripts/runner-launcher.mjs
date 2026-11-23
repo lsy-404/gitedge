@@ -667,61 +667,6 @@ async function colab(args) {
   }
 }
 
-// Long-running Colab waker on a desktop host; restarts from each newly published kit while idle.
-async function colabWaker(args) {
-  const usage =
-    "Usage: runner-launcher.mjs colab-waker --state-dir DIR [--uvx PATH] [--colab-mcp SPEC]";
-  const values = parseFlags(args, ["--state-dir", "--uvx", "--colab-mcp"], usage);
-  const state = path.resolve(values["state-dir"]);
-  const cacheRoot = path.join(state, KIT_DIRECTORY);
-  await mkdir(cacheRoot, { recursive: true, mode: 0o700 });
-  const stopper = new AbortController();
-  for (const name of ["SIGINT", "SIGTERM"]) process.once(name, () => stopper.abort());
-  const registration = await profileAccess(state);
-  let backoff = 1_000;
-  while (!stopper.signal.aborted) {
-    let current;
-    try {
-      const kit = await fetchCurrentKit({ ...registration, signal: stopper.signal });
-      current = {
-        kit,
-        directory: await installKit({ ...registration, cacheRoot, kit, signal: stopper.signal }),
-      };
-    } catch (error) {
-      if (stopper.signal.aborted) break;
-      [current] = await installedKits(cacheRoot);
-      if (!current) {
-        log(`${error.message}; no installed kit, retrying in 60 seconds.`);
-        await sleep(UNAVAILABLE_RETRY_MS, stopper.signal);
-        continue;
-      }
-      log(`${error.message}; starting installed kit ${current.kit.digest}.`);
-    }
-    log(`starting Colab waker from runner kit ${current.kit.digest}.`);
-    const code = await runKitCommand(
-      current.directory,
-      current.kit,
-      [
-        "colab-waker",
-        "--state-dir",
-        state,
-        ...(values.uvx ? ["--uvx", values.uvx] : []),
-        ...(values["colab-mcp"] ? ["--colab-mcp", values["colab-mcp"]] : []),
-      ],
-      stopper
-    );
-    if (stopper.signal.aborted || code === 0) return code;
-    if (code === KIT_UPDATE_EXIT_STATUS) {
-      backoff = 1_000;
-      continue;
-    }
-    log(`Colab waker exited with status ${code}; restarting in ${backoff / 1000} seconds.`);
-    await sleep(backoff, stopper.signal);
-    backoff = Math.min(60_000, backoff * 2);
-  }
-  return 0;
-}
-
 async function readStdin() {
   const chunks = [];
   let length = 0;
@@ -841,12 +786,10 @@ async function main() {
   if (command === "serve") return serve(args);
   if (command === "execute-vm-job") return executeVmJob();
   if (command === "colab") return colab(args);
-  if (command === "colab-waker") return colabWaker(args);
   if (!command || command === "--help" || command === "-h") {
     console.log(
       "Usage: node runner-launcher.mjs serve --state-dir DIR [--slots N] [--supersede-exit-status N]\n" +
         "       node runner-launcher.mjs execute-vm-job   (VM guest entry point; reads the job from stdin)\n" +
-        "       node runner-launcher.mjs colab-waker --state-dir DIR [--uvx PATH] [--colab-mcp SPEC]\n" +
         "       node runner-launcher.mjs colab --origin URL --runner-path DIR --state-dir DIR   (inside a Colab runtime)\n" +
         "       node runner-launcher.mjs version\n" +
         "       node runner-launcher.mjs <broker command> --state-dir DIR [options]\n" +
