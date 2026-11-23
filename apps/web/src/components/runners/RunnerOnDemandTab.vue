@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import type {
   GithubQuota,
@@ -6,11 +7,17 @@ import type {
   RunnerSettings,
 } from "../../../../../packages/contracts/src/runners";
 import HostedRunnerSettings from "../HostedRunnerSettings.vue";
+import ColabRunnerCard from "./ColabRunnerCard.vue";
 import GithubQuotaCard from "./GithubQuotaCard.vue";
 
-defineProps<{ overview: RunnerOverview }>();
+const props = defineProps<{ overview: RunnerOverview }>();
 defineEmits<{ quota: [quota: GithubQuota]; settings: [settings: RunnerSettings] }>();
 const { t } = useI18n();
+const settings = computed<RunnerSettings>(() => ({
+  typePriority: props.overview.typePriority,
+  githubIncludedUsd: props.overview.githubIncludedUsd,
+  colabEnabled: props.overview.colab.enabled,
+}));
 </script>
 
 <template>
@@ -19,11 +26,15 @@ const { t } = useI18n();
     <HostedRunnerSettings :connections="overview.github" />
     <GithubQuotaCard
       :quota="overview.githubQuota"
-      :settings="{
-        typePriority: overview.typePriority,
-        githubIncludedUsd: overview.githubIncludedUsd,
-      }"
+      :settings="settings"
       @quota="$emit('quota', $event)"
+      @settings="$emit('settings', $event)"
+    />
+    <p class="row-meta">{{ t("colabTierRule") }}</p>
+    <ColabRunnerCard
+      :colab="overview.colab"
+      :settings="settings"
+      :generated-at="overview.generatedAt"
       @settings="$emit('settings', $event)"
     />
   </div>

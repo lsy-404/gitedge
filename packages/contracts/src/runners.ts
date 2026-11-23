@@ -100,7 +100,7 @@ export const RunnerBudgetSchema = z
   .strict();
 export type RunnerBudget = z.infer<typeof RunnerBudgetSchema>;
 
-export const RUNNER_TYPES = ["owned", "rented", "github-hosted"] as const;
+export const RUNNER_TYPES = ["owned", "rented", "github-hosted", "colab"] as const;
 export const RunnerTypeSchema = z.enum(RUNNER_TYPES);
 export type RunnerType = z.infer<typeof RunnerTypeSchema>;
 export const RegisteredRunnerTypeSchema = z.enum(["owned", "rented"]);
@@ -115,11 +115,51 @@ export const RunnerSettingsUpdateSchema = z
   .object({
     typePriority: RunnerTypePrioritySchema,
     githubIncludedUsd: z.number().finite().min(0).max(1_000_000).nullable(),
+    colabEnabled: z.boolean(),
   })
   .strict();
 export interface RunnerSettings {
   typePriority: RunnerType[];
   githubIncludedUsd: number | null;
+  colabEnabled: boolean;
+}
+// A paid Colab session lasts at most about 24 hours.
+export const COLAB_SESSION_MAX_MS = 24 * 60 * 60_000;
+export const COLAB_WAKER_STALE_MS = 2 * 60_000;
+export const COLAB_DISPATCH_STATES = [
+  "pending",
+  "claimed",
+  "starting",
+  "running",
+  "finished",
+  "failed",
+  "cancelled",
+] as const;
+export type ColabDispatchState = (typeof COLAB_DISPATCH_STATES)[number];
+export const ColabDispatchReportSchema = z
+  .object({
+    state: z.enum(["starting", "finished", "failed"]).optional(),
+    error: z
+      .string()
+      .regex(/^[a-z0-9_:.-]{1,120}$/)
+      .optional(),
+  })
+  .strict();
+export interface ColabWaker {
+  runnerId: string;
+  name: string;
+  lastSeenAt: number;
+}
+export interface ColabDispatchSummary {
+  jobId: string;
+  state: ColabDispatchState;
+  createdAt: number;
+  error: string | null;
+}
+export interface RunnerOverviewColab {
+  enabled: boolean;
+  wakers: ColabWaker[];
+  recent: ColabDispatchSummary[];
 }
 export const GithubQuotaStateSchema = z.enum(["ok", "exhausted", "no-token", "forbidden", "error"]);
 export type GithubQuotaState = z.infer<typeof GithubQuotaStateSchema>;
@@ -289,6 +329,7 @@ export interface RunnerOverview {
   typePriority: RunnerType[];
   githubIncludedUsd: number | null;
   githubQuota: GithubQuota;
+  colab: RunnerOverviewColab;
   healthSource: { availability: "available" | "unavailable"; checkedAt: number };
   runners: RunnerOverviewRunner[];
   github: RunnerOverviewGithubConnection[];

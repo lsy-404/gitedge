@@ -73,11 +73,20 @@ export async function readRunnerSettings(
 ): Promise<RunnerSettings> {
   const row = await db
     .prepare(
-      "SELECT type_priority_json,github_included_usd FROM actions_runner_settings WHERE namespace_id=?"
+      "SELECT type_priority_json,github_included_usd,colab_enabled FROM actions_runner_settings WHERE namespace_id=?"
     )
     .bind(namespaceId)
-    .first<{ type_priority_json: string; github_included_usd: number | null }>();
-  if (!row) return { typePriority: [...DEFAULT_RUNNER_TYPE_PRIORITY], githubIncludedUsd: null };
+    .first<{
+      type_priority_json: string;
+      github_included_usd: number | null;
+      colab_enabled: number;
+    }>();
+  if (!row)
+    return {
+      typePriority: [...DEFAULT_RUNNER_TYPE_PRIORITY],
+      githubIncludedUsd: null,
+      colabEnabled: false,
+    };
   let parsed: ReturnType<typeof RunnerTypePrioritySchema.safeParse>;
   try {
     parsed = RunnerTypePrioritySchema.safeParse(JSON.parse(row.type_priority_json));
@@ -87,6 +96,7 @@ export async function readRunnerSettings(
   return {
     typePriority: parsed.success ? parsed.data : [...DEFAULT_RUNNER_TYPE_PRIORITY],
     githubIncludedUsd: row.github_included_usd,
+    colabEnabled: row.colab_enabled === 1,
   };
 }
 
@@ -112,11 +122,17 @@ export async function writeRunnerSettings(
   const now = Date.now();
   await db
     .prepare(
-      `INSERT INTO actions_runner_settings (namespace_id,type_priority_json,github_included_usd,updated_at) VALUES (?,?,?,?)
+      `INSERT INTO actions_runner_settings (namespace_id,type_priority_json,github_included_usd,colab_enabled,updated_at) VALUES (?,?,?,?,?)
       ON CONFLICT(namespace_id) DO UPDATE SET type_priority_json=excluded.type_priority_json,
-        github_included_usd=excluded.github_included_usd,updated_at=excluded.updated_at`
+        github_included_usd=excluded.github_included_usd,colab_enabled=excluded.colab_enabled,updated_at=excluded.updated_at`
     )
-    .bind(namespaceId, JSON.stringify(settings.typePriority), settings.githubIncludedUsd, now)
+    .bind(
+      namespaceId,
+      JSON.stringify(settings.typePriority),
+      settings.githubIncludedUsd,
+      settings.colabEnabled ? 1 : 0,
+      now
+    )
     .run();
   // A changed included-quota ceiling takes effect without waiting for the next GitHub read.
   await db

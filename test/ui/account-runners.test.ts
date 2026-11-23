@@ -101,8 +101,9 @@ function overview(overrides: Partial<RunnerOverview> = {}): RunnerOverview {
       },
     ],
     truncated: false,
-    typePriority: ["owned", "rented", "github-hosted"],
+    typePriority: ["owned", "rented", "github-hosted", "colab"],
     githubIncludedUsd: 12,
+    colab: { enabled: false, wakers: [], recent: [] },
     githubQuota: {
       state: "forbidden",
       includedUsedUsd: 3.5,

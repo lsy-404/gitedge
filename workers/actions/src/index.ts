@@ -68,6 +68,7 @@ import { retryPublishDispatches } from "./signing/publish";
 import { enqueueNativeSigningRun } from "./signing-execution";
 import { kickRunnerDispatch } from "./runner-dispatch";
 import { bootstrapHostedRunner, reconcileHostedRunners } from "./hosted-runners";
+import { bootstrapColabRunner, reconcileColabRunners } from "./colab-runners";
 import { refreshDueGithubQuotas } from "./github-quota";
 
 export { ActionRunDurableObject as ActionRun };
@@ -1792,8 +1793,10 @@ export default {
         return await accountGithubToken(request, env);
       if (url.pathname === "/hosted-runners/bootstrap")
         return await bootstrapHostedRunner(request, env);
+      if (url.pathname === "/colab-runners/bootstrap")
+        return await bootstrapColabRunner(request, env);
       if (
-        /^\/runner\/(?:connect|heartbeat|complete|github\/(?:heartbeat|complete)|kit(?:\/[0-9a-f]{64})?|signing\/requests\/[0-9a-f-]{36}\/(?:start|heartbeat|download|authorize-sign|output(?:\/parts\/\d+|\/complete)?|complete|fail))$/.test(
+        /^\/runner\/(?:connect|heartbeat|complete|colab\/(?:claim|dispatches\/[0-9a-f-]{36})|github\/(?:heartbeat|complete)|kit(?:\/[0-9a-f]{64})?|signing\/requests\/[0-9a-f-]{36}\/(?:start|heartbeat|download|authorize-sign|output(?:\/parts\/\d+|\/complete)?|complete|fail))$/.test(
           url.pathname
         )
       )
@@ -1905,6 +1908,8 @@ export default {
         await cleanRunnerSchedulingData(env, Date.now());
         await kickRunnerDispatch(env);
         await refreshDueGithubQuotas(env);
+        // Colab runs first so a Colab-first priority reserves the job before the GitHub tier looks.
+        await reconcileColabRunners(env);
         await reconcileHostedRunners(env);
         await publishPendingChecks(env);
       })().catch((cause: unknown) => {

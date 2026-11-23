@@ -28,6 +28,7 @@ import {
 } from "../../../packages/contracts/runner-scheduling.mjs";
 import { errorResponse } from "../../../src/worker/common/http";
 import { accountScope, readGithubQuota, readRunnerSettings } from "./github-quota";
+import { readColabOverview } from "./colab-runners";
 import { readRunnerDeviceHealth, type DeviceHealthEnv } from "./device-health";
 
 interface RunnerOverviewEnv extends DeviceHealthEnv {
@@ -51,7 +52,7 @@ interface RunnerDbRow {
   consecutive_failures: number;
   connected: number;
   runner_type: RegisteredRunnerType;
-  hosted_job_id: string | null;
+  hosted_type: "github-hosted" | "colab" | null;
   owner: string;
   repository: string | null;
 }
@@ -140,7 +141,7 @@ function parseRunner(row: RunnerDbRow): RegisteredRunner {
 
 const runnerSelect = `SELECT r.id,r.name,r.namespace_id,r.repository_id,r.created_by,r.labels_json,r.created_at,
   r.last_seen_at,r.revoked_at,r.capacity_json,r.capacity_reported_at,r.budget_json,r.held_until,
-  r.consecutive_failures,r.connected,r.runner_type,r.hosted_job_id,n.slug AS owner,p.slug AS repository
+  r.consecutive_failures,r.connected,r.runner_type,r.hosted_type,n.slug AS owner,p.slug AS repository
   FROM actions_runners r JOIN namespaces n ON n.id=r.namespace_id
   LEFT JOIN repositories p ON p.id=r.repository_id`;
 
@@ -306,15 +307,20 @@ async function queueRows(
 async function accountRunnerSettings(
   env: RunnerOverviewEnv,
   user: TrustedUser
-): Promise<Pick<RunnerOverview, "typePriority" | "githubIncludedUsd" | "githubQuota">> {
+): Promise<Pick<RunnerOverview, "typePriority" | "githubIncludedUsd" | "githubQuota" | "colab">> {
   const scope = await accountScope(env.DB, user.id);
   const settings = scope
     ? await readRunnerSettings(env.DB, scope.namespaceId)
-    : { typePriority: DEFAULT_RUNNER_TYPE_PRIORITY.slice(), githubIncludedUsd: null };
+    : {
+        typePriority: DEFAULT_RUNNER_TYPE_PRIORITY.slice(),
+        githubIncludedUsd: null,
+        colabEnabled: false,
+      };
   return {
     typePriority: settings.typePriority,
     githubIncludedUsd: settings.githubIncludedUsd,
     githubQuota: await readGithubQuota(env.DB, user.id, scope),
+    colab: await readColabOverview(env.DB, user.id, settings.colabEnabled),
   };
 }
 
@@ -538,7 +544,7 @@ export async function handleRunnerOverview(
         const budget = parseJson(row.budget_json, (value) => RunnerBudgetSchema.parse(value));
         return {
           ...names.get(row.id)!,
-          type: row.hosted_job_id ? ("github-hosted" as const) : row.runner_type,
+          type: row.hosted_type ?? row.runner_type,
           state: displayState(row, current !== null, now),
           capacity,
           capacityReportedAt: row.capacity_reported_at,

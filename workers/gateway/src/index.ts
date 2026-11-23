@@ -687,7 +687,8 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
 
   if (
     url.pathname === "/api/actions/hosted-runners/bootstrap" ||
-    /^\/api\/actions\/runner\/(?:connect|heartbeat|complete|github\/(?:heartbeat|complete)|kit(?:\/[0-9a-f]{64})?|signing\/requests\/[0-9a-f-]{36}\/(?:start|heartbeat|download|authorize-sign|output(?:\/parts\/\d+|\/complete)?|complete|fail))$/.test(
+    url.pathname === "/api/actions/colab-runners/bootstrap" ||
+    /^\/api\/actions\/runner\/(?:connect|heartbeat|complete|colab\/(?:claim|dispatches\/[0-9a-f-]{36})|github\/(?:heartbeat|complete)|kit(?:\/[0-9a-f]{64})?|signing\/requests\/[0-9a-f-]{36}\/(?:start|heartbeat|download|authorize-sign|output(?:\/parts\/\d+|\/complete)?|complete|fail))$/.test(
       url.pathname
     )
   ) {

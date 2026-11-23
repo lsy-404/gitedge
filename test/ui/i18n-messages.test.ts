@@ -10,6 +10,7 @@ import {
   MergeRequirementStatusSchema,
 } from "../../packages/contracts/src/merge-requirements";
 import { PullAttentionReasonSchema } from "../../packages/contracts/src/forge";
+import { COLAB_DISPATCH_STATES } from "../../packages/contracts/src/runners";
 import { ProfileActivitySchema } from "../../packages/contracts/src/profiles";
 import {
   SigningRequestStateSchema,
@@ -51,7 +52,8 @@ const dynamicKeys: Record<string, readonly string[]> = {
   actionsConclusion_: ["success", "failure", "cancelled"],
   runnerState_: ["idle", "busy", "held", "offline"],
   runnerTab_: ["activity", "slots", "ondemand", "services", "github"],
-  runnerType_: ["owned", "rented", "github_hosted"],
+  runnerType_: ["owned", "rented", "github_hosted", "colab"],
+  colabState_: COLAB_DISPATCH_STATES,
   runnerHealth_: ["online", "degraded", "offline", "pending", "planned", "disabled", "unknown"],
   githubQuotaState_: ["ok", "exhausted", "no_token", "forbidden", "error"],
   runnerSigningPlatform_: SigningPlatformSchema.options,

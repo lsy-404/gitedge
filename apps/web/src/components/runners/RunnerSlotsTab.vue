@@ -57,6 +57,7 @@ async function save(): Promise<void> {
     const result = await api.updateRunnerSettings({
       typePriority: order.value,
       githubIncludedUsd: props.overview.githubIncludedUsd,
+      colabEnabled: props.overview.colab.enabled,
     });
     emit("settings", result);
   } catch {

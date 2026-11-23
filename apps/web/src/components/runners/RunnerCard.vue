@@ -34,7 +34,9 @@ const typeError = ref(false);
 const removing = ref(false);
 const removeError = ref(false);
 const slots = computed(() => slotCount(props.runner));
-const selfHosted = computed(() => props.runner.type !== "github-hosted");
+const selfHosted = computed(
+  () => props.runner.type !== "github-hosted" && props.runner.type !== "colab"
+);
 
 function healthLabel(status: RunnerOverviewRunner["deviceHealth"]["status"]): string {
   return t(`runnerHealth_${status}`);

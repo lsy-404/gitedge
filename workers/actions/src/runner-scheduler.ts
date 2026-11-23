@@ -230,7 +230,7 @@ export async function loadRunnerCandidate(
 }
 
 export function effectiveRunnerType(runner: RunnerRow): RunnerType {
-  return runner.hosted_job_id ? "github-hosted" : (runner.runner_type ?? "owned");
+  return runner.hosted_type ?? runner.runner_type ?? "owned";
 }
 
 export function evaluateRunnerCandidate(

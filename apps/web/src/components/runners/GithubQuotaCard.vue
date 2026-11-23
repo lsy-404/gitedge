@@ -58,10 +58,7 @@ async function save(): Promise<void> {
   try {
     emit(
       "settings",
-      await api.updateRunnerSettings({
-        typePriority: props.settings.typePriority,
-        githubIncludedUsd: value,
-      })
+      await api.updateRunnerSettings({ ...props.settings, githubIncludedUsd: value })
     );
   } catch {
     saveError.value = true;

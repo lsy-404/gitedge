@@ -141,8 +141,8 @@ export async function bootstrapHostedRunner(request: Request, env: RunnerEnv): P
   const tokenHash = await sha256Hex(token);
   const [insert] = await env.DB.batch([
     env.DB.prepare(
-      `INSERT INTO actions_runners (id,name,namespace_id,repository_id,created_by,labels_json,token_hash,created_at,hosted_job_kind,hosted_job_id,expires_at)
-      SELECT ?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM actions_hosted_runner_dispatches h JOIN repositories p ON p.id=h.repository_id JOIN users u ON u.id=h.owner_id JOIN forge_hosted_runner_settings s ON s.owner_id=h.owner_id AND s.connection_id=h.connection_id WHERE h.id=? AND h.status='dispatched' AND h.expires_at>? AND p.deleted_at IS NULL AND p.archived=0 AND p.actions_enabled=1 AND u.disabled_at IS NULL AND ((h.job_kind='gitedge' AND p.actions_runner_enabled=1 AND EXISTS (SELECT 1 FROM actions_runner_runs j WHERE j.run_id=h.job_id AND j.status='queued')) OR (h.job_kind='github' AND EXISTS (SELECT 1 FROM actions_github_runner_jobs j JOIN forge_github_connections c ON c.id=j.connection_id WHERE j.id=h.job_id AND j.status='queued' AND c.enabled=1 AND c.runner_enabled=1))))`
+      `INSERT INTO actions_runners (id,name,namespace_id,repository_id,created_by,labels_json,token_hash,created_at,hosted_job_kind,hosted_job_id,hosted_type,expires_at)
+      SELECT ?,?,?,?,?,?,?,?,?,?,'github-hosted',? WHERE EXISTS (SELECT 1 FROM actions_hosted_runner_dispatches h JOIN repositories p ON p.id=h.repository_id JOIN users u ON u.id=h.owner_id JOIN forge_hosted_runner_settings s ON s.owner_id=h.owner_id AND s.connection_id=h.connection_id WHERE h.id=? AND h.status='dispatched' AND h.expires_at>? AND p.deleted_at IS NULL AND p.archived=0 AND p.actions_enabled=1 AND u.disabled_at IS NULL AND ((h.job_kind='gitedge' AND p.actions_runner_enabled=1 AND EXISTS (SELECT 1 FROM actions_runner_runs j WHERE j.run_id=h.job_id AND j.status='queued')) OR (h.job_kind='github' AND EXISTS (SELECT 1 FROM actions_github_runner_jobs j JOIN forge_github_connections c ON c.id=j.connection_id WHERE j.id=h.job_id AND j.status='queued' AND c.enabled=1 AND c.runner_enabled=1))))`
     ).bind(
       id,
       "Hosted runner",
@@ -192,7 +192,7 @@ interface QueuedJob {
   connection_id: string;
 }
 
-function recentlySeenPrivateRunner(signing: boolean): string {
+export function recentlySeenPrivateRunner(signing: boolean): string {
   const ordinary = RESOURCE_LABEL_PREFIXES.map(
     (prefix) => `lower(required.value) NOT LIKE '${prefix}%'`
   ).join(" AND ");
@@ -265,6 +265,7 @@ export async function reconcileHostedRunners(env: RunnerEnv): Promise<void> {
     SELECT 'github',j.id,p.id,c.created_by,(SELECT h.connection_id FROM forge_hosted_runner_settings h WHERE h.owner_id=c.created_by),j.created_at FROM actions_github_runner_jobs j JOIN forge_github_connections c ON c.id=j.connection_id JOIN repositories p ON p.id=c.repository_id
       WHERE j.status='queued' AND (j.created_at<=? OR NOT ${recentlySeenPrivateRunner(false)}) AND c.enabled=1 AND c.runner_enabled=1 AND p.deleted_at IS NULL AND p.archived=0 AND p.actions_enabled=1
     ) q WHERE connection_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM actions_hosted_runner_dispatches h WHERE h.job_kind=q.kind AND h.job_id=q.id)
+    AND NOT EXISTS (SELECT 1 FROM actions_colab_dispatches cd WHERE cd.job_kind=q.kind AND cd.job_id=q.id AND cd.state IN ('pending','claimed','starting','running'))
     AND NOT EXISTS (SELECT 1 FROM actions_github_quota gq JOIN namespaces qn ON qn.id=gq.namespace_id
       WHERE qn.kind='personal' AND qn.created_by=q.owner_id AND gq.state='exhausted' AND gq.checked_at>=?)
     ORDER BY created_at,id LIMIT 10`

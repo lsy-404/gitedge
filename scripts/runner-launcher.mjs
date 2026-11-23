@@ -38,6 +38,9 @@ const UNAVAILABLE_RETRY_MS = 60_000;
 const START_FAILURE_WINDOW_MS = 60_000;
 const GUEST_HEARTBEAT_MS = 15_000;
 const SUPERSEDED_EXIT_STATUS = 78;
+const COLAB_PROFILE = "colab";
+// The job must be offered to a fresh Colab runner within this window or the runtime is released.
+const COLAB_ASSIGN_WINDOW_MS = 15 * 60_000;
 const REQUIRED_FILES = ["package.json", "pnpm-lock.yaml", "scripts/runner-broker.mjs"];
 const ROOT_FILES = new Set(["package.json", "pnpm-lock.yaml"]);
 const ALLOWED_PREFIXES = ["scripts/", "packages/contracts/"];
@@ -550,6 +553,175 @@ async function serve(args) {
   return 0;
 }
 
+function parseFlags(args, allowed, usage) {
+  const values = {};
+  for (let index = 0; index < args.length; index += 2) {
+    const [flag, value] = [args[index], args[index + 1]];
+    if (!allowed.includes(flag) || value === undefined) throw new Error(usage);
+    values[flag.slice(2)] = value;
+  }
+  if (!values["state-dir"]) throw new Error(usage);
+  return values;
+}
+
+function launcherHostLabels() {
+  const os = { linux: "Linux", darwin: "macOS", win32: "Windows" }[process.platform];
+  const arch = { x64: "X64", arm64: "ARM64" }[process.arch];
+  if (!os || !arch) throw new Error("This host platform cannot run GitEdge jobs.");
+  return ["self-hosted", os, arch, os.toLowerCase(), arch.toLowerCase()];
+}
+
+async function writePrivateFile(file, content) {
+  await writeFile(file, content, { flag: "wx", mode: 0o600 });
+}
+
+async function runKitCommand(directory, kit, args, stopper) {
+  const child = spawn(process.execPath, [brokerScript(directory), ...args], {
+    env: kitEnvironment(kit),
+    stdio: "inherit",
+  });
+  stopper.signal.addEventListener("abort", () => child.kill("SIGTERM"), { once: true });
+  return new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", (status, signal) => resolve(status ?? (signal ? 1 : 0)));
+  });
+}
+
+// Single-job runner inside a Colab runtime: exchanges the one-time token, installs the kit and serves one job.
+async function colab(args) {
+  const values = parseFlags(
+    args,
+    ["--state-dir", "--origin", "--runner-path"],
+    "Usage: runner-launcher.mjs colab --origin URL --runner-path DIR --state-dir DIR"
+  );
+  if (!values.origin || !values["runner-path"])
+    throw new Error("colab requires --origin and --runner-path.");
+  const origin = originOf(values.origin);
+  const bootstrapToken = process.env.GITEDGE_COLAB_BOOTSTRAP_TOKEN ?? "";
+  delete process.env.GITEDGE_COLAB_BOOTSTRAP_TOKEN;
+  if (!/^[a-f0-9]{64}$/.test(bootstrapToken))
+    throw new Error("Set GITEDGE_COLAB_BOOTSTRAP_TOKEN to the one-time Colab bootstrap token.");
+  const state = path.resolve(values["state-dir"]);
+  const profiles = path.join(state, "profiles");
+  await mkdir(profiles, { recursive: true, mode: 0o700 });
+  if ((await readdir(profiles)).length)
+    throw new Error("The Colab runner state must not contain existing profiles.");
+  const response = await fetch(new URL("/api/actions/colab-runners/bootstrap", origin), {
+    method: "POST",
+    redirect: "error",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ bootstrapToken, labels: launcherHostLabels() }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const data = (await response.json().catch(() => null))?.data;
+  if (!response.ok) throw new Error(`The Colab bootstrap was refused (HTTP ${response.status}).`);
+  const runner = data?.runner;
+  const credential = data?.token;
+  if (
+    typeof runner?.id !== "string" ||
+    !/^[A-Za-z0-9._-]{1,100}$/.test(runner.id) ||
+    typeof runner.scope?.owner !== "string" ||
+    typeof runner.scope?.repository !== "string" ||
+    !Array.isArray(runner.labels) ||
+    typeof credential !== "string" ||
+    !/^ge_runner_[0-9a-f]{64}$/.test(credential) ||
+    !Number.isFinite(runner.expiresAt)
+  )
+    throw new Error("GitEdge returned invalid Colab runner registration metadata.");
+  const directory = path.join(profiles, COLAB_PROFILE);
+  await mkdir(directory, { mode: 0o700 });
+  const stopper = new AbortController();
+  for (const name of ["SIGINT", "SIGTERM"]) process.once(name, () => stopper.abort());
+  try {
+    await writePrivateFile(
+      path.join(directory, "profile.json"),
+      JSON.stringify({
+        id: COLAB_PROFILE,
+        kind: "gitedge",
+        origin,
+        owner: runner.scope.owner,
+        repository: runner.scope.repository,
+        labels: runner.labels,
+        runnerPath: path.resolve(values["runner-path"]),
+        runnerId: runner.id,
+      })
+    );
+    await writePrivateFile(path.join(directory, "credential"), credential);
+    const kit = await fetchCurrentKit({ origin, credential, signal: stopper.signal });
+    const kitDirectory = await installKit({
+      cacheRoot: path.join(state, KIT_DIRECTORY),
+      origin,
+      credential,
+      kit,
+      signal: stopper.signal,
+    });
+    log(`serving one job with runner kit ${kit.digest}.`);
+    return await runKitCommand(
+      kitDirectory,
+      kit,
+      ["once", "--state-dir", state, "--assign-by", String(Date.now() + COLAB_ASSIGN_WINDOW_MS)],
+      stopper
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+// Long-running Colab waker on a desktop host; restarts from each newly published kit while idle.
+async function colabWaker(args) {
+  const usage =
+    "Usage: runner-launcher.mjs colab-waker --state-dir DIR [--uvx PATH] [--colab-mcp SPEC]";
+  const values = parseFlags(args, ["--state-dir", "--uvx", "--colab-mcp"], usage);
+  const state = path.resolve(values["state-dir"]);
+  const cacheRoot = path.join(state, KIT_DIRECTORY);
+  await mkdir(cacheRoot, { recursive: true, mode: 0o700 });
+  const stopper = new AbortController();
+  for (const name of ["SIGINT", "SIGTERM"]) process.once(name, () => stopper.abort());
+  const registration = await profileAccess(state);
+  let backoff = 1_000;
+  while (!stopper.signal.aborted) {
+    let current;
+    try {
+      const kit = await fetchCurrentKit({ ...registration, signal: stopper.signal });
+      current = {
+        kit,
+        directory: await installKit({ ...registration, cacheRoot, kit, signal: stopper.signal }),
+      };
+    } catch (error) {
+      if (stopper.signal.aborted) break;
+      [current] = await installedKits(cacheRoot);
+      if (!current) {
+        log(`${error.message}; no installed kit, retrying in 60 seconds.`);
+        await sleep(UNAVAILABLE_RETRY_MS, stopper.signal);
+        continue;
+      }
+      log(`${error.message}; starting installed kit ${current.kit.digest}.`);
+    }
+    log(`starting Colab waker from runner kit ${current.kit.digest}.`);
+    const code = await runKitCommand(
+      current.directory,
+      current.kit,
+      [
+        "colab-waker",
+        "--state-dir",
+        state,
+        ...(values.uvx ? ["--uvx", values.uvx] : []),
+        ...(values["colab-mcp"] ? ["--colab-mcp", values["colab-mcp"]] : []),
+      ],
+      stopper
+    );
+    if (stopper.signal.aborted || code === 0) return code;
+    if (code === KIT_UPDATE_EXIT_STATUS) {
+      backoff = 1_000;
+      continue;
+    }
+    log(`Colab waker exited with status ${code}; restarting in ${backoff / 1000} seconds.`);
+    await sleep(backoff, stopper.signal);
+    backoff = Math.min(60_000, backoff * 2);
+  }
+  return 0;
+}
+
 async function readStdin() {
   const chunks = [];
   let length = 0;
@@ -668,10 +840,14 @@ async function main() {
   }
   if (command === "serve") return serve(args);
   if (command === "execute-vm-job") return executeVmJob();
+  if (command === "colab") return colab(args);
+  if (command === "colab-waker") return colabWaker(args);
   if (!command || command === "--help" || command === "-h") {
     console.log(
       "Usage: node runner-launcher.mjs serve --state-dir DIR [--slots N] [--supersede-exit-status N]\n" +
         "       node runner-launcher.mjs execute-vm-job   (VM guest entry point; reads the job from stdin)\n" +
+        "       node runner-launcher.mjs colab-waker --state-dir DIR [--uvx PATH] [--colab-mcp SPEC]\n" +
+        "       node runner-launcher.mjs colab --origin URL --runner-path DIR --state-dir DIR   (inside a Colab runtime)\n" +
         "       node runner-launcher.mjs version\n" +
         "       node runner-launcher.mjs <broker command> --state-dir DIR [options]\n" +
         "serve installs the published runner kit under DIR/runner-kit and runs its broker, switching to each newly published kit after running jobs finish."
