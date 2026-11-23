@@ -7,7 +7,7 @@ import { gzipSync } from "node:zlib";
 
 const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
 const manifestDirectory = "packages/runner-kit";
-const directories = ["scripts/signing", "scripts/runner-vm"];
+const directories = ["scripts/signing", "scripts/runner-vm", "scripts/runner-colab"];
 const topLevelScripts = /^(?:runner-.+|actions-runner\.mjs|secure-runner-context\.ps1)$/;
 const contractFiles = [
   "packages/contracts/runner-scheduling.mjs",

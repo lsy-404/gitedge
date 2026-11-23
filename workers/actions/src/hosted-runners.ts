@@ -17,7 +17,7 @@ import { randomHex } from "../../../src/worker/common/encoding";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 import { readJsonLimited } from "../../../src/worker/common/readText";
 import type { RunnerEnv } from "./runners";
-import { BILLING_BLOCKED_MESSAGE } from "./github-quota";
+import { INCLUDED_EXHAUSTED_MESSAGE } from "./github-quota";
 import type { SigningPlatform } from "../../../packages/contracts/src/signing";
 import { createLogger } from "../../../src/worker/common/logger";
 
@@ -229,25 +229,25 @@ export async function reconcileHostedRunners(env: RunnerEnv): Promise<void> {
     });
     if (!response.ok) continue;
     const run = z
-      .object({ data: z.object({ completed: z.boolean(), billingBlocked: z.boolean() }) })
+      .object({ data: z.object({ completed: z.boolean(), includedExhausted: z.boolean() }) })
       .safeParse(await readJsonLimited(response, 16384));
     if (!run.success || !run.data.data.completed) continue;
     const failed = await env.DB.prepare(
       "UPDATE actions_hosted_runner_dispatches SET status='failed',error_code=?,created_at=? WHERE id=? AND status='dispatched'"
     )
       .bind(
-        run.data.data.billingBlocked ? "github_billing_blocked" : "hosted_runner_unavailable",
+        run.data.data.includedExhausted ? "github_included_exhausted" : "hosted_runner_unavailable",
         now,
         row.id
       )
       .run();
-    if (failed.meta.changes !== 1 || !run.data.data.billingBlocked) continue;
+    if (failed.meta.changes !== 1 || !run.data.data.includedExhausted) continue;
     await env.DB.prepare(
       `INSERT INTO actions_github_quota (namespace_id,state,message,checked_at)
       SELECT id,'exhausted',?1,?2 FROM namespaces WHERE kind='personal' AND created_by=?3
       ON CONFLICT(namespace_id) DO UPDATE SET state='exhausted',message=excluded.message,checked_at=excluded.checked_at`
     )
-      .bind(BILLING_BLOCKED_MESSAGE, now, row.owner_id)
+      .bind(INCLUDED_EXHAUSTED_MESSAGE, now, row.owner_id)
       .run();
   }
   const stale = await env.DB.prepare(

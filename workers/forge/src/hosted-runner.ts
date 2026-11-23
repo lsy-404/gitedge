@@ -288,7 +288,7 @@ export async function hostedRunnerOperation(request: Request, env: ForgeEnv): Pr
       const inspect = input.data.operation === "inspect";
       if (!row.github_run_id || !row.github_repository || !row.github_repository_id)
         return dataResponse(
-          inspect ? { completed: false, billingBlocked: false } : { cancelled: false }
+          inspect ? { completed: false, includedExhausted: false } : { cancelled: false }
         );
       const [owner, name] = row.github_repository.split("/");
       if (!owner || name !== NAME) throw new Error("hosted_repository_invalid");
@@ -302,7 +302,7 @@ export async function hostedRunnerOperation(request: Request, env: ForgeEnv): Pr
       if (inspect) {
         const state = z.object({ status: z.string() }).parse(await githubRequest(token, runPath));
         if (state.status !== "completed")
-          return dataResponse({ completed: false, billingBlocked: false });
+          return dataResponse({ completed: false, includedExhausted: false });
         const jobs = z
           .object({ jobs: z.array(z.object({ id: z.number().int().positive() })) })
           .parse(await githubRequest(token, `${runPath}/jobs`)).jobs;
@@ -316,9 +316,9 @@ export async function hostedRunnerOperation(request: Request, env: ForgeEnv): Pr
               )
             );
           if (annotations.some((item) => BILLING_REFUSAL.test(item.message ?? "")))
-            return dataResponse({ completed: true, billingBlocked: true });
+            return dataResponse({ completed: true, includedExhausted: true });
         }
-        return dataResponse({ completed: true, billingBlocked: false });
+        return dataResponse({ completed: true, includedExhausted: false });
       }
       try {
         await githubRequest(token, `${runPath}/cancel`, "POST");

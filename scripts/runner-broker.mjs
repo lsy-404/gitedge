@@ -2089,11 +2089,13 @@ async function runWaker(state, values) {
     }
   }
   if (!profile) throw new Error(`Register a GitEdge profile in ${state} before waking Colab.`);
-  const { runColabWaker, COLAB_MCP_SPEC } = await import("./runner-colab-waker.mjs");
+  const { runColabWaker, installColabExtension, COLAB_MCP_SPEC } =
+    await import("./runner-colab-waker.mjs");
   const controller = new AbortController();
   for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => controller.abort());
   const logDir = path.join(state, "colab-mcp-logs");
   await mkdir(logDir, { recursive: true, mode: 0o700 });
+  await installColabExtension(path.join(state, "colab-extension"));
   process.exitCode = await runColabWaker({
     profile,
     kitDigest: runningKit()?.digest,

@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "GitEdge Colab waker",
+  "version": "1.0.0",
+  "description": "Confirms the local Colab MCP connection for Colab pages opened by the GitEdge Colab waker.",
+  "content_scripts": [
+    {
+      "matches": ["https://colab.research.google.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

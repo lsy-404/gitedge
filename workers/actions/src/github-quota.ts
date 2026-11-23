@@ -20,8 +20,8 @@ export interface QuotaEnv {
 const REFRESH_INTERVAL_MS = 15 * 60_000;
 const MANUAL_REFRESH_MIN_MS = 10_000;
 const CRON_REFRESH_LIMIT = 5;
-export const BILLING_BLOCKED_MESSAGE =
-  "GitHub refused to start jobs: account payment failed or spending limit reached.";
+export const INCLUDED_EXHAUSTED_MESSAGE =
+  "GitHub's included Actions minutes for this month are used up; hosted runs resume next month.";
 const FORBIDDEN_MESSAGE =
   'GitHub rejected the token. It needs the fine-grained "Plan: read" permission or the classic "user" scope.';
 
@@ -143,7 +143,7 @@ export async function writeRunnerSettings(
         WHEN paid_usd>0 OR (?1 IS NOT NULL AND included_used_usd>=?1) THEN 'exhausted' ELSE 'ok' END
       WHERE namespace_id=?2 AND state IN ('ok','exhausted') AND message IS NOT ?3`
     )
-    .bind(settings.githubIncludedUsd, namespaceId, BILLING_BLOCKED_MESSAGE)
+    .bind(settings.githubIncludedUsd, namespaceId, INCLUDED_EXHAUSTED_MESSAGE)
     .run();
 }
 
@@ -284,10 +284,10 @@ export async function refreshGithubQuota(
   const cached = await env.DB.prepare("SELECT * FROM actions_github_quota WHERE namespace_id=?")
     .bind(scope.namespaceId)
     .first<QuotaRow>();
-  // The billing summary cannot see a payment refusal, so only a manual refresh or a new month clears it.
+  // The billing summary cannot see GitHub's start refusal at the zero budget, so only a manual refresh or a new month clears it.
   if (
     !options.manual &&
-    cached?.message === BILLING_BLOCKED_MESSAGE &&
+    cached?.message === INCLUDED_EXHAUSTED_MESSAGE &&
     (cached.checked_at ?? 0) >= monthStart(now)
   )
     return presentQuota(cached);
@@ -379,7 +379,7 @@ export async function refreshDueGithubQuotas(env: QuotaEnv): Promise<void> {
     )
       .bind(
         Date.now() - REFRESH_INTERVAL_MS,
-        BILLING_BLOCKED_MESSAGE,
+        INCLUDED_EXHAUSTED_MESSAGE,
         monthStart(Date.now()),
         CRON_REFRESH_LIMIT
       )

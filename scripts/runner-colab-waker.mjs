@@ -1,9 +1,12 @@
-import { readFile } from "node:fs/promises";
+import { cp, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import {
+  StdioClientTransport,
+  getDefaultEnvironment,
+} from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 
 export const COLAB_MCP_SPEC = "git+https://github.com/googlecolab/colab-mcp@v1.0.2";
@@ -26,7 +29,13 @@ const TERMINAL_STATES = new Set(["finished", "failed", "cancelled"]);
 const REQUIRED_TOOLS = ["add_code_cell", "run_code_cell", "get_cells"];
 const STARTED_MARKER = "GITEDGE_RUNNER_STARTED";
 const EXIT_MARKER = /GITEDGE_RUNNER_EXIT=(-?\d+)/;
-const launcherPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "runner-launcher.mjs");
+const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
+const launcherPath = path.join(scriptDirectory, "runner-launcher.mjs");
+const openerPath = path.join(scriptDirectory, "runner-colab", "open-browser.mjs");
+const extensionSource = path.join(scriptDirectory, "runner-colab", "extension");
+const shellQuote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+// Python's webbrowser splits a BROWSER entry containing %s with shlex.
+const browserCommand = `${shellQuote(process.execPath)} ${shellQuote(openerPath)} %s`;
 
 const log = (message) => console.error(`[colab-waker] ${message}`);
 
@@ -106,6 +115,7 @@ export async function openColabSession({ uvx = "uvx", spec = COLAB_MCP_SPEC, log
     const transport = new StdioClientTransport({
       command: uvx,
       args: [spec, ...(logDir ? ["--log", logDir] : [])],
+      env: { ...getDefaultEnvironment(), BROWSER: browserCommand },
       stderr: "ignore",
     });
     try {
@@ -125,7 +135,9 @@ export async function openColabSession({ uvx = "uvx", spec = COLAB_MCP_SPEC, log
         );
         return { client, tools, close: () => client.close() };
       }
-      log(`the Colab page did not connect (attempt ${attempt} of ${CONNECT_ATTEMPTS}).`);
+      log(
+        `the Colab page did not connect (attempt ${attempt} of ${CONNECT_ATTEMPTS}); check that the browser is signed in to Colab and has the GitEdge Colab extension loaded.`
+      );
     } catch (error) {
       await client.close().catch(() => {});
       if (error instanceof ColabError) throw error;
@@ -143,6 +155,14 @@ async function callTool(session, name, args, timeout = CELL_TIMEOUT_MS) {
   if (result.isError) throw new ColabError("colab_tool_failed", `${name}: ${text.slice(0, 200)}`);
   return text;
 }
+
+const cellId = (cell) => cell?.cellId ?? cell?.id;
+const cellCode = (cell) =>
+  typeof cell?.code === "string"
+    ? cell.code
+    : Array.isArray(cell?.source)
+      ? cell.source.join("")
+      : cell?.source;
 
 async function readCells(session) {
   const cells = parseJson(await callTool(session, "get_cells", {}));
@@ -166,16 +186,16 @@ async function addCell(session, code) {
   const added = parseJson(text);
   const id = added?.newCellId ?? added?.cellId ?? added?.id;
   if (typeof id === "string" && id) return id;
-  const match = (await readCells(session)).find((cell) => cell?.code === code);
-  if (typeof match?.cellId === "string") return match.cellId;
+  const match = (await readCells(session)).find((cell) => cellCode(cell) === code);
+  if (typeof cellId(match) === "string") return cellId(match);
   throw new ColabError("colab_cell_unavailable");
 }
 
 // Returns the cell's output text, from the run result or from the notebook state.
-async function runCell(session, cellId, marker) {
-  const text = await callTool(session, "run_code_cell", { cellId });
+async function runCell(session, id, marker) {
+  const text = await callTool(session, "run_code_cell", { cellId: id });
   if (marker.test(text)) return text;
-  const cell = (await readCells(session)).find((entry) => entry?.cellId === cellId);
+  const cell = (await readCells(session)).find((entry) => cellId(entry) === id);
   return JSON.stringify(cell?.outputs ?? []);
 }
 
@@ -301,6 +321,11 @@ async function runDispatch({ profile, dispatch, uvx, spec, logDir, signal }) {
 }
 
 // Claims Colab dispatches for this host's account one at a time until stopped or a new kit is published.
+// Keeps the browser extension at a stable path so it stays loaded across kit updates.
+export async function installColabExtension(directory) {
+  await cp(extensionSource, directory, { recursive: true, force: true });
+}
+
 export async function runColabWaker({ profile, kitDigest, uvx, spec, logDir, signal }) {
   log(`waiting for Colab dispatches from ${profile.origin}.`);
   while (!signal.aborted) {
