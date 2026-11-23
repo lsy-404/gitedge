@@ -32,7 +32,9 @@ const Operation = z.discriminatedUnion("operation", [
     })
     .strict(),
   z.object({ operation: z.literal("cancel"), reservationId: z.string().min(1) }).strict(),
+  z.object({ operation: z.literal("inspect"), reservationId: z.string().min(1) }).strict(),
 ]);
+const BILLING_REFUSAL = /payments have failed|spending limit/i;
 type Settings = {
   owner_id: string;
   connection_id: string;
@@ -282,9 +284,12 @@ export async function hostedRunnerOperation(request: Request, env: ForgeEnv): Pr
   let dispatchAttempted = false;
   try {
     const { token } = await githubCredentials(env, connection);
-    if (input.data.operation === "cancel") {
+    if (input.data.operation === "cancel" || input.data.operation === "inspect") {
+      const inspect = input.data.operation === "inspect";
       if (!row.github_run_id || !row.github_repository || !row.github_repository_id)
-        return dataResponse({ cancelled: false });
+        return dataResponse(
+          inspect ? { completed: false, billingBlocked: false } : { cancelled: false }
+        );
       const [owner, name] = row.github_repository.split("/");
       if (!owner || name !== NAME) throw new Error("hosted_repository_invalid");
       const repo = await remoteRepository(token, owner);
@@ -294,6 +299,27 @@ export async function hostedRunnerOperation(request: Request, env: ForgeEnv): Pr
       )
         throw new Error("hosted_repository_changed");
       const runPath = `${githubRepoPath(owner, name)}/actions/runs/${encodeURIComponent(row.github_run_id)}`;
+      if (inspect) {
+        const state = z.object({ status: z.string() }).parse(await githubRequest(token, runPath));
+        if (state.status !== "completed")
+          return dataResponse({ completed: false, billingBlocked: false });
+        const jobs = z
+          .object({ jobs: z.array(z.object({ id: z.number().int().positive() })) })
+          .parse(await githubRequest(token, `${runPath}/jobs`)).jobs;
+        for (const job of jobs) {
+          const annotations = z
+            .array(z.object({ message: z.string().nullable() }))
+            .parse(
+              await githubRequest(
+                token,
+                `${githubRepoPath(owner, name)}/check-runs/${job.id}/annotations`
+              )
+            );
+          if (annotations.some((item) => BILLING_REFUSAL.test(item.message ?? "")))
+            return dataResponse({ completed: true, billingBlocked: true });
+        }
+        return dataResponse({ completed: true, billingBlocked: false });
+      }
       try {
         await githubRequest(token, `${runPath}/cancel`, "POST");
       } catch (cause) {

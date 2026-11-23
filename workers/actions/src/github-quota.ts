@@ -20,6 +20,8 @@ export interface QuotaEnv {
 const REFRESH_INTERVAL_MS = 15 * 60_000;
 const MANUAL_REFRESH_MIN_MS = 10_000;
 const CRON_REFRESH_LIMIT = 5;
+export const BILLING_BLOCKED_MESSAGE =
+  "GitHub refused to start jobs: account payment failed or spending limit reached.";
 const FORBIDDEN_MESSAGE =
   'GitHub rejected the token. It needs the fine-grained "Plan: read" permission or the classic "user" scope.';
 
@@ -139,9 +141,9 @@ export async function writeRunnerSettings(
     .prepare(
       `UPDATE actions_github_quota SET state=CASE
         WHEN paid_usd>0 OR (?1 IS NOT NULL AND included_used_usd>=?1) THEN 'exhausted' ELSE 'ok' END
-      WHERE namespace_id=?2 AND state IN ('ok','exhausted')`
+      WHERE namespace_id=?2 AND state IN ('ok','exhausted') AND message IS NOT ?3`
     )
-    .bind(settings.githubIncludedUsd, namespaceId)
+    .bind(settings.githubIncludedUsd, namespaceId, BILLING_BLOCKED_MESSAGE)
     .run();
 }
 
@@ -218,6 +220,9 @@ async function githubGet(token: string, path: string): Promise<unknown | Respons
   return readJsonLimited(response, 1_048_576);
 }
 
+const monthStart = (now: number) =>
+  Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), 1);
+
 const cents = (value: number) => Math.round(value * 100) / 100;
 
 async function readGithubUsage(token: string, now: Date): Promise<Reading> {
@@ -279,6 +284,13 @@ export async function refreshGithubQuota(
   const cached = await env.DB.prepare("SELECT * FROM actions_github_quota WHERE namespace_id=?")
     .bind(scope.namespaceId)
     .first<QuotaRow>();
+  // The billing summary cannot see a payment refusal, so only a manual refresh or a new month clears it.
+  if (
+    !options.manual &&
+    cached?.message === BILLING_BLOCKED_MESSAGE &&
+    (cached.checked_at ?? 0) >= monthStart(now)
+  )
+    return presentQuota(cached);
   if (
     options.manual &&
     cached?.checked_at != null &&
@@ -362,10 +374,15 @@ export async function refreshDueGithubQuotas(env: QuotaEnv): Promise<void> {
       `SELECT s.owner_id FROM forge_hosted_runner_settings s JOIN users u ON u.id=s.owner_id AND u.disabled_at IS NULL
       JOIN namespaces n ON n.kind='personal' AND n.created_by=s.owner_id
       LEFT JOIN actions_github_quota q ON q.namespace_id=n.id
-      WHERE q.checked_at IS NULL OR q.checked_at<?
+      WHERE (q.checked_at IS NULL OR q.checked_at<?) AND NOT (q.message=? AND q.checked_at>=?)
       ORDER BY COALESCE(q.checked_at,0) LIMIT ?`
     )
-      .bind(Date.now() - REFRESH_INTERVAL_MS, CRON_REFRESH_LIMIT)
+      .bind(
+        Date.now() - REFRESH_INTERVAL_MS,
+        BILLING_BLOCKED_MESSAGE,
+        monthStart(Date.now()),
+        CRON_REFRESH_LIMIT
+      )
       .all<{ owner_id: string }>();
     owners = due.results.map((row) => row.owner_id);
   } catch (cause) {

@@ -17,6 +17,7 @@ import { randomHex } from "../../../src/worker/common/encoding";
 import { dataResponse, errorResponse } from "../../../src/worker/common/http";
 import { readJsonLimited } from "../../../src/worker/common/readText";
 import type { RunnerEnv } from "./runners";
+import { BILLING_BLOCKED_MESSAGE } from "./github-quota";
 import type { SigningPlatform } from "../../../packages/contracts/src/signing";
 import { createLogger } from "../../../src/worker/common/logger";
 
@@ -215,6 +216,40 @@ export async function reconcileHostedRunners(env: RunnerEnv): Promise<void> {
   )
     .bind(now - 15 * 60_000)
     .run();
+  const unconsumed = await env.DB.prepare(
+    "SELECT id,owner_id FROM actions_hosted_runner_dispatches WHERE status='dispatched' AND github_run_id IS NOT NULL AND created_at<=? ORDER BY created_at LIMIT 10"
+  )
+    .bind(now - 60_000)
+    .all<{ id: string; owner_id: string }>();
+  for (const row of unconsumed.results) {
+    const response = await env.FORGE.fetch("https://forge.internal/internal/hosted-runner", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ operation: "inspect", reservationId: row.id }),
+    });
+    if (!response.ok) continue;
+    const run = z
+      .object({ data: z.object({ completed: z.boolean(), billingBlocked: z.boolean() }) })
+      .safeParse(await readJsonLimited(response, 16384));
+    if (!run.success || !run.data.data.completed) continue;
+    const failed = await env.DB.prepare(
+      "UPDATE actions_hosted_runner_dispatches SET status='failed',error_code=?,created_at=? WHERE id=? AND status='dispatched'"
+    )
+      .bind(
+        run.data.data.billingBlocked ? "github_billing_blocked" : "hosted_runner_unavailable",
+        now,
+        row.id
+      )
+      .run();
+    if (failed.meta.changes !== 1 || !run.data.data.billingBlocked) continue;
+    await env.DB.prepare(
+      `INSERT INTO actions_github_quota (namespace_id,state,message,checked_at)
+      SELECT id,'exhausted',?1,?2 FROM namespaces WHERE kind='personal' AND created_by=?3
+      ON CONFLICT(namespace_id) DO UPDATE SET state='exhausted',message=excluded.message,checked_at=excluded.checked_at`
+    )
+      .bind(BILLING_BLOCKED_MESSAGE, now, row.owner_id)
+      .run();
+  }
   const stale = await env.DB.prepare(
     `SELECT h.id,h.runner_id,h.github_run_id FROM actions_hosted_runner_dispatches h
     WHERE h.status IN ('dispatching','dispatched','consumed','cancel_pending') AND (
