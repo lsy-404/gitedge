@@ -5,7 +5,8 @@ import {
   type TrustedUser,
 } from "../../../packages/contracts/src/index";
 import {
-  DEFAULT_RUNNER_TYPE_PRIORITY,
+  DEFAULT_ON_DEMAND_PRIORITY,
+  DEFAULT_SLOT_PRIORITY,
   RunnerBudgetSchema,
   RunnerCapacitySchema,
   RUNNER_CAPACITY_STALE_MS,
@@ -307,17 +308,24 @@ async function queueRows(
 async function accountRunnerSettings(
   env: RunnerOverviewEnv,
   user: TrustedUser
-): Promise<Pick<RunnerOverview, "typePriority" | "githubIncludedUsd" | "githubQuota" | "colab">> {
+): Promise<
+  Pick<
+    RunnerOverview,
+    "slotPriority" | "onDemandPriority" | "githubIncludedUsd" | "githubQuota" | "colab"
+  >
+> {
   const scope = await accountScope(env.DB, user.id);
   const settings = scope
     ? await readRunnerSettings(env.DB, scope.namespaceId)
     : {
-        typePriority: DEFAULT_RUNNER_TYPE_PRIORITY.slice(),
+        slotPriority: DEFAULT_SLOT_PRIORITY.slice(),
+        onDemandPriority: DEFAULT_ON_DEMAND_PRIORITY.slice(),
         githubIncludedUsd: null,
         colabEnabled: false,
       };
   return {
-    typePriority: settings.typePriority,
+    slotPriority: settings.slotPriority,
+    onDemandPriority: settings.onDemandPriority,
     githubIncludedUsd: settings.githubIncludedUsd,
     githubQuota: await readGithubQuota(env.DB, user.id, scope),
     colab: await readColabOverview(env.DB, user.id, settings.colabEnabled),

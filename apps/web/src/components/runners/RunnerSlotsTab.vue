@@ -1,16 +1,14 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed } from "vue";
 import { useI18n } from "vue-i18n";
-import { FluentButton } from "@platform-kit/fluent/vue";
-import {
-  RUNNER_TYPES,
-  type RunnerOverview,
-  type RunnerSettings,
-  type RunnerType,
+import type {
+  RegisteredRunnerType,
+  RunnerOverview,
+  RunnerSettings,
 } from "../../../../../packages/contracts/src/runners";
 import { api } from "../../lib/api";
 import { availableSlots, typeKey } from "../../lib/runner-display";
-import NoticeBar from "../NoticeBar.vue";
+import RunnerPriorityBox from "./RunnerPriorityBox.vue";
 import RunnerCard from "./RunnerCard.vue";
 
 const props = defineProps<{ overview: RunnerOverview }>();
@@ -22,49 +20,24 @@ const emit = defineEmits<{
 }>();
 const { t } = useI18n();
 
-const order = ref<RunnerType[]>([...props.overview.typePriority]);
-const saving = ref(false);
-const error = ref(false);
-const dirty = computed(() => order.value.join() !== props.overview.typePriority.join());
-
-watch(
-  () => props.overview.typePriority,
-  (next) => {
-    if (!saving.value) order.value = [...next];
-  }
-);
-
 const groups = computed(() =>
-  RUNNER_TYPES.map((type) => ({
+  props.overview.slotPriority.map((type) => ({
     type,
     runners: props.overview.runners.filter((runner) => runner.type === type),
     available: availableSlots(props.overview.runners, type),
   }))
 );
 
-function move(index: number, offset: -1 | 1): void {
-  const target = index + offset;
-  if (target < 0 || target >= order.value.length) return;
-  const next = [...order.value];
-  [next[index], next[target]] = [next[target], next[index]];
-  order.value = next;
-}
-
-async function save(): Promise<void> {
-  saving.value = true;
-  error.value = false;
-  try {
-    const result = await api.updateRunnerSettings({
-      typePriority: order.value,
+async function savePriority(order: RegisteredRunnerType[]): Promise<void> {
+  emit(
+    "settings",
+    await api.updateRunnerSettings({
+      slotPriority: order,
+      onDemandPriority: props.overview.onDemandPriority,
       githubIncludedUsd: props.overview.githubIncludedUsd,
       colabEnabled: props.overview.colab.enabled,
-    });
-    emit("settings", result);
-  } catch {
-    error.value = true;
-  } finally {
-    saving.value = false;
-  }
+    })
+  );
 }
 </script>
 
@@ -77,36 +50,12 @@ async function save(): Promise<void> {
       </li>
     </ul>
 
-    <section class="box runner-section">
-      <h3>{{ t("runnerPriorityTitle") }}</h3>
-      <p class="row-meta">{{ t("runnerPriorityHelp") }}</p>
-      <ol class="priority-list">
-        <li v-for="(type, index) in order" :key="type" class="priority-item">
-          <span class="priority-rank">{{ index + 1 }}</span>
-          <span class="priority-name">{{ t(typeKey(type)) }}</span>
-          <FluentButton
-            type="button"
-            tone="subtle"
-            :disabled="index === 0"
-            :aria-label="`${t('runnerMoveUp')} · ${t(typeKey(type))}`"
-            @click="move(index, -1)"
-            >↑</FluentButton
-          >
-          <FluentButton
-            type="button"
-            tone="subtle"
-            :disabled="index === order.length - 1"
-            :aria-label="`${t('runnerMoveDown')} · ${t(typeKey(type))}`"
-            @click="move(index, 1)"
-            >↓</FluentButton
-          >
-        </li>
-      </ol>
-      <NoticeBar v-if="error" intent="error">{{ t("runnerSettingsError") }}</NoticeBar>
-      <FluentButton type="button" :disabled="!dirty" :busy="saving" @click="save">{{
-        t("runnerPrioritySave")
-      }}</FluentButton>
-    </section>
+    <RunnerPriorityBox
+      :title="t('runnerSlotPriorityTitle')"
+      :help="t('runnerSlotPriorityHelp')"
+      :saved="overview.slotPriority"
+      :save="savePriority"
+    />
 
     <section v-for="group in groups" :key="group.type" class="box">
       <h3 class="group-title">{{ t(typeKey(group.type)) }}</h3>
@@ -142,40 +91,10 @@ async function save(): Promise<void> {
   display: flex;
   gap: var(--space-2);
 }
-.runner-section {
-  display: grid;
-  justify-items: start;
-  gap: var(--space-3);
-  padding: var(--space-4);
-}
-.runner-section h3,
-.runner-section p,
 .group-title {
   margin: 0;
-}
-.group-title {
   padding: var(--space-3) var(--space-4) 0;
   font-size: 1rem;
-}
-.priority-list {
-  display: grid;
-  gap: var(--space-2);
-  width: 100%;
-  max-width: 28rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.priority-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-.priority-rank {
-  color: var(--fg-muted);
-}
-.priority-name {
-  flex: 1;
 }
 .empty-state {
   padding: 0 var(--space-4) var(--space-4);

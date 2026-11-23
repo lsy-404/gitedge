@@ -239,6 +239,7 @@ export const SigningSourceCredentialStatusSchema = z
   .object({
     configured: z.boolean(),
     updatedAt: z.number().int().positive().nullable(),
+    login: z.string().min(1).max(100).nullable(),
   })
   .strict();
 export type SigningSourceCredentialStatus = z.infer<typeof SigningSourceCredentialStatusSchema>;

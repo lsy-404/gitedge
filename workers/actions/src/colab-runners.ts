@@ -405,7 +405,7 @@ export async function reconcileColabRunners(env: RunnerEnv, ctx: ExecutionContex
     if (colabFirst === undefined) {
       const scope = await accountScope(env.DB, job.owner_id);
       const priority = scope
-        ? (await readRunnerSettings(env.DB, scope.namespaceId)).typePriority
+        ? (await readRunnerSettings(env.DB, scope.namespaceId)).onDemandPriority
         : null;
       colabFirst =
         priority !== null &&

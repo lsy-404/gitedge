@@ -1,11 +1,12 @@
 import { z } from "zod";
 import {
-  DEFAULT_RUNNER_TYPE_PRIORITY,
-  RunnerTypePrioritySchema,
+  DEFAULT_ON_DEMAND_PRIORITY,
+  DEFAULT_SLOT_PRIORITY,
+  OnDemandPrioritySchema,
+  SlotPrioritySchema,
   type GithubQuota,
   type GithubQuotaState,
   type RunnerSettings,
-  type RunnerType,
 } from "../../../packages/contracts/src/runners";
 import { createLogger } from "../../../src/worker/common/logger";
 import { readJsonLimited } from "../../../src/worker/common/readText";
@@ -75,35 +76,38 @@ export async function readRunnerSettings(
 ): Promise<RunnerSettings> {
   const row = await db
     .prepare(
-      "SELECT type_priority_json,github_included_usd,colab_enabled FROM actions_runner_settings WHERE namespace_id=?"
+      "SELECT slot_priority_json,on_demand_priority_json,github_included_usd,colab_enabled FROM actions_runner_settings WHERE namespace_id=?"
     )
     .bind(namespaceId)
     .first<{
-      type_priority_json: string;
+      slot_priority_json: string;
+      on_demand_priority_json: string;
       github_included_usd: number | null;
       colab_enabled: number;
     }>();
   if (!row)
     return {
-      typePriority: [...DEFAULT_RUNNER_TYPE_PRIORITY],
+      slotPriority: [...DEFAULT_SLOT_PRIORITY],
+      onDemandPriority: [...DEFAULT_ON_DEMAND_PRIORITY],
       githubIncludedUsd: null,
       colabEnabled: false,
     };
-  let parsed: ReturnType<typeof RunnerTypePrioritySchema.safeParse>;
-  try {
-    parsed = RunnerTypePrioritySchema.safeParse(JSON.parse(row.type_priority_json));
-  } catch {
-    parsed = RunnerTypePrioritySchema.safeParse(null);
-  }
+  const slot = parsePriority(SlotPrioritySchema, row.slot_priority_json);
+  const onDemand = parsePriority(OnDemandPrioritySchema, row.on_demand_priority_json);
   return {
-    typePriority: parsed.success ? parsed.data : [...DEFAULT_RUNNER_TYPE_PRIORITY],
+    slotPriority: slot.success ? slot.data : [...DEFAULT_SLOT_PRIORITY],
+    onDemandPriority: onDemand.success ? onDemand.data : [...DEFAULT_ON_DEMAND_PRIORITY],
     githubIncludedUsd: row.github_included_usd,
     colabEnabled: row.colab_enabled === 1,
   };
 }
 
-export async function readTypePriority(db: D1Database, namespaceId: string): Promise<RunnerType[]> {
-  return (await readRunnerSettings(db, namespaceId)).typePriority;
+function parsePriority<S extends z.ZodType>(schema: S, json: string) {
+  try {
+    return schema.safeParse(JSON.parse(json));
+  } catch {
+    return schema.safeParse(null);
+  }
 }
 
 export function quotaState(
@@ -124,13 +128,15 @@ export async function writeRunnerSettings(
   const now = Date.now();
   await db
     .prepare(
-      `INSERT INTO actions_runner_settings (namespace_id,type_priority_json,github_included_usd,colab_enabled,updated_at) VALUES (?,?,?,?,?)
-      ON CONFLICT(namespace_id) DO UPDATE SET type_priority_json=excluded.type_priority_json,
+      `INSERT INTO actions_runner_settings (namespace_id,slot_priority_json,on_demand_priority_json,github_included_usd,colab_enabled,updated_at) VALUES (?,?,?,?,?,?)
+      ON CONFLICT(namespace_id) DO UPDATE SET slot_priority_json=excluded.slot_priority_json,
+        on_demand_priority_json=excluded.on_demand_priority_json,
         github_included_usd=excluded.github_included_usd,colab_enabled=excluded.colab_enabled,updated_at=excluded.updated_at`
     )
     .bind(
       namespaceId,
-      JSON.stringify(settings.typePriority),
+      JSON.stringify(settings.slotPriority),
+      JSON.stringify(settings.onDemandPriority),
       settings.githubIncludedUsd,
       settings.colabEnabled ? 1 : 0,
       now

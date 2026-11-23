@@ -3,31 +3,25 @@ import {
   androidCredentialsSchema,
   windowsCredentialsSchema,
 } from "../../../../packages/contracts/signing-native.mjs";
-import { SigningSourceCredentialSchema } from "../../../../packages/contracts/src/signing";
 import { onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type {
   SigningCredentialStatus,
   SigningCredentialPlatform,
   SigningProfileMetadata,
-  SigningSourceCredentialStatus,
 } from "../../../../packages/contracts/src/signing";
 import { errorMessage } from "../lib/api";
 import {
   approveSigningProfile,
   getSigningCredentialStatus,
-  getSigningSourceCredentialStatus,
   installSigningCredentials,
-  installSigningSourceCredential,
   listSigningProfiles,
   removeSigningCredentials,
-  removeSigningSourceCredential,
 } from "../lib/runnerSigning";
 import { useReauthRetry } from "../lib/reauth";
 import { FluentButton } from "@platform-kit/fluent/vue";
 import NoticeBar from "./NoticeBar.vue";
 import ReauthPrompt from "./ReauthPrompt.vue";
-import TextField from "./TextField.vue";
 
 const props = defineProps<{ repositoryId: string }>();
 const { t, d } = useI18n();
@@ -38,8 +32,6 @@ const statuses = ref(new Map<string, SigningCredentialStatus>());
 const loading = ref(false);
 const busy = ref<string | null>(null);
 const error = ref("");
-const sourceToken = ref("");
-const sourceStatus = ref<SigningSourceCredentialStatus | null>(null);
 const windowsFormProfile = ref<string | null>(null);
 const windowsTenantId = ref("");
 const windowsClientId = ref("");
@@ -110,42 +102,6 @@ async function installWindows(profile: SigningProfileMetadata): Promise<void> {
   await operation();
 }
 
-async function installSource(): Promise<void> {
-  const token = sourceToken.value.trim();
-  if (busy.value || !SigningSourceCredentialSchema.safeParse({ token }).success) return;
-  const operation = async () => {
-    busy.value = "source";
-    error.value = "";
-    try {
-      sourceStatus.value = await installSigningSourceCredential(props.repositoryId, token);
-      sourceToken.value = "";
-    } catch (cause) {
-      if (reauth.intercept(cause, operation)) return;
-      error.value = errorMessage(cause, t);
-    } finally {
-      busy.value = null;
-    }
-  };
-  await operation();
-}
-
-async function removeSource(): Promise<void> {
-  if (busy.value || !window.confirm(t("runnerSigningSourceRemoveConfirm"))) return;
-  const operation = async () => {
-    busy.value = "source";
-    error.value = "";
-    try {
-      sourceStatus.value = await removeSigningSourceCredential(props.repositoryId);
-    } catch (cause) {
-      if (reauth.intercept(cause, operation)) return;
-      error.value = errorMessage(cause, t);
-    } finally {
-      busy.value = null;
-    }
-  };
-  await operation();
-}
-
 function isCredentialObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -155,7 +111,6 @@ async function refresh(): Promise<void> {
   error.value = "";
   try {
     profiles.value = await listSigningProfiles(props.repositoryId);
-    sourceStatus.value = await getSigningSourceCredentialStatus(props.repositoryId);
     const next = new Map<string, SigningCredentialStatus>();
     await Promise.all(
       profiles.value.flatMap((profile) =>
@@ -278,53 +233,11 @@ onMounted(() => void refresh());
 </script>
 
 <template>
-  <section class="signing-profiles" :aria-label="t('runnerSigningProfilesTitle')">
+  <section class="box signing-profiles" :aria-label="t('runnerSigningProfilesTitle')">
     <h4>{{ t("runnerSigningProfilesTitle") }}</h4>
     <p class="row-meta">{{ t("runnerSigningProfilesDescription") }}</p>
     <NoticeBar v-if="error" intent="error">{{ error }}</NoticeBar>
     <ReauthPrompt v-if="reauth.pending.value" @confirmed="reauth.confirmed" />
-    <form class="source-credentials-form" @submit.prevent="installSource">
-      <div class="row-meta">
-        {{
-          t("runnerSigningSourceCredential", {
-            status: sourceStatus?.configured
-              ? t("runnerSigningCredentialConfigured")
-              : t("runnerSigningCredentialMissing"),
-          })
-        }}
-        <span v-if="sourceStatus?.updatedAt">
-          · {{ d(new Date(sourceStatus.updatedAt), "long") }}</span
-        >
-      </div>
-      <p class="row-meta">{{ t("runnerSigningSourceHelp") }}</p>
-      <TextField
-        v-model="sourceToken"
-        type="password"
-        autocomplete="new-password"
-        spellcheck="false"
-        maxlength="512"
-        required
-        :disabled="busy !== null"
-        >{{ t("runnerSigningSourceToken") }}</TextField
-      >
-      <div class="profile-actions">
-        <FluentButton
-          type="submit"
-          tone="primary"
-          :busy="busy === 'source'"
-          :disabled="busy !== null || !sourceToken.trim()"
-          >{{ t("runnerSigningSourceSave") }}</FluentButton
-        >
-        <FluentButton
-          v-if="sourceStatus?.configured"
-          type="button"
-          tone="danger"
-          :disabled="busy !== null"
-          @click="removeSource"
-          >{{ t("runnerSigningSourceRemove") }}</FluentButton
-        >
-      </div>
-    </form>
     <form class="profile-approval" @submit.prevent="approve">
       <label class="field-label" for="runner-signing-profile-name">{{
         t("runnerSigningProfileName")
@@ -466,8 +379,7 @@ onMounted(() => void refresh());
 .signing-profiles {
   display: grid;
   gap: 0.65rem;
-  border-top: 1px solid var(--color-border, #d1d5db);
-  padding-top: 0.75rem;
+  padding: var(--space-4);
 }
 .signing-profiles h4,
 .signing-profiles p {
@@ -475,7 +387,6 @@ onMounted(() => void refresh());
 }
 .profile-approval,
 .signing-profile,
-.source-credentials-form,
 .windows-credentials-form {
   display: grid;
   gap: 0.5rem;
@@ -491,9 +402,6 @@ onMounted(() => void refresh());
 .profile-approval input {
   min-height: 2.5rem;
   padding: 0.4rem 0.6rem;
-}
-.source-credentials-form {
-  max-width: 38rem;
 }
 .signing-profile {
   border-top: 1px solid var(--color-border, #d1d5db);

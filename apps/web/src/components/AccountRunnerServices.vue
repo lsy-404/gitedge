@@ -7,6 +7,7 @@ import type { Repository } from "../lib/api";
 import { api, errorMessage } from "../lib/api";
 import NoticeBar from "./NoticeBar.vue";
 import StatusState from "./StatusState.vue";
+import AccountRunnerAccess from "./AccountRunnerAccess.vue";
 import AccountRunnerSigningProfiles from "./AccountRunnerSigningProfiles.vue";
 
 const { t } = useI18n();
@@ -75,59 +76,69 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="box account-runner-services" :aria-label="t('accountRunnerTitle')">
-    <header class="account-runner-services-header">
-      <div>
-        <h3>{{ t("accountRunnerTitle") }}</h3>
-        <p>{{ t("accountRunnerDescription") }}</p>
-      </div>
-      <FluentButton
-        v-if="!loading && !repository && !error"
-        type="button"
-        :busy="creating"
-        :disabled="creating"
-        @click="create"
-        >{{ t("accountRunnerCreate") }}</FluentButton
-      >
-      <FluentButton
-        v-else-if="error && !repository"
-        type="button"
-        tone="subtle"
-        :busy="loading"
-        @click="load"
-        >{{ t("retry") }}</FluentButton
-      >
-    </header>
+  <div class="account-runner-cards">
+    <section class="box account-runner-services" :aria-label="t('accountRunnerTitle')">
+      <header class="account-runner-services-header">
+        <div>
+          <h3>{{ t("accountRunnerTitle") }}</h3>
+          <p>{{ t("accountRunnerDescription") }}</p>
+        </div>
+        <FluentButton
+          v-if="!loading && !repository && !error"
+          type="button"
+          :busy="creating"
+          :disabled="creating"
+          @click="create"
+          >{{ t("accountRunnerCreate") }}</FluentButton
+        >
+        <FluentButton
+          v-else-if="error && !repository"
+          type="button"
+          tone="subtle"
+          :busy="loading"
+          @click="load"
+          >{{ t("retry") }}</FluentButton
+        >
+      </header>
 
-    <div v-if="loading" class="box"><StatusState :loading="true" /></div>
-    <NoticeBar v-else-if="error" intent="error">{{ error }}</NoticeBar>
-    <div v-else-if="repository" class="account-runner-service-state">
-      <div>
-        <strong>{{ repository.owner }}/{{ repository.name }}</strong>
-        <p>{{ t("accountRunnerPrivateLock") }}</p>
+      <div v-if="loading" class="box"><StatusState :loading="true" /></div>
+      <NoticeBar v-else-if="error" intent="error">{{ error }}</NoticeBar>
+      <div v-else-if="repository" class="account-runner-service-state">
+        <div>
+          <strong>{{ repository.owner }}/{{ repository.name }}</strong>
+          <p>{{ t("accountRunnerPrivateLock") }}</p>
+        </div>
+        <nav :aria-label="t('accountRunnerLinks')">
+          <RouterLink class="btn btn-sm" :to="repositoryPath('code')">{{
+            t("accountRunnerOpenCode")
+          }}</RouterLink>
+          <RouterLink class="btn btn-sm" :to="repositoryPath('actions')">{{
+            t("accountRunnerOpenActions")
+          }}</RouterLink>
+          <RouterLink class="btn btn-sm" :to="workflowDirectoryPath()">{{
+            t("accountRunnerEditWorkflows")
+          }}</RouterLink>
+          <RouterLink class="btn btn-sm" :to="repositoryPath('settings')">{{
+            t("accountRunnerSettings")
+          }}</RouterLink>
+        </nav>
+        <p class="muted">{{ t("accountRunnerServiceScope") }}</p>
       </div>
-      <nav :aria-label="t('accountRunnerLinks')">
-        <RouterLink class="btn btn-sm" :to="repositoryPath('code')">{{
-          t("accountRunnerOpenCode")
-        }}</RouterLink>
-        <RouterLink class="btn btn-sm" :to="repositoryPath('actions')">{{
-          t("accountRunnerOpenActions")
-        }}</RouterLink>
-        <RouterLink class="btn btn-sm" :to="workflowDirectoryPath()">{{
-          t("accountRunnerEditWorkflows")
-        }}</RouterLink>
-        <RouterLink class="btn btn-sm" :to="repositoryPath('settings')">{{
-          t("accountRunnerSettings")
-        }}</RouterLink>
-      </nav>
-      <p class="muted">{{ t("accountRunnerServiceScope") }}</p>
+      <p v-else class="empty-state">{{ t("accountRunnerEmpty") }}</p>
+    </section>
+    <template v-if="repository">
+      <AccountRunnerAccess :repository-id="repository.id" />
       <AccountRunnerSigningProfiles :repository-id="repository.id" />
-    </div>
-    <p v-else class="empty-state">{{ t("accountRunnerEmpty") }}</p>
-  </section>
+    </template>
+  </div>
 </template>
 
 <style scoped>
+.account-runner-cards {
+  display: grid;
+  gap: var(--space-4);
+}
+
 .account-runner-services-header,
 .account-runner-service-state {
   display: flex;

@@ -493,6 +493,38 @@ export async function removeSigningCredentials(
     .run();
 }
 
+// A rejected token (401) throws; any other failure leaves the login unknown.
+async function githubTokenLogin(token: string): Promise<string | null> {
+  let response: Response;
+  try {
+    response = await fetch("https://api.github.com/user", {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2026-03-10",
+        "User-Agent": "gitedge",
+      },
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch {
+    return null;
+  }
+  if (response.status === 401) {
+    await response.body?.cancel();
+    throw new Error("github_token_invalid");
+  }
+  if (!response.ok) {
+    await response.body?.cancel();
+    return null;
+  }
+  try {
+    const login = ((await response.json()) as { login?: unknown }).login;
+    return typeof login === "string" && login.length > 0 && login.length <= 100 ? login : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function installSigningSourceCredential(
   env: SigningEnv,
   ownerId: string,
@@ -500,6 +532,7 @@ export async function installSigningSourceCredential(
   value: unknown
 ): Promise<void> {
   const sourceToken = SigningSourceCredentialSchema.parse(value).token;
+  const login = await githubTokenLogin(sourceToken);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const aad = new TextEncoder().encode(`${ownerId}:${repositoryId}:github-source`);
   const encrypted = await crypto.subtle.encrypt(
@@ -509,9 +542,9 @@ export async function installSigningSourceCredential(
   );
   const envelope = `${bytesToBase64(iv)}.${bytesToBase64(new Uint8Array(encrypted))}`;
   await env.DB.prepare(
-    `INSERT INTO actions_signing_source_token(owner_id,repository_id,ciphertext,updated_at) VALUES(?,?,?,?) ON CONFLICT(owner_id,repository_id) DO UPDATE SET ciphertext=excluded.ciphertext,updated_at=excluded.updated_at`
+    `INSERT INTO actions_signing_source_token(owner_id,repository_id,ciphertext,github_login,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(owner_id,repository_id) DO UPDATE SET ciphertext=excluded.ciphertext,github_login=excluded.github_login,updated_at=excluded.updated_at`
   )
-    .bind(ownerId, repositoryId, envelope, Date.now())
+    .bind(ownerId, repositoryId, envelope, login, Date.now())
     .run();
 }
 
@@ -533,13 +566,14 @@ export async function signingSourceCredentialStatus(
   repositoryId: string
 ) {
   const row = await env.DB.prepare(
-    `SELECT updated_at FROM actions_signing_source_token WHERE owner_id=? AND repository_id=?`
+    `SELECT updated_at,github_login FROM actions_signing_source_token WHERE owner_id=? AND repository_id=?`
   )
     .bind(ownerId, repositoryId)
-    .first<{ updated_at: number }>();
+    .first<{ updated_at: number; github_login: string | null }>();
   return SigningSourceCredentialStatusSchema.parse({
     configured: Boolean(row),
     updatedAt: row?.updated_at ?? null,
+    login: row?.github_login ?? null,
   });
 }
 

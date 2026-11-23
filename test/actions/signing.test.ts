@@ -247,6 +247,20 @@ function request() {
   });
 }
 
+async function installSourceToken(
+  ...args: Parameters<typeof installSigningSourceCredential>
+): Promise<void> {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => Response.json({ login: "octocat" }))
+  );
+  try {
+    await installSigningSourceCredential(...args);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+}
+
 describe("native signing admission", () => {
   it("fails closed before persistence or queueing when no approved profile is available", async () => {
     const test = environment();
@@ -479,10 +493,10 @@ describe("native signing admission", () => {
         }),
       },
     } as unknown as SigningEnv;
-    await installSigningSourceCredential(env, "owner-1", "runner-one", {
+    await installSourceToken(env, "owner-1", "runner-one", {
       token: "source-token-one",
     });
-    await installSigningSourceCredential(env, "owner-2", "runner-two", {
+    await installSourceToken(env, "owner-2", "runner-two", {
       token: "source-token-two",
     });
     expect(
@@ -639,7 +653,7 @@ describe("native signing admission", () => {
         }),
       },
     } as unknown as SigningEnv;
-    await installSigningSourceCredential(env, owner.id, "runner-repo", {
+    await installSourceToken(env, owner.id, "runner-repo", {
       token: "release-source-token",
     });
     const { publicKey, privateKey } = await generateKeyPair("RS256");
@@ -753,7 +767,9 @@ describe("native signing admission", () => {
               if (query.includes("FROM repositories r JOIN namespaces"))
                 return { id: "runner-repo", created_by: owner.id };
               if (query.includes("SELECT profile_json,approved_by,approved_at")) return stored;
-              if (query.includes("SELECT updated_at FROM actions_signing_source_token"))
+              if (
+                query.includes("SELECT updated_at,github_login FROM actions_signing_source_token")
+              )
                 return sourceCredentials.has(`${String(bound[0])}:${String(bound[1])}`)
                   ? { updated_at: 1 }
                   : null;
@@ -824,7 +840,7 @@ describe("native signing admission", () => {
       "runner-repo",
       "desktop-release"
     );
-    await installSigningSourceCredential(env, owner.id, "runner-repo", {
+    await installSourceToken(env, owner.id, "runner-repo", {
       token: "shared-across-revisions",
     });
     await saveApprovedProfile(

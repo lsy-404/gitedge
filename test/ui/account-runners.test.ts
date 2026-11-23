@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { h } from "vue";
 import AccountRunners from "../../apps/web/src/components/AccountRunners.vue";
+import AccountRunnerAccess from "../../apps/web/src/components/AccountRunnerAccess.vue";
 import AccountRunnerSigningProfiles from "../../apps/web/src/components/AccountRunnerSigningProfiles.vue";
 import { api, ApiError } from "../../apps/web/src/lib/api";
 import { applyAccountPreferences } from "../../apps/web/src/lib/preferences";
@@ -101,7 +102,8 @@ function overview(overrides: Partial<RunnerOverview> = {}): RunnerOverview {
       },
     ],
     truncated: false,
-    typePriority: ["owned", "rented", "github-hosted", "colab"],
+    slotPriority: ["rented", "owned"],
+    onDemandPriority: ["github-hosted", "colab"],
     githubIncludedUsd: 12,
     colab: { enabled: false, account: null, recent: [] },
     githubQuota: {
@@ -127,6 +129,7 @@ beforeEach(() => {
   vi.spyOn(api, "signingSourceCredentialStatus").mockResolvedValue({
     configured: false,
     updatedAt: null,
+    login: null,
   });
 });
 afterEach(async () => {
@@ -339,10 +342,10 @@ describe("AccountRunners", () => {
     const install = vi
       .spyOn(api, "installSigningSourceCredential")
       .mockRejectedValueOnce(new ApiError(403, "reauth", "reauth_required"))
-      .mockResolvedValueOnce({ configured: true, updatedAt: Date.now() });
+      .mockResolvedValueOnce({ configured: true, updatedAt: Date.now(), login: "octo" });
     const remove = vi
       .spyOn(api, "removeSigningSourceCredential")
-      .mockResolvedValue({ configured: false, updatedAt: null });
+      .mockResolvedValue({ configured: false, updatedAt: null, login: null });
     vi.spyOn(window, "confirm").mockReturnValue(true);
     vi.spyOn(api, "security").mockResolvedValue({
       passwordEnabled: true,
@@ -360,13 +363,13 @@ describe("AccountRunners", () => {
     });
 
     const mounted = await mountAt("/_verify/signing-source", "/_verify/signing-source", () =>
-      h(AccountRunnerSigningProfiles, { repositoryId: "runner-repository" })
+      h(AccountRunnerAccess, { repositoryId: "runner-repository" })
     );
     await settle();
 
-    const form = mounted.root.querySelector<HTMLFormElement>(".source-credentials-form")!;
+    const form = mounted.root.querySelector<HTMLFormElement>(".token-form")!;
     const token = form.querySelector<HTMLInputElement>('input[type="password"]')!;
-    expect(form.textContent).toContain("Not installed");
+    expect(mounted.root.textContent).toContain("No GitHub token is saved.");
     fill(token, "  example-source-token  ");
     submit(form);
     await settle();
@@ -379,14 +382,15 @@ describe("AccountRunners", () => {
     submit(mounted.root.querySelector<HTMLFormElement>(".box-form")!);
     await settle();
     expect(install).toHaveBeenLastCalledWith("runner-repository", "example-source-token");
-    expect(token.value).toBe("");
-    expect(form.textContent).toContain("Encrypted and stored");
+    expect(mounted.root.querySelector(".token-form")).toBeNull();
+    expect(mounted.root.textContent).toContain("@octo");
+    expect(mounted.root.textContent).toContain("Encrypted and stored");
     expect(mounted.root.textContent).not.toContain("example-source-token");
 
     findButton(mounted.root, "Revoke token").click();
     await settle();
     expect(remove).toHaveBeenCalledWith("runner-repository");
-    expect(form.textContent).toContain("Not installed");
+    expect(mounted.root.textContent).toContain("No GitHub token is saved.");
   });
 
   it("retries Windows credential installation after recent-auth confirmation", async () => {

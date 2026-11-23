@@ -757,6 +757,7 @@ describe("general-purpose native signing execution", () => {
             : null,
       } as unknown as R2Bucket,
       SIGNING_ENCRYPTION_KEY: "unused",
+      APPLE_REMOTE_SIGNERS: {} as RunnerEnv["APPLE_REMOTE_SIGNERS"],
     } as RunnerEnv;
     const signingUrl = `https://actions.internal/runner/signing/requests/${requestId}/start`;
     const wrongLease = await runnerMachineRequest(
@@ -943,7 +944,7 @@ describe("general-purpose native signing execution", () => {
       );
     expect((await failRequest()).status).toBe(200);
     expect((await failRequest()).status).toBe(200);
-    expect(releasedSources).toEqual([failedRequestId, failedRequestId]);
+    expect(releasedSources).toEqual([]);
     const failedPersisted = await env.DB.prepare(
       "SELECT status,conclusion FROM actions_runner_runs WHERE run_id=?"
     )

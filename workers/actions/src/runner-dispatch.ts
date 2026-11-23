@@ -13,13 +13,16 @@ import {
   RUNNER_SOCKET_STALE_MS,
   RUNNER_SOCKET_SWEEP_MS,
   runnerTypeRank,
+  SLOT_RUNNER_TYPES,
   type RunnerBudget,
   type RunnerCapacity,
   type RunnerJobKind,
+  type RunnerSettings,
+  type RunnerType,
 } from "../../../packages/contracts/src/runners";
 import { scoreRunner } from "../../../packages/contracts/runner-scheduling.mjs";
 import { createLogger } from "../../../src/worker/common/logger";
-import { readTypePriority } from "./github-quota";
+import { readRunnerSettings } from "./github-quota";
 import { currentRunnerKit, type RunnerKit } from "./runner-kit";
 import {
   claimSpecificCandidate,
@@ -44,6 +47,12 @@ import {
   runnerUsageMinutes24h,
   type RunnerCandidate,
 } from "./runner-scheduler";
+
+// Registered slots rank by slot priority; hosted on-demand runners rank after all of them.
+function runnerRank(settings: RunnerSettings, type: RunnerType): number {
+  if (type === "owned" || type === "rented") return runnerTypeRank(settings.slotPriority, type);
+  return SLOT_RUNNER_TYPES.length + runnerTypeRank(settings.onDemandPriority, type);
+}
 
 const CLOSE_UNAUTHORIZED = 4001;
 const CLOSE_PROTOCOL = 4002;
@@ -685,9 +694,9 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
         .toArray()
         .map((row) => `${row.job_kind}:${row.job_id}:${row.runner_id}`)
     );
-    const priority = idle.length
-      ? await readTypePriority(this.env.DB, idle[0]!.row.namespace_id)
-      : [];
+    const settings = idle.length
+      ? await readRunnerSettings(this.env.DB, idle[0]!.row.namespace_id)
+      : null;
     const ordered = [...candidates.values()].sort(
       (a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id)
     );
@@ -720,7 +729,7 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
         if (evaluated.reasons.length) continue;
         const score = scoreRunner(runner.capacity, runner.budget, runner.used, evaluated.claim);
         const cache = runnerHasPreferredCache(runner.row, runner.capacity);
-        const rank = runnerTypeRank(priority, effectiveRunnerType(runner.row));
+        const rank = settings ? runnerRank(settings, effectiveRunnerType(runner.row)) : 0;
         if (
           !best ||
           rank < best.rank ||

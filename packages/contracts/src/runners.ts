@@ -103,23 +103,34 @@ export type RunnerBudget = z.infer<typeof RunnerBudgetSchema>;
 export const RUNNER_TYPES = ["owned", "rented", "github-hosted", "colab"] as const;
 export const RunnerTypeSchema = z.enum(RUNNER_TYPES);
 export type RunnerType = z.infer<typeof RunnerTypeSchema>;
-export const RegisteredRunnerTypeSchema = z.enum(["owned", "rented"]);
+export const SLOT_RUNNER_TYPES = ["rented", "owned"] as const;
+export const RegisteredRunnerTypeSchema = z.enum(SLOT_RUNNER_TYPES);
 export type RegisteredRunnerType = z.infer<typeof RegisteredRunnerTypeSchema>;
-export const DEFAULT_RUNNER_TYPE_PRIORITY: readonly RunnerType[] = RUNNER_TYPES;
-export const RunnerTypePrioritySchema = z
-  .array(RunnerTypeSchema)
-  .length(RUNNER_TYPES.length)
-  .refine((types) => new Set(types).size === RUNNER_TYPES.length);
+export const ON_DEMAND_RUNNER_TYPES = ["github-hosted", "colab"] as const;
+export const OnDemandRunnerTypeSchema = z.enum(ON_DEMAND_RUNNER_TYPES);
+export type OnDemandRunnerType = z.infer<typeof OnDemandRunnerTypeSchema>;
+export const DEFAULT_SLOT_PRIORITY: readonly RegisteredRunnerType[] = SLOT_RUNNER_TYPES;
+export const DEFAULT_ON_DEMAND_PRIORITY: readonly OnDemandRunnerType[] = ON_DEMAND_RUNNER_TYPES;
+export const SlotPrioritySchema = z
+  .array(RegisteredRunnerTypeSchema)
+  .length(SLOT_RUNNER_TYPES.length)
+  .refine((types) => new Set(types).size === SLOT_RUNNER_TYPES.length);
+export const OnDemandPrioritySchema = z
+  .array(OnDemandRunnerTypeSchema)
+  .length(ON_DEMAND_RUNNER_TYPES.length)
+  .refine((types) => new Set(types).size === ON_DEMAND_RUNNER_TYPES.length);
 export const RunnerTypeUpdateSchema = z.object({ type: RegisteredRunnerTypeSchema }).strict();
 export const RunnerSettingsUpdateSchema = z
   .object({
-    typePriority: RunnerTypePrioritySchema,
+    slotPriority: SlotPrioritySchema,
+    onDemandPriority: OnDemandPrioritySchema,
     githubIncludedUsd: z.number().finite().min(0).max(1_000_000).nullable(),
     colabEnabled: z.boolean(),
   })
   .strict();
 export interface RunnerSettings {
-  typePriority: RunnerType[];
+  slotPriority: RegisteredRunnerType[];
+  onDemandPriority: OnDemandRunnerType[];
   githubIncludedUsd: number | null;
   colabEnabled: boolean;
 }
@@ -168,7 +179,7 @@ export interface GithubQuota {
 }
 
 // Lower is preferred; types missing from a stored priority sort last.
-export function runnerTypeRank(priority: readonly RunnerType[], type: RunnerType): number {
+export function runnerTypeRank<T extends string>(priority: readonly T[], type: T): number {
   const index = priority.indexOf(type);
   return index === -1 ? priority.length : index;
 }
@@ -321,7 +332,8 @@ export interface RunnerOverviewQueueItem {
 }
 export interface RunnerOverview {
   generatedAt: number;
-  typePriority: RunnerType[];
+  slotPriority: RegisteredRunnerType[];
+  onDemandPriority: OnDemandRunnerType[];
   githubIncludedUsd: number | null;
   githubQuota: GithubQuota;
   colab: RunnerOverviewColab;

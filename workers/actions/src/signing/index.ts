@@ -1181,6 +1181,8 @@ export async function handleSigningRoute(
         message,
         "The failed signing stage is no longer available for retry."
       );
+    if (message === "github_token_invalid")
+      return errorResponse(400, "github_token_invalid", "The GitHub token was rejected.");
     if (message === "signing_idempotency_conflict")
       return errorResponse(
         409,

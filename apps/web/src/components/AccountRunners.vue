@@ -98,7 +98,8 @@ function removeRunner(id: string): void {
 function applySettings(settings: RunnerSettings): void {
   if (!overview.value) return;
   patchOverview({
-    typePriority: settings.typePriority,
+    slotPriority: settings.slotPriority,
+    onDemandPriority: settings.onDemandPriority,
     githubIncludedUsd: settings.githubIncludedUsd,
     colab: { ...overview.value.colab, enabled: settings.colabEnabled },
   });
