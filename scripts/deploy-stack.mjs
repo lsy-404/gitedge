@@ -27,6 +27,8 @@ export function pnpmInvocation(
     cli = process.env.npm_execpath,
   } = {}
 ) {
+  // The standalone pnpm build sets npm_execpath to a native binary rather than a script.
+  if (cli && !/\.[cm]?js$/.test(cli)) return { command: cli, args };
   if (cli) return { command: executable, args: [cli, ...args] };
   if (platform === "win32")
     throw new Error("Run the deploy stack through pnpm so Windows can locate the pnpm CLI safely.");
