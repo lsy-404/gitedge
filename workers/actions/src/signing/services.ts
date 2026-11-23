@@ -570,10 +570,22 @@ export async function signingSourceCredentialStatus(
   )
     .bind(ownerId, repositoryId)
     .first<{ updated_at: number; github_login: string | null }>();
+  let login = row?.github_login ?? null;
+  if (row && login === null) {
+    // Tokens saved before the account was recorded learn it on the next read.
+    const token = await storedSourceCredential(env, ownerId, repositoryId);
+    login = token ? await githubTokenLogin(token).catch(() => null) : null;
+    if (login)
+      await env.DB.prepare(
+        `UPDATE actions_signing_source_token SET github_login=? WHERE owner_id=? AND repository_id=? AND github_login IS NULL`
+      )
+        .bind(login, ownerId, repositoryId)
+        .run();
+  }
   return SigningSourceCredentialStatusSchema.parse({
     configured: Boolean(row),
     updatedAt: row?.updated_at ?? null,
-    login: row?.github_login ?? null,
+    login,
   });
 }
 

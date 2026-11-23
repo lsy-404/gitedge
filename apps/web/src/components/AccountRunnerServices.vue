@@ -139,6 +139,10 @@ onUnmounted(() => {
   gap: var(--space-4);
 }
 
+.account-runner-services {
+  padding: var(--space-4);
+}
+
 .account-runner-services-header,
 .account-runner-service-state {
   display: flex;
