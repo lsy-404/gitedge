@@ -25,6 +25,7 @@ function overview(overrides: Partial<RunnerOverview> = {}): RunnerOverview {
       {
         id: "runner-1",
         name: "amd-small",
+        type: "owned",
         scope: { owner: "ada" },
         labels: ["linux", "x64"],
         createdAt: Date.now() - 10_000,
@@ -100,8 +101,23 @@ function overview(overrides: Partial<RunnerOverview> = {}): RunnerOverview {
       },
     ],
     truncated: false,
+    typePriority: ["owned", "rented", "github-hosted"],
+    githubIncludedUsd: 12,
+    githubQuota: {
+      state: "forbidden",
+      includedUsedUsd: 3.5,
+      paidUsd: 0,
+      minutes: [{ sku: "linux", minutes: 120 }],
+      checkedAt: Date.now(),
+      message: null,
+    },
     ...overrides,
   };
+}
+
+async function openTab(tab: string): Promise<void> {
+  await router.replace({ query: { ...router.currentRoute.value.query, tab } });
+  await settle();
 }
 
 beforeEach(() => {
@@ -124,17 +140,71 @@ describe("AccountRunners", () => {
     const mounted = await mountAt("/_verify/runners", "/_verify/runners", () => h(AccountRunners));
     await settle();
     expect(mounted.root.textContent).toContain("Held");
-    expect(mounted.root.textContent).toContain("630 / 2000 MB");
     expect(mounted.root.textContent).toContain("ada/project");
     expect(mounted.root.textContent).toContain("Not enough free memory");
-    expect(mounted.root.textContent).toContain("AMD / 4096 MiB");
     expect(mounted.root.textContent).toContain("GPU: NVIDIA");
     expect(mounted.root.textContent).toContain("Dedicated VRAM per GPU ≥ 8192 MiB");
     expect(mounted.root.textContent).toContain(
       "No verified GPU meets the vendor and VRAM requirements"
     );
+    await openTab("slots");
+    expect(mounted.root.textContent).toContain("630 / 2000 MB");
+    expect(mounted.root.textContent).toContain("AMD / 4096 MiB");
+    expect(mounted.root.textContent).toContain("0 / 1 slots");
+    await openTab("github");
     expect(mounted.root.textContent).toContain("github_auth_failed");
     expect(mounted.root.textContent).not.toContain("credential");
+  });
+
+  it("keeps the selected tab in the URL and moves between tabs with the keyboard", async () => {
+    vi.spyOn(api, "runnerOverview").mockResolvedValue(overview());
+    const mounted = await mountAt("/_verify/runner-tabs", "/_verify/runner-tabs?tab=slots", () =>
+      h(AccountRunners)
+    );
+    await settle();
+    const selected = mounted.root.querySelector('[role="tab"][aria-selected="true"]');
+    expect(selected?.id).toBe("runner-tab-slots");
+    selected!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    await settle();
+    expect(router.currentRoute.value.query.tab).toBe("ondemand");
+  });
+
+  it("saves the type priority and the monthly included quota from their tabs", async () => {
+    vi.spyOn(api, "runnerOverview").mockResolvedValue(overview());
+    const updateSettings = vi
+      .spyOn(api, "updateRunnerSettings")
+      .mockImplementation(async (settings) => settings);
+    const updateType = vi
+      .spyOn(api, "updateRunnerType")
+      .mockResolvedValue({ id: "runner-1", type: "rented" });
+    const mounted = await mountAt("/_verify/runner-types", "/_verify/runner-types?tab=slots", () =>
+      h(AccountRunners)
+    );
+    await settle();
+    const select = mounted.root.querySelector<HTMLSelectElement>("#runner-type-runner-1")!;
+    select.value = "rented";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await settle();
+    expect(updateType).toHaveBeenCalledWith("runner-1", "rented");
+
+    findButton(mounted.root, "↓").click();
+    await settle();
+    findButton(mounted.root, "Save priority").click();
+    await settle();
+    expect(updateSettings).toHaveBeenLastCalledWith({
+      typePriority: ["rented", "owned", "github-hosted"],
+      githubIncludedUsd: 12,
+    });
+
+    await openTab("ondemand");
+    expect(mounted.root.textContent).toContain("read-only Plan permission");
+    fill(mounted.root.querySelector<HTMLInputElement>("#github-included-usd")!, "18");
+    submit(mounted.root.querySelector<HTMLFormElement>(".quota-form")!);
+    await settle();
+    expect(updateSettings).toHaveBeenLastCalledWith({
+      typePriority: ["rented", "owned", "github-hosted"],
+      githubIncludedUsd: 18,
+    });
   });
 
   it("saves explicit custom routing labels without exposing system labels for editing", async () => {
@@ -143,8 +213,10 @@ describe("AccountRunners", () => {
     const updateLabels = vi
       .spyOn(api, "updateRunnerLabels")
       .mockResolvedValue({ labels: ["linux", "x64", "server-tokyo", "ip-mobile"] });
-    const mounted = await mountAt("/_verify/runner-labels", "/_verify/runner-labels", () =>
-      h(AccountRunners)
+    const mounted = await mountAt(
+      "/_verify/runner-labels",
+      "/_verify/runner-labels?tab=slots",
+      () => h(AccountRunners)
     );
     await settle();
     const input = mounted.root.querySelector<HTMLInputElement>(
@@ -164,13 +236,17 @@ describe("AccountRunners", () => {
       overview({ runners: [], github: [], queue: [] })
     );
     vi.spyOn(api, "accountRunner").mockResolvedValue({ repository: null });
-    const mounted = await mountAt("/_verify/runners-empty", "/_verify/runners-empty", () =>
-      h(AccountRunners)
+    const mounted = await mountAt(
+      "/_verify/runners-empty",
+      "/_verify/runners-empty?tab=services",
+      () => h(AccountRunners)
     );
     await settle();
     expect(mounted.root.textContent).toContain("No account Runner repository exists yet.");
     findButton(mounted.root, "Create Runner repository");
+    await openTab("activity");
     expect(mounted.root.textContent).toContain("No self-hosted runners are registered yet.");
+    await openTab("github");
     expect(mounted.root.textContent).toContain(
       "No GitHub connections route jobs to self-hosted runners."
     );
@@ -191,8 +267,10 @@ describe("AccountRunners", () => {
       systemKind: "account_runner" as const,
     };
     vi.spyOn(api, "createAccountRunner").mockResolvedValue(accountRunnerRepository);
-    const mounted = await mountAt("/_verify/account-runner", "/_verify/account-runner", () =>
-      h(AccountRunners)
+    const mounted = await mountAt(
+      "/_verify/account-runner",
+      "/_verify/account-runner?tab=services",
+      () => h(AccountRunners)
     );
     await settle();
     const navigation = vi.spyOn(router, "push");
@@ -219,7 +297,7 @@ describe("AccountRunners", () => {
     vi.spyOn(api, "accountRunner").mockResolvedValue({ repository: accountRunnerRepository });
     const mounted = await mountAt(
       "/_verify/account-runner-owner",
-      "/_verify/account-runner-owner",
+      "/_verify/account-runner-owner?tab=services",
       () => h(AccountRunners)
     );
     await settle();
@@ -491,7 +569,7 @@ describe("AccountRunners", () => {
     );
     const mounted = await mountAt(
       "/_verify/account-runner-error",
-      "/_verify/account-runner-error",
+      "/_verify/account-runner-error?tab=services",
       () => h(AccountRunners)
     );
     await vi

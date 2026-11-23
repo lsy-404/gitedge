@@ -73,7 +73,9 @@ import type {
 import type {
   HostedRunnerSettings,
   RunnerHistory,
+  GithubQuota,
   RunnerOverview,
+  RunnerSettings,
 } from "../../../../packages/contracts/src/runners";
 import type {
   SigningCredentialStatus,
@@ -704,6 +706,18 @@ export const api = {
     ),
   disableHostedRunner: () =>
     request<{ enabled: boolean }>("/api/forge/hosted-runner-settings", { method: "DELETE" }),
+  updateRunnerType: (runnerId: string, type: "owned" | "rented") =>
+    request<{ id: string; type: "owned" | "rented" }>(
+      `/api/actions/runners/${encodeURIComponent(runnerId)}/type`,
+      { method: "PATCH", body: JSON.stringify({ type }) }
+    ),
+  updateRunnerSettings: (settings: RunnerSettings) =>
+    request<RunnerSettings>("/api/actions/runners/settings", {
+      method: "PUT",
+      body: JSON.stringify(settings),
+    }),
+  refreshGithubQuota: () =>
+    request<GithubQuota>("/api/actions/runners/github-quota/refresh", { method: "POST" }),
   updateRunnerLabels: (runnerId: string, labels: string[]) =>
     request<{ labels: string[] }>(`/api/actions/runners/${encodeURIComponent(runnerId)}/labels`, {
       method: "PUT",
