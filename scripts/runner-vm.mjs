@@ -13,8 +13,10 @@ import {
 import path from "node:path";
 import os from "node:os";
 import { readFileSync } from "node:fs";
+import { macosAvailableMemoryMb } from "./runner-capacity.mjs";
 import { createHypervVm, recoverHypervVm } from "./runner-vm/hyperv.mjs";
 import { createQemuVm, recoverQemuVm } from "./runner-vm/qemu.mjs";
+import { createTartVm, recoverTartVm, validateTartPool } from "./runner-vm/tart.mjs";
 import { LAUNCHER_VERSION } from "./runner-launcher.mjs";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -52,7 +54,7 @@ export async function loadVmPools(state, profiles) {
     throw error;
   });
   if (!info) {
-    if (profiles?.some((profile) => ["hyperv", "qemu"].includes(profile.execution)))
+    if (profiles?.some((profile) => ["hyperv", "qemu", "tart"].includes(profile.execution)))
       throw new Error("A registered VM profile requires vm.json; host execution is disabled.");
     return undefined;
   }
@@ -61,16 +63,17 @@ export async function loadVmPools(state, profiles) {
   const value = JSON.parse(await readFile(file, "utf8"));
   if (
     value.version !== 1 ||
-    !["hyperv", "qemu"].includes(value.driver) ||
+    !["hyperv", "qemu", "tart"].includes(value.driver) ||
     !value.pools ||
     Array.isArray(value.pools)
   )
     throw new Error("Invalid VM pool configuration.");
   if (
     (value.driver === "hyperv" && (process.platform !== "win32" || os.arch() !== "x64")) ||
-    (value.driver === "qemu" && (process.platform !== "linux" || os.arch() !== "x64"))
+    (value.driver === "qemu" && (process.platform !== "linux" || os.arch() !== "x64")) ||
+    (value.driver === "tart" && (process.platform !== "darwin" || os.arch() !== "arm64"))
   )
-    throw new Error(`${value.driver} pools require a matching x64 host.`);
+    throw new Error(`${value.driver} pools require a matching host platform and architecture.`);
   hostPath(value.vmRoot, "vmRoot");
   if (
     path.dirname(value.vmRoot) === value.vmRoot ||
@@ -92,10 +95,10 @@ export async function loadVmPools(state, profiles) {
     const config = value.pools[profile.id];
     if (
       !config ||
-      !(value.driver === "qemu"
+      !(["qemu", "tart"].includes(value.driver)
         ? config.guest?.platform === "macos"
         : ["windows", "linux"].includes(config.guest?.platform)) ||
-      config.guest.arch !== "x64"
+      config.guest.arch !== (value.driver === "tart" ? "arm64" : "x64")
     )
       throw new Error(`Profile ${profile.id} requires a supported VM guest pool.`);
     config.id = profile.id;
@@ -110,7 +113,15 @@ export async function loadVmPools(state, profiles) {
       "machine.memoryMiB"
     );
     integer(config.machine?.diskMiB, 8192, 2_097_152, "machine.diskMiB");
-    hostPath(config.machine.baseImage, "machine.baseImage");
+    if (value.driver === "tart") {
+      hostPath(value.tart, "tart");
+      hostPath(value.softnet, "softnet");
+      hostPath(value.tartHome, "tartHome");
+      config.tart = value.tart;
+      config.softnet = value.softnet;
+      config.tartHome = value.tartHome;
+      validateTartPool(config);
+    } else hostPath(config.machine.baseImage, "machine.baseImage");
     if (value.driver === "qemu") {
       for (const key of ["openCoreImage", "systemImage", "runnerDataImage"])
         hostPath(config.machine[key], `machine.${key}`);
@@ -281,6 +292,8 @@ export async function recoverJobVms(pool) {
       await recoverHypervVm(marker.machine, { id: entry.name, directory });
     else if (marker.driver === "qemu")
       await recoverQemuVm(marker.machine, { id: entry.name, directory });
+    else if (marker.driver === "tart")
+      await recoverTartVm({ ...config, machine: marker.machine }, { id: entry.name, directory });
     else throw new Error("Unknown VM recovery provider.");
     await rm(directory, { recursive: true });
   }
@@ -352,7 +365,9 @@ export async function createJobVm(config, signal, address = config.addresses[0])
     vm =
       config.driver === "hyperv"
         ? await createHypervVm(machine, { id, directory, signal })
-        : await createQemuVm(provider, { id, directory, signal });
+        : config.driver === "tart"
+          ? await createTartVm(provider, { id, directory, signal })
+          : await createQemuVm(provider, { id, directory, signal });
     return {
       ...vm,
       async dispose() {
@@ -363,6 +378,7 @@ export async function createJobVm(config, signal, address = config.addresses[0])
   } catch (error) {
     try {
       if (config.driver === "hyperv") await recoverHypervVm(machine, { id, directory });
+      else if (config.driver === "tart") await recoverTartVm(provider, { id, directory });
       else await recoverQemuVm(machine, { id, directory });
       await rm(directory, { recursive: true });
     } catch (cleanupError) {
@@ -457,6 +473,8 @@ export async function verifyVmImage(config, signal) {
 export function vmSlot(pool, config, sharedSlot, ledger) {
   const held = new Map();
   const availableMemoryMiB = () => {
+    if (config.driver === "tart" && Number.isFinite(config.hostAvailableMemoryMiB))
+      return config.hostAvailableMemoryMiB;
     if (config.driver !== "qemu") return os.freemem() / mebibyte;
     const match = /^MemAvailable:\s+(\d+)\s+kB$/m.exec(readFileSync("/proc/meminfo", "utf8"));
     if (!match) throw new Error("Linux MemAvailable is unavailable for QEMU admission.");
@@ -478,6 +496,7 @@ export function vmSlot(pool, config, sharedSlot, ledger) {
       return entry[0];
     },
     async tryAcquire() {
+      if (config.driver === "tart") config.hostAvailableMemoryMiB = await macosAvailableMemoryMb();
       if (!canAllocate()) return undefined;
       const address = config.addresses.find((entry) => !held.has(entry));
       held.set(address, false);
@@ -512,6 +531,7 @@ export function vmSlot(pool, config, sharedSlot, ledger) {
 
 export async function getVmCapacity(config, slot) {
   if (!config.verified) throw new Error("The VM image has not passed startup verification.");
+  if (config.driver === "tart") config.hostAvailableMemoryMiB = await macosAvailableMemoryMb();
   const disk = await statfs(config.vmRoot, { bigint: true });
   return {
     os: config.guest.platform,

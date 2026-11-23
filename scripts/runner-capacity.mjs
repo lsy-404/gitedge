@@ -196,7 +196,7 @@ async function linuxAvailableMemoryMb(read = readFile) {
   }
 }
 
-async function macosAvailableMemoryMb() {
+export async function macosAvailableMemoryMb() {
   const { stdout } = await captureOutput("/usr/bin/vm_stat", [], {
     timeout: toolTimeoutMs,
     maxBuffer: 16 * 1024,

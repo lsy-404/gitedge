@@ -193,3 +193,91 @@ Run `node runner-launcher.mjs verify-vm-images --state-dir <state>` with the con
 Host brokers update themselves through the launcher; see [Runner kit and launcher](actions.md#runner-kit-and-launcher). If an earlier release left an `active.lock` file after an unclean stop, verify that its recorded process is gone before removing that file. The current directory lock recovers automatically after sixty seconds without an update.
 
 After real jobs and reclamation pass on one slot per platform, stop the controller while idle, set each pool to `slots: 2`, add a second unique address to each pool, and update the corresponding profile slot counts. Recheck aggregate budgets and image verification before restarting. Verify overlapping real jobs and confirm that VM configurations and differencing disks disappear afterward.
+
+## Apple Silicon macOS hosts with Tart
+
+The `tart` driver runs one disposable macOS ARM64 guest on an Apple Silicon macOS host.
+Install Tart 2.41.1, Softnet 0.25.0, and a prepared **local** base VM containing the
+Tart guest agent, an existing SSH-enabled guest user with passwordless sudo, Node 24,
+pnpm, Git, the official ARM64 Actions runner, and this exact broker runtime.
+Install both dependency sets with `pnpm install --frozen-lockfile` at the checkout
+root and `pnpm --dir scripts/signing install --frozen-lockfile`. The signing SDK
+has its own pinned manifest and lockfile. Installed `node_modules` trees are
+excluded from the source digest; both manifests and lockfiles remain covered.
+
+No new host account is required. Jobs execute as the configured existing guest user,
+not as root or as the host user. Give that guest user ownership of its job directory
+and the prepared runtime work directory. The guest agent identity is checked at boot.
+
+Keep Tart storage, base disks and job disks on APFS so local clones use copy-on-write.
+Set an absolute private `tartHome` used only by this broker. The base must be shut down
+before serving. Do not store runner registration credentials or personal credentials
+in the base. Clone names use `gitedge-job-<run UUID>`; recovery only removes that
+run's VM after the broker validates its private recovery marker. Automatic image
+pruning is disabled. The provider does not share host directories, clipboard, audio
+or USB accessories, and it does not expose guest services to the LAN.
+
+Example `vm.json` for a 64 GiB host (adjust resource reservations to the actual host):
+
+```json
+{
+  "version": 1,
+  "driver": "tart",
+  "tart": "/Applications/Tart.app/Contents/MacOS/tart",
+  "softnet": "/Library/Application Support/GitEdge/tools/softnet",
+  "tartHome": "/Volumes/DevSSD/GitEdge/tart",
+  "vmRoot": "/Volumes/DevSSD/GitEdge/vm-work",
+  "reserveCpus": 5,
+  "reserveMemoryMiB": 32768,
+  "reserveDiskMiB": 20480,
+  "pools": {
+    "macmini-build-01": {
+      "slots": 1,
+      "addresses": ["127.0.0.1"],
+      "machine": {
+        "baseImage": "macmini-build-base",
+        "cpus": 8,
+        "memoryMiB": 24576,
+        "diskMiB": 95367,
+        "cachePort": 3129,
+        "guestNetwork": { "gateway": "127.0.0.1" }
+      },
+      "guest": {
+        "platform": "macos",
+        "arch": "arm64",
+        "sshUser": "admin",
+        "root": "/opt/gitedge/job",
+        "node": "/opt/gitedge/tools/node/bin/node",
+        "runtimeRoot": "/opt/gitedge/broker",
+        "runnerPath": "/opt/gitedge/actions-runner",
+        "environment": {
+          "PATH": "/opt/gitedge/tools/node/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        }
+      }
+    }
+  }
+}
+```
+
+For Tart, `addresses` identifies the single loopback cache session, not a static
+DHCP assignment. Job control uses Tart's guest-agent transport. Cache transport
+uses a per-VM Ed25519 controller key generated on the host and a pinned guest
+public host key obtained over the guest agent. Only the controller's public key
+is installed into the cloned guest. A restricted SSH reverse tunnel listens on
+**guest loopback** port 3129 and forwards to **host loopback** port 3129. The private
+key is never read or copied by the controller and is removed with run storage.
+Softnet blocks VM-initiated connections to the host and peers, denies inbound
+connections except host SSH, permits gateway DNS on UDP/TCP port 53, and retains
+its private/LAN destination restrictions for other services.
+No proxy is configured for Internet traffic.
+
+Configure `cache.json` with `address: "127.0.0.1"`, `port: 3129`, and
+`maxBytes: 100000000000` for a 100 GB shared cache budget. Keep its directory on
+DevSSD outside VM disks. Existing cache ranking, repository/ref separation and
+expiring job capabilities remain in effect. This is the cache store's application
+budget; it is not a filesystem quota on VM images or other SSD contents.
+
+Use `verify-vm-images` before registration or serving. It boots and removes a
+fresh guest without claiming a project job. Register with `--slots 1 --cost 10`
+and routing labels `dependency-install` and `cache-available`; no signing labels
+are required. Set the server registration on hold before starting the broker.

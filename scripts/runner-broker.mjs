@@ -240,7 +240,7 @@ async function loadProfile(state, id) {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(id)) throw new Error("Invalid profile name.");
   const directory = path.join(state, "profiles", id);
   const profile = JSON.parse(await readFile(path.join(directory, "profile.json"), "utf8"));
-  if (profile.execution !== undefined && !["hyperv", "qemu"].includes(profile.execution))
+  if (profile.execution !== undefined && !["hyperv", "qemu", "tart"].includes(profile.execution))
     throw new Error("Unsupported profile execution mode.");
   let credential;
   try {
@@ -397,7 +397,7 @@ async function addGitEdge(state, values) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        name: `broker-${id.slice(0, 45)}-${randomUUID().slice(0, 8)}`,
+        name: values.name ?? `broker-${id.slice(0, 45)}-${randomUUID().slice(0, 8)}`,
         scope: { owner, ...(repository ? { repository } : {}) },
         labels: runnerLabels,
       }),
