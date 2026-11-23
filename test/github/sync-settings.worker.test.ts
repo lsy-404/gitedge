@@ -18,8 +18,8 @@ it("retries a failed push job whose URL-encoded ID includes a ref path and perce
   const now = Date.now();
   await env.DB.prepare(
     `INSERT INTO forge_github_connections
-    (id,repository_id,owner,name,github_repository_id,github_private,created_by,enabled,callback_url,token_ciphertext,token_iv,secret_ciphertext,secret_iv,created_at)
-    VALUES (?,?,'source-owner','repository',4242,1,?,1,'https://example.test/hook','sealed','iv','sealed','iv',?)`
+    (id,repository_id,owner,name,github_repository_id,github_private,created_by,enabled,callback_url,secret_ciphertext,secret_iv,created_at)
+    VALUES (?,?,'source-owner','repository',4242,1,?,1,'https://example.test/hook','sealed','iv',?)`
   )
     .bind(connectionId, repositoryId, owner.id, now)
     .run();
@@ -61,8 +61,8 @@ it("retains the last successful ref state after completed job cleanup", async ()
   const now = Date.now();
   await env.DB.prepare(
     `INSERT INTO forge_github_connections
-    (id,repository_id,owner,name,github_repository_id,github_private,created_by,enabled,callback_url,token_ciphertext,token_iv,secret_ciphertext,secret_iv,created_at)
-    VALUES (?,?,'source-owner','repository',4243,1,?,1,'https://example.test/hook','sealed','iv','sealed','iv',?)`
+    (id,repository_id,owner,name,github_repository_id,github_private,created_by,enabled,callback_url,secret_ciphertext,secret_iv,created_at)
+    VALUES (?,?,'source-owner','repository',4243,1,?,1,'https://example.test/hook','sealed','iv',?)`
   )
     .bind(connectionId, repositoryId, owner.id, now)
     .run();
@@ -113,8 +113,8 @@ it("records a matching ref baseline and reconciles later deletions without resur
   const tagOid = "b".repeat(40);
   await env.DB.prepare(
     `INSERT INTO forge_github_connections
-    (id,repository_id,owner,name,github_repository_id,github_private,created_by,enabled,callback_url,token_ciphertext,token_iv,secret_ciphertext,secret_iv,created_at)
-    VALUES (?,?,'source-owner','repository',4244,1,?,1,'https://example.test/hook','sealed','iv','sealed','iv',?)`
+    (id,repository_id,owner,name,github_repository_id,github_private,created_by,enabled,callback_url,secret_ciphertext,secret_iv,created_at)
+    VALUES (?,?,'source-owner','repository',4244,1,?,1,'https://example.test/hook','sealed','iv',?)`
   )
     .bind(connectionId, repositoryId, owner.id, now)
     .run();

@@ -10,22 +10,20 @@ export const GitHubSyncEvents = [
   "pull_request_review_comment",
 ] as const;
 export type GitHubSyncEvent = (typeof GitHubSyncEvents)[number];
-const GitHubSyncTargetSchema = z.object({
-  owner: z
-    .string()
-    .trim()
-    .regex(/^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}$/),
-  repository: z
-    .string()
-    .trim()
-    .regex(/^[a-zA-Z0-9_.-]{1,100}$/)
-    .refine((s) => s !== "." && s !== ".."),
-  allowVisibilityMismatch: z.boolean().default(false),
-});
-export const GitHubSyncInputSchema = z.union([
-  GitHubSyncTargetSchema.extend({ token: z.string().min(20).max(512) }).strict(),
-  GitHubSyncTargetSchema.extend({ connectionId: z.string().min(1).max(100) }).strict(),
-]);
+export const GitHubSyncInputSchema = z
+  .object({
+    owner: z
+      .string()
+      .trim()
+      .regex(/^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}$/),
+    repository: z
+      .string()
+      .trim()
+      .regex(/^[a-zA-Z0-9_.-]{1,100}$/)
+      .refine((s) => s !== "." && s !== ".."),
+    allowVisibilityMismatch: z.boolean().default(false),
+  })
+  .strict();
 export type GitHubSyncInput = z.input<typeof GitHubSyncInputSchema>;
 export const GitHubSyncEnabledSchema = z.object({ enabled: z.boolean() }).strict();
 

@@ -6,7 +6,6 @@ import type {
   GitHubSyncJob,
   GitHubSyncState,
 } from "../../../../packages/contracts/src/github-sync";
-import type { RunnerOverviewGithubConnection } from "../../../../packages/contracts/src/runners";
 import { api, ApiError, errorMessage } from "../lib/api";
 import { useReauthRetry } from "../lib/reauth";
 import ConfirmButton from "./ConfirmButton.vue";
@@ -26,10 +25,6 @@ const notice = ref("");
 const busy = ref(false);
 const owner = ref("");
 const repository = ref("");
-const token = ref("");
-const credentialSource = ref("");
-const sources = ref<RunnerOverviewGithubConnection[]>([]);
-const sourcesError = ref(false);
 const allowVisibilityMismatch = ref(false);
 let version = 0;
 let timer: ReturnType<typeof setInterval> | undefined;
@@ -46,31 +41,8 @@ const jobStatusKeys: Record<GitHubSyncJob["status"], string> = {
   ignored: "githubSyncStatus_ignored",
 };
 const canConfigure = computed(
-  () =>
-    props.canManage &&
-    owner.value.trim() !== "" &&
-    repository.value.trim() !== "" &&
-    (credentialSource.value
-      ? sources.value.some((source) => source.connectionId === credentialSource.value)
-      : token.value !== "")
+  () => props.canManage && owner.value.trim() !== "" && repository.value.trim() !== ""
 );
-
-async function loadSources(): Promise<void> {
-  const currentVersion = version;
-  sourcesError.value = false;
-  try {
-    const overview = await api.runnerOverview();
-    if (currentVersion === version)
-      sources.value = overview.github.filter((source) => source.credentialReusable);
-  } catch {
-    if (currentVersion === version) sourcesError.value = true;
-  }
-}
-
-function refresh(): void {
-  void load();
-  void loadSources();
-}
 
 async function load(): Promise<void> {
   const currentVersion = version;
@@ -110,15 +82,10 @@ async function save(): Promise<void> {
     const result = await api.saveGitHubSync(props.repositoryId, {
       owner: owner.value.trim(),
       repository: repository.value.trim(),
-      ...(credentialSource.value
-        ? { connectionId: credentialSource.value }
-        : { token: token.value }),
       allowVisibilityMismatch: allowVisibilityMismatch.value,
     });
     if (currentVersion !== version) return;
     state.value = result;
-    token.value = "";
-    credentialSource.value = "";
     owner.value = result.connection?.owner ?? owner.value.trim();
     repository.value = result.connection?.repository ?? repository.value.trim();
     notice.value = t("githubSyncSaved");
@@ -126,8 +93,8 @@ async function save(): Promise<void> {
     if (currentVersion !== version) return;
     if (reauth.intercept(cause, save)) return;
     actionError.value =
-      cause instanceof ApiError && cause.code === "github_source_unavailable"
-        ? t("githubSyncSourceUnavailable")
+      cause instanceof ApiError && cause.code === "github_token_missing"
+        ? t("githubSyncTokenMissing")
         : errorMessage(cause, t, {}, "githubSyncActionError");
   } finally {
     if (currentVersion === version) busy.value = false;
@@ -187,17 +154,11 @@ watch(
     notice.value = "";
     reauth.pending.value = null;
     busy.value = false;
-    token.value = "";
-    credentialSource.value = "";
-    sources.value = [];
-    sourcesError.value = false;
     owner.value = "";
     repository.value = "";
     loading.value = canManage;
-    if (canManage) {
-      void load();
-      void loadSources();
-    } else loading.value = false;
+    if (canManage) void load();
+    else loading.value = false;
   },
   { immediate: true }
 );
@@ -205,7 +166,6 @@ scheduleRefresh();
 
 onBeforeUnmount(() => {
   version += 1;
-  token.value = "";
   if (timer) clearInterval(timer);
 });
 </script>
@@ -214,7 +174,7 @@ onBeforeUnmount(() => {
   <section class="box github-sync" aria-labelledby="github-sync-title">
     <header class="box-header">
       <h3 id="github-sync-title">{{ t("githubSyncTitle") }}</h3>
-      <FluentButton type="button" :disabled="loading || busy" @click="refresh">{{
+      <FluentButton type="button" :disabled="loading || busy" @click="load">{{
         t("githubSyncRefresh")
       }}</FluentButton>
     </header>
@@ -333,28 +293,6 @@ onBeforeUnmount(() => {
         <div class="github-sync-fields">
           <FluentField v-model="owner" :label="t('githubSyncOwner')" :disabled="busy" />
           <FluentField v-model="repository" :label="t('githubSyncRepository')" :disabled="busy" />
-          <label for="github-sync-credential">{{ t("githubSyncCredentialSource") }}</label>
-          <select id="github-sync-credential" v-model="credentialSource" :disabled="busy">
-            <option value="">{{ t("githubSyncNewToken") }}</option>
-            <option
-              v-for="source in sources"
-              :key="source.connectionId"
-              :value="source.connectionId"
-            >
-              {{ source.remote }} · {{ source.repository }}
-            </option>
-          </select>
-          <p v-if="sourcesError" class="field-hint" role="alert">
-            {{ t("githubSyncSourcesError") }}
-          </p>
-          <FluentField
-            v-if="!credentialSource"
-            v-model="token"
-            :label="t('githubSyncToken')"
-            type="password"
-            autocomplete="new-password"
-            :disabled="busy"
-          />
           <FluentCheckbox
             v-model="allowVisibilityMismatch"
             :label="t('githubSyncVisibilityMismatch')"

@@ -2,7 +2,7 @@ export const githubSyncMessages = {
   "zh-CN": {
     hostedRunnerRepositoryAccess:
       "GitHub 无法创建应急仓库。如果该私有仓库已存在，请在此 GitHub 连接的仓库访问权限中将其加入。",
-    githubSyncConnectionError: "连接不可用，请检查 GitHub 权限、凭证和仓库可见性后重新连接。",
+    githubSyncConnectionError: "连接不可用，请检查账户 GitHub 令牌、其权限和仓库可见性后恢复同步。",
     auditAction_github_sync_connected: "连接 GitHub 同步",
     auditAction_github_sync_updated: "更新 GitHub 同步",
     githubSyncSection: "GitHub 同步",
@@ -10,13 +10,10 @@ export const githubSyncMessages = {
     githubSyncIntro: "同步代码分支、标签、Issues、Pull Requests、评论与评审。",
     githubSyncOwner: "GitHub 用户或组织",
     githubSyncRepository: "GitHub 仓库",
-    githubSyncToken: "GitHub token",
-    githubSyncCredentialSource: "凭证来源",
-    githubSyncNewToken: "输入新的 token",
-    githubSyncSourcesError: "无法加载已有连接，请刷新后重试，或输入新的 token。",
-    githubSyncSourceUnavailable: "所选连接不可用，请检查连接及仓库权限后重试。",
+    githubSyncTokenMissing:
+      "尚未保存账户 GitHub 令牌。请先在 账户设置 → Runner → 服务与签名 中保存 GitHub 个人访问令牌（PAT）。",
     githubSyncTokenHint:
-      "需要目标仓库 Contents、Issues、Pull requests 与 Webhooks 的读写权限；保存后不会再次显示。",
+      "使用账户统一的 GitHub 令牌，在 账户设置 → Runner → 服务与签名 中保存一次即可。经典 PAT 需要 repo、workflow、admin:repo_hook 权限（读取账单用量另需 user）。",
     githubSyncVisibilityMismatch: "允许公开与私有仓库之间的同步",
     githubSyncVisibilityHint: "私有仓库中的代码与协作数据会同步到公开仓库，任何人均可访问。",
     githubSyncConnect: "连接并同步",
@@ -62,7 +59,7 @@ export const githubSyncMessages = {
     hostedRunnerRepositoryAccess:
       "GitHub could not create the emergency repository. If the private emergency repository already exists, include it in this GitHub connection’s repository access.",
     githubSyncConnectionError:
-      "The connection is unavailable. Check GitHub permissions, credentials and repository visibility, then reconnect.",
+      "The connection is unavailable. Check the account GitHub token, its permissions and repository visibility, then resume.",
     auditAction_github_sync_connected: "Connected GitHub synchronization",
     auditAction_github_sync_updated: "Updated GitHub synchronization",
     githubSyncSection: "GitHub sync",
@@ -70,15 +67,10 @@ export const githubSyncMessages = {
     githubSyncIntro: "Sync code branches, tags, Issues, Pull Requests, comments, and reviews.",
     githubSyncOwner: "GitHub owner",
     githubSyncRepository: "GitHub repository",
-    githubSyncToken: "GitHub token",
-    githubSyncCredentialSource: "Credential source",
-    githubSyncNewToken: "Enter a new token",
-    githubSyncSourcesError:
-      "Could not load existing connections. Refresh to retry, or enter a new token.",
-    githubSyncSourceUnavailable:
-      "The selected connection is unavailable. Check the connection and repository permissions, then retry.",
+    githubSyncTokenMissing:
+      "The account GitHub token is not saved yet. Save the GitHub personal access token (PAT) in Account settings → Runners → Services & signing first.",
     githubSyncTokenHint:
-      "Needs read and write access to Contents, Issues, Pull requests, and Webhooks in the destination repository. It is never shown again after saving.",
+      "Uses the account's shared GitHub token, saved once in Account settings → Runners → Services & signing. A classic PAT needs the repo, workflow and admin:repo_hook scopes, plus user to read billing usage.",
     githubSyncVisibilityMismatch: "Allow synchronization between public and private repositories",
     githubSyncVisibilityHint:
       "Private repository code and collaboration data will be shared with everyone through the public repository.",

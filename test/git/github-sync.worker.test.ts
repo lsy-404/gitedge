@@ -20,8 +20,8 @@ it("rechecks synchronization authorization after native fetch and cleans the pre
   const freshRepositoryId = await createRepository(owner, "synchronized-ref-race");
   await env.DB.prepare(
     `INSERT INTO forge_github_connections
-    (id,repository_id,owner,name,github_repository_id,github_private,created_by,enabled,callback_url,token_ciphertext,token_iv,secret_ciphertext,secret_iv,created_at,lease,lease_expires_at)
-    VALUES (?,?,'source-owner','repository',4242,1,?,1,'https://example.test/hook','sealed','iv','sealed','iv',?,?,?)`
+    (id,repository_id,owner,name,github_repository_id,github_private,created_by,enabled,callback_url,secret_ciphertext,secret_iv,created_at,lease,lease_expires_at)
+    VALUES (?,?,'source-owner','repository',4242,1,?,1,'https://example.test/hook','sealed','iv',?,?,?)`
   )
     .bind(id, freshRepositoryId, owner.id, now, lease, now + 180_000)
     .run();
@@ -113,8 +113,8 @@ it("rejects a ref update when its destination moved after reconciliation", async
     now = Date.now();
   await env.DB.prepare(
     `INSERT INTO forge_github_connections
-    (id,repository_id,owner,name,github_repository_id,github_private,created_by,enabled,callback_url,token_ciphertext,token_iv,secret_ciphertext,secret_iv,created_at,lease,lease_expires_at)
-    VALUES (?,?,'source-owner','repository',4243,1,?,1,'https://example.test/hook','sealed','iv','sealed','iv',?,?,?)`
+    (id,repository_id,owner,name,github_repository_id,github_private,created_by,enabled,callback_url,secret_ciphertext,secret_iv,created_at,lease,lease_expires_at)
+    VALUES (?,?,'source-owner','repository',4243,1,?,1,'https://example.test/hook','sealed','iv',?,?,?)`
   )
     .bind(id, repositoryId, owner.id, now, lease, now + 180_000)
     .run();
@@ -178,8 +178,8 @@ it("guards regular branch updates in both directions and allows an already-appli
     const freshRepositoryId = await createRepository(owner, `sync-ref-update-${index}`);
     await env.DB.prepare(
       `INSERT INTO forge_github_connections
-      (id,repository_id,owner,name,github_repository_id,github_private,created_by,enabled,callback_url,token_ciphertext,token_iv,secret_ciphertext,secret_iv,created_at,lease,lease_expires_at)
-      VALUES (?,?,'source-owner','repository',?,1,?,1,'https://example.test/hook','sealed','iv','sealed','iv',?,?,?)`
+      (id,repository_id,owner,name,github_repository_id,github_private,created_by,enabled,callback_url,secret_ciphertext,secret_iv,created_at,lease,lease_expires_at)
+      VALUES (?,?,'source-owner','repository',?,1,?,1,'https://example.test/hook','sealed','iv',?,?,?)`
     )
       .bind(id, freshRepositoryId, 4250 + index, owner.id, now, lease, now + 180_000)
       .run();

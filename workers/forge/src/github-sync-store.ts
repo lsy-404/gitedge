@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { GitHubSyncJob, GitHubSyncStatus } from "../../../packages/contracts/src/github-sync";
 import { importSealingKey, openText } from "../../../src/worker/common/secret-box";
 import type { ForgeEnv } from "./common";
@@ -16,8 +17,6 @@ export interface GithubConnectionRow {
   runner_enabled: number;
   hook_id: number | null;
   callback_url: string;
-  token_ciphertext: string;
-  token_iv: string;
   secret_ciphertext: string;
   secret_iv: string;
   last_synced_at: number | null;
@@ -42,8 +41,8 @@ export interface GithubJobRow {
 }
 export interface GithubCredentials {
   token: string;
-  secret: string;
 }
+const TokenResponseSchema = z.object({ data: z.object({ token: z.string().min(1) }) });
 export class GithubSyncConflict extends Error {}
 export type GithubResourceKind = "issue" | "pull_request" | "comment" | "review" | "review_comment";
 export interface GithubMappingRow {
@@ -66,16 +65,40 @@ export async function githubConnection(
     .bind(repositoryId)
     .first<GithubConnectionRow>();
 }
+export async function accountGithubToken(env: ForgeEnv, ownerId: string): Promise<string> {
+  if (!env.ACTIONS) throw new Error("github_token_unavailable");
+  const response = await env.ACTIONS.fetch(
+    new Request("https://actions.internal/internal/account-github-token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ownerId }),
+    })
+  );
+  if (response.status === 404) {
+    await response.body?.cancel();
+    throw new Error("github_token_missing");
+  }
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error("github_token_unavailable");
+  }
+  const parsed = TokenResponseSchema.safeParse(await response.json());
+  if (!parsed.success) throw new Error("github_token_unavailable");
+  return parsed.data.data.token;
+}
 export async function githubCredentials(
   env: ForgeEnv,
   row: GithubConnectionRow
 ): Promise<GithubCredentials> {
+  return { token: await accountGithubToken(env, row.created_by) };
+}
+export async function githubWebhookSecret(
+  env: ForgeEnv,
+  row: GithubConnectionRow
+): Promise<string> {
   const key = await importSealingKey(env.WEBHOOK_ENCRYPTION_KEY);
   if (!key) throw new Error("github_encryption_unavailable");
-  return {
-    token: await openText(key, { ciphertext: row.token_ciphertext, iv: row.token_iv }),
-    secret: await openText(key, { ciphertext: row.secret_ciphertext, iv: row.secret_iv }),
-  };
+  return openText(key, { ciphertext: row.secret_ciphertext, iv: row.secret_iv });
 }
 export function presentGithubJob(row: GithubJobRow): GitHubSyncJob {
   return {

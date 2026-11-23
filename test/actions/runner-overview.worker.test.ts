@@ -281,8 +281,8 @@ describe("runner overview and history", () => {
     await env.DB.prepare(
       `INSERT INTO forge_github_connections
       (id,repository_id,owner,name,github_repository_id,github_private,created_by,enabled,runner_enabled,callback_url,
-        token_ciphertext,token_iv,secret_ciphertext,secret_iv,created_at)
-      VALUES (?,?, 'remote-owner','usage-repo',?,1,?,1,1,'https://forge.test/hook','cipher','iv','cipher','iv',?)`
+        secret_ciphertext,secret_iv,created_at)
+      VALUES (?,?, 'remote-owner','usage-repo',?,1,?,1,1,'https://forge.test/hook','cipher','iv',?)`
     )
       .bind(connectionId, repositoryId, Date.now(), owner.id, now)
       .run();

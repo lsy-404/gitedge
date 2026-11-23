@@ -54,7 +54,12 @@ const remoteJobStates = new Map<number, "queued" | "completed">();
 const bridgeEnv = {
   ...forgeEnv,
   WEBHOOK_ENCRYPTION_KEY: encryption,
-  ACTIONS: { fetch: (request: Request) => queueGithubRunner(request, machineEnv) },
+  ACTIONS: {
+    fetch: async (request: Request) =>
+      new URL(request.url).pathname === "/internal/account-github-token"
+        ? Response.json({ data: { token: credential } })
+        : queueGithubRunner(request, machineEnv),
+  },
 };
 const machineEnv: RunnerEnv = {
   DB: env.DB,
@@ -86,8 +91,7 @@ async function connection(
   const id = crypto.randomUUID();
   const key = await importSealingKey(encryption);
   if (!key) throw new Error("Fixture encryption key is invalid.");
-  const tokenBox = await sealText(key, credential),
-    secretBox = await sealText(key, secret);
+  const secretBox = await sealText(key, secret);
   await env.DB.prepare("DELETE FROM forge_github_connections WHERE repository_id=?")
     .bind(repositoryId)
     .run();
@@ -96,8 +100,8 @@ async function connection(
     .run();
   await env.DB.prepare(
     `INSERT INTO forge_github_connections
-    (id,repository_id,owner,name,github_repository_id,github_private,created_by,enabled,runner_enabled,callback_url,token_ciphertext,token_iv,secret_ciphertext,secret_iv,created_at)
-    VALUES (?,?, 'remote-owner',?,?,1,?,1,1,'https://forge.test/hook',?,?,?,?,?)`
+    (id,repository_id,owner,name,github_repository_id,github_private,created_by,enabled,runner_enabled,callback_url,secret_ciphertext,secret_iv,created_at)
+    VALUES (?,?, 'remote-owner',?,?,1,?,1,1,'https://forge.test/hook',?,?,?)`
   )
     .bind(
       id,
@@ -105,8 +109,6 @@ async function connection(
       remoteName,
       remoteId,
       owner.id,
-      tokenBox.ciphertext,
-      tokenBox.iv,
       secretBox.ciphertext,
       secretBox.iv,
       Date.now()

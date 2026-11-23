@@ -24,8 +24,10 @@ import {
   GithubSyncConflict,
   enqueueGithubJob,
   githubConnection,
+  accountGithubToken,
   githubCredentials,
   githubLastSyncedRef,
+  githubWebhookSecret,
   presentGithubJob,
   type GithubConnectionRow,
   type GithubCredentials,
@@ -108,22 +110,20 @@ async function setupGithubSync(
     return errorResponse(400, "bad_request", "Invalid GitHub synchronization settings.");
   const input = parsed.data;
   let token: string;
-  if ("connectionId" in input) {
-    const source = await env.DB.prepare(
-      `SELECT c.* FROM forge_github_connections c JOIN repositories r ON r.id=c.repository_id
-       WHERE c.id=? AND c.created_by=? AND c.enabled=1 AND r.deleted_at IS NULL AND r.archived=0`
-    )
-      .bind(input.connectionId, user.id)
-      .first<GithubConnectionRow>();
-    if (!source || (await repositoryRole(env.DB, source.repository_id, user.id)) !== "admin")
+  try {
+    token = await accountGithubToken(env, user.id);
+  } catch (cause) {
+    if (cause instanceof Error && cause.message === "github_token_missing")
       return errorResponse(
-        404,
-        "github_source_unavailable",
-        "The selected GitHub connection is unavailable."
+        409,
+        "github_token_missing",
+        "Save the account GitHub token in account Runner settings first."
       );
-    token = (await githubCredentials(env, source)).token;
-  } else {
-    token = input.token;
+    return errorResponse(
+      503,
+      "github_token_unavailable",
+      "The account GitHub token is unavailable."
+    );
   }
   const key = await importSealingKey(env.WEBHOOK_ENCRYPTION_KEY);
   if (!key)
@@ -157,14 +157,13 @@ async function setupGithubSync(
     );
   const candidateId = existing?.id ?? crypto.randomUUID();
   const secret = randomHex(32);
-  const tokenBox = await sealText(key, token);
   const secretBox = await sealText(key, secret);
   const candidateCallback = new URL(
     `/api/forge/github-sync/hooks/${candidateId}`,
     request.url
   ).toString();
   await env.DB.prepare(
-    "INSERT OR IGNORE INTO forge_github_connections (id,repository_id,owner,name,github_repository_id,github_private,created_by,enabled,callback_url,token_ciphertext,token_iv,secret_ciphertext,secret_iv,created_at) VALUES (?,?,?,?,?,?,?,0,?,?,?,?,?,?)"
+    "INSERT OR IGNORE INTO forge_github_connections (id,repository_id,owner,name,github_repository_id,github_private,created_by,enabled,callback_url,secret_ciphertext,secret_iv,created_at) VALUES (?,?,?,?,?,?,?,0,?,?,?,?)"
   )
     .bind(
       candidateId,
@@ -175,8 +174,6 @@ async function setupGithubSync(
       Number(remote.private),
       user.id,
       candidateCallback,
-      tokenBox.ciphertext,
-      tokenBox.iv,
       secretBox.ciphertext,
       secretBox.iv,
       existing?.created_at ?? Date.now()
@@ -205,7 +202,7 @@ async function setupGithubSync(
   try {
     const callback = new URL(`/api/forge/github-sync/hooks/${id}`, request.url).toString();
     await env.DB.prepare(
-      "UPDATE forge_github_connections SET owner=?,name=?,github_private=?,allow_visibility_mismatch=?,created_by=?,enabled=0,callback_url=?,token_ciphertext=?,token_iv=?,secret_ciphertext=?,secret_iv=? WHERE id=? AND lease=?"
+      "UPDATE forge_github_connections SET owner=?,name=?,github_private=?,allow_visibility_mismatch=?,created_by=?,enabled=0,callback_url=?,secret_ciphertext=?,secret_iv=? WHERE id=? AND lease=?"
     )
       .bind(
         input.owner,
@@ -214,8 +211,6 @@ async function setupGithubSync(
         Number(input.allowVisibilityMismatch),
         user.id,
         callback,
-        tokenBox.ciphertext,
-        tokenBox.iv,
         secretBox.ciphertext,
         secretBox.iv,
         id,
@@ -429,6 +424,12 @@ export async function handleGithubSyncSettings(
     });
     return dataResponse(await githubSyncState(env, repository.id));
   } catch (cause) {
+    if (cause instanceof Error && cause.message === "github_token_missing")
+      return errorResponse(
+        409,
+        "github_token_missing",
+        "Save the account GitHub token in account Runner settings first."
+      );
     createLogger(env.LOG_LEVEL, { service: "github-sync", repoId: repository.id }).warn(
       "github-sync:setup-failed",
       { status: cause instanceof GithubApiError ? cause.status : null }
@@ -462,9 +463,9 @@ export async function receiveGithubWebhook(
       "github_payload_limit",
       "Webhook payload exceeds the synchronization limit."
     );
-  let credentials: GithubCredentials;
+  let secret: string;
   try {
-    credentials = await githubCredentials(env, connection);
+    secret = await githubWebhookSecret(env, connection);
   } catch {
     return errorResponse(
       503,
@@ -474,7 +475,7 @@ export async function receiveGithubWebhook(
   }
   const key = await crypto.subtle.importKey(
     "raw",
-    new TextEncoder().encode(credentials.secret),
+    new TextEncoder().encode(secret),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["verify"]

@@ -59,13 +59,13 @@ export async function signingPublishDispatch(request: Request, env: ForgeEnv): P
       return errorResponse(
         403,
         "github_dispatch_forbidden",
-        "GitHub refused the dispatch. The connection token needs Actions read and write permission on the source repository."
+        "GitHub refused the dispatch. The account GitHub token needs Actions read and write permission on the source repository."
       );
     if (status === 404)
       return errorResponse(
         404,
         "github_dispatch_not_found",
-        "GitHub returned not found. Either the connection token lacks Actions write permission on the source repository, or the workflow file does not exist on that ref."
+        "GitHub returned not found. Either the account GitHub token lacks Actions write permission on the source repository, or the workflow file does not exist on that ref."
       );
     if (status !== null && status >= 300 && status < 400)
       return errorResponse(
