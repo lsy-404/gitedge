@@ -566,7 +566,7 @@ $entrypoint = @(
   '@echo off'
   "call `"$environmentScript`""
   'if errorlevel 1 exit /b %errorlevel%'
-  ('"' + (Join-Path $nodeRoot 'node.exe') + '" "' + (Join-Path $brokerRoot 'scripts\runner-broker.mjs') + '" execute-vm-job')
+  ('"' + (Join-Path $nodeRoot 'node.exe') + '" "' + (Join-Path $brokerRoot 'scripts\runner-launcher.mjs') + '" execute-vm-job')
   'exit /b %errorlevel%'
 ) -join "`r`n"
 [IO.File]::WriteAllText((Join-Path $InstallRoot 'run-vm-job.cmd'), $entrypoint + "`r`n", [Text.Encoding]::ASCII)

@@ -30,8 +30,6 @@ const actionEnv: RunnerEnv = {
   DB: env.DB,
   FORGE: { fetch: async () => Response.json({ data: {} }) },
   GIT: { fetch: async () => Response.json({ data: {} }) },
-  SIGNING_RUNTIME_DIGEST: `sha256:${"d".repeat(64)}`,
-  SIGNING_ARTIFACTS: { head: async () => ({ size: 4096 }) } as unknown as R2Bucket,
 };
 
 // Mirrors one dispatch pass for a single connected runner: report, list, evaluate, commit.

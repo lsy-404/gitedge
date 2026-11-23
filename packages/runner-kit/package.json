@@ -1,5 +1,5 @@
 {
-  "name": "@gitedge/native-signing-runtime",
+  "name": "@gitedge/runner-kit",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.34.6",
@@ -10,9 +10,15 @@
     "@electron/asar": "4.3.1",
     "@electron/fuses": "2.1.3",
     "@electron/osx-sign": "2.7.1",
+    "@xmldom/xmldom": "0.8.15",
     "archiver": "8.0.0",
     "electron-builder": "26.15.3",
     "electron-winstaller": "5.4.4",
+    "jose": "6.2.10",
+    "proper-lockfile": "4.1.2",
+    "systeminformation": "5.33.16",
+    "ws": "8.22.0",
+    "yaml": "2.9.1",
     "yauzl": "3.4.0",
     "zod": "4.6.5"
   }

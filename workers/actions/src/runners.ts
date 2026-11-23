@@ -39,11 +39,7 @@ import type { RunnerWorkflow } from "./runner-workflow";
 import { claimGithubRunner, githubRunnerLease } from "./github-runners";
 import { notifyRunnerDispatch, type RunnerDispatch } from "./runner-dispatch";
 import { handleSigningMachineCallback } from "./signing-execution";
-import {
-  currentSigningRuntime,
-  serveSigningRuntime,
-  type SigningRuntimeEnv,
-} from "./signing-runtime";
+import { serveCurrentRunnerKit, serveRunnerKit, type RunnerKitEnv } from "./runner-kit";
 import { retryRunnerNetworkFailure } from "./runner-network";
 import {
   accountScope,
@@ -59,7 +55,7 @@ import {
   recordRunnerFailure,
 } from "./runner-scheduler";
 
-export interface RunnerEnv extends SigningRuntimeEnv {
+export interface RunnerEnv extends RunnerKitEnv {
   DB: D1Database;
   AUTH?: Pick<Fetcher, "fetch">;
   FORGE: Pick<Fetcher, "fetch">;
@@ -201,15 +197,23 @@ async function authenticateExecutionLease(
 ): Promise<RunnerRow | null> {
   if (!z.string().uuid().safeParse(runId).success) return null;
   const pathname = new URL(request.url).pathname;
-  if (request.method === "GET" && /^\/runner\/signing\/runtime\/[0-9a-f]{64}$/.test(pathname)) {
-    const lease = await env.DB.prepare(
-      `SELECT j.runner_id FROM actions_runner_runs j
-       WHERE j.run_id=? AND j.lease_hash=? AND j.status='running'
-       AND j.lease_expires_at>? AND j.started_at+j.timeout_minutes*60000>?
-       AND EXISTS(SELECT 1 FROM actions_signing_runs s WHERE s.run_id=j.run_id)`
-    )
-      .bind(runId, await sha256Hex(leaseToken), Date.now(), Date.now())
-      .first<{ runner_id: string }>();
+  // VM guests download the runner kit with the lease of whichever job they run.
+  if (request.method === "GET" && /^\/runner\/kit\/[0-9a-f]{64}$/.test(pathname)) {
+    const now = Date.now();
+    const leaseHash = await sha256Hex(leaseToken);
+    const lease =
+      (await env.DB.prepare(
+        `SELECT runner_id FROM actions_runner_runs WHERE run_id=? AND lease_hash=?
+         AND status='running' AND lease_expires_at>? AND started_at+timeout_minutes*60000>?`
+      )
+        .bind(runId, leaseHash, now, now)
+        .first<{ runner_id: string }>()) ??
+      (await env.DB.prepare(
+        `SELECT runner_id FROM actions_github_runner_jobs WHERE id=? AND lease_hash=?
+         AND status='running' AND lease_expires_at>? AND started_at+21600000>?`
+      )
+        .bind(runId, leaseHash, now, now)
+        .first<{ runner_id: string }>());
     return lease ? leaseRunner(env, lease.runner_id) : null;
   }
   if (request.method !== "POST") return null;
@@ -931,9 +935,6 @@ export async function claimSpecificCandidate(
   evaluated: EvaluatedRunnerCandidate,
   now: number
 ): Promise<ClaimOutcome> {
-  const signingRuntime =
-    candidate.execution_kind === "signing" ? await currentSigningRuntime(env) : null;
-  if (candidate.execution_kind === "signing" && !signingRuntime) return { kind: "skipped" };
   const leaseToken = randomHex(32);
   const leaseHash = await sha256Hex(leaseToken);
   const claimed = await claimRunnerCandidate(
@@ -986,7 +987,6 @@ export async function claimSpecificCandidate(
             requestId: candidate.request_id,
             stage: candidate.stage,
             inputDigest: candidate.input_digest,
-            signingRuntime,
             ownerId: row.created_by,
             repositoryId: row.repository_id,
             repository,
@@ -1096,13 +1096,13 @@ async function connectRunner(request: Request, env: RunnerEnv): Promise<Response
 export async function runnerMachineRequest(request: Request, env: RunnerEnv): Promise<Response> {
   const pathname = new URL(request.url).pathname;
   if (pathname === "/runner/connect") return connectRunner(request, env);
-  const runtimeRoute = /^\/runner\/signing\/runtime\/([0-9a-f]{64})$/.exec(pathname);
-  if (runtimeRoute) {
+  const kitRoute = /^\/runner\/kit(?:\/([0-9a-f]{64}))?$/.exec(pathname);
+  if (kitRoute) {
     if (request.method !== "GET")
-      return errorResponse(405, "method_not_allowed", "The signing runtime is read only.");
+      return errorResponse(405, "method_not_allowed", "The runner kit is read only.");
     if (!(await authenticateRunner(request, env)))
       return errorResponse(401, "unauthorized", "Invalid or revoked runner registration.");
-    return serveSigningRuntime(env, runtimeRoute[1]!);
+    return kitRoute[1] ? serveRunnerKit(env, kitRoute[1]) : serveCurrentRunnerKit(env);
   }
   const signingMachineRoute = pathname.startsWith("/runner/signing/requests/");
   if (signingMachineRoute && !["POST", "GET", "PUT"].includes(request.method))

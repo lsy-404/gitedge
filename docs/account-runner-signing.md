@@ -10,21 +10,17 @@ macOS profiles need the required Apple signing and notarization tools. iOS profi
 
 ## Signing runtime
 
-The signing scripts that a runner executes are published by the server. `pnpm run deploy` packs every file under `scripts/signing/` (without `node_modules`) plus `packages/contracts/signing-native.mjs` into one gzip-compressed JSON bundle (`{ "format": 1, "files": [{ "path", "mode", "data" }] }`, sorted paths, base64 data), uploads it to the `SIGNING_ARTIFACTS` bucket as `signing-runtime/<hex>` unless that object exists, and renders `SIGNING_RUNTIME_DIGEST=sha256:<hex>` (SHA-256 of the uploaded bytes) into the Actions Worker. `node scripts/signing-runtime-pack.mjs [output]` prints the digest and size of the current sources and optionally writes the bundle. The pack fails when a script reachable from `client.mjs` imports a relative file outside the bundle.
-
-A signing claim carries `run.signingRuntime = { "digest": "sha256:<hex>", "size": <bytes> }`. When the digest is not configured or its object is missing, signing runs are not offered to runners and a warning is logged; other runs are unaffected.
+The signing scripts are part of the runner kit that every GitEdge deployment publishes (see [Runner kit and launcher](actions.md#runner-kit-and-launcher)). `scripts/signing/` and `packages/contracts/signing-native.mjs` ship in the kit, and their dependencies are pinned by the kit's lockfile in `packages/runner-kit/`. A broker running under the launcher already has the signing client of its kit installed, so a signing claim downloads nothing: the broker starts `scripts/signing/client.mjs` from its own kit directory. Signing runs are dispatched like other runs; there is no separate signing digest.
 
 ### On the runner
 
-The signing code and its dependency lockfile are published with each GitEdge deployment; a runner needs no preinstalled signing packages. Each signing claim names the published runtime by digest. Before the job starts, the broker downloads it with its runner credential, checks its size and SHA-256, unpacks it into `signing-runtime/<digest>` under the broker state directory, runs `pnpm install --frozen-lockfile --prod --prefer-offline` there, and keeps the three most recently used versions. The state directory must be writable by the account that runs jobs.
-
-A runner therefore needs Node.js 24 or newer, pnpm, network access to the GitEdge origin and the npm registry (or a warm pnpm store), and the platform tools below. Before the platform step the signing client verifies Node, its dependencies and these tools, and fails with a specific reason such as `preflight_python`, `preflight_dependency` or `preflight_tool_notarytool`; download and install failures report `runtime_download_failed`, `runtime_digest_mismatch`, `runtime_invalid` or `runtime_install_failed`. The reason and a short detail appear on the signing request.
+A runner needs Node.js 24 or newer, pnpm, network access to the GitEdge origin and the npm registry (or a warm pnpm store) for kit installation, and the platform tools below. The kit lives under `runner-kit/` in the broker state directory, which must be readable by the account that runs jobs. Before the platform step the signing client verifies Node, its dependencies and these tools, and fails with a specific reason such as `preflight_python`, `preflight_dependency` or `preflight_tool_notarytool`. The reason and a short detail appear on the signing request.
 
 - macOS and iOS: Python 3.12 or newer (`PYTHON` selects the interpreter, default `python3`), `codesign`, `security`, `lipo` and `xcrun` with `notarytool` and `stapler`; iOS also needs `xcodebuild`, `vtool` and `openssl`, and DMG stages need `hdiutil` and `ditto`.
 - Windows: PowerShell 7 (`pwsh`) and the approved Microsoft signing tooling.
 - Android (macOS or Linux): a Java runtime (`JAVA_HOME/bin/java`, or `java` on `PATH`) and Android SDK build-tools 30 or newer with `aapt2`, `zipalign` and `lib/apksigner.jar`. The newest installed build-tools under `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `~/Library/Android/sdk` (macOS) or `~/Android/Sdk` (Linux) are used, so set `ANDROID_HOME` and `JAVA_HOME` in the broker environment when jobs run as another account. Preflight reports `preflight_tool_java`, `preflight_tool_android_build_tools`, `preflight_tool_aapt2` or `preflight_tool_apksigner`.
 
-Installing dependencies adds time to every job on a disposable VM. To speed this up, warm the pnpm store in the VM image by running `pnpm install --frozen-lockfile --prod` once against `scripts/signing` of a recent release and keeping the store; correctness never depends on the warm-up.
+A disposable VM installs its host's kit before every job. To speed this up, warm the pnpm store in the VM image by running `pnpm install --frozen-lockfile --prod` once in `packages/runner-kit` of a recent release and keeping the store; correctness never depends on the warm-up.
 
 On a macOS host where jobs run as root, the Developer ID intermediate certificates must be installed in the System keychain so `codesign` can build the chain.
 
@@ -198,26 +194,25 @@ Delivery is at least once. A dispatch GitHub accepted can still be recorded as f
 
 All paths below are under `/api/actions` on the Gateway. Pass the private Runner's `repositoryId` query parameter.
 
-| Method | Path                                       | Purpose                                                                                                         |
-| ------ | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
-| GET    | `/signing/profiles`                        | Read approved profile metadata                                                                                  |
-| POST   | `/signing/profiles`                        | Approve `{ "name": "profile-name" }` from Runner                                                                |
-| GET    | `/signing/source-credential`               | Read `{ "configured": true, "updatedAt": 1700000000000 }` for the repository (`?repositoryId=`)                 |
-| POST   | `/signing/source-credential`               | Install the shared GitHub source-read token `{ "token": "..." }`; returns the same status                       |
-| DELETE | `/signing/source-credential`               | Revoke the shared GitHub source-read token; returns the same status                                             |
-| GET    | `/signing/profiles/:name/credentials`      | Read credential configuration metadata                                                                          |
-| POST   | `/signing/profiles/:name/credentials`      | Install `{ "platform": "macos", "credentials": { ... } }`                                                       |
-| DELETE | `/signing/profiles/:name/credentials`      | Remove credentials for `{ "platform": "macos" }`                                                                |
-| POST   | `/signing/requests`                        | Submit source proof with `Idempotency-Key`                                                                      |
-| GET    | `/signing/requests/:id`                    | Read request state                                                                                              |
-| POST   | `/signing/requests/:id/retry`              | Retry only the failed stage with `{ "runId": "FAILED_RUN_UUID" }` or `{ "runId": null }`                        |
-| PUT    | `/signing/requests/:id/source/parts/:part` | Upload an authenticated 8 MiB source part                                                                       |
-| POST   | `/signing/requests/:id/source/complete`    | Verify the uploaded source and queue signing                                                                    |
-| GET    | `/signing/requests?sourceRunId=...`        | Find requests for an authorized source run                                                                      |
-| GET    | `/signing/requests/:id/download`           | Download verified final output                                                                                  |
-| GET    | `/runner/signing/runtime/<hex>`            | Runner credential only: download any published signing runtime bundle; the broker verifies its size and SHA-256 |
+| Method | Path                                       | Purpose                                                                                         |
+| ------ | ------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| GET    | `/signing/profiles`                        | Read approved profile metadata                                                                  |
+| POST   | `/signing/profiles`                        | Approve `{ "name": "profile-name" }` from Runner                                                |
+| GET    | `/signing/source-credential`               | Read `{ "configured": true, "updatedAt": 1700000000000 }` for the repository (`?repositoryId=`) |
+| POST   | `/signing/source-credential`               | Install the shared GitHub source-read token `{ "token": "..." }`; returns the same status       |
+| DELETE | `/signing/source-credential`               | Revoke the shared GitHub source-read token; returns the same status                             |
+| GET    | `/signing/profiles/:name/credentials`      | Read credential configuration metadata                                                          |
+| POST   | `/signing/profiles/:name/credentials`      | Install `{ "platform": "macos", "credentials": { ... } }`                                       |
+| DELETE | `/signing/profiles/:name/credentials`      | Remove credentials for `{ "platform": "macos" }`                                                |
+| POST   | `/signing/requests`                        | Submit source proof with `Idempotency-Key`                                                      |
+| GET    | `/signing/requests/:id`                    | Read request state                                                                              |
+| POST   | `/signing/requests/:id/retry`              | Retry only the failed stage with `{ "runId": "FAILED_RUN_UUID" }` or `{ "runId": null }`        |
+| PUT    | `/signing/requests/:id/source/parts/:part` | Upload an authenticated 8 MiB source part                                                       |
+| POST   | `/signing/requests/:id/source/complete`    | Verify the uploaded source and queue signing                                                    |
+| GET    | `/signing/requests?sourceRunId=...`        | Find requests for an authorized source run                                                      |
+| GET    | `/signing/requests/:id/download`           | Download verified final output                                                                  |
 
-The runner failure callback `POST /runner/signing/requests/:id/fail` accepts an optional `reason` (`^[a-z0-9_]{1,64}$`, for example `runtime_digest_mismatch` or `preflight_python`) and `detail` (up to 300 characters; control characters are replaced by spaces). The account signing list returns them beside each request as `failure: { reason, detail }`, `null` unless the request failed; the request object itself is unchanged.
+The runner failure callback `POST /runner/signing/requests/:id/fail` accepts an optional `reason` (`^[a-z0-9_]{1,64}$`, for example `preflight_dependency` or `preflight_python`) and `detail` (up to 300 characters; control characters are replaced by spaces). The account signing list returns them beside each request as `failure: { reason, detail }`, `null` unless the request failed; the request object itself is unchanged.
 
 Runner callbacks require the registered runner credential and matching native run lease. Signing profile approval and the task/lease authorization govern signing and credential access. Account-runner capacity, cancellation, history and repository admission limits apply to signing stages.
 

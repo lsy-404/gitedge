@@ -94,7 +94,7 @@ interface ActionsEnv extends Cloudflare.Env {
   readonly RELEASE_ASSETS: R2Bucket;
   readonly LOG_LEVEL?: string;
   readonly USER_GROUP_LIMITS_JSON?: string;
-  readonly SIGNING_RUNTIME_DIGEST?: string;
+  readonly RUNNER_KIT_DIGEST?: string;
 }
 
 function signingExecutionHooks(env: ActionsEnv) {
@@ -1793,7 +1793,7 @@ export default {
       if (url.pathname === "/hosted-runners/bootstrap")
         return await bootstrapHostedRunner(request, env);
       if (
-        /^\/runner\/(?:connect|heartbeat|complete|github\/(?:heartbeat|complete)|signing\/runtime\/[0-9a-f]{64}|signing\/requests\/[0-9a-f-]{36}\/(?:start|heartbeat|download|authorize-sign|output(?:\/parts\/\d+|\/complete)?|complete|fail))$/.test(
+        /^\/runner\/(?:connect|heartbeat|complete|github\/(?:heartbeat|complete)|kit(?:\/[0-9a-f]{64})?|signing\/requests\/[0-9a-f-]{36}\/(?:start|heartbeat|download|authorize-sign|output(?:\/parts\/\d+|\/complete)?|complete|fail))$/.test(
           url.pathname
         )
       )

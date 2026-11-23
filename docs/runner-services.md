@@ -45,3 +45,7 @@ Use Actions to choose the workflow, run it manually, inspect its queue/execution
 Signing uses separately approved definitions, machine purposes and credential access. An ordinary task workflow cannot gain signing access by changing labels or YAML. The native signing migration and platform requirements are described in [sign-executor-cutover.md](sign-executor-cutover.md).
 
 See [account-runner-signing.md](account-runner-signing.md) for machine setup, profile approval and task submission.
+
+## Runner hosts
+
+The machines that execute these services run the runner launcher, which installs the runner kit published with each GitEdge deployment and switches to a new kit after running jobs finish. Hosts need no checkout updates; see [Runner kit and launcher](actions.md#runner-kit-and-launcher) for the launcher and for moving an existing host's launchd, systemd or Task Scheduler unit to it.

@@ -19,6 +19,8 @@ Production values come from `gitedge.config.json` at the repository root (ignore
 
 To change a name that is not account-specific (R2 bucket, queue, Artifacts namespace), edit the committed Worker config and the tests that assert it.
 
+`pnpm run deploy` also packs the runner kit with `scripts/runner-kit-pack.mjs` and uploads it to the Actions `SIGNING_ARTIFACTS` bucket as `runner-kit/<hex>` before deploying the Workers, skipping the upload when that object already exists, and renders its digest as the Actions variable `RUNNER_KIT_DIGEST`. Published kits are kept: the bucket lifecycle rule only expires the `signing/` prefix, and VM guests download the kit their host runs, which may be an earlier one. Connected launchers pick up the new kit after the deploy, finish running jobs and switch; see [Runner kit and launcher](actions.md#runner-kit-and-launcher). `pnpm run build` and `pnpm run deploy:dry-run` pack the kit too, so a script that imports a file or package the kit does not contain fails the build.
+
 Set shared policy only under `settings`. Rendering distributes identical user-group quotas to Auth, Gateway, Forge and Actions. Putting managed keys such as `USER_GROUP_LIMITS_JSON`, `ALLOW_PUBLIC_SIGNUP` or `IP_RPM_LIMIT` under `vars` stops validation: move their values to `settings` before deploying. Worker-specific optional features and secrets are described in [configuration](configuration.md).
 
 # Repository deployment manifest

@@ -33,6 +33,12 @@ const isLabels = (value, max) =>
   Array.isArray(value) && value.length <= max && value.every(isLabel);
 const isId = (value) => typeof value === "string" && identifier.test(value);
 const isJobId = (value) => isId(value) || (Number.isSafeInteger(value) && value > 0);
+const isKit = (value) =>
+  isObject(value) &&
+  typeof value.digest === "string" &&
+  /^sha256:[0-9a-f]{64}$/.test(value.digest) &&
+  Number.isSafeInteger(value.size) &&
+  value.size > 0;
 
 export function parseServerFrame(data) {
   const size = Buffer.isBuffer(data) ? data.length : Buffer.byteLength(String(data));
@@ -48,7 +54,12 @@ export function parseServerFrame(data) {
   const valid = (() => {
     switch (frame.type) {
       case "ready":
-        return isLabels(frame.runnerLabels, 40);
+        return (
+          isLabels(frame.runnerLabels, 40) &&
+          (frame.kit === undefined || frame.kit === null || isKit(frame.kit))
+        );
+      case "kit":
+        return isKit(frame.kit);
       case "offer":
         return (
           isId(frame.offerId) &&

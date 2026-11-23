@@ -22,10 +22,6 @@ export function buildRunnerBrokerUnit({
   const home = safeUnitValue(homeDir, "home path");
   const state = safeUnitValue(stateDir, "state path");
   const node = safeUnitValue(nodePath, "Node path");
-  const broker = safeUnitValue(
-    path.posix.join(install, "scripts", "runner-broker.mjs"),
-    "broker path"
-  );
-  const actions = safeUnitValue(path.posix.join(install, "work", "actions"), "actions state path");
-  return `[Unit]\nDescription=GitEdge runner broker\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser=${username}\nGroup=${groupId}\nWorkingDirectory=${install}\nEnvironment=CARGO_HOME=${state}/.cargo\nEnvironment=RUSTUP_HOME=${state}/.rustup\nEnvironment=PATH=${path.posix.dirname(node)}:${state}/.cargo/bin:/usr/local/bin:/usr/bin:/bin\nExecStart=${node} ${broker} serve --state-dir ${state}\nRestart=on-failure\nRestartPreventExitStatus=78\nRestartSec=5s\nTimeoutStopSec=60s\nKillMode=mixed\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nProtectHome=read-only\nProtectKernelTunables=true\nProtectKernelModules=true\nProtectControlGroups=true\nReadWritePaths=${home} ${state} ${actions}\n\n[Install]\nWantedBy=multi-user.target\n`;
+  const launcher = safeUnitValue(path.posix.join(install, "runner-launcher.mjs"), "launcher path");
+  return `[Unit]\nDescription=GitEdge runner broker\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser=${username}\nGroup=${groupId}\nWorkingDirectory=${install}\nEnvironment=CARGO_HOME=${state}/.cargo\nEnvironment=RUSTUP_HOME=${state}/.rustup\nEnvironment=PATH=${path.posix.dirname(node)}:${state}/.cargo/bin:/usr/local/bin:/usr/bin:/bin\nExecStart=${node} ${launcher} serve --state-dir ${state}\nRestart=on-failure\nRestartPreventExitStatus=78\nRestartSec=5s\nTimeoutStopSec=60s\nKillMode=mixed\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nProtectHome=read-only\nProtectKernelTunables=true\nProtectKernelModules=true\nProtectControlGroups=true\nReadWritePaths=${home} ${state}\n\n[Install]\nWantedBy=multi-user.target\n`;
 }

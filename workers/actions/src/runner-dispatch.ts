@@ -20,7 +20,7 @@ import {
 import { scoreRunner } from "../../../packages/contracts/runner-scheduling.mjs";
 import { createLogger } from "../../../src/worker/common/logger";
 import { readTypePriority } from "./github-quota";
-import { currentSigningRuntime } from "./signing-runtime";
+import { currentRunnerKit, type RunnerKit } from "./runner-kit";
 import {
   claimSpecificCandidate,
   ownsScope,
@@ -83,7 +83,8 @@ const InboundFrameSchema = z.discriminatedUnion("type", [
 ]);
 
 type OutboundFrame =
-  | { type: "ready"; runnerLabels: string[] }
+  | { type: "ready"; runnerLabels: string[]; kit: RunnerKit | null }
+  | { type: "kit"; kit: RunnerKit }
   | {
       type: "offer";
       offerId: string;
@@ -166,6 +167,8 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
   // Runners whose accepted offer is being committed; their reports must not move the claim snapshot.
   private readonly committing = new Set<string>();
   private rotation = 0;
+  // The kit digest is a deploy-time variable, so it is fixed for the life of this instance.
+  private runnerKit?: Promise<RunnerKit | null>;
 
   constructor(ctx: DurableObjectState, env: RunnerEnv) {
     super(ctx, env);
@@ -358,11 +361,22 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
     else await storeRunnerReport(this.env, runner, frame.capacity, frame.budget ?? null, now);
     const busy = frame.capacity.busy >= frame.capacity.slots;
     this.updateState(ws, { ready: true, busy, reportedAt: now });
+    const kit = await (this.runnerKit ??= currentRunnerKit(this.env));
     if (!state.ready)
       this.send(ws, {
         type: "ready",
         runnerLabels: z.array(z.string()).parse(JSON.parse(runner.labels_json)),
+        kit,
       });
+    // Hibernated sockets survive deploys, so a launcher-managed broker reporting another kit is told
+    // again on each report until it switches or reports that this kit failed to install.
+    else if (
+      kit &&
+      frame.capacity.kit &&
+      frame.capacity.kit.digest !== kit.digest &&
+      frame.capacity.kit.failed?.digest !== kit.digest
+    )
+      this.send(ws, { type: "kit", kit });
     if (!state.ready || (state.busy && !busy) || state.reportedAt < now - RUNNER_CAPACITY_STALE_MS)
       await this.dispatch();
   }
@@ -677,15 +691,10 @@ export class RunnerDispatch extends DurableObject<RunnerEnv> {
     const ordered = [...candidates.values()].sort(
       (a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id)
     );
-    let signingRuntime: Awaited<ReturnType<typeof currentSigningRuntime>> | false | undefined;
     const taken = new Set<string>();
     for (const candidate of ordered) {
       const key = `${candidate.kind}:${candidate.id}`;
       if (offeredJobs.has(key)) continue;
-      if (candidate.execution_kind === "signing") {
-        signingRuntime ??= (await currentSigningRuntime(this.env)) ?? false;
-        if (!signingRuntime) continue;
-      }
       let best: {
         runner: IdleRunner;
         labels: string[];

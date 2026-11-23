@@ -8,7 +8,7 @@ import {
   loadOperatorConfig,
   writeProductionConfigs,
 } from "./operator-config.mjs";
-import { packSigningRuntime } from "./signing-runtime-pack.mjs";
+import { packRunnerKit } from "./runner-kit-pack.mjs";
 
 const unresolvedIdPattern = /REPLACE_WITH_[A-Z0-9_]+/;
 
@@ -17,7 +17,7 @@ const bootstrapServices = ["git", "forge", "actions", "gateway"];
 const deployOrder = ["limits", "auth", "forge", "actions", "git", "deploy", "mcp", "gateway"];
 
 let activeAccountId;
-let activeSigningRuntime;
+let activeRunnerKit;
 
 export function pnpmInvocation(
   args,
@@ -177,25 +177,26 @@ function ensureAssetBuckets(configs) {
   );
 }
 
-// The bundle is content-addressed, so an existing object under its key is already correct.
-function publishSigningRuntime(configs) {
+// The kit is content-addressed, so an existing object under its key is already correct. Kits are
+// never deleted here: VM guests may still fetch the kit their host runs.
+function publishRunnerKit(configs) {
   const bucket = readConfig(configs.actions).r2_buckets.find(
     (entry) => entry.binding === "SIGNING_ARTIFACTS"
   ).bucket_name;
-  const target = `${bucket}/signing-runtime/${activeSigningRuntime.hex}`;
-  const directory = mkdtempSync(join(tmpdir(), "gitedge-signing-runtime-"));
+  const target = `${bucket}/runner-kit/${activeRunnerKit.hex}`;
+  const directory = mkdtempSync(join(tmpdir(), "gitedge-runner-kit-"));
   try {
-    const file = join(directory, "runtime.gz");
+    const file = join(directory, "runner-kit.gz");
     const existing = spawnPnpmSync(
       ["exec", "wrangler", "r2", "object", "get", target, "--remote", "--file", file],
       { encoding: "utf8", env: cloudflareEnvironment() }
     );
     if (existing.status === 0) {
-      console.log(`Signing runtime ${activeSigningRuntime.digest} is already published`);
+      console.log(`Runner kit ${activeRunnerKit.digest} is already published`);
       return true;
     }
-    writeFileSync(file, activeSigningRuntime.bytes);
-    console.log(`Publishing signing runtime ${activeSigningRuntime.digest}`);
+    writeFileSync(file, activeRunnerKit.bytes);
+    console.log(`Publishing runner kit ${activeRunnerKit.digest}`);
     return runPnpm(
       [
         "exec",
@@ -255,10 +256,8 @@ function migrateRemote(configs) {
 function prepareConfigs({ dryRun }) {
   const operator = loadOperatorConfig({ optional: dryRun }) ?? dryRunOperatorConfig();
   activeAccountId = operator.accountId;
-  activeSigningRuntime = packSigningRuntime();
-  const configs = writeProductionConfigs(operator, {
-    signingRuntimeDigest: activeSigningRuntime.digest,
-  });
+  activeRunnerKit = packRunnerKit();
+  const configs = writeProductionConfigs(operator, { runnerKitDigest: activeRunnerKit.digest });
   return assertResolvedConfigs(configs) ? configs : null;
 }
 
@@ -279,7 +278,7 @@ export function deployStack({ dryRun = false } = {}) {
   if (!dryRun) {
     if (!migrateRemote(configs)) return false;
     if (!ensureAssetBuckets(configs)) return false;
-    if (!publishSigningRuntime(configs)) return false;
+    if (!publishRunnerKit(configs)) return false;
     if (!ensureGithubSyncQueue(configs)) return false;
     if (!bootstrapCyclicWorkers(configs)) return false;
   }

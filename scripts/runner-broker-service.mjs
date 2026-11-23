@@ -1,10 +1,13 @@
 import { spawn } from "node:child_process";
-import { access, chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { access, chmod, copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { buildRunnerBrokerUnit } from "./runner-systemd-unit.mjs";
+
+const launcherSource = fileURLToPath(new URL("./runner-launcher.mjs", import.meta.url));
 
 const label = "com.gitedge.runner-broker";
 const [action, ...args] = process.argv.slice(2);
@@ -27,6 +30,15 @@ function escapeXml(value) {
     .replaceAll("'", "&apos;");
 }
 
+// The service runs a stable copy of the launcher, so no checkout or kit directory must stay in place.
+async function installLauncher(installDir, mode) {
+  await mkdir(installDir, { recursive: true, mode });
+  const target = path.join(installDir, "runner-launcher.mjs");
+  await copyFile(launcherSource, target);
+  await chmod(target, 0o644);
+  return target;
+}
+
 function launchctl(args) {
   return new Promise((resolve, reject) => {
     const child = spawn("/bin/launchctl", args, { stdio: "inherit" });
@@ -45,9 +57,9 @@ async function main() {
     throw new Error("launchd service management is available only on macOS.");
   if (!values["install-dir"]) throw new Error("--install-dir is required.");
   const installDir = path.resolve(values["install-dir"]);
-  const broker = path.join(installDir, "scripts", "runner-broker.mjs");
+  const launcher = path.join(installDir, "runner-launcher.mjs");
   const node = process.execPath;
-  await Promise.all([access(broker), access(node, constants.X_OK)]);
+  await access(node, constants.X_OK);
   const state = path.resolve(values["state-dir"] ?? path.join(installDir, "work", "runner-broker"));
   const userHome = os.homedir();
   const launchAgents = path.join(userHome, "Library", "LaunchAgents");
@@ -56,6 +68,7 @@ async function main() {
   const uid = process.getuid?.();
   if (!Number.isInteger(uid)) throw new Error("Could not determine the current macOS user ID.");
   if (action === "install") {
+    await installLauncher(installDir, 0o700);
     await mkdir(launchAgents, { recursive: true, mode: 0o700 });
     await mkdir(logs, { recursive: true, mode: 0o700 });
     await chmod(logs, 0o700);
@@ -82,7 +95,7 @@ async function main() {
     const entries = Object.entries(environment)
       .map(([key, value]) => `    <key>${key}</key><string>${escapeXml(value)}</string>`)
       .join("\n");
-    const document = `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n  <key>Label</key><string>${label}</string>\n  <key>ProgramArguments</key><array><string>${escapeXml(node)}</string><string>${escapeXml(broker)}</string><string>serve</string><string>--state-dir</string><string>${escapeXml(state)}</string><string>--supersede-exit-status</string><string>0</string></array>\n  <key>WorkingDirectory</key><string>${escapeXml(installDir)}</string>\n  <key>EnvironmentVariables</key><dict>\n${entries}\n  </dict>\n  <key>RunAtLoad</key><false/>\n  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>\n  <key>StandardOutPath</key><string>${escapeXml(path.join(logs, "runner-broker.out.log"))}</string>\n  <key>StandardErrorPath</key><string>${escapeXml(path.join(logs, "runner-broker.err.log"))}</string>\n</dict></plist>\n`;
+    const document = `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n  <key>Label</key><string>${label}</string>\n  <key>ProgramArguments</key><array><string>${escapeXml(node)}</string><string>${escapeXml(launcher)}</string><string>serve</string><string>--state-dir</string><string>${escapeXml(state)}</string><string>--supersede-exit-status</string><string>0</string></array>\n  <key>WorkingDirectory</key><string>${escapeXml(installDir)}</string>\n  <key>EnvironmentVariables</key><dict>\n${entries}\n  </dict>\n  <key>RunAtLoad</key><false/>\n  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>\n  <key>StandardOutPath</key><string>${escapeXml(path.join(logs, "runner-broker.out.log"))}</string>\n  <key>StandardErrorPath</key><string>${escapeXml(path.join(logs, "runner-broker.err.log"))}</string>\n</dict></plist>\n`;
     await writeFile(plist, document, { mode: 0o600 });
     await chmod(plist, 0o600);
     console.log(`Installed ${label} at ${plist}. Run service start to load it.`);
@@ -125,7 +138,6 @@ async function linuxMain() {
       "Linux system service installation requires root; execution uses --run-as-user."
     );
   const installDir = path.resolve(values["install-dir"]);
-  const broker = path.join(installDir, "scripts", "runner-broker.mjs");
   const node = process.execPath;
   const state = path.resolve(values["state-dir"] ?? path.join(installDir, "work", "runner-broker"));
   const unitPath = "/etc/systemd/system/gitedge-runner-broker.service";
@@ -138,7 +150,7 @@ async function linuxMain() {
       .map((line) => line.split(":"))
       .find((fields) => fields[0] === username);
     if (!passwd || !/^\d+$/.test(passwd[3])) throw new Error("The service user was not found.");
-    await Promise.all([access(broker), access(node, constants.X_OK)]);
+    await access(node, constants.X_OK);
     const stateInfo = await stat(state);
     if (
       !stateInfo.isDirectory() ||
@@ -147,6 +159,7 @@ async function linuxMain() {
       (stateInfo.mode & 0o077) !== 0
     )
       throw new Error("The broker state directory must be private and owned by --run-as-user.");
+    await installLauncher(installDir, 0o755);
     const unit = buildRunnerBrokerUnit({
       username,
       groupId: passwd[3],

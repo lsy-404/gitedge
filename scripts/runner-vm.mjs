@@ -10,12 +10,12 @@ import {
   writeFile,
   statfs,
 } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 import path from "node:path";
 import os from "node:os";
 import { readFileSync } from "node:fs";
 import { createHypervVm, recoverHypervVm } from "./runner-vm/hyperv.mjs";
 import { createQemuVm, recoverQemuVm } from "./runner-vm/qemu.mjs";
+import { LAUNCHER_VERSION } from "./runner-launcher.mjs";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const mebibyte = 1_048_576;
@@ -397,33 +397,9 @@ export function guestEnvironment(config, scoped = {}) {
   };
 }
 
-async function runtimeDigest(root) {
-  const fs = await import("node:fs/promises");
-  const paths = await import("node:path");
-  const crypto = await import("node:crypto");
-  const hash = crypto.createHash("sha256");
-  const visit = async (relative) => {
-    const file = paths.join(root, ...relative.split("/"));
-    const info = await fs.lstat(file);
-    if (info.isSymbolicLink()) throw new Error("Broker runtime must not contain symbolic links.");
-    if (info.isDirectory()) {
-      for (const name of (await fs.readdir(file)).sort()) await visit(`${relative}/${name}`);
-    } else if (info.isFile()) {
-      hash
-        .update(relative)
-        .update("\0")
-        .update(await fs.readFile(file))
-        .update("\0");
-    } else throw new Error("Unexpected broker runtime file.");
-  };
-  for (const relative of ["package.json", "pnpm-lock.yaml", "scripts", "packages/contracts"])
-    await visit(relative);
-  return hash.digest("hex");
-}
-
 export async function verifyVmImage(config, signal) {
   const guestPath = guestPaths(config);
-  const brokerHash = await runtimeDigest(fileURLToPath(new URL("../", import.meta.url)));
+  const launcher = guestPath.join(config.guest.runtimeRoot, "scripts", "runner-launcher.mjs");
   const vm = await createJobVm(config, signal);
   try {
     const probe = `
@@ -437,8 +413,8 @@ export async function verifyVmImage(config, signal) {
           await new Promise(resolve=>setTimeout(resolve,2000));
         }
       }
-      if(await (${runtimeDigest.toString()})(${JSON.stringify(config.guest.runtimeRoot)})!==${JSON.stringify(brokerHash)})throw new Error('Guest broker runtime does not match this host release.');
-      fs.accessSync(${JSON.stringify(guestPath.join(config.guest.runtimeRoot, "scripts", "actions-runner.mjs"))});
+      const launcher=cp.spawnSync(process.execPath,[${JSON.stringify(launcher)},'version'],{encoding:'utf8',timeout:60000});
+      if(launcher.status!==0||launcher.stdout.trim()!==${JSON.stringify(String(LAUNCHER_VERSION))})throw new Error('Guest runner launcher must be version ${LAUNCHER_VERSION}; rebuild or update the image launcher.');
       fs.accessSync(${JSON.stringify(guestPath.join(config.guest.runnerPath, "bin", config.guest.platform === "windows" ? "Runner.Listener.exe" : "Runner.Listener"))});
       const commands={pnpm:process.platform==='win32'?['cmd.exe',['/d','/c','pnpm.cmd','--version']]:['pnpm',['--version']],git:['git',['--version']],docker:['docker',['version','--format','{{.Server.Version}}']],python:[process.platform==='win32'?'python':'python3',['--version']],go:['go',['version']],rust:['rustc',['--version']]};
       const tools=['node',...Object.entries(commands).filter(([,v])=>available(...v)).map(([k])=>k)];

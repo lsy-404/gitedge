@@ -127,7 +127,7 @@ export function renderWorkerConfig(service, operator, extraVars = {}) {
   return config;
 }
 
-export function writeProductionConfigs(operator, { signingRuntimeDigest } = {}) {
+export function writeProductionConfigs(operator, { runnerKitDigest } = {}) {
   const paths = {};
   for (const service of services) {
     paths[service] = productionConfigPath(service);
@@ -137,9 +137,7 @@ export function writeProductionConfigs(operator, { signingRuntimeDigest } = {}) 
         renderWorkerConfig(
           service,
           operator,
-          service === "actions" && signingRuntimeDigest
-            ? { SIGNING_RUNTIME_DIGEST: signingRuntimeDigest }
-            : {}
+          service === "actions" && runnerKitDigest ? { RUNNER_KIT_DIGEST: runnerKitDigest } : {}
         ),
         null,
         2

@@ -114,7 +114,7 @@ describe("runner capacity probes", () => {
     expect(unit).toContain("TimeoutStopSec=60s\nKillMode=mixed");
     expect(unit).toContain("Restart=on-failure\nRestartPreventExitStatus=78\n");
     expect(unit).not.toMatch(/CPUQuota=|Memory(?:High|Max)=|TasksMax=/);
-    expect(unit).toContain("ExecStart=/usr/bin/node /opt/gitedge/scripts/runner-broker.mjs");
+    expect(unit).toContain("ExecStart=/usr/bin/node /opt/gitedge/runner-launcher.mjs serve");
     expect(unit).not.toContain("Environment=HOME=");
     expect(unit).toContain("Environment=CARGO_HOME=/var/lib/gitedge/runner-broker/.cargo");
     expect(unit).toContain("Environment=RUSTUP_HOME=/var/lib/gitedge/runner-broker/.rustup");

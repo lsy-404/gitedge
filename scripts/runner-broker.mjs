@@ -34,10 +34,12 @@ import {
   signingFailureBody,
 } from "./runner-broker-signing-workflow.mjs";
 import {
-  SigningRuntimeError,
-  prepareSigningRuntime,
-  signingRuntimeHex,
-} from "./runner-signing-runtime.mjs";
+  KIT_DIGEST_ENV,
+  KIT_DIRECTORY,
+  KIT_SIZE_ENV,
+  KIT_STATUS_FILE,
+  KIT_UPDATE_EXIT_STATUS,
+} from "./runner-launcher.mjs";
 import {
   SupersededError,
   createDispatchSession,
@@ -500,7 +502,8 @@ function eligible(labels, profile) {
   return runnerJobMatches(labels, profile.labels, hostLabels());
 }
 
-const actionsState = path.join(root, "work", "actions");
+// Lives under the state directory so every runner kit version shares slot locks and run roots.
+let actionsState;
 
 const actionsLockName = (index) => (index === 0 ? "active.lock" : `active-${index}.lock`);
 
@@ -614,7 +617,7 @@ async function runClaimedGitHub(profile, claim, signal) {
   if (!eligible(run.labels, profile))
     throw new Error("GitHub job labels do not match this runner host.");
   const capacity = await getRunnerCapacity({
-    workDirectories: [profile.directory, path.join(root, "work", "actions")],
+    workDirectories: [profile.directory, actionsState],
   });
   validateLocalJobClaim(run.labels, capacity, 360);
   const runId = run.id;
@@ -876,7 +879,7 @@ async function runClaimedSigning(profile, claim, signal) {
   try {
     try {
       const capacity = await getRunnerCapacity({
-        workDirectories: [profile.directory, path.join(root, "work", "actions")],
+        workDirectories: [profile.directory, actionsState],
       });
       if (
         typeof run.workflowSource !== "string" ||
@@ -911,15 +914,7 @@ async function runClaimedSigning(profile, claim, signal) {
       if (!workflowDemand.claim.valid || !jobClaim.valid)
         throw new Error("Signing workflow has invalid host requirements.");
       validateLocalJobClaim(requiredLabels, capacity, run.timeoutMinutes);
-      signingRuntimeHex(run.signingRuntime);
-      const clientPath = await prepareSigningRuntimeWithLease({
-        profile,
-        secret: secret.trim(),
-        run,
-        claim,
-        context,
-        signal,
-      });
+      const clientPath = path.join(root, "scripts", "signing", "client.mjs");
       await secureSigningPath(runDirectory, true);
       await writePrivate(contextFile, JSON.stringify(context), { secure: true });
       const source = createSigningWorkflow(budgetedWorkflowSource, {
@@ -937,7 +932,7 @@ async function runClaimedSigning(profile, claim, signal) {
         profile,
         run,
         workflowFile,
-        actionsState: path.join(root, "work", "actions"),
+        actionsState,
         jobClaim,
         demandLabels: requiredLabels,
         eventPayloadFile,
@@ -1037,8 +1032,7 @@ async function runClaimedSigning(profile, claim, signal) {
     } catch (error) {
       if (child && childRunning(child)) await killChild(child);
       if (!signal.aborted) {
-        const failure =
-          error instanceof SigningRuntimeError ? error : await readSigningFailure(failureFile);
+        const failure = await readSigningFailure(failureFile);
         await apiRequest(
           profile.origin,
           secret.trim(),
@@ -1082,63 +1076,6 @@ function signingHeartbeat(profile, secret, run, claim, signal, timeoutMs) {
     },
     timeoutMs
   );
-}
-
-// Installing dependencies can outlast the 2-minute lease, so renew it while preparing.
-async function prepareSigningRuntimeWithLease({ profile, secret, run, claim, context, signal }) {
-  const controller = new AbortController();
-  const preparing = AbortSignal.any([signal, controller.signal]);
-  let leaseFailure;
-  const keeper = (async () => {
-    while (!preparing.aborted) {
-      await sleep(15_000, preparing);
-      const remaining = claim.leaseExpiresAt - Date.now() - 1_000;
-      if (remaining <= 0) throw new Error("Signing lease expired during runtime preparation.");
-      let result;
-      try {
-        result = await signingHeartbeat(
-          profile,
-          secret,
-          run,
-          claim,
-          preparing,
-          Math.min(20_000, remaining)
-        );
-      } catch (error) {
-        const status = error.cause?.status;
-        if (preparing.aborted || (status && status < 500 && status !== 429)) throw error;
-        console.error("Signing heartbeat failed during runtime preparation; will retry.");
-        continue;
-      }
-      if (result?.data?.completed === true) throw new Error("GitEdge requested cancellation.");
-      if (!Number.isFinite(result?.data?.leaseExpiresAt))
-        throw new Error("GitEdge returned an invalid signing lease heartbeat response.");
-      claim.leaseExpiresAt = result.data.leaseExpiresAt;
-      context.leaseExpiresAt = result.data.leaseExpiresAt;
-    }
-  })().catch((error) => {
-    if (preparing.aborted) return;
-    leaseFailure = error;
-    controller.abort(error);
-  });
-  let client;
-  let failure;
-  try {
-    client = await prepareSigningRuntime({
-      origin: profile.origin,
-      credential: secret,
-      runtime: run.signingRuntime,
-      cacheRoot: path.join(profileState(profile), "signing-runtime"),
-      signal: preparing,
-    });
-  } catch (error) {
-    failure = error;
-  }
-  controller.abort();
-  await keeper;
-  if (leaseFailure) throw leaseFailure;
-  if (failure) throw failure;
-  return client;
 }
 
 function validateGitEdgeWorkflow(source, profile) {
@@ -1311,7 +1248,7 @@ async function runGitEdge(profile, run, leaseToken, signal, leaseExpiresAt) {
     jobClaim = workflowDemand.claim;
     workflowDemandLabels = workflowDemand.labels;
     const capacity = await getRunnerCapacity({
-      workDirectories: [profile.directory, path.join(root, "work", "actions")],
+      workDirectories: [profile.directory, actionsState],
     });
     validateCapacityClaim(jobClaim, capacity);
     if (typeof eventPayload === "string") {
@@ -1350,7 +1287,6 @@ async function runGitEdge(profile, run, leaseToken, signal, leaseExpiresAt) {
   if (eventPayload) await writeFile(eventPayloadFile, eventPayloadSource, { mode: 0o600 });
   await writeFile(workflowFile, run.workflowSource, { mode: 0o600 });
   const log = createWriteStream(logFile, { mode: 0o600 });
-  const actionsState = path.join(root, "work", "actions");
   const args = createGitEdgeExecutionArgs({
     runnerScript: runnerScript(),
     profile,
@@ -1494,28 +1430,33 @@ async function runAssignedClaim(profile, claim, signal) {
   }
 }
 
+// The lease heartbeat for an isolated job, also handed to the guest launcher for kit installation.
+function isolatedLeaseHeartbeat(claim) {
+  if (claim.run.kind === "signing")
+    return {
+      path: `/api/actions/runner/signing/requests/${claim.run.requestId}/heartbeat`,
+      headers: { "X-Runner-Run-Id": claim.run.id, "X-Runner-Lease-Token": claim.leaseToken },
+    };
+  return {
+    path:
+      claim.run.kind === "github"
+        ? "/api/actions/runner/github/heartbeat"
+        : "/api/actions/runner/heartbeat",
+    headers: {},
+    body: JSON.stringify({ runId: claim.run.id, leaseToken: claim.leaseToken }),
+  };
+}
+
 async function renewIsolatedLease(profile, claim, signal, expiresAt = claim.leaseExpiresAt) {
-  const signing = claim.run.kind === "signing";
-  const endpoint = signing
-    ? `/api/actions/runner/signing/requests/${claim.run.requestId}/heartbeat`
-    : claim.run.kind === "github"
-      ? "/api/actions/runner/github/heartbeat"
-      : "/api/actions/runner/heartbeat";
+  const heartbeat = isolatedLeaseHeartbeat(claim);
   const response = await leaseRequest(
     profile.origin,
     profile.credential,
-    endpoint,
+    heartbeat.path,
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(signing
-          ? { "X-Runner-Run-Id": claim.run.id, "X-Runner-Lease-Token": claim.leaseToken }
-          : {}),
-      },
-      ...(!signing
-        ? { body: JSON.stringify({ runId: claim.run.id, leaseToken: claim.leaseToken }) }
-        : {}),
+      headers: { "Content-Type": "application/json", ...heartbeat.headers },
+      ...(heartbeat.body ? { body: heartbeat.body } : {}),
       signal,
     },
     expiresAt,
@@ -1576,6 +1517,8 @@ async function runIsolatedClaim(profile, claim, signal, cache) {
       JSON.stringify({
         version: 1,
         state: guestState,
+        // The image caches the workflow engine here during preparation.
+        actionsState: guestPaths(profile.vm).join(profile.vm.guest.runtimeRoot, "work", "actions"),
         profile: {
           id: profile.id,
           kind: "gitedge",
@@ -1589,6 +1532,7 @@ async function runIsolatedClaim(profile, claim, signal, cache) {
           cacheEndpoint: cacheSession?.url,
         },
         claim: { ...claim, leaseExpiresAt },
+        kit: { ...runningKit(), heartbeat: isolatedLeaseHeartbeat(claim) },
       })
     );
     if (payload.length > 1_400_000)
@@ -1605,7 +1549,7 @@ async function runIsolatedClaim(profile, claim, signal, cache) {
               guestPaths(profile.vm).join(
                 profile.vm.guest.runtimeRoot,
                 "scripts",
-                "runner-broker.mjs"
+                "runner-launcher.mjs"
               ),
               "execute-vm-job",
             ],
@@ -1691,6 +1635,8 @@ async function executeVmJob() {
     !profile ||
     !claim?.run ||
     !path.isAbsolute(state) ||
+    typeof payload.actionsState !== "string" ||
+    !path.isAbsolute(payload.actionsState) ||
     !/^[0-9a-f-]{36}$/i.test(claim.run.id) ||
     !/^[0-9a-f]{64}$/i.test(claim.leaseToken) ||
     !/^[A-Za-z0-9_.-]{1,100}$/.test(profile.id) ||
@@ -1700,6 +1646,7 @@ async function executeVmJob() {
     throw new Error("Invalid guest job identity.");
   originValue(profile.origin);
   await ensureState(state);
+  actionsState = payload.actionsState;
   await mkdir(actionsState, { recursive: true, mode: 0o700 });
   profile.directory = path.join(state, "profiles", profile.id);
   await mkdir(profile.directory, { recursive: true, mode: 0o700 });
@@ -1756,6 +1703,45 @@ function parseSlots(value) {
   return slots;
 }
 
+// The published kit this broker runs from, as set by the launcher; absent in a source checkout.
+function runningKit() {
+  const digest = process.env[KIT_DIGEST_ENV];
+  const size = Number(process.env[KIT_SIZE_ENV]);
+  return /^sha256:[0-9a-f]{64}$/.test(digest ?? "") && Number.isSafeInteger(size) && size > 0
+    ? { digest, size }
+    : undefined;
+}
+
+async function kitReport(state) {
+  const kit = runningKit();
+  if (!kit) return undefined;
+  let failed;
+  try {
+    failed = JSON.parse(
+      await readFile(path.join(state, KIT_DIRECTORY, KIT_STATUS_FILE), "utf8")
+    )?.failed;
+  } catch {
+    // No status file means no failed installation to report.
+  }
+  return {
+    digest: kit.digest,
+    ...(failed &&
+    failed.digest !== kit.digest &&
+    /^sha256:[0-9a-f]{64}$/.test(failed.digest) &&
+    /^[a-z0-9_]{1,64}$/.test(failed.reason)
+      ? {
+          failed: {
+            digest: failed.digest,
+            reason: failed.reason,
+            ...(typeof failed.detail === "string" && failed.detail
+              ? { detail: failed.detail.slice(0, 300) }
+              : {}),
+          },
+        }
+      : {}),
+  };
+}
+
 async function serve(state, exitStatusOnSupersede, { slots, supervised, once, expiresAt }) {
   const controller = new AbortController();
   const stop = () => controller.abort(new Error("Stopped."));
@@ -1784,6 +1770,7 @@ async function serve(state, exitStatusOnSupersede, { slots, supervised, once, ex
     vmPools = await loadVmPools(state, profiles);
     if (vmPools) {
       if (slots !== undefined) throw new Error("Configure VM slot counts in vm.json.");
+      if (!runningKit()) throw new Error("VM pools require serving through the runner launcher.");
       await recoverJobVms(vmPools);
     }
     for (const profile of profiles) {
@@ -1808,6 +1795,7 @@ async function serve(state, exitStatusOnSupersede, { slots, supervised, once, ex
   const cache = await loadRunnerCache(state, profiles);
   let reservedMemMb = 0; // memory claimed by jobs running on this broker
   const localCapacity = async (profile) => ({
+    ...(await kitReport(state).then((kit) => (kit ? { kit } : {}))),
     ...(await (profile.vm
       ? getVmCapacity(profile.vm, profile.vmSlot)
       : getRunnerCapacity({
@@ -1832,6 +1820,7 @@ async function serve(state, exitStatusOnSupersede, { slots, supervised, once, ex
   };
   const liveness = { lastReportAt: 0, open: 0 };
   let superseded = false;
+  let kitDraining = false;
   let assigned = false;
   let hostedError;
   const expiry = expiresAt
@@ -1888,7 +1877,11 @@ async function serve(state, exitStatusOnSupersede, { slots, supervised, once, ex
       onReportSent: (at) => {
         liveness.lastReportAt = Math.max(liveness.lastReportAt, at);
       },
-      onFrame: (frame) => session.onFrame(frame),
+      onFrame: (frame) => {
+        if (frame.kit && supervised && process.connected)
+          process.send({ type: "kit-available", kit: frame.kit });
+        return session.onFrame(frame);
+      },
     })
       .catch((error) => {
         if (!(error instanceof SupersededError)) throw error;
@@ -1899,8 +1892,17 @@ async function serve(state, exitStatusOnSupersede, { slots, supervised, once, ex
         );
       })
       .finally(unsubscribe);
-    return { session, done };
+    return { session, done, reconnect };
   });
+  if (supervised)
+    process.on("message", (message) => {
+      if (message?.type !== "kit-drain" || kitDraining) return;
+      kitDraining = true;
+      console.error(
+        `A new runner kit is installed. Running jobs will finish; this broker then exits with status ${KIT_UPDATE_EXIT_STATUS} and restarts on the new kit.`
+      );
+      for (const client of clients) client.reconnect.abort();
+    });
   console.log(
     `Runner broker serving ${profiles.length} profiles with ${slot.size} execution ${slot.size === 1 ? "slot" : "slots"}.`
   );
@@ -1945,6 +1947,7 @@ async function serve(state, exitStatusOnSupersede, { slots, supervised, once, ex
     await cache?.close();
   }
   if (superseded) process.exitCode = exitStatusOnSupersede;
+  else if (kitDraining) process.exitCode = KIT_UPDATE_EXIT_STATUS;
   if (hostedError) throw hostedError;
   return assigned;
 }
@@ -2089,9 +2092,10 @@ async function main() {
   const [action, profileId] = positionals;
   if (action === "execute-vm-job") return executeVmJob();
   const state = path.resolve(values["state-dir"] ?? stateDefault);
+  actionsState = path.join(state, "actions");
   if (!action || values.help) {
     console.log(
-      "Usage: pnpm run runner-broker -- init|register-gitedge|list|remove|set-slots|verify-vm-images|serve|service [options]\n\nregister-gitedge --origin URL --owner OWNER [--repository REPO] --label LABEL --runner-path DIR [--max-job-minutes N] [--daily-minutes N] [--cost N] [--slots N]\nA generic GitEdge runner executes matched workflow, GitHub and native signing jobs with task-scoped secrets.\nset-slots PROFILE N: sets profile concurrency (1-16, default 1). VM profiles must match vm.json.\nverify-vm-images: recovers owned VM remnants, boots and checks every configured image, then removes the verification VMs.\nserve [--slots N] [--supersede-exit-status N]: starts a supervised broker with one outbound WebSocket per profile. Native profiles share the largest profile slot count and workflow/signing jobs run alone. With vm.json, each job uses a disposable VM and pool slots share the physical host budget; --slots is unavailable. Image verification must pass before connecting. The supervisor restarts an unresponsive worker. A superseded registration finishes running jobs and exits with status 78 (or N).\nservice install|start|stop|status --install-dir DIR [--state-dir DIR] [--run-as-user USER]\nAll commands accept --state-dir DIR. Registration reads GITEDGE_TOKEN."
+      "Usage: pnpm run runner-broker -- init|register-gitedge|list|remove|set-slots|verify-vm-images|serve|service [options]\n\nregister-gitedge --origin URL --owner OWNER [--repository REPO] --label LABEL --runner-path DIR [--max-job-minutes N] [--daily-minutes N] [--cost N] [--slots N]\nA generic GitEdge runner executes matched workflow, GitHub and native signing jobs with task-scoped secrets.\nset-slots PROFILE N: sets profile concurrency (1-16, default 1). VM profiles must match vm.json.\nverify-vm-images: recovers owned VM remnants, boots and checks every configured image, then removes the verification VMs.\nserve [--slots N] [--supersede-exit-status N]: starts a supervised broker with one outbound WebSocket per profile. Native profiles share the largest profile slot count and workflow/signing jobs run alone. With vm.json, each job uses a disposable VM and pool slots share the physical host budget; --slots is unavailable. Image verification must pass before connecting. The supervisor restarts an unresponsive worker. A superseded registration finishes running jobs and exits with status 78 (or N).\nservice install|start|stop|status --install-dir DIR [--state-dir DIR] [--run-as-user USER]: install copies runner-launcher.mjs into DIR; the service runs it, and it keeps the published runner kit current.\nAll commands accept --state-dir DIR. Registration reads GITEDGE_TOKEN."
     );
     console.log(
       "hosted --origin URL --runner-path DIR --state-dir DIR: exchanges the hosted bootstrap and OIDC tokens from the environment and serves one assigned job."
@@ -2136,6 +2140,9 @@ async function main() {
         await serve(state, exitStatus, { slots, supervised: Boolean(process.send) });
       } catch (error) {
         if (error.message !== "Stopped.") throw error;
+      } finally {
+        // The open IPC channel would otherwise keep the finished worker alive.
+        if (process.connected) process.disconnect();
       }
       return;
     }
@@ -2157,6 +2164,7 @@ async function main() {
       });
     } finally {
       await release();
+      if (process.connected) process.disconnect();
     }
     return;
   }

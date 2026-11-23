@@ -26,6 +26,8 @@ export const RUNNER_SAMPLE_RETENTION_MS = 24 * 60 * 60_000;
 export const RUNNER_CLAIM_CANDIDATE_LIMIT = 25;
 export const RUNNER_SAMPLE_CLEANUP_LIMIT = 500;
 
+const RunnerKitDigestSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/);
+
 export const RunnerCapacitySchema = z
   .object({
     os: z.enum(["linux", "macos", "windows"]),
@@ -68,6 +70,21 @@ export const RunnerCapacitySchema = z
       .optional(),
     slots: z.number().int().min(1).max(RUNNER_MAX_SLOTS),
     busy: z.number().int().min(0).max(RUNNER_MAX_SLOTS),
+    // Present when the broker runs from a published runner kit under the launcher.
+    kit: z
+      .object({
+        digest: RunnerKitDigestSchema,
+        failed: z
+          .object({
+            digest: RunnerKitDigestSchema,
+            reason: z.string().regex(/^[a-z0-9_]{1,64}$/),
+            detail: z.string().max(300).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .refine((capacity) => capacity.memFreeMb <= capacity.memTotalMb)
