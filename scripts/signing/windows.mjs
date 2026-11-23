@@ -26,10 +26,11 @@ import { createRequire } from "node:module";
 import {
   signedFileName,
   sourceMetadataSchema,
-  windowsCredentialsSchema,
+  windowsGrantSchema,
   windowsManifestSchema,
   windowsVerificationSchema,
 } from "./contract.mjs";
+import { parseGrant, remoteIdentityHeader } from "./remote.mjs";
 
 let signingAbortSignal;
 
@@ -99,7 +100,7 @@ async function fileSha256(file) {
 }
 
 function credentialEnvironment(credentials) {
-  const parsed = windowsCredentialsSchema.parse(credentials);
+  const { tenant_id, client_id, remote } = parseGrant(windowsGrantSchema, credentials);
   const excluded = new Set([
     "IDENTITY_ENDPOINT",
     "IDENTITY_HEADER",
@@ -115,9 +116,10 @@ function credentialEnvironment(credentials) {
   );
   return {
     ...inherited,
-    AZURE_TENANT_ID: parsed.tenant_id,
-    AZURE_CLIENT_ID: parsed.client_id,
-    AZURE_CLIENT_SECRET: parsed.client_secret,
+    AZURE_TENANT_ID: tenant_id,
+    AZURE_CLIENT_ID: client_id,
+    IDENTITY_ENDPOINT: `${remote.endpoint}/azure-token`,
+    IDENTITY_HEADER: remoteIdentityHeader(remote),
   };
 }
 
@@ -1005,7 +1007,7 @@ async function signFiles(manifest, appDir, output, signScript, configPath, autho
     { flag: "wx", mode: 0o600 }
   );
   step("authorization");
-  const credentials = windowsCredentialsSchema.parse(await authorize());
+  const credentials = parseGrant(windowsGrantSchema, await authorize());
   step("codesign");
   await invokePowerShell(signScript, "SignFolder", configPath, appDir, "app", credentials);
   step("signature_verification");
@@ -1138,7 +1140,7 @@ async function execute(manifestInput, inputZip, outputDir, authorize) {
       throw new Error("Squirrel product name is not package-safe");
     }
     failureCode = "authorization";
-    const credentials = windowsCredentialsSchema.parse(await authorize());
+    const credentials = parseGrant(windowsGrantSchema, await authorize());
     failureCode = "codesign";
     await invokePowerShell(script, "SignFolder", configPath, appDir, "app", credentials);
     for (const file of signable) await invokePowerShell(script, "Verify", configPath, file, "app");

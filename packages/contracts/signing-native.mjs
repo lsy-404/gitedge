@@ -29,6 +29,7 @@ const base64 = z
         String.fromCharCode(...Uint8Array.from(atob(value), (character) => character.charCodeAt(0)))
       ) === value
   );
+export const certificateChainSchema = z.array(base64.max(20_000)).min(1).max(8);
 export const sourceMetadataSchema = z
   .object({
     source_sha: commitSha,
@@ -94,6 +95,8 @@ export const credentialsSchema = z
   })
   .strict();
 
+export const macosGrantSchema = z.object({ chain: certificateChainSchema }).strict();
+
 export const macosVerificationSchema = z
   .object({
     schema_version: z.literal(1),
@@ -156,6 +159,7 @@ export const windowsCredentialsSchema = z
     client_secret: z.string().min(1).max(10_000),
   })
   .strict();
+export const windowsGrantSchema = z.object({ tenant_id: z.uuid(), client_id: z.uuid() }).strict();
 export const signedFileName = z
   .string()
   .regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\.(?:exe|dll|node|msix)$/i);
@@ -270,6 +274,10 @@ export const iosCredentialsSchema = z
   })
   .strict();
 
+export const iosGrantSchema = z
+  .object({ chain: certificateChainSchema, provisioning_profile: base64.max(200_000) })
+  .strict();
+
 export const iosVerificationSchema = z
   .object({
     schema_version: z.literal(1),
@@ -358,6 +366,8 @@ export const androidCredentialsSchema = z
       .regex(/^[^\r\n]+$/),
   })
   .strict();
+
+export const androidGrantSchema = z.object({ chain: certificateChainSchema }).strict();
 
 export const androidVerificationSchema = z
   .object({

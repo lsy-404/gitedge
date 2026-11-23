@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 
 import { createReadStream } from "node:fs";
@@ -20,12 +20,14 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import {
-  credentialsSchema,
   executableName,
+  macosGrantSchema,
   macosManifestSchema as manifestSchema,
   sourceMetadataSchema,
   macosVerificationSchema as verificationSchema,
 } from "./contract.mjs";
+import { AppleRemoteError, rcodesignSign, submitNotarization } from "./apple-remote.mjs";
+import { parseGrant } from "./remote.mjs";
 
 let signingAbortSignal;
 
@@ -45,7 +47,6 @@ const require = createRequire(import.meta.url);
 const { getRawHeader } = require("@electron/asar");
 const { FuseState, FuseVersion, FuseV1Options, flipFuses, getCurrentFuseWire } =
   await import("@electron/fuses");
-const { sign } = await import("@electron/osx-sign");
 
 class RunnerFailure extends Error {
   constructor(code) {
@@ -113,7 +114,6 @@ const DIAGNOSTIC_TOOLS = new Set([
   "ditto",
   "hdiutil",
   "lipo",
-  "notarytool",
   "plutil",
   "spctl",
   "stapler",
@@ -355,37 +355,67 @@ async function createTar(archivePath, bundleName, baseDir) {
   });
 }
 
-async function identityHash(keychain, teamId) {
-  const { stdout } = await command("/usr/bin/security", [
-    "find-identity",
-    "-v",
-    "-p",
-    "codesigning",
-    keychain,
-  ]);
-  for (const line of stdout.split("\n")) {
-    const found = line.match(/\s([A-F0-9]{40})\s+"(Developer ID Application:[^"]+)"/);
-    if (found && found[2].endsWith(`(${teamId})`)) return found[1];
+// Entitlements Electron's signing tool applies by default, per helper role.
+const DEFAULT_ENTITLEMENTS = [
+  "com.apple.security.cs.allow-jit",
+  "com.apple.security.device.audio-input",
+  "com.apple.security.device.bluetooth",
+  "com.apple.security.device.camera",
+  "com.apple.security.device.print",
+  "com.apple.security.device.usb",
+  "com.apple.security.personal-information.location",
+  "com.apple.security.personal-information.photos-library",
+];
+const HELPER_ENTITLEMENTS = [
+  [
+    "(Plugin).app",
+    [
+      "com.apple.security.cs.allow-jit",
+      "com.apple.security.cs.allow-unsigned-executable-memory",
+      "com.apple.security.cs.disable-library-validation",
+    ],
+  ],
+  ["(GPU).app", ["com.apple.security.cs.allow-jit"]],
+  ["(Renderer).app", ["com.apple.security.cs.allow-jit"]],
+];
+
+async function nestedBundles(appPath, directory = path.join(appPath, "Contents")) {
+  const found = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const child = path.join(directory, entry.name);
+    if (entry.name.endsWith(".app"))
+      found.push(path.relative(appPath, child).split(path.sep).join("/"));
+    found.push(...(await nestedBundles(appPath, child)));
   }
-  throw new Error("approved signing identity unavailable");
+  return found;
 }
 
-async function keychainSearch(keychain, include) {
-  const { stdout } = await command("/usr/bin/security", ["list-keychains", "-d", "user"]);
-  const paths = stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
-  if (
-    paths.some(
-      (value) => typeof value !== "string" || !path.isAbsolute(value) || /[\r\n]/.test(value)
-    )
-  )
-    throw new Error("keychain search list invalid");
-  const updated = paths.filter((value) => value !== keychain);
-  if (include) updated.push(keychain);
-  await command("/usr/bin/security", ["list-keychains", "-d", "user", "-s", ...updated]);
+/** rcodesign arguments that give the bundle and each nested app the default entitlements. */
+async function entitlementArguments(appPath, work) {
+  const files = new Map();
+  const file = async (keys) => {
+    const name = keys.join(",");
+    if (!files.has(name)) {
+      const target = path.join(work, `entitlements-${files.size}.plist`);
+      await writeFile(
+        target,
+        `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>${keys.map((key) => `<key>${key}</key><true/>`).join("")}</dict></plist>\n`,
+        { mode: 0o600, flag: "wx" }
+      );
+      files.set(name, target);
+    }
+    return files.get(name);
+  };
+  const args = ["--entitlements-xml-file", await file(DEFAULT_ENTITLEMENTS)];
+  for (const bundle of await nestedBundles(appPath)) {
+    // rcodesign scopes a setting with `<path>:<value>`, so a colon in the path cannot be scoped.
+    if (bundle.includes(":")) throw new RunnerFailure("codesign_options");
+    const keys =
+      HELPER_ENTITLEMENTS.find(([suffix]) => bundle.endsWith(suffix))?.[1] ?? DEFAULT_ENTITLEMENTS;
+    args.push("--entitlements-xml-file", `${bundle}:${await file(keys)}`);
+  }
+  return args;
 }
 
 function signingRequirement(teamId) {
@@ -453,7 +483,6 @@ async function execute(manifestInput, inputArchivePath, outputDir, credentialsIn
   const extract = path.join(work, "extract");
   const unpacker = path.join(path.dirname(fileURLToPath(import.meta.url)), "unpack.py");
   const python = process.env.PYTHON || "python3";
-  let keychain;
   let failureCode = "input_archive";
   try {
     const archiveSnapshot = await snapshotArchive(
@@ -516,81 +545,33 @@ async function execute(manifestInput, inputArchivePath, outputDir, credentialsIn
 
     if (manifest.stage === "sign") {
       failureCode = "credential_release";
-      const suppliedCredentials =
-        typeof credentialsInput === "function" ? await credentialsInput() : credentialsInput;
-      const credentials = credentialsSchema.parse(suppliedCredentials);
-      const p12 = path.join(work, "certificate.p12");
-      const keyFile = path.join(work, "notary.p8");
-      const keychainPassword = randomBytes(32).toString("base64url");
-      keychain = path.join(work, "signing.keychain-db");
-      await writeFile(p12, Buffer.from(credentials.certificate_p12, "base64"), {
-        mode: 0o600,
-        flag: "wx",
-      });
-      await writeFile(keyFile, credentials.notarization.private_key, { mode: 0o600, flag: "wx" });
-      await command("/usr/bin/security", ["create-keychain", "-p", keychainPassword, keychain]);
-      await command("/usr/bin/security", ["set-keychain-settings", "-lut", "3600", keychain]);
-      await command("/usr/bin/security", ["unlock-keychain", "-p", keychainPassword, keychain]);
-      failureCode = "keychain_import";
-      const publicIntermediate = fileURLToPath(
-        new URL("./certificates/developer-id-g2.cer", import.meta.url)
+      const { remote } = parseGrant(
+        macosGrantSchema,
+        typeof credentialsInput === "function" ? await credentialsInput() : credentialsInput
       );
-      await command("/usr/bin/security", [
-        "import",
-        publicIntermediate,
-        "-k",
-        keychain,
-        "-T",
-        "/usr/bin/codesign",
-      ]);
-      await command("/usr/bin/security", [
-        "import",
-        p12,
-        "-k",
-        keychain,
-        "-P",
-        credentials.certificate_password,
-        "-T",
-        "/usr/bin/codesign",
-      ]);
-      await command("/usr/bin/security", [
-        "set-key-partition-list",
-        "-S",
-        "apple-tool:,apple:,codesign:",
-        "-s",
-        "-k",
-        keychainPassword,
-        keychain,
-      ]);
-      await keychainSearch(keychain, true);
-      const identity = await identityHash(keychain, manifest.team_id);
       failureCode = "codesign";
+      const signArgs = [
+        "--for-notarization",
+        ...(await entitlementArguments(appPath, work)),
+        appPath,
+      ];
       for (let attempt = 0; ; attempt += 1) {
         try {
-          await sign({
-            app: appPath,
-            identity,
-            keychain,
-            hardenedRuntime: true,
-            preAutoEntitlements: false,
-            preEmbedProvisioningProfile: false,
-            platform: "darwin",
-            type: "distribution",
-            strictVerify: true,
-          });
+          await rcodesignSign(remote, signArgs, { work, signal: signingAbortSignal });
           break;
         } catch (error) {
-          const detail = error instanceof Error ? error.message : "";
+          const detail = [...(error?.output ?? "").matchAll(/^Error: (.*)$/gm)].at(-1)?.[1] ?? "";
           const categories = [
-            ["identity", /identity|certificate.*not found|no identity/i],
-            ["chain", /unable to build chain|CSSMERR_TP_NOT_TRUSTED/i],
-            ["acl", /errSecInternalComponent|User interaction is not allowed/i],
+            ["timestamp", /time-?stamp/i],
+            ["remote", /relay server|websocket|cryptography error|bad client state/i],
+            ["identity", /Developer ID|signing certificate/i],
             ["resources", /resource fork|Finder information|unsealed contents/i],
-            ["unsigned_child", /code object is not signed at all/i],
-            ["timestamp", /timestamp|time stamp/i],
-            ["options", /invalid option|unknown option|invalid.*entitlement/i],
+            ["options", /invalid value|unexpected argument|entitlements/i],
           ];
-          const category = categories.find(([, pattern]) => pattern.test(detail))?.[0] ?? "failed";
+          const category =
+            error instanceof AppleRemoteError && !error.output
+              ? "remote"
+              : (categories.find(([, pattern]) => pattern.test(detail))?.[0] ?? "failed");
           // Apple's timestamp service drops requests under bursts, and signing again replaces the earlier signatures.
           if (category === "timestamp" && attempt < 3) {
             await new Promise((resolve) => setTimeout(resolve, 30_000 * (attempt + 1)));
@@ -608,29 +589,17 @@ async function execute(manifestInput, inputArchivePath, outputDir, credentialsIn
       if ((await lstat(notarizeZip)).size > manifest.max_artifact_bytes)
         throw new Error("notarization archive exceeds approved limit");
       const notaryHash = await fileSha256(notarizeZip);
-      const notary = credentials.notarization;
-      const { stdout } = await command("/usr/bin/xcrun", [
-        "notarytool",
-        "submit",
-        notarizeZip,
-        "--key",
-        keyFile,
-        "--key-id",
-        notary.key_id,
-        "--issuer",
-        notary.issuer_id,
-        "--output-format",
-        "json",
-      ]);
-      let receipt;
+      let notarizationId;
       try {
-        receipt = JSON.parse(stdout);
-      } catch {
-        throw new Error("Apple notarization receipt invalid");
+        notarizationId = await submitNotarization(remote, notarizeZip, {
+          sha256: notaryHash,
+          submissionName: `${manifest.bundle_id}-${manifest.version}.zip`.slice(0, 128),
+          signal: signingAbortSignal,
+        });
+      } catch (error) {
+        if (error?.code === "notarization_upload") failureCode = "notarization_upload";
+        throw new Error("Apple notarization submission failed");
       }
-      const notarizationId = receipt.id;
-      if (typeof notarizationId !== "string" || !/^[0-9a-f-]{36}$/i.test(notarizationId))
-        throw new Error("Apple notarization receipt invalid");
       failureCode = "artifact_packaging";
       const signedTar = path.join(work, "signed.tar.gz");
       await createTar(signedTar, manifest.bundle_name, extract);
@@ -704,25 +673,7 @@ async function execute(manifestInput, inputArchivePath, outputDir, credentialsIn
     await mkdir(output, { recursive: true, mode: 0o700 });
     throw error instanceof RunnerFailure ? error : new RunnerFailure(failureCode);
   } finally {
-    let cleanupFailed = false;
-    if (keychain) {
-      try {
-        await keychainSearch(keychain, false);
-      } catch {
-        cleanupFailed = true;
-      }
-      try {
-        await command("/usr/bin/security", ["delete-keychain", keychain]);
-      } catch {
-        cleanupFailed = true;
-      }
-    }
     await rm(work, { recursive: true, force: true });
-    if (cleanupFailed) {
-      await rm(output, { recursive: true, force: true });
-      await mkdir(output, { recursive: true, mode: 0o700 });
-      throw new RunnerFailure("keychain_cleanup");
-    }
   }
 }
 
@@ -742,9 +693,7 @@ export {
   command,
   createTar,
   fileSha256,
-  identityHash,
   inspectBundle,
-  keychainSearch,
   signingRequirement,
   snapshotArchive,
   staple,

@@ -17,14 +17,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
-  androidCredentialsSchema,
-  credentialsSchema,
-  iosCredentialsSchema,
+  androidGrantSchema,
+  iosGrantSchema,
+  macosGrantSchema,
   manifestSchema,
   signedFileName,
   verificationSchema,
-  windowsCredentialsSchema,
+  windowsGrantSchema,
 } from "./contract.mjs";
+import { remoteAccess } from "./remote.mjs";
 import {
   parseSigningContext,
   readSigningContext,
@@ -59,13 +60,10 @@ const MACOS_FAILURE_PHASES = new Set([
   "source_binding",
   "static_verification",
   "credential_release",
-  "keychain_import",
   "codesign",
   "codesign_identity",
-  "codesign_chain",
-  "codesign_acl",
+  "codesign_remote",
   "codesign_resources",
-  "codesign_unsigned_child",
   "codesign_timestamp",
   "signature_chain",
   "signature_team",
@@ -74,10 +72,10 @@ const MACOS_FAILURE_PHASES = new Set([
   "codesign_failed",
   "signature_verification",
   "notarization",
+  "notarization_upload",
   "artifact_packaging",
   "stapling",
   "gatekeeper_verification",
-  "keychain_cleanup",
 ]);
 const DMG_FAILURE_PHASES = new Set([
   "input",
@@ -322,7 +320,7 @@ export function createSigningClient({
     )
       throw new ClientError("INVALID_RESPONSE");
     currentLeaseExpiresAt = Math.max(currentLeaseExpiresAt, authorization.leaseExpiresAt);
-    return authorization;
+    return { ...authorization, remote: remoteAccess(identity) };
   };
 
   const download = async (object, destination, { digest, maxBytes }) => {
@@ -674,7 +672,7 @@ async function executePlatform(
       : process.platform !== (family.windows ? "win32" : "darwin")
   )
     throw new ClientError("NATIVE_HOST_REQUIRED");
-  await preflight(family);
+  await preflight(family, manifest.stage);
   if (family.android) {
     const executor = await import("./android-sign.mjs");
     executor.setSigningAbortSignal(signal);
@@ -824,16 +822,16 @@ export async function runSigning({
       credentialsProvided = true;
       if (heartbeatError) throw new ClientError("HEARTBEAT_FAILED");
       const authorization = await client.authorizeSign(manifest.stage);
-      if (family.windows) {
-        return windowsCredentialsSchema.parse(authorization.credentials);
-      }
+      const grant = (schema) => ({
+        ...schema.parse(authorization.credentials),
+        remote: authorization.remote,
+      });
+      if (family.windows) return grant(windowsGrantSchema);
       if (manifest.stage.endsWith("finalize")) {
         return;
       }
-      if (family.android) return androidCredentialsSchema.parse(authorization.credentials);
-      return family.ios
-        ? iosCredentialsSchema.parse(authorization.credentials)
-        : credentialsSchema.parse(authorization.credentials);
+      if (family.android) return grant(androidGrantSchema);
+      return grant(family.ios ? iosGrantSchema : macosGrantSchema);
     };
     if (manifest.stage.endsWith("finalize")) await credentialsProvider();
     if (heartbeatError) throw new ClientError("HEARTBEAT_FAILED");

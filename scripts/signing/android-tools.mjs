@@ -78,6 +78,17 @@ export function javaCommand(env = process.env) {
     : "java";
 }
 
+export function javacCommand(env = process.env) {
+  return typeof env.JAVA_HOME === "string" && path.isAbsolute(env.JAVA_HOME)
+    ? path.join(env.JAVA_HOME, "bin", process.platform === "win32" ? "javac.exe" : "javac")
+    : "javac";
+}
+
+export const remoteProviderSource = fileURLToPath(
+  new URL("./android-remote/RemoteProvider.java", import.meta.url)
+);
+export const REMOTE_PROVIDER_CLASS = "com.gitedge.signing.RemoteProvider";
+
 async function probe() {
   const tools = await findAndroidBuildTools();
   if (!tools) return false;

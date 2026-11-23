@@ -22,13 +22,21 @@ export interface SigningExecutionEnv
     Partial<
       Pick<
         SigningEnv,
-        "GIT" | "SIGNING_COORDINATORS" | "SIGNING_ARTIFACTS" | "SIGNING_ENCRYPTION_KEY"
+        | "GIT"
+        | "SIGNING_COORDINATORS"
+        | "SIGNING_ARTIFACTS"
+        | "SIGNING_ENCRYPTION_KEY"
+        | "APPLE_REMOTE_SIGNERS"
       >
     > {}
 
 function hasSigningBindings(env: SigningExecutionEnv): env is SigningEnv {
   return Boolean(
-    env.GIT && env.SIGNING_COORDINATORS && env.SIGNING_ARTIFACTS && env.SIGNING_ENCRYPTION_KEY
+    env.GIT &&
+    env.SIGNING_COORDINATORS &&
+    env.SIGNING_ARTIFACTS &&
+    env.SIGNING_ENCRYPTION_KEY &&
+    env.APPLE_REMOTE_SIGNERS
   );
 }
 
@@ -39,9 +47,10 @@ export async function handleSigningMachineCallback(
 ): Promise<Response> {
   const url = new URL(request.url);
   const match =
-    /^\/runner\/signing\/requests\/([0-9a-f-]{36})\/(start|heartbeat|download|authorize-sign|output(?:\/parts\/\d+|\/complete)?|complete|fail)$/.exec(
+    /^\/runner\/signing\/requests\/([0-9a-f-]{36})\/(start|heartbeat|download|authorize-sign|signer|sign|azure-token|notary(?:\/[0-9a-f-]{36})?|output(?:\/parts\/\d+|\/complete)?|complete|fail)$/.exec(
       url.pathname
-    );
+    ) ??
+    /^\/runner\/signing\/requests\/([0-9a-f-]{36})\/(apple-remote(?:\/join)?)$/.exec(url.pathname);
   if (!match)
     return new Response(
       JSON.stringify({

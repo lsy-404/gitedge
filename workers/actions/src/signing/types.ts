@@ -15,6 +15,9 @@ export interface SigningEnv {
   readonly FORGE: Pick<Fetcher, "fetch">;
   readonly GIT: Pick<Fetcher, "fetch">;
   readonly SIGNING_COORDINATORS: DurableObjectNamespace<import("./coordinator").SigningCoordinator>;
+  readonly APPLE_REMOTE_SIGNERS: DurableObjectNamespace<
+    import("./apple-remote-signer").AppleRemoteSigner
+  >;
   readonly SIGNING_ARTIFACTS: R2Bucket;
   readonly SIGNING_ENCRYPTION_KEY: string;
 }

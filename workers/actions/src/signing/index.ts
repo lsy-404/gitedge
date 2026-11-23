@@ -24,6 +24,8 @@ import {
   previousStage,
 } from "./coordinator";
 import type { SigningEnv, SigningExecutionHooks } from "./types";
+import { REMOTE_OPERATIONS, handleRemoteOperation } from "./remote";
+import { handleAppleRemote } from "./apple-remote-signer";
 import { attemptPublishDispatch, recordPublishDispatch } from "./publish";
 import {
   installSigningCredentials,
@@ -1397,6 +1399,28 @@ export async function handleSigningMachineRoute(
         headers: objectHeaders(target.digest, target.size, start),
       });
     }
+    if (REMOTE_OPERATIONS.has(operation)) {
+      const { profile } = await machineRpc(
+        env,
+        context.ownerId,
+        id,
+        "remote-authorized",
+        context,
+        profileRpcSchema
+      );
+      return handleRemoteOperation(request, env, context, profile, operation, parts[5]);
+    }
+    if (operation === "apple-remote") {
+      const { profile } = await machineRpc(
+        env,
+        context.ownerId,
+        id,
+        "remote-authorized",
+        context,
+        profileRpcSchema
+      );
+      return handleAppleRemote(request, env, context, profile, parts[5]);
+    }
     if (operation === "authorize-sign" && request.method === "POST") {
       const { profile, submission } = await machineRpc(
         env,
@@ -1761,6 +1785,8 @@ export async function handleSigningMachineRoute(
     });
     if (message === "invalid_range")
       return errorResponse(416, "range_not_satisfiable", "Requested source range is invalid.");
+    if (message === "signing_operation_cap_exceeded")
+      return errorResponse(429, "rate_limited", "The signing operation limit was reached.");
     if (message === "signing_lease_invalid")
       return errorResponse(409, "conflict", "The signing lease is no longer valid.");
     if (message === "signing_output_invalid")

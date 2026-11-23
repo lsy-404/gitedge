@@ -283,7 +283,10 @@ async function authenticateSigningJob(request: Request, env: RunnerEnv): Promise
   )?.[1];
   if (!token) return null;
   const match =
-    /^\/runner\/signing\/requests\/([0-9a-f-]{36})\/(start|heartbeat|download|authorize-sign|output(?:\/parts\/\d+|\/complete)?|complete|fail)$/i.exec(
+    /^\/runner\/signing\/requests\/([0-9a-f-]{36})\/(start|heartbeat|download|authorize-sign|signer|sign|azure-token|notary(?:\/[0-9a-f-]{36})?|output(?:\/parts\/\d+|\/complete)?|complete|fail)$/i.exec(
+      new URL(request.url).pathname
+    ) ??
+    /^\/runner\/signing\/requests\/([0-9a-f-]{36})\/(apple-remote(?:\/join)?)$/i.exec(
       new URL(request.url).pathname
     );
   const runId = request.headers.get("X-Runner-Run-Id") ?? "";
@@ -1095,7 +1098,31 @@ async function connectRunner(request: Request, env: RunnerEnv): Promise<Response
   );
 }
 
-export async function runnerMachineRequest(request: Request, env: RunnerEnv): Promise<Response> {
+/** The managed-identity client can only send X-IDENTITY-HEADER, which carries `jobToken.runId.leaseToken`. */
+function withIdentityHeader(request: Request): Request {
+  if (
+    request.method !== "GET" ||
+    !/^\/runner\/signing\/requests\/[0-9a-f-]{36}\/azure-token$/i.test(
+      new URL(request.url).pathname
+    )
+  )
+    return request;
+  const match = /^(ge_job_[0-9a-f]{64})\.([0-9a-f-]{36})\.([0-9a-f]{64})$/i.exec(
+    request.headers.get("X-IDENTITY-HEADER") ?? ""
+  );
+  if (!match) return request;
+  const headers = new Headers(request.headers);
+  headers.set("Authorization", `Bearer ${match[1]}`);
+  headers.set("X-Runner-Run-Id", match[2]!);
+  headers.set("X-Runner-Lease-Token", match[3]!);
+  return new Request(request, { headers });
+}
+
+export async function runnerMachineRequest(
+  originalRequest: Request,
+  env: RunnerEnv
+): Promise<Response> {
+  const request = withIdentityHeader(originalRequest);
   const pathname = new URL(request.url).pathname;
   if (pathname === "/runner/connect") return connectRunner(request, env);
   const kitRoute = /^\/runner\/kit(?:\/([0-9a-f]{64}))?$/.exec(pathname);

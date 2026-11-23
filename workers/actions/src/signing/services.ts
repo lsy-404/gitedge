@@ -38,6 +38,7 @@ import {
   bytesToBase64,
   bytesToBase64Url,
 } from "../../../../src/worker/common/encoding";
+import { chainToBase64, loadRemoteSigningKey } from "./remote-keys";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 
 const sha = /^[a-f0-9]{40}$/;
@@ -735,10 +736,25 @@ async function grantCredentials(
       credentials: {},
       expiresAt: Math.min(context.leaseExpiresAt, Date.now() + 5 * 60_000),
     };
-  const credentials = await storedCredentials(env, context, profile);
-  return credentials
-    ? { credentials, expiresAt: Math.min(context.leaseExpiresAt, Date.now() + 5 * 60_000) }
-    : null;
+  const expiresAt = Math.min(context.leaseExpiresAt, Date.now() + 5 * 60_000);
+  if (profile.platform === "windows") {
+    const credentials = await storedCredentials(env, context, profile);
+    if (!credentials) return null;
+    const { tenant_id, client_id } = windowsCredentialsSchema.parse(credentials);
+    return { credentials: { tenant_id, client_id }, expiresAt };
+  }
+  const key = await loadRemoteSigningKey(env, context, profile);
+  if (!key) return null;
+  const chain = chainToBase64(key.chain);
+  if (profile.platform === "ios") {
+    const credentials = await storedCredentials(env, context, profile);
+    if (!credentials) return null;
+    return {
+      credentials: { chain, provisioning_profile: credentials.provisioning_profile },
+      expiresAt,
+    };
+  }
+  return { credentials: { chain }, expiresAt };
 }
 
 async function storedCredentials(
@@ -755,34 +771,50 @@ async function storedCredentials(
   );
 }
 
-async function storedPlatformCredentials(
+export async function storedPlatformCredentials(
   env: SigningEnv,
   ownerId: string,
   repositoryId: string,
   revision: string,
   platform: SigningPlatform
 ): Promise<Record<string, unknown> | null> {
-  const row = await env.DB.prepare(
-    `SELECT ciphertext FROM actions_signing_credentials WHERE owner_id=? AND repository_id=? AND profile_revision=? AND platform=?`
-  )
-    .bind(ownerId, repositoryId, revision, platform)
-    .first<{ ciphertext: string }>();
+  const row = await storedCredentialRow(env, ownerId, repositoryId, revision, platform);
   if (!row) return null;
   try {
-    const [ivText, cipherText, extra] = row.ciphertext.split(".");
-    if (!ivText || !cipherText || extra) return null;
-    const iv = base64ToBytes(ivText);
-    const cipher = base64ToBytes(cipherText);
-    const aad = new TextEncoder().encode(`${ownerId}:${repositoryId}:${revision}:${platform}`);
-    const plaintext = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv, additionalData: aad },
-      await credentialKey(env.SIGNING_ENCRYPTION_KEY),
-      cipher
-    );
-    return credentialSchema(platform)(JSON.parse(new TextDecoder().decode(plaintext)));
+    return await row.credentials();
   } catch {
     return null;
   }
+}
+
+/** Locates the encrypted credentials; `credentials()` decrypts them and rejects on any failure. */
+export async function storedCredentialRow(
+  env: SigningEnv,
+  ownerId: string,
+  repositoryId: string,
+  revision: string,
+  platform: SigningPlatform
+): Promise<{ updatedAt: number; credentials: () => Promise<Record<string, unknown>> } | null> {
+  const row = await env.DB.prepare(
+    `SELECT ciphertext,updated_at FROM actions_signing_credentials WHERE owner_id=? AND repository_id=? AND profile_revision=? AND platform=?`
+  )
+    .bind(ownerId, repositoryId, revision, platform)
+    .first<{ ciphertext: string; updated_at: number }>();
+  if (!row) return null;
+  return {
+    updatedAt: row.updated_at,
+    credentials: async () => {
+      const [ivText, cipherText, extra] = row.ciphertext.split(".");
+      if (!ivText || !cipherText || extra) throw new Error("signing_credentials_invalid");
+      const aad = new TextEncoder().encode(`${ownerId}:${repositoryId}:${revision}:${platform}`);
+      const plaintext = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: base64ToBytes(ivText), additionalData: aad },
+        await credentialKey(env.SIGNING_ENCRYPTION_KEY),
+        base64ToBytes(cipherText)
+      );
+      return credentialSchema(platform)(JSON.parse(new TextDecoder().decode(plaintext)));
+    },
+  };
 }
 
 async function verifyNotarization(
@@ -806,30 +838,15 @@ async function verifyNotarization(
   return appleNotarizationStatus(credentials, report.notarization_id, report.notary_archive_sha256);
 }
 
-async function boundedJson(response: Response, limit: number): Promise<unknown> {
-  if (!response.ok || !response.body) {
-    await response.body?.cancel();
-    throw new Error("notary_service_unavailable");
-  }
-  const value = await readJsonLimited(response, limit);
-  if (value === null) throw new Error("notary_response_invalid");
-  return value;
-}
-async function appleNotarizationStatus(
-  credentials: Record<string, unknown>,
-  id: string,
-  expectedSha: string,
-  diagnostics?: (issues: Array<{ message: string; path?: string; architecture?: string }>) => void
-): Promise<"Accepted" | "In Progress" | "Invalid" | "Rejected"> {
+export async function appleConnectToken(credentials: Record<string, unknown>): Promise<string> {
   const value = macosCredentialsSchema.parse(credentials).notarization;
   const pem = value.private_key.replace(
     /-----BEGIN PRIVATE KEY-----|-----END PRIVATE KEY-----|\s/g,
     ""
   );
-  const pkcs8 = base64ToBytes(pem);
   const key = await crypto.subtle.importKey(
     "pkcs8",
-    pkcs8,
+    base64ToBytes(pem),
     { name: "ECDSA", namedCurve: "P-256" },
     false,
     ["sign"]
@@ -851,7 +868,25 @@ async function appleNotarizationStatus(
       new TextEncoder().encode(signingInput)
     )
   );
-  const token = `${signingInput}.${bytesToBase64Url(signature)}`;
+  return `${signingInput}.${bytesToBase64Url(signature)}`;
+}
+
+export async function boundedJson(response: Response, limit: number): Promise<unknown> {
+  if (!response.ok || !response.body) {
+    await response.body?.cancel();
+    throw new Error("notary_service_unavailable");
+  }
+  const value = await readJsonLimited(response, limit);
+  if (value === null) throw new Error("notary_response_invalid");
+  return value;
+}
+async function appleNotarizationStatus(
+  credentials: Record<string, unknown>,
+  id: string,
+  expectedSha: string,
+  diagnostics?: (issues: Array<{ message: string; path?: string; architecture?: string }>) => void
+): Promise<"Accepted" | "In Progress" | "Invalid" | "Rejected"> {
+  const token = await appleConnectToken(credentials);
   const getJson = async (suffix = "") => {
     const response = await fetch(
       `https://appstoreconnect.apple.com/notary/v2/submissions/${encodeURIComponent(id)}${suffix}`,

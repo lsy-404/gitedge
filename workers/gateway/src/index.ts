@@ -688,7 +688,10 @@ export async function handleGatewayRequest(request: Request, env: GatewayEnv): P
   if (
     url.pathname === "/api/actions/hosted-runners/bootstrap" ||
     url.pathname === "/api/actions/colab-runners/bootstrap" ||
-    /^\/api\/actions\/runner\/(?:connect|heartbeat|complete|colab\/(?:claim|dispatches\/[0-9a-f-]{36})|github\/(?:heartbeat|complete)|kit(?:\/[0-9a-f]{64})?|signing\/requests\/[0-9a-f-]{36}\/(?:start|heartbeat|download|authorize-sign|output(?:\/parts\/\d+|\/complete)?|complete|fail))$/.test(
+    /^\/api\/actions\/runner\/(?:connect|heartbeat|complete|colab\/(?:claim|dispatches\/[0-9a-f-]{36})|github\/(?:heartbeat|complete)|kit(?:\/[0-9a-f]{64})?|signing\/requests\/[0-9a-f-]{36}\/(?:start|heartbeat|download|authorize-sign|signer|sign|azure-token|notary(?:\/[0-9a-f-]{36})?|output(?:\/parts\/\d+|\/complete)?|complete|fail))$/.test(
+      url.pathname
+    ) ||
+    /^\/api\/actions\/runner\/signing\/(?:requests\/[0-9a-f-]{36}\/apple-remote(?:\/join)?|apple-remote\/[0-9a-f-]{36}\/[A-Za-z0-9_-]{43})$/.test(
       url.pathname
     )
   ) {

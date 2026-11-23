@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { constants } from "node:fs";
 import {
   chmod,
@@ -17,20 +16,20 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  credentialsSchema,
+  macosGrantSchema,
   macosManifestSchema as manifestSchema,
   macosVerificationSchema as verificationSchema,
 } from "./contract.mjs";
+import { rcodesignSign, submitNotarization } from "./apple-remote.mjs";
 import {
   command,
   fileSha256,
-  identityHash,
   inspectBundle,
-  keychainSearch,
   signingRequirement,
   snapshotArchive,
   staple,
 } from "./macos-sign.mjs";
+import { parseGrant } from "./remote.mjs";
 
 async function unpack(mode, archive, target, manifest) {
   const script = fileURLToPath(new URL("./dmg-unpack.py", import.meta.url));
@@ -126,54 +125,6 @@ async function verifyImage(image, manifest) {
     throw new Error("disk image signature mismatch");
 }
 
-async function keychainFor(credentials, work, teamId) {
-  const keychain = path.join(work, "signing.keychain-db");
-  const password = randomBytes(32).toString("base64url");
-  const certificate = path.join(work, "certificate.p12");
-  await writeFile(certificate, Buffer.from(credentials.certificate_p12, "base64"), {
-    mode: 0o600,
-    flag: "wx",
-  });
-  await command("/usr/bin/security", ["create-keychain", "-p", password, keychain]);
-  try {
-    await command("/usr/bin/security", ["set-keychain-settings", "-lut", "3600", keychain]);
-    await command("/usr/bin/security", ["unlock-keychain", "-p", password, keychain]);
-    await command("/usr/bin/security", [
-      "import",
-      fileURLToPath(new URL("./certificates/developer-id-g2.cer", import.meta.url)),
-      "-k",
-      keychain,
-      "-T",
-      "/usr/bin/codesign",
-    ]);
-    await command("/usr/bin/security", [
-      "import",
-      certificate,
-      "-k",
-      keychain,
-      "-P",
-      credentials.certificate_password,
-      "-T",
-      "/usr/bin/codesign",
-    ]);
-    await command("/usr/bin/security", [
-      "set-key-partition-list",
-      "-S",
-      "apple-tool:,apple:,codesign:",
-      "-s",
-      "-k",
-      password,
-      keychain,
-    ]);
-    await keychainSearch(keychain, true);
-    return { keychain, identity: await identityHash(keychain, teamId) };
-  } catch {
-    await keychainSearch(keychain, false);
-    await command("/usr/bin/security", ["delete-keychain", keychain]);
-    throw new Error("disk image signing identity unavailable");
-  }
-}
-
 export async function executeDmg(
   rawManifest,
   inputArchivePath,
@@ -196,7 +147,6 @@ export async function executeDmg(
   const work = await mkdtemp(path.join(os.tmpdir(), "dmg-sign-"));
   await chmod(work, 0o700);
   let attached;
-  let keychain;
   let phase = "input";
   try {
     const input = await snapshotArchive(
@@ -267,38 +217,16 @@ export async function executeDmg(
       attached = undefined;
       await command("/usr/bin/hdiutil", ["convert", writable, "-format", "UDZO", "-o", image]);
       phase = "credentials";
-      const credentials = credentialsSchema.parse(await credentialsProvider());
-      const identity = await keychainFor(credentials, work, manifest.team_id);
-      keychain = identity.keychain;
+      const { remote } = parseGrant(macosGrantSchema, await credentialsProvider());
       phase = "image-signing";
-      await command("/usr/bin/codesign", [
-        "--force",
-        "--sign",
-        identity.identity,
-        "--keychain",
-        keychain,
-        "--timestamp",
-        image,
-      ]);
+      await rcodesignSign(remote, ["--for-notarization", image], { work });
       await verifyImage(image, manifest);
-      const keyFile = path.join(work, "notary.p8");
-      await writeFile(keyFile, credentials.notarization.private_key, { mode: 0o600, flag: "wx" });
       phase = "notarization-submit";
       const hash = await fileSha256(image);
-      const result = await command("/usr/bin/xcrun", [
-        "notarytool",
-        "submit",
-        image,
-        "--key",
-        keyFile,
-        "--key-id",
-        credentials.notarization.key_id,
-        "--issuer",
-        credentials.notarization.issuer_id,
-        "--output-format",
-        "json",
-      ]);
-      const id = JSON.parse(result.stdout).id;
+      const id = await submitNotarization(remote, image, {
+        sha256: hash,
+        submissionName: `${manifest.bundle_id}-${manifest.version}.dmg`.slice(0, 128),
+      });
       return await output(image, outputDir, manifest, asarVerified, id, hash, false);
     }
     image = path.join(work, "product.dmg");
@@ -365,18 +293,6 @@ export async function executeDmg(
       } catch {
         failed = true;
       }
-    if (keychain) {
-      try {
-        await keychainSearch(keychain, false);
-      } catch {
-        failed = true;
-      }
-      try {
-        await command("/usr/bin/security", ["delete-keychain", keychain]);
-      } catch {
-        failed = true;
-      }
-    }
     if (!attached || !failed) await rm(work, { recursive: true, force: true });
     if (failed) {
       await rm(outputDir, { recursive: true, force: true });

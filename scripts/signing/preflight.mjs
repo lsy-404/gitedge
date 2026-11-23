@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { access, constants } from "node:fs/promises";
 import { promisify } from "node:util";
-import { findAndroidBuildTools, javaCommand } from "./android-tools.mjs";
+import { findAndroidBuildTools, javaCommand, javacCommand } from "./android-tools.mjs";
 
 const execFileAsync = promisify(execFile);
 const PROBE_TIMEOUT_MS = 15_000;
@@ -17,17 +17,17 @@ export class PreflightError extends Error {
 const COMMON_DEPENDENCIES = ["zod", "archiver"];
 const DEPENDENCIES = {
   windows: ["yauzl", "electron-builder", "electron-winstaller"],
-  ios: ["yauzl"],
+  ios: ["yauzl", "aws4fetch"],
   android: ["yauzl"],
-  dmg: ["@electron/asar", "@electron/fuses", "@electron/osx-sign"],
-  macos: ["@electron/asar", "@electron/fuses", "@electron/osx-sign"],
+  dmg: ["@electron/asar", "@electron/fuses", "aws4fetch"],
+  macos: ["@electron/asar", "@electron/fuses", "aws4fetch"],
 };
-const MACOS_BINARIES = ["codesign", "security", "ditto", "plutil", "lipo", "tar", "spctl"];
+const MACOS_BINARIES = ["codesign", "ditto", "plutil", "lipo", "tar", "spctl"];
 const BINARY_DIRECTORY = { spctl: "/usr/sbin" };
 const TOOLS = {
-  macos: { binaries: MACOS_BINARIES, xcrun: ["notarytool", "stapler"] },
-  dmg: { binaries: [...MACOS_BINARIES, "hdiutil"], xcrun: ["notarytool", "stapler"] },
-  ios: { binaries: ["codesign", "security", "lipo", "openssl"], xcrun: ["vtool", "xcodebuild"] },
+  macos: { binaries: MACOS_BINARIES, xcrun: ["stapler"] },
+  dmg: { binaries: [...MACOS_BINARIES, "hdiutil"], xcrun: ["stapler"] },
+  ios: { binaries: ["codesign", "security", "lipo", "openssl", "ditto"], xcrun: ["vtool"] },
 };
 
 function pythonCommand() {
@@ -57,7 +57,7 @@ async function checkTool(name, probe) {
   }
 }
 
-export async function preflight(family) {
+export async function preflight(family, stage) {
   const key = family.windows
     ? "windows"
     : family.ios
@@ -86,6 +86,9 @@ export async function preflight(family) {
     await checkTool("java", () =>
       execFileAsync(javaCommand(), ["-version"], { timeout: PROBE_TIMEOUT_MS })
     );
+    await checkTool("javac", () =>
+      execFileAsync(javacCommand(), ["-version"], { timeout: PROBE_TIMEOUT_MS })
+    );
     const tools = await findAndroidBuildTools();
     if (!tools) throw new PreflightError("preflight_tool_android_build_tools", "not_found");
     await checkTool("aapt2", () =>
@@ -108,4 +111,9 @@ export async function preflight(family) {
     await checkTool(name, () =>
       execFileAsync("/usr/bin/xcrun", ["--find", name], { timeout: PROBE_TIMEOUT_MS })
     );
+  if (!stage.endsWith("finalize"))
+    await checkTool("rcodesign", async () => {
+      const { rcodesignPath } = await import("./apple-remote.mjs");
+      await execFileAsync(await rcodesignPath(), ["--version"], { timeout: PROBE_TIMEOUT_MS });
+    });
 }

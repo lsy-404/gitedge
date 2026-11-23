@@ -18,12 +18,19 @@ import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import {
-  androidCredentialsSchema,
+  androidGrantSchema,
   androidManifestSchema,
   androidSourceMetadataSchema,
   androidVerificationSchema,
 } from "./contract.mjs";
-import { findAndroidBuildTools, javaCommand } from "./android-tools.mjs";
+import {
+  findAndroidBuildTools,
+  javaCommand,
+  javacCommand,
+  REMOTE_PROVIDER_CLASS,
+  remoteProviderSource,
+} from "./android-tools.mjs";
+import { parseGrant } from "./remote.mjs";
 
 let signingAbortSignal;
 
@@ -238,6 +245,14 @@ export function parseApksignerVerification(output) {
   };
 }
 
+function signerCertificateDigest(chain) {
+  try {
+    return createHash("sha256").update(Buffer.from(chain[0], "base64")).digest("hex");
+  } catch {
+    throw new RunnerFailure("certificate_mismatch");
+  }
+}
+
 async function badging(tools, apk) {
   const { stdout } = await command(tools.aapt2, ["dump", "badging", apk]);
   const info = parseBadging(stdout);
@@ -304,39 +319,51 @@ async function runAndroid(manifestInput, artifactZip, outputDirectory, credentia
     await command(tools.zipalign, ["-c", "-p", "4", aligned]);
 
     phase = "credentials";
-    const credentials = androidCredentialsSchema.parse(
+    const credentials = parseGrant(
+      androidGrantSchema,
       typeof credentialInput === "function" ? await credentialInput() : credentialInput
     );
+    const signer = signerCertificateDigest(credentials.chain);
+    if (signer !== manifest.certificate_sha256) throw new RunnerFailure("certificate_mismatch");
     await mkdir(keys, { mode: 0o700 });
-    const keystore = path.join(keys, "release.p12");
-    const storePassword = path.join(keys, "store-password");
-    const keyPassword = path.join(keys, "key-password");
-    await writeFile(keystore, Buffer.from(credentials.keystore_p12, "base64"), {
-      mode: 0o600,
-      flag: "wx",
-    });
-    await writeFile(storePassword, `${credentials.store_password}\n`, { mode: 0o600, flag: "wx" });
-    await writeFile(keyPassword, `${credentials.key_password}\n`, { mode: 0o600, flag: "wx" });
+    const providerClasses = path.join(keys, "classes");
+    await mkdir(providerClasses, { mode: 0o700 });
+    const providerConfig = path.join(keys, "remote.properties");
+    await writeFile(
+      providerConfig,
+      [
+        `endpoint=${credentials.remote.endpoint}`,
+        `jobToken=${credentials.remote.jobToken}`,
+        `runId=${credentials.remote.runId}`,
+        `leaseToken=${credentials.remote.leaseToken}`,
+        "",
+      ].join("\n"),
+      { mode: 0o600, flag: "wx" }
+    );
 
     phase = "sign";
+    await command(javacCommand(), ["-d", providerClasses, remoteProviderSource]);
     const signed = path.join(work, "signed.apk");
     try {
       await command(
         java,
         [
-          "-jar",
-          tools.apksignerJar,
+          "-cp",
+          `${tools.apksignerJar}${path.delimiter}${providerClasses}`,
+          "com.android.apksigner.ApkSignerTool",
           "sign",
           "--ks",
-          keystore,
+          "NONE",
           "--ks-type",
-          "PKCS12",
-          "--ks-key-alias",
-          credentials.key_alias,
+          "GITEDGE",
+          "--provider-class",
+          REMOTE_PROVIDER_CLASS,
+          "--provider-arg",
+          providerConfig,
           "--ks-pass",
-          `file:${storePassword}`,
-          "--key-pass",
-          `file:${keyPassword}`,
+          "pass:none",
+          "--ks-key-alias",
+          "signer",
           "--v2-signing-enabled",
           "true",
           "--v3-signing-enabled",

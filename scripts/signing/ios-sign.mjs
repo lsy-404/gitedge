@@ -9,12 +9,14 @@ import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import {
-  iosCredentialsSchema,
+  iosGrantSchema,
   iosManifestSchema,
   iosSourceMetadataSchema,
   iosVerificationSchema,
 } from "./contract.mjs";
 import { validateIosProfile, validateSignedEntitlements } from "./ios-policy.mjs";
+import { rcodesignSign } from "./apple-remote.mjs";
+import { parseGrant } from "./remote.mjs";
 
 let signingAbortSignal;
 
@@ -47,16 +49,8 @@ const iosFailurePhases = new Set([
   "profile_signer",
   "profile_trust",
   "identity",
-  "identity_search",
-  "identity_create",
-  "identity_unlock",
-  "identity_import",
-  "identity_partition",
-  "identity_verify",
-  "profile_install",
   "export",
   "signature_verification",
-  "cleanup",
 ]);
 const iosFailureCodes = new Set([
   "macos_host_required",
@@ -86,7 +80,6 @@ const iosFailureCodes = new Set([
   "certificate_identity",
   "certificate_expired",
   "development_identity_unavailable",
-  "profile_collision",
   "native_command",
   "native_timeout",
   "python_runtime",
@@ -97,17 +90,7 @@ const iosFailureCodes = new Set([
   "signature_verification",
   "signature_identity",
   "signature_profile",
-  "keychain_cleanup",
-  "p12_integrity",
-  "p12_format",
-  "keychain_not_found",
-  "interaction_not_allowed",
-]);
-const identityImportFailureCodes = new Set([
-  "p12_integrity",
-  "p12_format",
-  "keychain_not_found",
-  "interaction_not_allowed",
+  "remote_signing",
 ]);
 
 export function safeIosFailure(phase, code) {
@@ -118,30 +101,9 @@ export function safeIosFailure(phase, code) {
   return safeCode.length <= 64 ? new RunnerFailure(safeCode) : new RunnerFailure("ios_sign_failed");
 }
 
-export function classifyIdentityImportFailure(stderr) {
-  if (typeof stderr !== "string") return null;
-  if (/\bMAC verification failed\b|\bMac verify error\b/i.test(stderr)) return "p12_integrity";
-  if (
-    /\b(?:unknown|unsupported|invalid) format\b|\bnot (?:a|an) (?:PKCS ?#?12|PFX)(?: file| data)?\b/i.test(
-      stderr
-    )
-  )
-    return "p12_format";
-  if (/\b(?:user )?interaction (?:is )?not allowed\b|\berrSecInteractionNotAllowed\b/i.test(stderr))
-    return "interaction_not_allowed";
-  if (
-    /\bkeychain[^\r\n.]{0,100}(?:not found|could not be found|does not exist|no such file)\b|\b(?:not found|could not be found|does not exist|no such file)[^\r\n.]{0,100}keychain\b/i.test(
-      stderr
-    )
-  ) {
-    return "keychain_not_found";
-  }
-  return null;
-}
-
 function command(file, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const { timeout = 120_000, failureClass, ...spawnOptions } = options;
+    const { timeout = 120_000, ...spawnOptions } = options;
     const child = spawn(file, args, {
       ...spawnOptions,
       signal: spawnOptions.signal ?? signingAbortSignal,
@@ -176,19 +138,7 @@ function command(file, args, options = {}) {
           stdout: Buffer.concat(stdout).toString(),
           stderr: Buffer.concat(stderr).toString(),
         });
-      else {
-        const diagnostic =
-          failureClass === "identity_import"
-            ? Buffer.concat(stderr).subarray(0, 16_384).toString()
-            : "";
-        const classified =
-          failureClass === "identity_import" ? classifyIdentityImportFailure(diagnostic) : null;
-        reject(
-          new RunnerFailure(
-            identityImportFailureCodes.has(classified) ? classified : "native_command"
-          )
-        );
-      }
+      else reject(new RunnerFailure("native_command"));
     });
   });
 }
@@ -557,19 +507,6 @@ export function selectProfileSignerIntermediate(signerPem, certificateBundle) {
   }
 }
 
-export function identityOutputMatchesProfile(output, expectedSha1) {
-  if (
-    typeof output !== "string" ||
-    typeof expectedSha1 !== "string" ||
-    !/^[A-F0-9]{40}$/i.test(expectedSha1)
-  )
-    return false;
-  return output.split(/\r?\n/).some((line) => {
-    const match = line.match(/^\s*\d+\)\s+([A-F0-9]{40})\s+"(Apple Development:[^"\r\n]*)"\s*$/);
-    return match && match[1] === expectedSha1.toUpperCase();
-  });
-}
-
 export function codesignIdentityMatches(output, teamId) {
   if (typeof output !== "string" || typeof teamId !== "string") return false;
   const lines = output.split(/\r?\n/);
@@ -579,20 +516,32 @@ export function codesignIdentityMatches(output, teamId) {
   );
 }
 
-function exportOptions(plistPath, { teamId, bundleId, profileUuid }) {
-  const fields = {
-    method: "debugging",
-    signingStyle: "manual",
-    signingCertificate: "Apple Development",
-    teamID: teamId,
-    provisioningProfiles: { [bundleId]: profileUuid },
-    manageAppVersionAndBuildNumber: false,
+async function writePlist(file, value) {
+  const python = process.env.PYTHON || "python3";
+  const source = `${file}.json`;
+  await writeFile(source, JSON.stringify(value), { mode: 0o600, flag: "wx" });
+  await command(python, [
+    "-c",
+    "import json, plistlib, sys\nwith open(sys.argv[1]) as source, open(sys.argv[2], 'xb') as target: plistlib.dump(json.load(source), target)",
+    source,
+    file,
+  ]);
+}
+
+/** Entitlements for a development signature: the archive's own plus the profile's identity keys. */
+async function developmentEntitlements(app, profile, { teamId, bundleId }, temp) {
+  let entitlements = {};
+  try {
+    entitlements = await signedEntitlements(app, temp);
+  } catch {
+    // An unsigned archive carries no entitlements of its own.
+  }
+  return {
+    ...entitlements,
+    "application-identifier": `${profile.ApplicationIdentifierPrefix[0]}.${bundleId}`,
+    "com.apple.developer.team-identifier": teamId,
+    "get-task-allow": true,
   };
-  return writeFile(
-    plistPath,
-    `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>method</key><string>${fields.method}</string><key>signingStyle</key><string>manual</string><key>signingCertificate</key><string>Apple Development</string><key>teamID</key><string>${teamId}</string><key>provisioningProfiles</key><dict><key>${bundleId}</key><string>${profileUuid}</string></dict><key>manageAppVersionAndBuildNumber</key><false/></dict></plist>`,
-    { mode: 0o600, flag: "wx" }
-  );
 }
 
 async function runIos(manifestInput, artifactZip, outputDirectory, credentialInput) {
@@ -602,8 +551,6 @@ async function runIos(manifestInput, artifactZip, outputDirectory, credentialInp
   if ((await readdir(outputDirectory)).length) throw new RunnerFailure("output_not_empty");
   const work = await mkdtemp(path.join(os.tmpdir(), "ios-export-"));
   await chmod(work, 0o700);
-  let keychain;
-  let priorKeychains;
   let phase = "input";
   try {
     const artifactStat = await lstat(artifactZip);
@@ -646,23 +593,18 @@ async function runIos(manifestInput, artifactZip, outputDirectory, credentialInp
     if (!(await lstat(archiveRoot)).isDirectory()) throw new RunnerFailure("archive_layout");
     const info = await archiveMetadata(archiveRoot, manifest, source, work);
     phase = "profile";
-    const credentials = iosCredentialsSchema.parse(
+    const grant = parseGrant(
+      iosGrantSchema,
       typeof credentialInput === "function" ? await credentialInput() : credentialInput
     );
-    const p12 = path.join(work, "development.p12"),
-      profileFile = path.join(work, "development.mobileprovision");
-    await writeFile(p12, Buffer.from(credentials.certificate_p12, "base64"), {
-      mode: 0o600,
-      flag: "wx",
-    });
-    await writeFile(profileFile, Buffer.from(credentials.provisioning_profile, "base64"), {
+    const profileFile = path.join(work, "development.mobileprovision");
+    await writeFile(profileFile, Buffer.from(grant.provisioning_profile, "base64"), {
       mode: 0o600,
       flag: "wx",
     });
     const profile = await profilePlist(profileFile, work, (nextPhase) => {
       phase = nextPhase;
     });
-    // Validate the profile's public certificate before importing its matching private key.
     const expectedCertificate = profile.DeveloperCertificates?.[0];
     if (!expectedCertificate) throw new RunnerFailure("profile_certificate");
     const certBytes = Buffer.isBuffer(expectedCertificate)
@@ -674,215 +616,157 @@ async function runIos(manifestInput, artifactZip, outputDirectory, credentialInp
       bundleId: manifest.bundle_id,
       certificateSha1: profileCertificateSha,
     });
-    phase = "identity_search";
-    const search = await command("/usr/bin/security", ["list-keychains", "-d", "user"]);
-    priorKeychains = search.stdout;
-    keychain = path.join(work, "ios.keychain-db");
-    const password = randomBytes(32).toString("base64url");
-    phase = "identity_create";
-    await command("/usr/bin/security", ["create-keychain", "-p", password, keychain]);
-    await command("/usr/bin/security", ["set-keychain-settings", "-lut", "3600", keychain]);
-    phase = "identity_unlock";
-    await command("/usr/bin/security", ["unlock-keychain", "-p", password, keychain]);
-    phase = "identity_import";
+    phase = "identity";
+    const signingCertificateSha = createHash("sha1")
+      .update(Buffer.from(grant.chain[0], "base64"))
+      .digest("hex")
+      .toUpperCase();
+    if (signingCertificateSha !== profileCertificateSha)
+      throw new RunnerFailure("development_identity_unavailable");
+    phase = "export";
+    const exportPayload = path.join(work, "ipa", "Payload");
+    await mkdir(exportPayload, { recursive: true, mode: 0o700 });
+    const exportedApp = path.join(exportPayload, path.basename(info.app));
+    await command("/usr/bin/ditto", [info.app, exportedApp]);
+    await writeFile(
+      path.join(exportedApp, "embedded.mobileprovision"),
+      await readFile(profileFile),
+      { mode: 0o644 }
+    );
+    const entitlementsFile = path.join(work, "development.entitlements");
+    await writePlist(
+      entitlementsFile,
+      await developmentEntitlements(
+        info.app,
+        profile,
+        {
+          teamId: manifest.team_id,
+          bundleId: manifest.bundle_id,
+        },
+        work
+      )
+    );
+    try {
+      await rcodesignSign(
+        grant.remote,
+        ["--timestamp-url", "none", "--entitlements-xml-file", entitlementsFile, exportedApp],
+        { work, signal: signingAbortSignal, timeout: 10 * 60_000 }
+      );
+    } catch {
+      throw new RunnerFailure("remote_signing");
+    }
+    const ipa = path.join(work, "signed.ipa");
     await command(
-      "/usr/bin/security",
-      [
-        "import",
-        p12,
-        "-k",
-        keychain,
-        "-P",
-        credentials.certificate_password,
-        "-T",
-        "/usr/bin/codesign",
-      ],
+      "/usr/bin/ditto",
+      ["-c", "-k", "--norsrc", "--noextattr", "--noacl", "--keepParent", exportPayload, ipa],
       {
-        failureClass: "identity_import",
+        timeout: 10 * 60_000,
       }
     );
-    phase = "identity_partition";
-    await command("/usr/bin/security", [
-      "set-key-partition-list",
-      "-S",
-      "apple-tool:,apple:",
-      "-s",
-      "-k",
-      password,
-      keychain,
-    ]);
-    const keychains = [...priorKeychains.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
-    phase = "identity_search";
-    await command("/usr/bin/security", [
-      "list-keychains",
-      "-d",
-      "user",
-      "-s",
-      keychain,
-      ...keychains,
-    ]);
-    phase = "identity_verify";
-    const identities = await command("/usr/bin/security", [
-      "find-identity",
-      "-v",
-      "-p",
-      "codesigning",
-      keychain,
-    ]);
-    if (!identityOutputMatchesProfile(identities.stdout, profileCertificateSha))
-      throw new RunnerFailure("development_identity_unavailable");
-    phase = "profile_install";
-    const profileDir = path.join(
-      os.homedir(),
-      "Library",
-      "Developer",
-      "Xcode",
-      "UserData",
-      "Provisioning Profiles"
+    const stat = await lstat(ipa);
+    if (!stat.isFile() || stat.size > manifest.max_artifact_bytes)
+      throw new RunnerFailure("output_archive");
+    phase = "signature_verification";
+    const signedExtract = path.join(work, "signed-ipa");
+    await mkdir(signedExtract, { mode: 0o700 });
+    await extractZip(ipa, signedExtract, {
+      maxBytes: manifest.max_unpacked_bytes,
+      allowedRoots: ["Payload", "SwiftSupport", "Symbols"],
+      maxEntries: 100_000,
+    });
+    const payload = path.join(signedExtract, "Payload");
+    const payloadEntries = await readdir(payload, { withFileTypes: true });
+    const apps = payloadEntries.filter(
+      (entry) => entry.isDirectory() && entry.name.endsWith(".app")
     );
-    await mkdir(profileDir, { recursive: true, mode: 0o700 });
-    const installedProfile = path.join(profileDir, `${profileInfo.uuid}.mobileprovision`);
-    try {
-      await lstat(installedProfile);
-      throw new RunnerFailure("profile_collision");
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-    }
-    await writeFile(installedProfile, await readFile(profileFile), { mode: 0o600 });
-    try {
-      phase = "export";
-      const exportPath = path.join(work, "export");
-      await mkdir(exportPath, { mode: 0o700 });
-      const options = path.join(work, "ExportOptions.plist");
-      await exportOptions(options, {
-        teamId: manifest.team_id,
-        bundleId: manifest.bundle_id,
-        profileUuid: profileInfo.uuid,
-      });
-      await command(
-        "/usr/bin/xcodebuild",
-        [
-          "-exportArchive",
-          "-archivePath",
-          archiveRoot,
-          "-exportPath",
-          exportPath,
-          "-exportOptionsPlist",
-          options,
-        ],
-        { timeout: 10 * 60_000 }
-      );
-      const entries = await readdir(exportPath);
-      const ipaNames = entries.filter((name) => name.endsWith(".ipa"));
-      if (ipaNames.length !== 1) throw new RunnerFailure("export_output");
-      const ipa = path.join(exportPath, ipaNames[0]);
-      const stat = await lstat(ipa);
-      if (!stat.isFile() || stat.size > manifest.max_artifact_bytes)
-        throw new RunnerFailure("output_archive");
-      phase = "signature_verification";
-      const signedExtract = path.join(work, "signed-ipa");
-      await mkdir(signedExtract, { mode: 0o700 });
-      await extractZip(ipa, signedExtract, {
-        maxBytes: manifest.max_unpacked_bytes,
-        allowedRoots: ["Payload", "SwiftSupport", "Symbols"],
-        maxEntries: 100_000,
-      });
-      const payload = path.join(signedExtract, "Payload");
-      const payloadEntries = await readdir(payload, { withFileTypes: true });
-      const apps = payloadEntries.filter(
-        (entry) => entry.isDirectory() && entry.name.endsWith(".app")
-      );
-      if (apps.length !== 1) throw new RunnerFailure("export_bundle");
-      const signedApp = path.join(payload, apps[0].name);
-      const signedInfo = await plist(path.join(signedApp, "Info.plist"), work);
-      if (
-        signedInfo.CFBundleIdentifier !== manifest.bundle_id ||
-        signedInfo.CFBundleShortVersionString !== manifest.version
-      )
-        throw new RunnerFailure("signature_bundle");
-      await command("/usr/bin/codesign", [
-        "--verify",
-        "--deep",
-        "--strict",
-        "--verbose=2",
-        signedApp,
-      ]);
-      const detail = await command("/usr/bin/codesign", ["-dv", "--verbose=4", signedApp]).catch(
-        () => {
-          throw new RunnerFailure("signature_verification");
-        }
-      );
-      if (!codesignIdentityMatches(detail.stderr, manifest.team_id))
-        throw new RunnerFailure("signature_identity");
-      const embeddedProfile = await profilePlist(
-        path.join(signedApp, "embedded.mobileprovision"),
-        work
-      );
-      const signedProfileInfo = validateIosProfile(embeddedProfile, {
-        teamId: manifest.team_id,
-        bundleId: manifest.bundle_id,
-        certificateSha1: profileCertificateSha,
-      });
-      if (
-        signedProfileInfo.uuid !== profileInfo.uuid ||
-        signedProfileInfo.expiration !== profileInfo.expiration
-      )
-        throw new RunnerFailure("signature_profile");
-      const certDirectory = path.join(work, "signature-certs");
-      await mkdir(certDirectory, { mode: 0o700 });
-      await command("/usr/bin/codesign", ["-d", "--extract-certificates", signedApp], {
-        cwd: certDirectory,
-      });
-      const leafSha1 = createHash("sha1")
-        .update(await readFile(path.join(certDirectory, "codesign0")))
-        .digest("hex")
-        .toUpperCase();
-      if (leafSha1 !== profileCertificateSha) throw new RunnerFailure("signature_identity");
-      const entitlements = await signedEntitlements(signedApp, work);
-      validateSignedEntitlements(entitlements, embeddedProfile, {
-        teamId: manifest.team_id,
-        bundleId: manifest.bundle_id,
-      });
-      await import("node:fs/promises").then((fs) =>
-        fs.copyFile(ipa, path.join(outputDirectory, "signed.ipa"))
-      );
-      const report = iosVerificationSchema.parse({
-        schema_version: 1,
-        request_id: manifest.request_id,
-        generation: manifest.generation,
-        stage: "ios_sign",
-        input_digest: manifest.input_digest,
-        recipe_sha: manifest.recipe_sha,
-        policy_digest: manifest.policy_digest,
-        source_sha: manifest.source_sha,
-        version: manifest.version,
-        architecture: "arm64",
-        team_id: manifest.team_id,
-        bundle_id: manifest.bundle_id,
-        codesign_verified: true,
-        identity_class: "Apple Development",
-        certificate_expiration: profileInfo.certificateExpiration,
-        profile_uuid: profileInfo.uuid,
-        profile_expiration: profileInfo.expiration,
-        profile_type: "development",
-        authorized_device_count: profileInfo.deviceCount,
-        files: [
-          {
-            path: "signed.ipa",
-            size: stat.size,
-            sha256: await fileDigest(path.join(outputDirectory, "signed.ipa")),
-          },
-        ],
-      });
-      await writeFile(
-        path.join(outputDirectory, "verification.json"),
-        `${JSON.stringify(report)}\n`,
-        { mode: 0o600, flag: "wx" }
-      );
-      return report;
-    } finally {
-      await rm(installedProfile, { force: true });
-    }
+    if (apps.length !== 1) throw new RunnerFailure("export_bundle");
+    const signedApp = path.join(payload, apps[0].name);
+    const signedInfo = await plist(path.join(signedApp, "Info.plist"), work);
+    if (
+      signedInfo.CFBundleIdentifier !== manifest.bundle_id ||
+      signedInfo.CFBundleShortVersionString !== manifest.version
+    )
+      throw new RunnerFailure("signature_bundle");
+    await command("/usr/bin/codesign", [
+      "--verify",
+      "--deep",
+      "--strict",
+      "--verbose=2",
+      signedApp,
+    ]);
+    const detail = await command("/usr/bin/codesign", ["-dv", "--verbose=4", signedApp]).catch(
+      () => {
+        throw new RunnerFailure("signature_verification");
+      }
+    );
+    if (!codesignIdentityMatches(detail.stderr, manifest.team_id))
+      throw new RunnerFailure("signature_identity");
+    const embeddedProfile = await profilePlist(
+      path.join(signedApp, "embedded.mobileprovision"),
+      work
+    );
+    const signedProfileInfo = validateIosProfile(embeddedProfile, {
+      teamId: manifest.team_id,
+      bundleId: manifest.bundle_id,
+      certificateSha1: profileCertificateSha,
+    });
+    if (
+      signedProfileInfo.uuid !== profileInfo.uuid ||
+      signedProfileInfo.expiration !== profileInfo.expiration
+    )
+      throw new RunnerFailure("signature_profile");
+    const certDirectory = path.join(work, "signature-certs");
+    await mkdir(certDirectory, { mode: 0o700 });
+    await command("/usr/bin/codesign", ["-d", "--extract-certificates", signedApp], {
+      cwd: certDirectory,
+    });
+    const leafSha1 = createHash("sha1")
+      .update(await readFile(path.join(certDirectory, "codesign0")))
+      .digest("hex")
+      .toUpperCase();
+    if (leafSha1 !== profileCertificateSha) throw new RunnerFailure("signature_identity");
+    const entitlements = await signedEntitlements(signedApp, work);
+    validateSignedEntitlements(entitlements, embeddedProfile, {
+      teamId: manifest.team_id,
+      bundleId: manifest.bundle_id,
+    });
+    await import("node:fs/promises").then((fs) =>
+      fs.copyFile(ipa, path.join(outputDirectory, "signed.ipa"))
+    );
+    const report = iosVerificationSchema.parse({
+      schema_version: 1,
+      request_id: manifest.request_id,
+      generation: manifest.generation,
+      stage: "ios_sign",
+      input_digest: manifest.input_digest,
+      recipe_sha: manifest.recipe_sha,
+      policy_digest: manifest.policy_digest,
+      source_sha: manifest.source_sha,
+      version: manifest.version,
+      architecture: "arm64",
+      team_id: manifest.team_id,
+      bundle_id: manifest.bundle_id,
+      codesign_verified: true,
+      identity_class: "Apple Development",
+      certificate_expiration: profileInfo.certificateExpiration,
+      profile_uuid: profileInfo.uuid,
+      profile_expiration: profileInfo.expiration,
+      profile_type: "development",
+      authorized_device_count: profileInfo.deviceCount,
+      files: [
+        {
+          path: "signed.ipa",
+          size: stat.size,
+          sha256: await fileDigest(path.join(outputDirectory, "signed.ipa")),
+        },
+      ],
+    });
+    await writeFile(
+      path.join(outputDirectory, "verification.json"),
+      `${JSON.stringify(report)}\n`,
+      { mode: 0o600, flag: "wx" }
+    );
+    return report;
   } catch (error) {
     await rm(outputDirectory, { recursive: true, force: true });
     await mkdir(outputDirectory, { recursive: true, mode: 0o700 });
@@ -890,25 +774,7 @@ async function runIos(manifestInput, artifactZip, outputDirectory, credentialInp
       ? safeIosFailure(phase, error.code)
       : new RunnerFailure("ios_sign_failed");
   } finally {
-    try {
-      if (keychain) {
-        if (priorKeychains) {
-          const keychains = [...priorKeychains.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
-          await command("/usr/bin/security", [
-            "list-keychains",
-            "-d",
-            "user",
-            "-s",
-            ...keychains,
-          ]).catch(() => {});
-        }
-        await command("/usr/bin/security", ["delete-keychain", keychain]).catch(() => {
-          throw safeIosFailure("cleanup", "keychain_cleanup");
-        });
-      }
-    } finally {
-      await rm(work, { recursive: true, force: true });
-    }
+    await rm(work, { recursive: true, force: true });
   }
 }
 

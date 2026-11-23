@@ -5,9 +5,15 @@
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
   "durable_objects": {
-    "bindings": [{ "name": "SIGNING_COORDINATORS", "class_name": "SigningCoordinator" }]
+    "bindings": [
+      { "name": "SIGNING_COORDINATORS", "class_name": "SigningCoordinator" },
+      { "name": "APPLE_REMOTE_SIGNERS", "class_name": "AppleRemoteSigner" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SigningCoordinator"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["SigningCoordinator"] },
+    { "tag": "v2", "new_sqlite_classes": ["AppleRemoteSigner"] }
+  ],
   "d1_databases": [
     {
       "binding": "DB",

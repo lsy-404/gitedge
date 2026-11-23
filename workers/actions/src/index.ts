@@ -67,6 +67,7 @@ import {
 import { retryPublishDispatches } from "./signing/publish";
 import { enqueueNativeSigningRun } from "./signing-execution";
 import { kickRunnerDispatch } from "./runner-dispatch";
+import { APPLE_REMOTE_SOCKET_ROUTE, handleAppleRemoteSocket } from "./signing/apple-remote-signer";
 import { bootstrapHostedRunner, reconcileHostedRunners } from "./hosted-runners";
 import { bootstrapColabRunner, reconcileColabRunners } from "./colab-runners";
 import { refreshDueGithubQuotas } from "./github-quota";
@@ -75,6 +76,7 @@ export { ActionRunDurableObject as ActionRun };
 export { GitTransfer } from "./git-transfer";
 export { SigningCoordinator } from "./signing";
 export { RunnerDispatch } from "./runner-dispatch";
+export { AppleRemoteSigner } from "./signing/apple-remote-signer";
 
 const MAX_SNAPSHOT_FILES = 2048;
 const MAX_SNAPSHOT_BYTES = 24 * 1024 * 1024;
@@ -1796,11 +1798,17 @@ export default {
       if (url.pathname === "/colab-runners/bootstrap")
         return await bootstrapColabRunner(request, env);
       if (
-        /^\/runner\/(?:connect|heartbeat|complete|colab\/(?:claim|dispatches\/[0-9a-f-]{36})|github\/(?:heartbeat|complete)|kit(?:\/[0-9a-f]{64})?|signing\/requests\/[0-9a-f-]{36}\/(?:start|heartbeat|download|authorize-sign|output(?:\/parts\/\d+|\/complete)?|complete|fail))$/.test(
+        /^\/runner\/(?:connect|heartbeat|complete|colab\/(?:claim|dispatches\/[0-9a-f-]{36})|github\/(?:heartbeat|complete)|kit(?:\/[0-9a-f]{64})?|signing\/requests\/[0-9a-f-]{36}\/(?:start|heartbeat|download|authorize-sign|signer|sign|azure-token|notary(?:\/[0-9a-f-]{36})?|output(?:\/parts\/\d+|\/complete)?|complete|fail))$/.test(
           url.pathname
         )
       )
         return await runnerMachineRequest(request, env);
+      if (
+        /^\/runner\/signing\/requests\/[0-9a-f-]{36}\/apple-remote(?:\/join)?$/.test(url.pathname)
+      )
+        return await runnerMachineRequest(request, env);
+      if (APPLE_REMOTE_SOCKET_ROUTE.test(url.pathname))
+        return await handleAppleRemoteSocket(request, env);
       const user = readTrustedUser(request);
       if (url.pathname.startsWith("/signing/"))
         return handleSigningRoute(request, env, user, signingExecutionHooks(env));

@@ -4,9 +4,9 @@ Signing runs use the private account Runner repository and the same generic runn
 
 ## Runner setup
 
-Install the broker and platform toolchain on each host, then register it with the standard `register-gitedge` command for the account Runner repository. Keep the GitEdge registration token and local runner state private. The broker stores the returned GitEdge runner credential; signing credentials remain encrypted on the server and are delivered only to the authorized task under its active lease.
+Install the broker and platform toolchain on each host, then register it with the standard `register-gitedge` command for the account Runner repository. Keep the GitEdge registration token and local runner state private. The broker stores the returned GitEdge runner credential; private keys and long-lived secrets stay encrypted on the server and never reach a runner; see [Credential flow](#credential-flow).
 
-macOS profiles need the required Apple signing and notarization tools. iOS profiles need the approved Xcode, SDK, certificate and provisioning profile. Windows profiles need the approved Microsoft signing tooling. Android profiles need a Java runtime and Android SDK build-tools on a macOS or Linux host. The broker reports its real OS, architecture and available tools so the scheduler can match requirements; custom labels do not change the host platform.
+macOS and iOS profiles need Apple's command line tools for verification, stapling and packaging; signing itself uses a pinned `rcodesign` that the client installs. Windows profiles need the approved Microsoft signing tooling. Android profiles need a Java runtime and Android SDK build-tools on a macOS or Linux host. The broker reports its real OS, architecture and available tools so the scheduler can match requirements; custom labels do not change the host platform.
 
 ## Signing runtime
 
@@ -14,15 +14,42 @@ The signing scripts are part of the runner kit that every GitEdge deployment pub
 
 ### On the runner
 
-A runner needs Node.js 24 or newer, pnpm, network access to the GitEdge origin and the npm registry (or a warm pnpm store) for kit installation, and the platform tools below. The kit lives under `runner-kit/` in the broker state directory, which must be readable by the account that runs jobs. Before the platform step the signing client verifies Node, its dependencies and these tools, and fails with a specific reason such as `preflight_python`, `preflight_dependency` or `preflight_tool_notarytool`. The reason and a short detail appear on the signing request.
+A runner needs Node.js 24 or newer, pnpm, network access to the GitEdge origin and the npm registry (or a warm pnpm store) for kit installation, and the platform tools below. The kit lives under `runner-kit/` in the broker state directory, which must be readable by the account that runs jobs. Before the platform step the signing client verifies Node, its dependencies and these tools, and fails with a specific reason such as `preflight_python`, `preflight_dependency` or `preflight_tool_rcodesign`. The reason and a short detail appear on the signing request.
 
-- macOS and iOS: Python 3.12 or newer (`PYTHON` selects the interpreter, default `python3`), `codesign`, `security`, `lipo` and `xcrun` with `notarytool` and `stapler`; iOS also needs `xcodebuild`, `vtool` and `openssl`, and DMG stages need `hdiutil` and `ditto`.
+- macOS and iOS: Python 3.12 or newer (`PYTHON` selects the interpreter, default `python3`), `codesign`, `lipo` and `ditto`; macOS also needs `plutil`, `tar`, `spctl` and `xcrun stapler`, DMG stages `hdiutil`, and iOS `security`, `openssl` and `xcrun vtool`. Signing stages (`sign`, `dmg_sign`, `ios_sign`) also need network access to `github.com` and to Apple's notarization upload bucket on S3: preflight installs `rcodesign` 0.29.0 from the apple-codesign release on GitHub, verifies the archive's SHA-256 against the digest pinned in `scripts/signing/apple-remote.mjs`, and caches it under `~/Library/Caches/gitedge` of the account that runs jobs (`$XDG_CACHE_HOME/gitedge` or `~/.cache/gitedge` on Linux). A failed download or digest reports `preflight_tool_rcodesign`. Xcode's `notarytool` and `xcodebuild` and a signing keychain are not used.
 - Windows: PowerShell 7 (`pwsh`) and the approved Microsoft signing tooling.
-- Android (macOS or Linux): a Java runtime (`JAVA_HOME/bin/java`, or `java` on `PATH`) and Android SDK build-tools 30 or newer with `aapt2`, `zipalign` and `lib/apksigner.jar`. The newest installed build-tools under `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `~/Library/Android/sdk` (macOS) or `~/Android/Sdk` (Linux) are used, so set `ANDROID_HOME` and `JAVA_HOME` in the broker environment when jobs run as another account. Preflight reports `preflight_tool_java`, `preflight_tool_android_build_tools`, `preflight_tool_aapt2` or `preflight_tool_apksigner`.
+- Android (macOS or Linux): a JDK with `javac` (`JAVA_HOME/bin/java` and `javac`, or both on `PATH`; Java 11 or newer) and Android SDK build-tools 30 or newer with `aapt2`, `zipalign` and `lib/apksigner.jar`. The newest installed build-tools under `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `~/Library/Android/sdk` (macOS) or `~/Android/Sdk` (Linux) are used, so set `ANDROID_HOME` and `JAVA_HOME` in the broker environment when jobs run as another account. Preflight reports `preflight_tool_java`, `preflight_tool_javac`, `preflight_tool_android_build_tools`, `preflight_tool_aapt2` or `preflight_tool_apksigner`.
 
 A disposable VM installs its host's kit before every job. To speed this up, warm the pnpm store in the VM image by running `pnpm install --frozen-lockfile --prod` once in `packages/runner-kit` of a recent release and keeping the store; correctness never depends on the warm-up.
 
-On a macOS host where jobs run as root, the Developer ID intermediate certificates must be installed in the System keychain so `codesign` can build the chain.
+## Credential flow
+
+Stored credentials keep their format, but the Actions Worker is the only place they are decrypted. The `authorize-sign` response (the grant) carries public material only, and every secret-dependent operation is a lease-authenticated call to the Worker:
+
+| Platform | Grant (`credentials`)                                         | Remote operation                                                                          |
+| -------- | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Android  | `{ "chain": ["<base64 DER>", ...] }` (leaf first)             | `sign`: the Worker signs with the keystore key                                            |
+| Windows  | `{ "tenant_id": "...", "client_id": "..." }`                  | `azure-token`: the Worker exchanges the client secret for an Entra token                  |
+| iOS      | `{ "chain": [...], "provisioning_profile": "<base64>" }`      | Apple remote signing (see the Apple endpoints below)                                      |
+| macOS    | `{ "chain": [...] }` (`{}` for `finalize` and `dmg_finalize`) | Apple remote signing and `notary`: the Worker signs the App Store Connect JWT and submits |
+
+The client adds `remote` (`endpoint`, `jobToken`, `runId`, `leaseToken`) to the grant it hands to platform executors; it is the same lease credential the client uses for every other callback. Remote operations require a prior `authorize-sign` for the stage, the active lease and an unchanged approved profile. The Worker caches imported keys per isolate (keyed by owner, repository, profile revision, platform and credential update time), keeps them non-extractable, counts operations per run and kind in `actions_signing_remote_operations`, and refuses a kind after 4096 operations in one run.
+
+Android and Apple credentials are PKCS#12 files parsed in the Worker (3DES/RC2 and PBES2 encryption, RSA and P-256/P-384 keys).
+
+### Apple remote signing
+
+Apple stages sign with `rcodesign sign` in its remote signing mode, with GitEdge as both the relay server and the signer:
+
+1. The executor calls `apple-remote`. The Worker opens a session in the run's `AppleRemoteSigner` Durable Object, which generates an RSA-OAEP key pair for this session only (the private key is non-extractable and stays in memory) and returns `{ "url": "wss://<origin>/api/actions/runner/signing/apple-remote/<runId>/<token>", "publicKeyPem": "..." }`. The token is single use, because `rcodesign` cannot send authentication headers.
+2. The executor runs `rcodesign sign --remote-public-key-pem-file <file> --remote-signing-url <url> ...`. `rcodesign` connects, creates a relay session and prints a session join string, which the executor posts to `apple-remote/join`.
+3. The Durable Object decrypts the join string with the session key, checks that it names this relay URL and session, loads the profile's key with the Worker's credential loader and completes the key agreement. `rcodesign` then requests the certificate chain and sends each signature request over the encrypted channel; every signature is counted as an `apple-sign` operation.
+
+Each socket upgrade, join and signature rechecks the run lease in D1, and a 30-second alarm closes the session once the lease ends, is cancelled or after one hour. Apple keys must be RSA or EC P-384: `rcodesign` 0.29 verifies every remote ECDSA signature as P-384, so a P-256 key fails with `apple_remote_signing_key_unsupported`.
+
+macOS `sign` signs the bundle with `--for-notarization` (hardened runtime on every Mach-O, Apple timestamp). The bundle and nested `.app` bundles get the entitlements Electron's signing tool applies by default: the main bundle and plain helpers get `allow-jit` and the device and personal-information entitlements, and the `(Plugin)`, `(GPU)` and `(Renderer)` helpers get the Chromium helper sets. `dmg_sign` signs the disk image the same way. Both then zip (or take) the artifact, call `notary` with its SHA-256 and upload it to the returned S3 object with SigV4 from Node; the submission id goes into `verification.json` as before, the coordinator polls Apple and queues the `finalize` stage, and `finalize` staples with `xcrun stapler`, which needs no credentials.
+
+`ios_sign` copies the archived app into `Payload/`, embeds the granted provisioning profile, and signs with entitlements made of the app's existing entitlements plus `application-identifier`, `com.apple.developer.team-identifier` and `get-task-allow` from the profile (no timestamp, as for development exports). The grant's leaf certificate must be the profile's development certificate. The IPA is zipped with `ditto` and verified as before.
 
 ## Approve a definition and credentials
 
@@ -32,7 +59,7 @@ Source policy identifies permitted GitHub repository IDs, workflow path, actor I
 
 Without `releaseTagPattern`, a source build must come from its repository's default branch. A release profile additionally checks its approved tag pattern, the exact `v<version>` tag and default-branch ancestry. All submissions require GitHub Actions OIDC proof for that source run. Grant the source job `id-token: write`; the CLI obtains a fresh identity with the Gateway origin as its audience. A caller integrating the client directly supplies `sourceIdentity`, or sets `GITEDGE_SOURCE_IDENTITY` for the CLI. Identity tokens are never part of the stored request.
 
-Use the signing profile panel to approve a profile and install platform credential JSON. A single GitHub personal access token (PAT) for the account Runner repository is pasted once at the top of the panel; every signing profile in the repository uses it to read source runs, it is encrypted with AAD `<owner>:<repository>:github-source`, it also serves every GitHub sync connection the account created and its billing usage reads, and it survives profile re-approval. Windows platform credentials must be exactly `{ "tenant_id": "...", "client_id": "...", "client_secret": "..." }`; the broker does not use a preconfigured managed or workload identity. The service encrypts credentials at rest and grants them per authorized task. Credential writes and removal require recent human authentication. The panel exposes configuration metadata, never stored secret values.
+Use the signing profile panel to approve a profile and install platform credential JSON. A single GitHub personal access token (PAT) for the account Runner repository is pasted once at the top of the panel; every signing profile in the repository uses it to read source runs, it is encrypted with AAD `<owner>:<repository>:github-source`, it also serves every GitHub sync connection the account created and its billing usage reads, and it survives profile re-approval. Windows platform credentials must be exactly `{ "tenant_id": "...", "client_id": "...", "client_secret": "..." }`. The service encrypts credentials at rest and uses them only inside the Actions Worker. Credential writes and removal require recent human authentication. The panel exposes configuration metadata, never stored secret values.
 
 ## Windows recipes
 
@@ -50,6 +77,8 @@ policy:
       max_unpacked_bytes: 2000000000
       installer: none
 ```
+
+The signing host receives no client secret. The executor points the Artifact Signing module's managed-identity credential at the Worker through `IDENTITY_ENDPOINT` (the request's `azure-token` URL), `IDENTITY_HEADER` (the lease credential) and `AZURE_TENANT_ID`/`AZURE_CLIENT_ID`, and excludes the environment credential. Only the `https://codesigning.azure.net` resource is served.
 
 Both recipes verify each signature with SignTool (`/pa`, all signatures, timestamp required) and check the signer subject against `policy.azure.subject`.
 
@@ -97,7 +126,7 @@ The source ZIP holds exactly two root files: `unsigned.apk` (the unsigned releas
 }
 ```
 
-The submission `version` must equal `source.json` `version` and the APK `versionName`; `version_code` must equal the APK `versionCode`; the package name must match the policy and the APK. The host checks the archive digest and layout, reads the APK with `aapt2 dump badging` (debuggable APKs are rejected), runs `zipalign -p 4`, signs with `apksigner` (APK Signature Scheme v2 and v3; v1 follows the APK's `minSdkVersion`), and verifies the result with `apksigner verify --print-certs`: exactly one signer whose certificate digest equals `certificate_sha256`. The keystore and password files exist only inside a private temporary directory during signing and are removed afterwards. The output contains `signed.apk` and `verification.json` (`version_code`, `certificate_sha256`, `v1_verified`, `v2_verified`, `v3_verified` and the APK digest).
+The submission `version` must equal `source.json` `version` and the APK `versionName`; `version_code` must equal the APK `versionCode`; the package name must match the policy and the APK. The host checks the archive digest and layout, reads the APK with `aapt2 dump badging` (debuggable APKs are rejected), runs `zipalign -p 4`, signs with `apksigner` (APK Signature Scheme v2 and v3; v1 follows the APK's `minSdkVersion`), and verifies the result with `apksigner verify --print-certs`: exactly one signer whose certificate digest equals `certificate_sha256`. No key material reaches the host: the executor compiles `scripts/signing/android-remote/RemoteProvider.java` with `javac` into a private temporary directory and runs `apksigner` with a `GITEDGE` keystore backed by that provider, which fetches the certificate chain from `signer` and sends every signature to `sign`. Before signing, the executor checks that the grant's leaf certificate digest equals `certificate_sha256`. The provider configuration (endpoint and lease credential) is a mode-0600 file in the same directory and is removed afterwards. Signatures use SHA-1, SHA-256, SHA-384 or SHA-512 digests as `apksigner` selects for the APK. The output contains `signed.apk` and `verification.json` (`version_code`, `certificate_sha256`, `v1_verified`, `v2_verified`, `v3_verified` and the APK digest).
 
 Failures are reported as `android_<phase>_<code>`, for example `android_source_source_binding`, `android_apk_metadata_apk_version`, `android_signature_verification_certificate_mismatch` or `android_tools_build_tools_unavailable`.
 
@@ -212,8 +241,20 @@ All paths below are under `/api/actions` on the Gateway. Pass the private Runner
 | GET    | `/signing/requests?sourceRunId=...`        | Find requests for an authorized source run                                                      |
 | GET    | `/signing/requests/:id/download`           | Download verified final output                                                                  |
 
+The runner endpoints below are under `/api/actions/runner/signing/requests/:id/` and use the same lease authentication and `authorize-sign` precondition. Responses use the usual `{ "data": ... }` envelope, except `azure-token`, which returns the bare managed-identity JSON.
+
+| Method | Path                   | Purpose                                                                                                                                                                                                                                                                                |
+| ------ | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `signer`               | `{ "keyType": "rsa"\|"ec-p256"\|"ec-p384", "chain": ["<base64 DER>"] }` (Android, iOS, macOS)                                                                                                                                                                                          |
+| POST   | `sign`                 | Android: `{ "data": "<base64>", "hash": "SHA-256", "format": "der" }` returns `{ "signature": "<base64>" }`; `format` is `der` (default) or `raw` for ECDSA                                                                                                                            |
+| GET    | `azure-token`          | Windows, App Service managed-identity protocol: `?api-version=2019-08-01&resource=https://codesigning.azure.net`, header `X-IDENTITY-HEADER: <jobToken>.<runId>.<leaseToken>`; returns `{ access_token, expires_on, resource, token_type }` with `expires_on` as a Unix-seconds string |
+| POST   | `notary`               | macOS `sign` and `dmg_sign`: `{ "sha256": "<hex>", "submissionName": "..." }` returns `{ id, region, bucket, object, awsAccessKeyId, awsSecretAccessKey, awsSessionToken }`                                                                                                            |
+| GET    | `notary/:submissionId` | macOS: `{ "status": "In Progress"\|"Accepted"\|"Invalid"\|"Rejected" }`                                                                                                                                                                                                                |
+| POST   | `apple-remote`         | macOS `sign` and `dmg_sign`, iOS `ios_sign`: opens a remote signing session and returns `{ "url": "wss://...", "publicKeyPem": "..." }`                                                                                                                                                |
+| POST   | `apple-remote/join`    | `{ "sessionJoinString": "<base64url>" }` from `rcodesign`; returns `{ "joined": true }`                                                                                                                                                                                                |
+
 The runner failure callback `POST /runner/signing/requests/:id/fail` accepts an optional `reason` (`^[a-z0-9_]{1,64}$`, for example `preflight_dependency` or `preflight_python`) and `detail` (up to 300 characters; control characters are replaced by spaces). The account signing list returns them beside each request as `failure: { reason, detail }`, `null` unless the request failed; the request object itself is unchanged.
 
-Runner callbacks require the registered runner credential and matching native run lease. Signing profile approval and the task/lease authorization govern signing and credential access. Account-runner capacity, cancellation, history and repository admission limits apply to signing stages.
+Runner callbacks require the registered runner credential or the job credential, and the matching native run lease. Signing profile approval and the task/lease authorization govern signing and credential access. Account-runner capacity, cancellation, history and repository admission limits apply to signing stages.
 
 Signing requests have a six-day deadline. Source archives and unfinished uploads expire after 24 hours. Failed execution stages retain their inputs until that original deadline so they can be retried; success, cancellation, invalid source and rejected notarization remove inputs immediately. Signed output archives also expire 24 hours after the request succeeds, or can be released immediately after publication with the output delete endpoint. Request metadata remains in history; expired downloads return 410. Import verified outputs into release storage before their retention period ends.

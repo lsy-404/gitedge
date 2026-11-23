@@ -248,23 +248,10 @@ async function executeStage(input: {
           ? {
               tenant_id: "11111111-1111-4111-8111-111111111111",
               client_id: "22222222-2222-4222-8222-222222222222",
-              client_secret: "task-scoped-secret",
             }
           : input.profile.platform === "ios"
-            ? {
-                certificate_p12: "Y2VydA==",
-                certificate_password: "temporary",
-                provisioning_profile: "cHJvZmlsZQ==",
-              }
-            : {
-                certificate_p12: "Y2VydA==",
-                certificate_password: "temporary",
-                notarization: {
-                  key_id: "ABCDE12345",
-                  issuer_id: "33333333-3333-4333-8333-333333333333",
-                  private_key: "x".repeat(120),
-                },
-              },
+            ? { chain: ["Y2VydA=="], provisioning_profile: "cHJvZmlsZQ==" }
+            : { chain: ["Y2VydA=="] },
     }),
     verifyOutput: async () => true,
     verifyNotarization: async () => "Accepted",

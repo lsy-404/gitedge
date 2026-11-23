@@ -81,9 +81,9 @@ switch ($Mode) {
       FileDigest = 'SHA256'
       TimestampRfc3161 = 'http://timestamp.acs.microsoft.com'
       TimestampDigest = 'SHA256'
-      ExcludeEnvironmentCredential = $false
+      ExcludeEnvironmentCredential = $true
       ExcludeWorkloadIdentityCredential = $true
-      ExcludeManagedIdentityCredential = $true
+      ExcludeManagedIdentityCredential = $false
       ExcludeSharedTokenCacheCredential = $true
       ExcludeVisualStudioCredential = $true
       ExcludeVisualStudioCodeCredential = $true

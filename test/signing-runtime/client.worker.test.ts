@@ -440,15 +440,7 @@ describe("native signing context and Actions client", () => {
       if (action === "authorize-sign")
         return Response.json({
           data: {
-            credentials: {
-              certificate_p12: "YQ==",
-              certificate_password: "temporary-password",
-              notarization: {
-                key_id: "ABCDEFGHIJ",
-                issuer_id: randomUUID(),
-                private_key: "k".repeat(100),
-              },
-            },
+            credentials: { chain: ["YQ=="] },
             expiresAt: Date.now() + 30_000,
             leaseExpiresAt: runContext.leaseExpiresAt,
           },
@@ -486,7 +478,7 @@ describe("native signing context and Actions client", () => {
       contextReader: async (file) => parseSigningContext(JSON.parse(await readFile(file, "utf8"))),
       platformExecutor: async (_manifest, _input, outputDir, credentialsProvider) => {
         const credentials = await credentialsProvider();
-        expect(credentials.certificate_password).toBe("temporary-password");
+        expect(credentials.chain).toEqual(["YQ=="]);
         await writeFile(path.join(outputDir, "signed.tar.gz"), signed, { mode: 0o600 });
         await writeFile(path.join(outputDir, "verification.json"), JSON.stringify(report), {
           mode: 0o600,
@@ -546,7 +538,6 @@ describe("native signing context and Actions client", () => {
             credentials: {
               tenant_id: randomUUID(),
               client_id: randomUUID(),
-              client_secret: "task-scoped-secret",
             },
             expiresAt: Date.now() + 30_000,
             leaseExpiresAt: runContext.leaseExpiresAt,
@@ -580,7 +571,7 @@ describe("native signing context and Actions client", () => {
           expect.objectContaining({
             tenant_id: expect.any(String),
             client_id: expect.any(String),
-            client_secret: "task-scoped-secret",
+            remote: expect.objectContaining({ endpoint: expect.any(String) }),
           })
         );
         await writeFile(path.join(outputDir, "product.exe"), signed, { mode: 0o600 });
@@ -717,11 +708,7 @@ describe("native signing context and Actions client", () => {
       if (action === "authorize-sign")
         return Response.json({
           data: {
-            credentials: {
-              certificate_p12: "YQ==",
-              certificate_password: "one-time-credential",
-              provisioning_profile: "YQ==",
-            },
+            credentials: { chain: ["YQ=="], provisioning_profile: "YQ==" },
             expiresAt: Date.now() + 30_000,
             leaseExpiresAt: runContext.leaseExpiresAt,
           },
@@ -751,7 +738,7 @@ describe("native signing context and Actions client", () => {
       contextReader: async (file) => parseSigningContext(JSON.parse(await readFile(file, "utf8"))),
       platformExecutor: async (_manifest, _input, outputDir, credentialsProvider) => {
         expect(await credentialsProvider()).toMatchObject({
-          certificate_password: "one-time-credential",
+          chain: ["YQ=="],
           provisioning_profile: "YQ==",
         });
         await writeFile(path.join(outputDir, "signed.ipa"), signed, { mode: 0o600 });

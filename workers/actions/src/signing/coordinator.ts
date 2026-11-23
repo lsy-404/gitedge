@@ -829,6 +829,13 @@ export class SigningCoordinator extends DurableObject<SigningEnv> {
       );
       return { authorized: true };
     }
+    if (operation === "remote-authorized") {
+      if (row.authorized_at <= 0) throw new Error("signing_not_authorized");
+      return {
+        profile,
+        submission: SigningSubmissionSchema.parse(JSON.parse(row.submission_json)),
+      };
+    }
     if (operation === "output") {
       if (row.authorized_at <= 0) throw new Error("signing_not_authorized");
       const digest = String(payload?.digest ?? "");
