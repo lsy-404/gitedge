@@ -62,6 +62,8 @@ const iosFailureCodes = new Set([
   "source_binding",
   "archive_app_path",
   "nested_bundle",
+  "extension_bundle",
+  "extension_profile_missing",
   "archive_metadata",
   "archive_executable",
   "archive_architecture",
@@ -325,19 +327,7 @@ async function archiveMetadata(root, manifest, source, temp) {
   )
     throw new RunnerFailure("archive_app_path");
   const app = path.join(root, "Products", relative);
-  async function rejectNestedBundles(directory) {
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
-      if (
-        entry.isDirectory() &&
-        (entry.name.endsWith(".app") ||
-          entry.name.endsWith(".appex") ||
-          entry.name.endsWith(".xpc"))
-      )
-        throw new RunnerFailure("nested_bundle");
-      if (entry.isDirectory()) await rejectNestedBundles(path.join(directory, entry.name));
-    }
-  }
-  await rejectNestedBundles(app);
+  const extensionDirectories = await collectExtensionBundles(app);
   const appInfo = await plist(path.join(app, "Info.plist"), temp);
   const build = appInfo.CFBundleVersion;
   if (
@@ -357,11 +347,59 @@ async function archiveMetadata(root, manifest, source, temp) {
     source.bundle_id !== appInfo.CFBundleIdentifier
   )
     throw new RunnerFailure("source_binding");
-  const executable = path.join(app, appInfo.CFBundleExecutable ?? "");
-  if (!appInfo.CFBundleExecutable || path.basename(executable) !== appInfo.CFBundleExecutable)
+  await verifyBundleExecutable(app, appInfo);
+  const extensions = [];
+  for (const directory of extensionDirectories) {
+    let extensionInfo;
+    try {
+      extensionInfo = await plist(path.join(app, directory, "Info.plist"), temp);
+    } catch {
+      throw new RunnerFailure("extension_bundle");
+    }
+    const bundleId = extensionInfo.CFBundleIdentifier;
+    if (
+      typeof bundleId !== "string" ||
+      !bundleId.startsWith(`${manifest.bundle_id}.`) ||
+      !bundleIdPattern.test(bundleId) ||
+      extensions.some((extension) => extension.bundleId === bundleId) ||
+      extensionInfo.CFBundleShortVersionString !== manifest.version ||
+      extensionInfo.CFBundleVersion !== build
+    )
+      throw new RunnerFailure("extension_bundle");
+    await verifyBundleExecutable(path.join(app, directory), extensionInfo);
+    extensions.push({ directory, bundleId });
+  }
+  return { app, archiveInfo, appInfo, build, extensions };
+}
+
+const bundleIdPattern = /^[A-Za-z0-9][A-Za-z0-9.-]{0,254}$/;
+const nestedBundleSuffixes = [".app", ".appex", ".xpc"];
+
+/** Returns the app's extension bundles as paths relative to the app; any other nested bundle is rejected. */
+async function collectExtensionBundles(app) {
+  const extensions = [];
+  async function walk(directory) {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const child = path.join(directory, entry.name);
+      if (nestedBundleSuffixes.some((suffix) => entry.name.endsWith(suffix))) {
+        if (!entry.name.endsWith(".appex") || directory !== path.join(app, "PlugIns"))
+          throw new RunnerFailure("nested_bundle");
+        extensions.push(path.relative(app, child));
+      }
+      await walk(child);
+    }
+  }
+  await walk(app);
+  return extensions.sort();
+}
+
+async function verifyBundleExecutable(bundle, info) {
+  const executable = path.join(bundle, info.CFBundleExecutable ?? "");
+  if (!info.CFBundleExecutable || path.basename(executable) !== info.CFBundleExecutable)
     throw new RunnerFailure("archive_executable");
-  const info = await lstat(executable);
-  if (!info.isFile() || info.isSymbolicLink()) throw new RunnerFailure("archive_executable");
+  const stat = await lstat(executable);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new RunnerFailure("archive_executable");
   const lipo = await command("/usr/bin/lipo", ["-archs", executable]);
   if (lipo.stdout.trim().split(/\s+/).join(",") !== "arm64")
     throw new RunnerFailure("archive_architecture");
@@ -371,7 +409,6 @@ async function archiveMetadata(root, manifest, source, temp) {
     /platform\s+IOSSIMULATOR(?:\s|$)/m.test(buildInfo.stdout)
   )
     throw new RunnerFailure("archive_platform");
-  return { app, archiveInfo, appInfo, build };
 }
 
 async function profilePlist(file, temp, setPhase) {
@@ -544,6 +581,38 @@ async function developmentEntitlements(app, profile, { teamId, bundleId }, temp)
   };
 }
 
+async function verifySignedBundle(
+  bundle,
+  { bundleId, profileInfo, certificateSha1 },
+  teamId,
+  work
+) {
+  const embeddedProfile = await profilePlist(path.join(bundle, "embedded.mobileprovision"), work);
+  const signedProfileInfo = validateIosProfile(embeddedProfile, {
+    teamId,
+    bundleId,
+    certificateSha1,
+  });
+  if (
+    signedProfileInfo.uuid !== profileInfo.uuid ||
+    signedProfileInfo.expiration !== profileInfo.expiration
+  )
+    throw new RunnerFailure("signature_profile");
+  const certDirectory = await mkdtemp(path.join(work, "signature-certs-"));
+  await command("/usr/bin/codesign", ["-d", "--extract-certificates", bundle], {
+    cwd: certDirectory,
+  });
+  const leafSha1 = createHash("sha1")
+    .update(await readFile(path.join(certDirectory, "codesign0")))
+    .digest("hex")
+    .toUpperCase();
+  if (leafSha1 !== certificateSha1) throw new RunnerFailure("signature_identity");
+  validateSignedEntitlements(await signedEntitlements(bundle, work), embeddedProfile, {
+    teamId,
+    bundleId,
+  });
+}
+
 async function runIos(manifestInput, artifactZip, outputDirectory, credentialInput) {
   const manifest = iosManifestSchema.parse(manifestInput);
   if (process.platform !== "darwin") throw new RunnerFailure("macos_host_required");
@@ -616,6 +685,28 @@ async function runIos(manifestInput, artifactZip, outputDirectory, credentialInp
       bundleId: manifest.bundle_id,
       certificateSha1: profileCertificateSha,
     });
+    const extensionProfiles = [];
+    for (const [index, extension] of info.extensions.entries()) {
+      const encoded = grant.extension_profiles?.[extension.bundleId];
+      if (!encoded) throw new RunnerFailure("extension_profile_missing");
+      phase = "profile";
+      const file = path.join(work, `extension-${index}.mobileprovision`);
+      await writeFile(file, Buffer.from(encoded, "base64"), { mode: 0o600, flag: "wx" });
+      const extensionProfile = await profilePlist(file, work, (nextPhase) => {
+        phase = nextPhase;
+      });
+      const extensionInfo = validateIosProfile(extensionProfile, {
+        teamId: manifest.team_id,
+        bundleId: extension.bundleId,
+        certificateSha1: profileCertificateSha,
+      });
+      extensionProfiles.push({
+        ...extension,
+        file,
+        profile: extensionProfile,
+        info: extensionInfo,
+      });
+    }
     phase = "identity";
     const signingCertificateSha = createHash("sha1")
       .update(Buffer.from(grant.chain[0], "base64"))
@@ -646,10 +737,36 @@ async function runIos(manifestInput, artifactZip, outputDirectory, credentialInp
         work
       )
     );
+    const scopedEntitlements = [];
+    for (const [index, extension] of extensionProfiles.entries()) {
+      await writeFile(
+        path.join(exportedApp, extension.directory, "embedded.mobileprovision"),
+        await readFile(extension.file),
+        { mode: 0o644 }
+      );
+      const file = path.join(work, `extension-${index}.entitlements`);
+      await writePlist(
+        file,
+        await developmentEntitlements(
+          path.join(info.app, extension.directory),
+          extension.profile,
+          { teamId: manifest.team_id, bundleId: extension.bundleId },
+          work
+        )
+      );
+      scopedEntitlements.push("--entitlements-xml-file", `${extension.directory}:${file}`);
+    }
     try {
       await rcodesignSign(
         grant.remote,
-        ["--timestamp-url", "none", "--entitlements-xml-file", entitlementsFile, exportedApp],
+        [
+          "--timestamp-url",
+          "none",
+          "--entitlements-xml-file",
+          entitlementsFile,
+          ...scopedEntitlements,
+          exportedApp,
+        ],
         { work, signal: signingAbortSignal, timeout: 10 * 60_000 }
       );
     } catch {
@@ -701,35 +818,23 @@ async function runIos(manifestInput, artifactZip, outputDirectory, credentialInp
     );
     if (!codesignIdentityMatches(detail.stderr, manifest.team_id))
       throw new RunnerFailure("signature_identity");
-    const embeddedProfile = await profilePlist(
-      path.join(signedApp, "embedded.mobileprovision"),
+    await verifySignedBundle(
+      signedApp,
+      { bundleId: manifest.bundle_id, profileInfo, certificateSha1: profileCertificateSha },
+      manifest.team_id,
       work
     );
-    const signedProfileInfo = validateIosProfile(embeddedProfile, {
-      teamId: manifest.team_id,
-      bundleId: manifest.bundle_id,
-      certificateSha1: profileCertificateSha,
-    });
-    if (
-      signedProfileInfo.uuid !== profileInfo.uuid ||
-      signedProfileInfo.expiration !== profileInfo.expiration
-    )
-      throw new RunnerFailure("signature_profile");
-    const certDirectory = path.join(work, "signature-certs");
-    await mkdir(certDirectory, { mode: 0o700 });
-    await command("/usr/bin/codesign", ["-d", "--extract-certificates", signedApp], {
-      cwd: certDirectory,
-    });
-    const leafSha1 = createHash("sha1")
-      .update(await readFile(path.join(certDirectory, "codesign0")))
-      .digest("hex")
-      .toUpperCase();
-    if (leafSha1 !== profileCertificateSha) throw new RunnerFailure("signature_identity");
-    const entitlements = await signedEntitlements(signedApp, work);
-    validateSignedEntitlements(entitlements, embeddedProfile, {
-      teamId: manifest.team_id,
-      bundleId: manifest.bundle_id,
-    });
+    for (const extension of extensionProfiles)
+      await verifySignedBundle(
+        path.join(signedApp, extension.directory),
+        {
+          bundleId: extension.bundleId,
+          profileInfo: extension.info,
+          certificateSha1: profileCertificateSha,
+        },
+        manifest.team_id,
+        work
+      );
     await import("node:fs/promises").then((fs) =>
       fs.copyFile(ipa, path.join(outputDirectory, "signed.ipa"))
     );

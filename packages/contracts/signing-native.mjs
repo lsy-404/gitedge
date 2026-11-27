@@ -266,16 +266,25 @@ export const iosSourceMetadataSchema = z
   })
   .strict();
 
+const iosExtensionProfilesSchema = z
+  .record(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9.-]{0,254}$/), base64.max(200_000))
+  .refine((profiles) => Object.keys(profiles).length <= 8);
+
 export const iosCredentialsSchema = z
   .object({
     certificate_p12: base64.max(40_000),
     certificate_password: z.string().min(1).max(512),
     provisioning_profile: base64.max(200_000),
+    extension_profiles: iosExtensionProfilesSchema.optional(),
   })
   .strict();
 
 export const iosGrantSchema = z
-  .object({ chain: certificateChainSchema, provisioning_profile: base64.max(200_000) })
+  .object({
+    chain: certificateChainSchema,
+    provisioning_profile: base64.max(200_000),
+    extension_profiles: iosExtensionProfilesSchema.optional(),
+  })
   .strict();
 
 export const iosVerificationSchema = z

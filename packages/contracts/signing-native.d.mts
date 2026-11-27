@@ -46,7 +46,11 @@ export declare const azureProfileSchema: z.ZodType<unknown>;
 export declare const certificateChainSchema: z.ZodType<string[]>;
 export declare const macosGrantSchema: z.ZodType<{ chain: string[] }>;
 export declare const windowsGrantSchema: z.ZodType<{ tenant_id: string; client_id: string }>;
-export declare const iosGrantSchema: z.ZodType<{ chain: string[]; provisioning_profile: string }>;
+export declare const iosGrantSchema: z.ZodType<{
+  chain: string[];
+  provisioning_profile: string;
+  extension_profiles?: Record<string, string>;
+}>;
 export declare const androidGrantSchema: z.ZodType<{ chain: string[] }>;
 export declare const windowsCredentialsSchema: z.ZodType<{
   tenant_id: string;
@@ -80,6 +84,7 @@ export declare const iosCredentialsSchema: z.ZodType<{
   certificate_p12: string;
   certificate_password: string;
   provisioning_profile: string;
+  extension_profiles?: Record<string, string>;
 }>;
 export type IosVerification = {
   schema_version: 1;

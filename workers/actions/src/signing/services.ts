@@ -433,6 +433,7 @@ function credentialSchema(platform: string): (value: unknown) => Record<string, 
         certificate_p12: parsed.certificate_p12,
         certificate_password: parsed.certificate_password,
         provisioning_profile: parsed.provisioning_profile,
+        ...(parsed.extension_profiles && { extension_profiles: parsed.extension_profiles }),
       };
     };
   if (platform === "macos")
@@ -795,8 +796,13 @@ async function grantCredentials(
   if (profile.platform === "ios") {
     const credentials = await storedCredentials(env, context, profile);
     if (!credentials) return null;
+    const { provisioning_profile, extension_profiles } = iosCredentialsSchema.parse(credentials);
     return {
-      credentials: { chain, provisioning_profile: credentials.provisioning_profile },
+      credentials: {
+        chain,
+        provisioning_profile,
+        ...(extension_profiles && { extension_profiles }),
+      },
       expiresAt,
     };
   }
