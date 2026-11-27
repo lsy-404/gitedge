@@ -116,12 +116,9 @@ async function verifyImage(image, manifest) {
     "--verbose=2",
     image,
   ]);
+  // rcodesign leaves the team field out of a disk image's code directory; the requirement above pins the team.
   const details = await command("/usr/bin/codesign", ["-dv", "--verbose=4", image]);
-  const text = details.stdout + "\n" + details.stderr;
-  if (
-    text.match(/^TeamIdentifier=(.+)$/m)?.[1] !== manifest.team_id ||
-    !text.match(/^Timestamp=(?!none$).+/m)
-  )
+  if (!(details.stdout + "\n" + details.stderr).match(/^Timestamp=(?!none$).+/m))
     throw new Error("disk image signature mismatch");
 }
 
