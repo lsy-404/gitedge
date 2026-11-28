@@ -86,6 +86,10 @@ export declare const iosCredentialsSchema: z.ZodType<{
   provisioning_profile: string;
   extension_profiles?: Record<string, string>;
 }>;
+export declare const iosProfilesUpdateSchema: z.ZodType<{
+  provisioning_profile?: string;
+  extension_profiles?: Record<string, string>;
+}>;
 export type IosVerification = {
   schema_version: 1;
   request_id: string;

@@ -18,6 +18,7 @@ import {
   credentialsSchema as macosCredentialsSchema,
   windowsCredentialsSchema,
   iosCredentialsSchema,
+  iosProfilesUpdateSchema,
   androidCredentialsSchema,
   macosVerificationSchema,
   windowsVerificationSchema,
@@ -459,7 +460,22 @@ export async function installSigningCredentials(
   const profile = await readProfile(env, ownerId, repositoryId, profileName);
   if (!profile) throw new Error("signing_profile_not_approved");
   if (profile.platform !== platform) throw new Error("signing_profile_not_approved");
-  const safeValue = credentialSchema(platform)(value);
+  let input = value;
+  if (platform === "ios") {
+    // Profiles are not secret, so they can be replaced without resubmitting the certificate.
+    const update = iosProfilesUpdateSchema.safeParse(value);
+    if (update.success) {
+      const stored = await storedPlatformCredentials(
+        env,
+        ownerId,
+        repositoryId,
+        profile.revision,
+        "ios"
+      );
+      if (stored) input = { ...stored, ...update.data };
+    }
+  }
+  const safeValue = credentialSchema(platform)(input);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const aad = new TextEncoder().encode(
     `${ownerId}:${repositoryId}:${profile.revision}:${platform}`

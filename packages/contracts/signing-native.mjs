@@ -279,6 +279,14 @@ export const iosCredentialsSchema = z
   })
   .strict();
 
+export const iosProfilesUpdateSchema = z
+  .object({
+    provisioning_profile: base64.max(200_000).optional(),
+    extension_profiles: iosExtensionProfilesSchema.optional(),
+  })
+  .strict()
+  .refine((value) => value.provisioning_profile || value.extension_profiles);
+
 export const iosGrantSchema = z
   .object({
     chain: certificateChainSchema,
