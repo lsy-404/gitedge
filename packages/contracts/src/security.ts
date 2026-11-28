@@ -147,6 +147,8 @@ export interface SecuritySummary {
     valid: boolean;
     expiresAt: number | null;
     methods: ("password" | SecondFactorMethod)[];
+    /** Configured SSO providers with an identity linked to this account. */
+    sso: { id: string; label: string }[];
   };
 }
 

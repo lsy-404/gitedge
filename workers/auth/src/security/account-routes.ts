@@ -20,6 +20,7 @@ import { dataResponse, errorResponse, requireRecentAuth } from "../../../../src/
 import { auditActor, recordAudit, type AuditInput } from "../../../../src/worker/common/audit";
 import { createLogger } from "../../../../src/worker/common/logger";
 import { readJsonLimited, SMALL_JSON_BYTES } from "../../../../src/worker/common/readText";
+import { ssoProviders } from "../sso/config";
 import { verifyPassword } from "../password";
 import { findAccountById, replacePassword } from "./accounts";
 import { saveChallenge, takeChallenge } from "./challenges";
@@ -75,9 +76,32 @@ function reauthRequired(session: HumanSession): Response | null {
   return requireRecentAuth(session.user);
 }
 
+async function reauthProviders(
+  env: SecurityEnv,
+  userId: string
+): Promise<SecuritySummary["recentAuth"]["sso"]> {
+  let providers: ReturnType<typeof ssoProviders>;
+  try {
+    providers = ssoProviders(env);
+  } catch {
+    return [];
+  }
+  if (!providers.length) return [];
+  const linked = await env.DB.prepare(
+    "SELECT provider_id AS providerId, issuer FROM auth_sso_identities WHERE user_id = ?"
+  )
+    .bind(userId)
+    .all<{ providerId: string; issuer: string }>();
+  return providers
+    .filter((provider) =>
+      linked.results.some((row) => row.providerId === provider.id && row.issuer === provider.issuer)
+    )
+    .map((provider) => ({ id: provider.id, label: provider.label }));
+}
+
 async function summary(env: SecurityEnv, session: HumanSession): Promise<SecuritySummary> {
   const userId = session.user.id;
-  const [account, email, passkeys, recoveryCodesRemaining, totp, methods] = await Promise.all([
+  const [account, email, passkeys, recoveryCodesRemaining, totp, methods, sso] = await Promise.all([
     findAccountById(env, userId),
     env.DB.prepare("SELECT email, verified_at AS verifiedAt FROM auth_emails WHERE user_id = ?")
       .bind(userId)
@@ -86,6 +110,7 @@ async function summary(env: SecurityEnv, session: HumanSession): Promise<Securit
     countRecoveryCodes(env, userId),
     totpConfirmed(env, userId),
     secondFactorMethods(env, userId),
+    reauthProviders(env, userId),
   ]);
   const passwordEnabled = account?.passwordEnabled === 1;
   const recentAt = session.user.recentAuthAt;
@@ -102,6 +127,7 @@ async function summary(env: SecurityEnv, session: HumanSession): Promise<Securit
       valid,
       expiresAt: valid && recentAt !== undefined ? recentAt + RECENT_AUTH_WINDOW_MS : null,
       methods: [...(passwordEnabled ? (["password"] as const) : []), ...methods],
+      sso,
     },
   };
 }

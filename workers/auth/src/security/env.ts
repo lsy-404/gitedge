@@ -10,6 +10,7 @@ export interface SecurityEnv {
   /** Public origin used for email links and the WebAuthn relying party. */
   readonly PUBLIC_ORIGIN?: string;
   readonly TOTP_ENCRYPTION_KEY?: string;
+  readonly SSO_PROVIDERS_JSON?: string;
 }
 
 export function publicOrigin(env: SecurityEnv, request: Request): string {

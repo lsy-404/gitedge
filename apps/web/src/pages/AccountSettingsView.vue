@@ -34,7 +34,7 @@ const sections = [
   "connections",
 ] as const;
 const section = computed(() =>
-  route.query.sso || route.query.error
+  route.query.sso || (route.query.error && !route.query.section)
     ? "connections"
     : (sections.find((value) => value === route.query.section) ?? "profile")
 );

@@ -974,6 +974,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ returnTo }),
     }),
+  reauthSso: (providerId: string, returnTo: string) =>
+    request<{ url: string }>(`/api/auth/sso/${encodeURIComponent(providerId)}/reauth`, {
+      method: "POST",
+      body: JSON.stringify({ returnTo }),
+    }),
   logoutSsoIdentity: (providerId: string, identityId: string) =>
     request<SsoLogoutResponse>(`/api/auth/sso/${encodeURIComponent(providerId)}/logout`, {
       method: "POST",

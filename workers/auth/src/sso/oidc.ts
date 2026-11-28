@@ -8,6 +8,8 @@ import type {
 } from "./types";
 
 const HTTP_TIMEOUT_SECONDS = 10;
+const CLOCK_SKEW_SECONDS = 60;
+export type OidcPrompt = "select_account" | "login";
 const OidcFlowPayloadSchema = z.object({
   version: z.literal(1),
   providerId: z.string().min(1),
@@ -119,7 +121,7 @@ export async function startOidc(
   secrets: SsoProviderSecrets,
   callbackUrl: string,
   state: string,
-  selectAccount = false
+  prompt?: OidcPrompt
 ): Promise<SsoAuthorization> {
   if (state.length < 16 || state.length > 512) throw new Error("Invalid OIDC state.");
   const callback = validateCallbackUrl(callbackUrl);
@@ -136,7 +138,8 @@ export async function startOidc(
     nonce,
     code_challenge: codeChallenge,
     code_challenge_method: "S256",
-    ...(selectAccount ? { prompt: "select_account" } : {}),
+    ...(prompt ? { prompt } : {}),
+    ...(prompt === "login" ? { max_age: "0" } : {}),
   });
   const flow: OidcFlowPayload = {
     version: 1,
@@ -173,7 +176,8 @@ export async function completeOidc(
   callbackRequest: Request,
   callbackUrl: string,
   expectedState: string,
-  payload: string
+  payload: string,
+  maxAuthAgeSeconds?: number
 ): Promise<SsoIdentityClaims> {
   const flow = parsePayload(payload);
   const callback = validateCallbackUrl(callbackUrl);
@@ -208,6 +212,15 @@ export async function completeOidc(
     !claims.sub
   ) {
     throw new Error("OIDC ID token claims are invalid.");
+  }
+  if (
+    maxAuthAgeSeconds !== undefined &&
+    // A request with max_age obliges the provider to return auth_time (OIDC Core 3.1.2.1).
+    (typeof claims.auth_time !== "number" ||
+      claims.auth_time > now + CLOCK_SKEW_SECONDS ||
+      now - claims.auth_time > maxAuthAgeSeconds + CLOCK_SKEW_SECONDS)
+  ) {
+    throw new Error("OIDC authentication is not recent.");
   }
   const email =
     typeof claims.email === "string" && claims.email.length > 0 ? claims.email : undefined;

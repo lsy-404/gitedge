@@ -82,7 +82,7 @@ describe("RepositoryDangerActions", () => {
       passkeys: [],
       recoveryCodesRemaining: 0,
       secondFactorEnabled: false,
-      recentAuth: { valid: false, expiresAt: null, methods: ["password"] },
+      recentAuth: { valid: false, expiresAt: null, methods: ["password"], sso: [] },
     });
     const reauthenticate = vi
       .spyOn(api, "reauthenticate")

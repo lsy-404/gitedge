@@ -28,7 +28,7 @@ function summary(overrides: Partial<SecuritySummary> = {}): SecuritySummary {
     passkeys: [],
     recoveryCodesRemaining: 0,
     secondFactorEnabled: false,
-    recentAuth: { valid: true, expiresAt: Date.now() + 60_000, methods: ["password"] },
+    recentAuth: { valid: true, expiresAt: Date.now() + 60_000, methods: ["password"], sso: [] },
     ...overrides,
   };
 }
@@ -171,7 +171,7 @@ describe("password recovery pages", () => {
 describe("account security settings", () => {
   it("locks sensitive actions until identity is confirmed again", async () => {
     const locked = summary({
-      recentAuth: { valid: false, expiresAt: null, methods: ["password"] },
+      recentAuth: { valid: false, expiresAt: null, methods: ["password"], sso: [] },
     });
     vi.spyOn(api, "security").mockResolvedValueOnce(locked).mockResolvedValue(summary());
     const reauth = vi

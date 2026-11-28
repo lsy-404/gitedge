@@ -67,7 +67,7 @@ const secretsSchema = z.record(
     .strict()
 );
 
-export function ssoProviders(env: SsoEnvironment): SsoProvider[] {
+export function ssoProviders(env: Pick<SsoEnvironment, "SSO_PROVIDERS_JSON">): SsoProvider[] {
   const input: unknown = JSON.parse(env.SSO_PROVIDERS_JSON ?? "[]");
   return providersSchema.parse(input);
 }

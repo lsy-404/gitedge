@@ -24,7 +24,7 @@ GitHub and SSO sign-ins are not challenged by GitEdge; their identity provider e
 
 ## Re-authentication
 
-Each session stores `recent_auth_at`, set at sign-in and refreshed by `POST /api/auth/reauth` with a password, authenticator code, recovery code or passkey. For 10 minutes (`RECENT_AUTH_WINDOW_MS`) the session may change the password, email, authenticator app, passkeys and recovery codes, create personal access tokens, delete, purge or transfer repositories, and delete organizations. Otherwise those routes answer 403 `reauth_required`. Changing the password keeps only the current session.
+Each session stores `recent_auth_at`, set at sign-in and refreshed by `POST /api/auth/reauth` with a password, authenticator code, recovery code or passkey, or by signing in again at a linked SSO provider (`POST /api/auth/sso/:provider/reauth`, see [SSO configuration](sso.md)). For 10 minutes (`RECENT_AUTH_WINDOW_MS`) the session may change the password, email, authenticator app, passkeys and recovery codes, create personal access tokens, delete, purge or transfer repositories, and delete organizations. Otherwise those routes answer 403 `reauth_required`. Changing the password keeps only the current session.
 
 ### Using the claim from other services
 

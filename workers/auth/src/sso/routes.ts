@@ -4,7 +4,12 @@ import { createLogger } from "../../../../src/worker/common/logger";
 import { readTextLimited } from "../../../../src/worker/common/readText";
 import { createToken, hashToken, issueSession, createSessionCookie, readCookie } from "../session";
 import { ssoProviders, ssoSecrets } from "./config";
-import { listSsoIdentities, resolveSsoIdentity, unlinkSsoIdentity } from "./identities";
+import {
+  findSsoIdentity,
+  listSsoIdentities,
+  resolveSsoIdentity,
+  unlinkSsoIdentity,
+} from "./identities";
 import { startOidc, completeOidc, startOidcLogout } from "./oidc";
 import {
   startSaml,
@@ -19,8 +24,9 @@ import { dataResponse, errorResponse } from "../../../../src/worker/common/http"
 
 const FLOW_COOKIE = "gitedge_sso";
 const FLOW_SECONDS = 600;
+const REAUTH_MAX_AGE_SECONDS = 300;
 interface SsoRequestRow {
-  intent: "login" | "link" | "logout";
+  intent: "login" | "link" | "logout" | "reauth";
   user_id: string | null;
   session_hash: string | null;
   return_to: string;
@@ -108,6 +114,7 @@ async function finishLogin(
   request: Request
 ): Promise<Response> {
   if (!validClaims(claims)) return redirect(flow.return_to, "invalid_response");
+  if (flow.intent === "reauth") return finishReauth(env, provider, flow, claims);
   let linkUser: TrustedUser | null = null;
   if (flow.intent === "link") {
     linkUser = await env.DB.prepare(
@@ -140,6 +147,34 @@ async function finishLogin(
     userId: resolved.identity.userId,
     intent: flow.intent,
   });
+  return response;
+}
+
+async function finishReauth(
+  env: SsoEnvironment,
+  provider: SsoProvider,
+  flow: SsoRequestRow,
+  claims: SsoIdentityClaims
+): Promise<Response> {
+  const identity = await findSsoIdentity(env, provider, claims.subject);
+  if (!identity || identity.userId !== flow.user_id)
+    return redirect(flow.return_to, "reauth_mismatch");
+  const now = Date.now();
+  const updated = await env.DB.prepare(
+    "UPDATE auth_sessions SET recent_auth_at = ? WHERE token_hash = ? AND user_id = ? AND expires_at > ? AND EXISTS (SELECT 1 FROM users WHERE id = ? AND disabled_at IS NULL) RETURNING token_hash"
+  )
+    .bind(now, flow.session_hash, flow.user_id, now, flow.user_id)
+    .first<{ token_hash: string }>();
+  if (!updated) return redirect(flow.return_to, "expired");
+  createLogger(env.LOG_LEVEL, { service: "sso" }).info("sso:reauthenticated", {
+    providerId: provider.id,
+    protocol: provider.protocol,
+    userId: identity.userId,
+  });
+  const response = redirect(flow.return_to);
+  const target = new URL(flow.return_to, "https://gitedge.invalid");
+  target.searchParams.set("reauth", "confirmed");
+  response.headers.set("Location", `${target.pathname}${target.search}`);
   return response;
 }
 
@@ -204,16 +239,17 @@ async function handleSsoRequest(
   }
   if (
     (parts[2] === "start" && request.method === "GET") ||
-    (parts[2] === "link" && request.method === "POST")
+    ((parts[2] === "link" || parts[2] === "reauth") && request.method === "POST")
   ) {
-    const linking = parts[2] === "link";
-    if (linking && (!user || user.agentSession || request.headers.has("Authorization")))
+    const intent = parts[2] === "start" ? "login" : parts[2];
+    const accountFlow = intent !== "login";
+    if (accountFlow && (!user || user.agentSession || request.headers.has("Authorization")))
       return errorResponse(401, "unauthorized", "A human account session is required.");
-    if (linking && request.headers.get("Origin") !== url.origin)
+    if (accountFlow && request.headers.get("Origin") !== url.origin)
       return errorResponse(403, "forbidden", "Same-origin account management is required.");
     let returnTo =
-      url.searchParams.get("returnTo") ?? (linking ? "/settings/account" : "/dashboard");
-    if (linking) {
+      url.searchParams.get("returnTo") ?? (accountFlow ? "/settings/account" : "/dashboard");
+    if (accountFlow) {
       const text = await readTextLimited(request.body, 4096);
       if (text === null)
         return errorResponse(413, "bad_request", "Account-link request exceeded the size limit.");
@@ -232,6 +268,19 @@ async function handleSsoRequest(
     }
     if (!safeReturnTo(returnTo, url.origin))
       return errorResponse(400, "bad_request", "The return path must stay on this site.");
+    if (
+      intent === "reauth" &&
+      !(await env.DB.prepare(
+        "SELECT 1 AS linked FROM auth_sso_identities WHERE user_id = ? AND provider_id = ? AND issuer = ?"
+      )
+        .bind(user?.id ?? null, provider.id, provider.issuer)
+        .first())
+    )
+      return errorResponse(
+        409,
+        "sso_identity_missing",
+        "This account has no identity linked with this provider."
+      );
     const state = createToken();
     const proof = createToken();
     const callback = callbackUrl(request, provider);
@@ -243,19 +292,23 @@ async function handleSsoRequest(
               secrets,
               callback,
               state,
-              !linking && url.searchParams.get("prompt") === "select_account"
+              intent === "reauth"
+                ? "login"
+                : !accountFlow && url.searchParams.get("prompt") === "select_account"
+                  ? "select_account"
+                  : undefined
             )
-          : await startSaml(provider, secrets, callback, state);
+          : await startSaml(provider, secrets, callback, state, intent === "reauth");
       await persistFlow(env, provider, state, proof, {
-        intent: linking ? "link" : "login",
-        user_id: linking ? (user?.id ?? null) : null,
-        session_hash: linking ? await hashToken(readCookie(request) ?? "") : null,
+        intent,
+        user_id: accountFlow ? (user?.id ?? null) : null,
+        session_hash: accountFlow ? await hashToken(readCookie(request) ?? "") : null,
         return_to: returnTo,
         callback_url: callback,
         payload: authorization.payload,
       });
-      logger.info("sso:started", { providerId: provider.id, protocol: provider.protocol, linking });
-      const response = linking
+      logger.info("sso:started", { providerId: provider.id, protocol: provider.protocol, intent });
+      const response = accountFlow
         ? dataResponse({ url: authorization.url })
         : new Response(null, {
             status: 302,
@@ -496,7 +549,8 @@ async function handleSsoRequest(
           callbackRequest,
           flow.callback_url,
           state,
-          flow.payload
+          flow.payload,
+          flow.intent === "reauth" ? REAUTH_MAX_AGE_SECONDS : undefined
         );
       }
       return await finishLogin(env, provider, flow, claims, request);

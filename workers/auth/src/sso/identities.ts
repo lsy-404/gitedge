@@ -18,7 +18,7 @@ export type IdentityResolution =
   | { ok: true; identity: SsoIdentityRow }
   | { ok: false; reason: "identity_in_use" | "signup_disabled" };
 
-async function findIdentity(
+export async function findSsoIdentity(
   env: SsoEnvironment,
   provider: SsoProvider,
   subject: string
@@ -36,7 +36,7 @@ export async function resolveSsoIdentity(
   claims: SsoIdentityClaims,
   linkUser: TrustedUser | null
 ): Promise<IdentityResolution> {
-  let existing = await findIdentity(env, provider, claims.subject);
+  let existing = await findSsoIdentity(env, provider, claims.subject);
   if (existing && linkUser && existing.userId !== linkUser.id)
     return { ok: false, reason: "identity_in_use" };
   if (!existing) {
@@ -103,7 +103,7 @@ export async function resolveSsoIdentity(
         break;
       } catch {
         // Concurrent first logins may race; the unique subject determines the one owner.
-        existing = await findIdentity(env, provider, claims.subject);
+        existing = await findSsoIdentity(env, provider, claims.subject);
         if (existing) {
           if (linkUser && existing.userId !== linkUser.id)
             return { ok: false, reason: "identity_in_use" };
@@ -173,7 +173,7 @@ export async function resolveSsoIdentity(
             "UPDATE users SET identifier = ? WHERE id = ? AND identifier = ? AND EXISTS (SELECT 1 FROM namespaces WHERE kind = 'personal' AND created_by = ? AND slug = ?)"
           ).bind(identifier, existing.userId, existing.identifier, existing.userId, identifier),
         ]);
-        existing = (await findIdentity(env, provider, claims.subject)) ?? existing;
+        existing = (await findSsoIdentity(env, provider, claims.subject)) ?? existing;
       } catch {
         logger.warn("sso:legacy-handle-rename-conflict", { userId: existing.userId });
       }

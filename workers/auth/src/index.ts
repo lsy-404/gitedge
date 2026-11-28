@@ -59,7 +59,6 @@ export type AuthEnv = SecurityEnv & {
   readonly WEBHOOK_ENCRYPTION_KEY?: string;
   readonly ALLOW_PUBLIC_SIGNUP: string;
   readonly DEFAULT_USER_GROUP: string;
-  readonly SSO_PROVIDERS_JSON?: string;
   readonly SSO_SECRETS_JSON?: string;
   readonly GITHUB_CLIENT_ID?: string;
   readonly GITHUB_CLIENT_SECRET?: string;

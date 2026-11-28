@@ -163,7 +163,8 @@ function createSaml(
   secrets: SsoProviderSecrets,
   callbackUrl: string,
   cacheProvider: CacheProvider,
-  logoutCallbackUrl?: string
+  logoutCallbackUrl?: string,
+  forceAuthn = false
 ): VerifiableSaml {
   assertSigningKeyPair(provider, secrets);
   const serviceProviderEntity = serviceProviderEntityId(provider, callbackUrl);
@@ -191,6 +192,7 @@ function createSaml(
     validateInResponseTo: ValidateInResponseTo.always,
     requestIdExpirationPeriodMs: REQUEST_ID_TTL_MS,
     authnRequestBinding: "HTTP-Redirect",
+    forceAuthn,
     cacheProvider,
   };
   return new VerifiableSaml(options);
@@ -200,11 +202,12 @@ export async function startSaml(
   provider: SamlProvider,
   secrets: SsoProviderSecrets,
   callbackUrl: string,
-  state: string
+  state: string,
+  forceAuthn = false
 ): Promise<SsoAuthorization> {
   if (!state.trim() || state.length > 1024) throw new Error("Invalid SAML RelayState.");
   const cache = new SingleRequestCache();
-  const saml = createSaml(provider, secrets, callbackUrl, cache);
+  const saml = createSaml(provider, secrets, callbackUrl, cache, undefined, forceAuthn);
   const url = await saml.getAuthorizeUrlAsync(state, undefined, {});
   const payload = JSON.stringify(cache.requestState(provider.id, callbackUrl));
   return { url, payload };

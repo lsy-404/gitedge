@@ -355,7 +355,7 @@ describe("AccountRunners", () => {
       passkeys: [],
       recoveryCodesRemaining: 0,
       secondFactorEnabled: false,
-      recentAuth: { valid: false, expiresAt: null, methods: ["password"] },
+      recentAuth: { valid: false, expiresAt: null, methods: ["password"], sso: [] },
     });
     vi.spyOn(api, "reauthenticate").mockResolvedValue({
       recentAuthAt: Date.now(),
@@ -429,7 +429,7 @@ describe("AccountRunners", () => {
       passkeys: [],
       recoveryCodesRemaining: 0,
       secondFactorEnabled: false,
-      recentAuth: { valid: false, expiresAt: null, methods: ["password"] },
+      recentAuth: { valid: false, expiresAt: null, methods: ["password"], sso: [] },
     });
     const reauthenticate = vi.spyOn(api, "reauthenticate").mockResolvedValue({
       recentAuthAt: Date.now(),
